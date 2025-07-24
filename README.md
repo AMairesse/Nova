@@ -39,6 +39,7 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 Nova uses a `.env` file for configuration. Copy `.env.example` to `.env` and edit as needed. Key variables include:
 
 - **Required for Production (Docker):**
+
   - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` (PostgreSQL settings).
   - `DJANGO_SECRET_KEY`: Random secure key.
   - `FIELD_ENCRYPTION_KEY`: For encrypting sensitive data.
@@ -54,10 +55,12 @@ Nova uses a `.env` file for configuration. Copy `.env.example` to `.env` and edi
 This is the recommended way to run Nova for real use, using Docker with PostgreSQL for better concurrency and persistence.
 
 ### Prerequisites
+
 - Docker and Docker Compose installed.
 - A `.env` file (see [Environment Variables](#environment-variables)).
 
 ### Steps
+
 1. Clone the repo:
 
    ```
@@ -79,7 +82,7 @@ This is the recommended way to run Nova for real use, using Docker with PostgreS
 3. Build and start containers:
 
    ```
-   docker-compose up -d --build
+   docker compose up -d --build
    ```
 
 4. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
@@ -87,22 +90,25 @@ This is the recommended way to run Nova for real use, using Docker with PostgreS
 5. View logs:
 
    ```
-   docker-compose logs -f
+   docker compose logs -f
    ```
 
 6. Stop/restart:
 
    ```
-   docker-compose down docker-compose up -d
+   docker compose down
+   docker compose up -d
    ```
 
 7. Updates:
 
    ```
-   git pull docker-compose up -d --build
+   git pull
+   docker compose up -d --build
    ```
 
 ### Notes
+
 - **Persistence:** Docker volumes (`postgres_data`, `static_data`, `media_data`) ensure data survives container restarts. Back them up regularly.
 - **Dev vs Prod:** Prod uses PostgreSQL with a persistent volume. Dev uses SQLite (local file). Switch via `DB_ENGINE` in `.env`.
 - **Security:** Use strong secrets. Expose via a reverse-proxy (e.g., Nginx) with HTTPS. Don't commit `.env`.
@@ -145,24 +151,22 @@ For development or testing only (uses SQLite, less scalable). Not recommended fo
    python manage.py runserver
    ```
 
-
 6. Open `http://localhost:8000`, log in, and configure via **Config › LLM Providers**.
 
 **Tip:** For local models, use Ollama as above.
 
 ## Project Layout
 
-   ```
-   nova/
-   ├─ api/ # Minimal REST facade
-   ├─ mcp/ # Thin wrapper around FastMCP
-   ├─ migrations/ # Django model migration scripts
-   ├─ static/ # JS helpers (SSE streaming, tool modal manager…)
-   ├─ templates/ # Django + Bootstrap 5 UI
-   ├─ tools/ # Built-in tool modules (CalDav, agent wrapper…)
-   └─ views/ # Django views
-   ```
-
+```
+nova/
+├─ api/ # Minimal REST facade
+├─ mcp/ # Thin wrapper around FastMCP
+├─ migrations/ # Django model migration scripts
+├─ static/ # JS helpers (SSE streaming, tool modal manager…)
+├─ templates/ # Django + Bootstrap 5 UI
+├─ tools/ # Built-in tool modules (CalDav, agent wrapper…)
+└─ views/ # Django views
+```
 
 ## Roadmap
 
@@ -170,7 +174,6 @@ For development or testing only (uses SQLite, less scalable). Not recommended fo
 2. File management : add a file, receive a file as a result, file support for MCP tools, ...
 3. Add a scratchpad tool (acting like a memory for long task)
 4. Add a canvas tool (acting like a UI component for the agent to interact with the user)
-
 
 ## Contributing
 
@@ -185,11 +188,9 @@ Pull requests are welcome! To propose a tool:
 
 Please run `pre-commit install` to apply linting and type checks before submitting.
 
-
 ## License
 
 Nova is released under the MIT License – see `LICENSE` for details.
-
 
 ## Acknowledgements
 
@@ -200,12 +201,11 @@ Nova is released under the MIT License – see `LICENSE` for details.
 
 Made with ❤️ and a healthy concern for data privacy.
 
-
 ## Troubleshooting
 
 - **Port conflicts:** Ensure ports 80 (Nginx), 8000 (Gunicorn), and 5432 (PostgreSQL) are free. Stop conflicting services or edit `docker-compose.yml`.
-- **DB not ready:** If web container fails with DB errors, check PostgreSQL logs (`docker-compose logs db`). Increase healthcheck timeouts if needed.
-- **No superuser:** Set `DJANGO_SUPERUSER_*` in `.env` and restart. Or run `docker-compose exec web python manage.py createsuperuser`.
+- **DB not ready:** If web container fails with DB errors, check PostgreSQL logs (`docker compose logs db`). Increase healthcheck timeouts if needed.
+- **No superuser:** Set `DJANGO_SUPERUSER_*` in `.env` and restart. Or run `docker compose exec web python manage.py createsuperuser`.
 - **Ollama unreachable:** Use `host.docker.internal` (Docker Desktop) or your machine's IP for Base URL. Ensure Ollama runs on the host.
 - **Volumes lost data?** Back up volumes with `docker volume ls` and tools like `docker-volume-backup`.
 
