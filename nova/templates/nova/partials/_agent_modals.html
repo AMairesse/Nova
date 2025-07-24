@@ -1,0 +1,204 @@
+{# nova/templates/nova/partials/_agent_modals.html #}
+{% load i18n %}
+{# ──────────────────────────  AGENT CREATION MODAL  ─────────────────────────#}
+<div class="modal fade" id="agentModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title">{% trans "Create an agent" %}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+
+      <form method="post" action="{% url 'create_agent' %}">
+        <div class="modal-body">
+          {% csrf_token %}
+          <!-- Agent name -->
+          <div class="mb-3">
+            <label for="agentName" class="form-label">{% trans "Agent name" %}</label>
+            <input type="text" class="form-control" id="agentName" name="name" required>
+          </div>
+
+          <!-- LLM Provider -->
+          <div class="mb-3">
+            <label for="llmProvider" class="form-label">{% trans "LLM provider" %}</label>
+            <select class="form-control" id="llmProvider" name="llm_provider" required>
+              <option value="" selected disabled>— {% trans "Choose a provider" %} —</option>
+              {% for provider in llm_providers %}
+                <option value="{{ provider.id }}">
+                  {{ provider.name }} ({{ provider.get_provider_type_display }} – {{ provider.model }})
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <!-- System prompt -->
+          <div class="mb-3">
+            <label for="systemPrompt" class="form-label">{% trans "System prompt" %}</label>
+            <textarea class="form-control" id="systemPrompt" name="system_prompt" rows="3"></textarea>
+          </div>
+
+          <!-- Use as tool -->
+          <div class="mb-3 form-check">
+            <input class="form-check-input" type="checkbox" id="createIsToolCheckbox" name="is_tool">
+            <label class="form-check-label" for="createIsToolCheckbox">
+              {% trans "Use as a tool" %}
+            </label>
+          </div>
+
+          <!-- Tool description (hidden unless is_tool checked) -->
+          <div class="mb-3" id="createToolDescriptionWrapper" style="display: none;">
+            <label for="toolDescription" class="form-label">{% trans "Tool description" %}</label>
+            <textarea class="form-control" id="toolDescription" name="tool_description" rows="3"></textarea>
+            <small class="form-text text-muted">{% trans "Describe how this agent can be used as a tool." %}</small>
+          </div>
+
+          <!-- Available tools -->
+          {% if tools %}
+            <div class="mb-3">
+              <label class="form-label">{% trans "Available tools" %}</label>
+              <div class="tools-selection" id="createToolsSelection">
+                {% for tool in tools %}
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox"
+                           name="tools" value="{{ tool.id }}" id="tool{{ tool.id }}">
+                    <label class="form-check-label" for="tool{{ tool.id }}">
+                      {{ tool.name }} — {{ tool.description }}
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+
+          <!-- Agents available as tools -->
+          {% if agents_tools %}
+            <div class="mb-3">
+              <label class="form-label">{% trans "Agents available as tools" %}</label>
+              <div class="agent-tools-selection">
+                {% for atool in agents_tools %}
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox"
+                           name="agent_tools" value="{{ atool.id }}" id="agent_tool_{{ atool.id }}">
+                    <label class="form-check-label" for="agent_tool_{{ atool.id }}">
+                      {{ atool.name }}
+                      <small class="text-muted">{{ atool.tool_description|truncatechars:50 }}</small>
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            {% trans "Cancel" %}
+          </button>
+          <button type="submit" class="btn btn-primary">{% trans "Create" %}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# ──────────────────────────  AGENT EDIT MODAL  ─────────────────────────#}
+<div class="modal fade" id="editAgentModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">{% trans "Edit" %}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+
+      <form method="post" id="editAgentForm">
+        <div class="modal-body">
+          {% csrf_token %}
+          <input type="hidden" id="editAgentId" name="agent_id">
+
+          <div class="mb-3">
+            <label for="editAgentName" class="form-label">{% trans "Name" %}</label>
+            <input class="form-control" type="text" id="editAgentName" name="name" required>
+          </div>
+
+          <div class="mb-3">
+            <label for="editLlmProvider" class="form-label">{% trans "LLM provider" %}</label>
+            <select class="form-control" id="editLlmProvider" name="llm_provider" required>
+              {% for provider in llm_providers %}
+                <option value="{{ provider.id }}">
+                  {{ provider.name }} ({{ provider.get_provider_type_display }} – {{ provider.model }})
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label for="editSystemPrompt" class="form-label">{% trans "System prompt" %}</label>
+            <textarea class="form-control" id="editSystemPrompt" name="system_prompt" rows="3"></textarea>
+          </div>
+
+          <div class="mb-3 form-check">
+            <input class="form-check-input" type="checkbox"
+                   id="editIsToolCheckbox" name="is_tool">
+            <label class="form-check-label" for="editIsToolCheckbox">
+              {% trans "Use as a tool" %}
+            </label>
+          </div>
+
+          <!-- Tool description (hidden unless is_tool checked) -->
+          <div class="mb-3" id="editToolDescriptionWrapper" style="display: none;">
+            <label for="editToolDescription" class="form-label">{% trans "Tool description" %}</label>
+            <textarea class="form-control" id="editToolDescription" name="tool_description" rows="3"></textarea>
+            <small class="form-text text-muted">{% trans "Describe how this agent can be used as a tool." %}</small>
+          </div>
+
+          {% if tools %}
+            <div class="mb-3">
+              <label class="form-label">{% trans "Associated tools" %}</label>
+              <div class="tools-selection" id="editToolsSelection">
+                {% for tool in tools %}
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox"
+                           name="tools" value="{{ tool.id }}" id="editTool{{ tool.id }}">
+                    <label class="form-check-label" for="editTool{{ tool.id }}">
+                      {{ tool.name }} — {{ tool.description }}
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+
+          {% if agents_tools %}
+            <div class="mb-3">
+              <label class="form-label">{% trans "Agents available as tools" %}</label>
+              <div class="agent-tools-selection" id="editAgentToolsSelection">
+                {% for atool in agents_tools %}
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox"
+                           name="agent_tools" value="{{ atool.id }}"
+                           id="edit_agent_tool_{{ atool.id }}">
+                    <label class="form-check-label" for="edit_agent_tool_{{ atool.id }}">
+                      {{ atool.name }}
+                      <small class="text-muted">{{ atool.tool_description|truncatechars:50 }}</small>
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+
+          <!-- Provider-specific dynamic fields -->
+          <div id="editProviderFields"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            {% trans "Cancel" %}
+          </button>
+          <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,79 @@
+{# nova/templates/nova/partials/_provider_modals.html #}
+{% load i18n %}
+{# ──────────────────────────  PROVIDER CREATION MODAL  ───────────────────────#}
+<div class="modal fade" id="providerModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+          <h5 class="modal-title">{% trans "Create a LLM provider" %}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" action="{% url 'create_provider' %}">
+        <div class="modal-body">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label for="providerName" class="form-label">{% trans "Name" %}</label>
+            <input type="text" class="form-control" id="providerName" name="name" required>
+          </div>
+          <div class="mb-3">
+            <label for="providerType" class="form-label">{% trans "Type" %}</label>
+            <select class="form-control" id="providerType" name="provider_type" required>
+              <option value="" selected disabled>— {% trans "Choose a provider" %} —</option>
+              {% for value,label in PROVIDER_CHOICES %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <!-- Dynamic config fields -->
+          <div id="providerConfigFields"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            {% trans "Cancel" %}
+          </button>
+          <button type="submit" class="btn btn-primary" id="createProviderBtn" disabled>
+            {% trans "Create" %}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# ──────────────────────────  PROVIDER EDIT MODAL  ───────────────────────────#}
+<div class="modal fade" id="editProviderModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+          <h5 class="modal-title">{% trans "Edit provider" %}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="editProviderForm">
+        <div class="modal-body">
+          {% csrf_token %}
+          <input type="hidden" id="editProviderId" name="provider_id">
+          <div class="mb-3">
+            <label class="form-label">{% trans "Name" %}</label>
+            <input type="text" class="form-control" id="editProviderName" name="name" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">{% trans "Type" %}</label>
+            <select class="form-control" id="editProviderType" name="provider_type" required>
+              {% for value,label in PROVIDER_CHOICES %}
+                <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <!-- Dynamic config fields -->
+          <div id="editProviderConfigFields"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            {% trans "Cancel" %}
+          </button>
+          <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

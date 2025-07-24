@@ -1,0 +1,19 @@
+<!-- tool_modals.html -->
+
+<!-- Creation modal -->
+{% include 'nova/partials/_modal_create_tool.html' %}
+
+<!-- Edition modal -->
+{% for tool in tools %}
+    {% include 'nova/partials/_modal_edit_tool.html' with tool=tool %}
+{% endfor %}
+
+<!-- Configuration modal -->
+{% for tool in tools %}
+    {% include 'nova/partials/_tool_config_modal.html' with tool=tool %}
+{% endfor %}
+
+<!-- Suppression modal -->
+{% for tool in tools %}
+    {% include 'nova/partials/_tool_delete_modal.html' with tool=tool %}
+{% endfor %}

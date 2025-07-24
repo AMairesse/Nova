@@ -1,0 +1,106 @@
+<!-- message_container.html -->
+{% load static %} {% load i18n %}
+
+<div class="chat-wrapper d-flex flex-column h-100">
+  <div id="conversation-container" class="flex-grow-1 overflow-auto">
+    {% for message in messages %}
+    <div class="message">
+      {% if message.actor == Actor.USER %}
+      <p>
+        <strong><em>{{ message.rendered_html }}</em></strong>
+      </p>
+      {% elif message.actor == Actor.AGENT %}
+      <p>{{ message.rendered_html }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <button
+    id="toggle-details"
+    class="btn btn-sm btn-outline-secondary mb-2"
+    style="display: none"
+  >
+    {% trans "Show details" %}
+  </button>
+
+  <div id="agent-stream-container" style="display: none"></div>
+
+  {% with nb_agents=user_agents|length %} {% if nb_agents == 0 %}
+  <div class="alert alert-info text-center my-3">
+    {% trans "No agents configured yet." %}<br />
+    <a href="{% url 'user_config' %}?tab=agents" class="alert-link">
+      {% trans "Create one now" %}
+    </a>
+  </div>
+  {% else %}
+  <form id="message-form" method="post">
+    {% csrf_token %}
+    <input
+      type="hidden"
+      name="thread_id"
+      value="{{ thread_id|default_if_none:'' }}"
+    />
+    <div class="d-flex align-items-start gap-2 mb-3">
+      <!-- Dropdown -->
+      <div class="dropdown">
+        <button
+          class="btn btn-outline-secondary dropdown-toggle"
+          type="button"
+          data-bs-toggle="dropdown"
+          aria-expanded="false"
+          id="dropdownMenuButton"
+        >
+          {% if default_agent %} {{ default_agent.name }} {% else %} {% trans
+          "Select an agent" %} {% endif %}
+        </button>
+        <ul class="dropdown-menu">
+          {% for agent in user_agents %}
+          <li>
+            <a class="dropdown-item" href="#" data-value="{{ agent.id }}"
+              >{{ agent.name }}</a
+            >
+          </li>
+          {% endfor %} {% if nb_agents == 0 %}
+          <li>
+            <span class="dropdown-item-text text-muted"
+              >{% trans "No agents available" %}</span
+            >
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <!-- Hidden input -->
+      <input
+        type="hidden"
+        name="selected_agent"
+        id="selectedAgentInput"
+        value="{% if default_agent %}{{ default_agent.id }}{% endif %}"
+      />
+
+      <!-- Message input -->
+      <textarea
+        class="form-control flex-grow-1"
+        name="new_message"
+        placeholder="{% trans 'Add a new message…' %}"
+        rows="1"
+        autofocus
+      ></textarea>
+
+      <!-- Send button -->
+      <button
+        type="submit"
+        id="send-btn"
+        class="btn btn-link p-0 {% if nb_agents == 0 %}disabled{% endif %}"
+      >
+        <img
+          src="{% static 'images/round-arrow-up.png' %}"
+          alt="Send"
+          style="width: 32px; height: 32px"
+        />
+      </button>
+    </div>
+  </form>
+  {% endif %} {% endwith %}
+</div>

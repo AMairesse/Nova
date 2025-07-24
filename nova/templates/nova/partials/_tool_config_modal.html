@@ -1,0 +1,118 @@
+<!-- nova/templates/nova/partials/_tool_config_modal.html -->
+{% load i18n %}
+{% load custom_filters %}
+
+<div class="modal fade" id="configToolModal{{ tool.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">{% blocktrans %} Configure {{ tool.name }} {% endblocktrans %}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post" action="{% url 'configure_tool' tool.id %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <!-- If tool is builtin, generate configurated fields only -->
+                    {% if tool.tool_type == 'builtin' %}
+                        {% with cred=tool.credentials.all|first meta=tool_types|get_item:tool.tool_subtype %}
+                            {% if meta.requires_config %}
+                                {% for field in meta.config_fields %}
+                                    <div class="mb-3">
+                                        <label for="{{ field.name }}_{{ tool.id }}" class="form-label">{{ field.label }}</label>
+                                        {% if field.type == 'password' %}
+                                            <input type="password" class="form-control" id="{{ field.name }}_{{ tool.id }}" name="{{ field.name }}" 
+                                                value="{{ cred.config|get_item:field.name }}" {% if field.required %}required{% endif %}>
+                                        {% elif field.type == 'url' %}
+                                            <input type="url" class="form-control" id="{{ field.name }}_{{ tool.id }}" name="{{ field.name }}" 
+                                                value="{{ cred.config|get_item:field.name }}" {% if field.required %}required{% endif %}>
+                                        {% else %}
+                                            <input type="text" class="form-control" id="{{ field.name }}_{{ tool.id }}" name="{{ field.name }}" 
+                                                value="{{ cred.config|get_item:field.name }}" {% if field.required %}required{% endif %}>
+                                        {% endif %}
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                <p>{% trans "No configuration required for this tool." %}</p>
+                            {% endif %}
+                            {% if meta.test_function is not None %}
+                                <div class="mb-3">
+                                    <button type="button" class="btn btn-outline-primary test-connection-btn" data-tool-id="{{ tool.id }}">
+                                        <i class="bi bi-check2-circle"></i> {% trans "Test" %}
+                                    </button>
+                                    <div id="connection-test-result-{{ tool.id }}" class="mt-2" style="display: none;"></div>
+                                </div>
+                            {% endif %}
+                        {% endwith %}
+                    {% else %}
+
+                        <!-- Generic credential fields -->
+                        {% with tool_credential=tool.credentials.all|first %}
+                        <div class="mb-3">
+                            <label for="auth_type_{{ tool.id }}" class="form-label">{%trans "Authentication type" %}</label>
+                            <select class="form-select auth-type-select" id="auth_type_{{ tool.id }}" name="auth_type" 
+                                    data-tool-id="{{ tool.id }}">
+                                <option value="none" {% if tool_credential.auth_type == 'none' %}selected{% endif %}>{%trans "No Authentication" %}</option>
+                                <option value="basic" {% if tool_credential.auth_type == 'basic' %}selected{% endif %}>{%trans "Basic Auth" %}</option>
+                                <option value="token" {% if tool_credential.auth_type == 'token' %}selected{% endif %}>{%trans "Token Auth" %}</option>
+                                <option value="api_key" {% if tool_credential.auth_type == 'api_key' %}selected{% endif %}>{%trans "API Key" %}</option>
+                                <option value="oauth" {% if tool_credential.auth_type == 'oauth' %}selected{% endif %}>{%trans "OAuth" %}</option>
+                                <option value="custom" {% if tool_credential.auth_type == 'custom' %}selected{% endif %}>{%trans "Custom" %}</option>
+                            </select>
+                        </div>
+                        
+                        <!-- MCP connection test -->
+                        {% if tool.tool_type == 'mcp' %}
+                        <div class="mb-3">
+                            <button type="button" class="btn btn-outline-primary test-connection-btn" data-tool-id="{{ tool.id }}">
+                                <i class="bi bi-check2-circle"></i> {% trans "Test MCP connection" %}
+                            </button>
+                            <div id="connection-test-result-{{ tool.id }}" class="mt-2" style="display: none;"></div>
+                        </div>
+                        {% endif %}
+                        
+                        <!-- Basic auth fields -->
+                        <div class="mb-3 auth-field basic-auth" data-tool-id="{{ tool.id }}" {% if tool_credential.auth_type != 'basic' %}style="display: none;"{% endif %}>
+                            <label for="username_{{ tool.id }}" class="form-label">{% trans "Username" %}</label>
+                            <input type="text" class="form-control" id="username_{{ tool.id }}" name="username" 
+                                value="{{ tool_credential.username }}">
+                        </div>
+                        <div class="mb-3 auth-field basic-auth" data-tool-id="{{ tool.id }}" {% if tool_credential.auth_type != 'basic' %}style="display: none;"{% endif %}>
+                            <label for="password_{{ tool.id }}" class="form-label">{% trans "Password" %}</label>
+                            <input type="password" class="form-control" id="password_{{ tool.id }}" name="password" 
+                                value="{{ tool_credential.password }}">
+                        </div>
+                        
+                        <!-- Token auth fields -->
+                        <div class="mb-3 auth-field token-auth api-key-auth" data-tool-id="{{ tool.id }}" {% if tool_credential.auth_type != 'token' and tool_credential.auth_type != 'api_key' %}style="display: none;"{% endif %}>
+                            <label for="token_{{ tool.id }}" class="form-label">{% trans "Token / API Key" %}</label>
+                            <input type="text" class="form-control" id="token_{{ tool.id }}" name="token" 
+                                value="{{ tool_credential.token }}">
+                        </div>
+                        <div class="mb-3 auth-field token-auth" data-tool-id="{{ tool.id }}" {% if tool_credential.auth_type != 'token' %}style="display: none;"{% endif %}>
+                            <label for="token_type_{{ tool.id }}" class="form-label">{% trans "Token type" %}</label>
+                            <input type="text" class="form-control" id="token_type_{{ tool.id }}" name="token_type" 
+                                value="{{ tool_credential.token_type }}" placeholder="ex: Bearer">
+                        </div>
+                        
+                        <!-- OAuth fields -->
+                        <div class="mb-3 auth-field oauth-auth" data-tool-id="{{ tool.id }}" {% if tool_credential.auth_type != 'oauth' %}style="display: none;"{% endif %}>
+                            <label for="client_id_{{ tool.id }}" class="form-label">{% trans "Client ID" %}</label>
+                            <input type="text" class="form-control" id="client_id_{{ tool.id }}" name="client_id" 
+                                value="{{ tool_credential.client_id }}">
+                        </div>
+                        <div class="mb-3 auth-field oauth-auth" data-tool-id="{{ tool.id }}" {% if tool_credential.auth_type != 'oauth' %}style="display: none;"{% endif %}>
+                            <label for="client_secret_{{ tool.id }}" class="form-label">{% trans "Client Secret" %}</label>
+                            <input type="password" class="form-control" id="client_secret_{{ tool.id }}" name="client_secret" 
+                                value="{{ tool_credential.client_secret }}">
+                        </div>
+                        {% endwith %}
+                    {% endif %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
+                    <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

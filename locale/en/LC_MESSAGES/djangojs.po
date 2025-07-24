@@ -1,0 +1,101 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-07-24 19:35+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: nova/static/js/message_container.js:264
+msgid "Hide details"
+msgstr "Hide details"
+
+#: nova/static/js/message_container.js:264
+msgid "Show details"
+msgstr "Show details"
+
+#: nova/static/js/message_container.js:268
+msgid "Starting agent…"
+msgstr "Starting agent…"
+
+#: nova/static/js/message_container.js:298
+msgid "Agent is thinking…"
+msgstr "Agent is thinking…"
+
+#: nova/static/js/message_container.js:304
+#, javascript-format
+msgid "Agent is using tool « %s »…"
+msgstr "Agent is using tool « %s »…"
+
+#: nova/static/js/tool_management.js:88
+msgid "Invalid JSON: "
+msgstr "Invalid JSON: "
+
+#: nova/static/js/tool_management.js:108
+msgid "Testing…"
+msgstr "Testing…"
+
+#: nova/static/js/tool_management.js:131
+msgid "Available calendars:"
+msgstr "Available calendars:"
+
+#: nova/static/js/tool_management.js:139
+msgid "MCP tools available:"
+msgstr "MCP tools available:"
+
+#: nova/static/js/tool_management.js:151
+msgid "input_schema"
+msgstr "input_schema"
+
+#: nova/static/js/tool_management.js:157
+msgid "output_schema"
+msgstr "output_schema"
+
+#: nova/static/js/tool_management.js:166
+msgid "Error"
+msgstr "Error"
+
+#: nova/static/js/tool_management.js:167
+msgid "Unknown error"
+msgstr "Unknown error"
+
+#: nova/static/js/tool_management.js:175
+msgid "Network error: "
+msgstr "Network error: "
+
+#: nova/static/js/user_config.js:9 nova/static/js/user_config.js:22
+#: nova/static/js/user_config.js:39 nova/static/js/user_config.js:49
+msgid "Model"
+msgstr "Model"
+
+#: nova/static/js/user_config.js:13 nova/static/js/user_config.js:26
+msgid "API key"
+msgstr "API key"
+
+#: nova/static/js/user_config.js:16 nova/static/js/user_config.js:29
+msgid "A key is already registered ; leave empty to keep it."
+msgstr "A key is already registered ; leave empty to keep it."
+
+#: nova/static/js/user_config.js:33
+msgid "Base URL (optional)"
+msgstr "Base URL (optional)"
+
+#: nova/static/js/user_config.js:43 nova/static/js/user_config.js:53
+msgid "Base URL"
+msgstr "Base URL"
+
+#: nova/static/js/user_config.js:143
+msgid "Tool description is required when using as tool."
+msgstr "Tool description is required when using as tool."

@@ -1,0 +1,81 @@
+{# nova/templates/nova/partials/_tool_form_fields.html #}
+{% load i18n %}
+<div class="mb-3">
+  <label for="{{ prefix }}tool_type_{{ tool.id|default:'new' }}" class="form-label">
+    {% trans "Type" %}
+  </label>
+  <select class="form-select tool-type-select"
+          id="{{ prefix }}tool_type_{{ tool.id|default:'new' }}"
+          name="tool_type" required
+          data-prefix="{{ prefix }}"
+          data-tool-id="{{ tool.id|default:'new' }}">
+    <option value="">{% trans "— Select a type —" %}</option>
+    <option value="builtin" {% if tool.tool_type == 'builtin' %}selected{% endif %}>{% trans "Builtin" %}</option>
+    <option value="api"     {% if tool.tool_type == 'api' %}selected{% endif %}>{% trans "HTTP / REST API" %}</option>
+    <option value="mcp"     {% if tool.tool_type == 'mcp' %}selected{% endif %}>{% trans "MCP server" %}</option>
+  </select>
+</div>
+
+{# ───────────────────────────────────────────────────────────── #}
+<div class="dynamic-fields" data-tool-id="{{ tool.id|default:'new' }}">
+  {# Built-in subtype --------------------------------------------------- #}
+  <div class="mb-3 field-group builtin-fields" style="display:none;">
+    <label for="{{ prefix }}tool_subtype_{{ tool.id|default:'new' }}" class="form-label">
+      {% trans "Builtin subtype" %}
+    </label>
+    <select class="form-select"
+            id="{{ prefix }}tool_subtype_{{ tool.id|default:'new' }}"
+            name="tool_subtype">
+      <option value="">{% trans "— Select a subtype —" %}</option>
+      {% for key, value in tool_types.items %}
+        <option value="{{ key }}" {% if tool.tool_subtype == key %}selected{% endif %}>
+          {{ value.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  {# API / MCP common fields ------------------------------------------- #}
+  <div class="field-group api-mcp-fields" style="display:none;">
+    <div class="mb-3">
+      <label for="{{ prefix }}name_{{ tool.id|default:'new' }}" class="form-label">
+        {% trans "Name" %}
+      </label>
+      <input type="text" class="form-control"
+             id="{{ prefix }}name_{{ tool.id|default:'new' }}"
+             name="name" value="{{ tool.name|default:'' }}">
+    </div>
+    <div class="mb-3">
+      <label for="{{ prefix }}description_{{ tool.id|default:'new' }}" class="form-label">
+        {% trans "Description" %}
+      </label>
+      <textarea class="form-control"
+                id="{{ prefix }}description_{{ tool.id|default:'new' }}"
+                name="description" rows="3">{{ tool.description|default:'' }}</textarea>
+    </div>
+    <div class="mb-3">
+      <label for="{{ prefix }}endpoint_{{ tool.id|default:'new' }}" class="form-label">
+        {% trans "Endpoint URL" %}
+      </label>
+      <input type="url" class="form-control"
+             id="{{ prefix }}endpoint_{{ tool.id|default:'new' }}"
+             name="endpoint" value="{{ tool.endpoint|default:'' }}"
+             placeholder="https://api.example.com/v1">
+    </div>
+  </div>
+
+  {# JSON-schema fields (API only) ------------------------------------- #}
+  <div class="field-group api-fields" style="display:none;">
+    {% include 'nova/partials/_json_schema_fields.html' with prefix=prefix tool=tool %}
+  </div>
+</div>
+
+<div class="form-check mb-3">
+  <input class="form-check-input" type="checkbox"
+         id="{{ prefix }}is_active_{{ tool.id|default:'new' }}"
+         name="is_active"
+         {% if tool.is_active or mode == 'create' %}checked{% endif %}>
+  <label class="form-check-label" for="{{ prefix }}is_active_{{ tool.id|default:'new' }}">
+    {% trans "Active" %}
+  </label>
+</div>

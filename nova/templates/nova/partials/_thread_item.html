@@ -1,0 +1,16 @@
+<!-- nova/templates/nova/partials/_thread_item.html -->
+{% load static %}
+{% load i18n %}
+
+<li class="list-group-item" id="thread-item-{{ thread.id }}">
+    <a href="#" class="thread-link" data-thread-id="{{ thread.id }}">
+      {{ thread.subject }}
+    </a>
+    <button class="delete-thread-btn"
+            data-thread-id="{{ thread.id }}"
+            style="background:none;border:none;padding:0;margin-left:10px;">
+      <img src="{% static 'images/bin_icon.png' %}"
+           width="14" height="14"
+           alt="{% trans 'Delete Thread' %}"/>
+    </button>
+  </li>

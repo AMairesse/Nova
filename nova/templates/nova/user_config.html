@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% load static %}
+{% load i18n %}
+
+{% block content %}
+<h2>{% trans "User Config" %}</h2>
+
+<!-- Tabs navigation -->
+<ul class="nav nav-tabs" id="configTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="providers-tab" data-bs-toggle="tab" data-bs-target="#providers" type="button" role="tab">
+            {% trans "LLM Providers" %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="agents-tab" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">
+            {% trans "Agents" %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tools-tab" data-bs-toggle="tab" data-bs-target="#tools" type="button" role="tab">
+            {% trans "Tools" %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="general-config-tab" data-bs-toggle="tab" data-bs-target="#general-config" type="button" role="tab">
+            {% trans "General Config" %}
+        </button>
+    </li>
+</ul>
+
+<!-- Tabs content -->
+<div class="tab-content mt-3" id="configTabsContent">
+    <!-- LLM Providers tab -->
+    <div class="tab-pane fade show active" id="providers" role="tabpanel">
+        <h3>{% trans "My LLM providers" %}</h3>
+        <div class="row">
+            {% for provider in llm_providers %}
+                <div class="card mb-2">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5>{{ provider.name }}</h5>
+                            <p class="text-muted mb-0">{{ provider.get_provider_type_display }} – {{ provider.model }}</p>
+                        </div>
+                        <div>
+                            <button class="btn btn-sm btn-outline-primary me-2 edit-provider-btn"
+                                    data-id="{{ provider.id }}" data-name="{{ provider.name|escapejs }}" data-provider-type="{{ provider.provider_type }}"
+                                    data-model="{{ provider.model }}" data-base-url="{{ provider.base_url|default:'' }}" data-config="{{ provider.additional_config|default:'{}' }}">
+                                {% trans "Edit" %}
+                            </button>
+                            <form method="post" action="{% url 'delete_provider' provider.id %}" class="d-inline"
+                                  onsubmit="return confirm(getDeleteConfirmation('{{ provider.name }}'))">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            {% empty %}
+                <div class="alert alert-info">{% trans "No LLM providers configured. Create one to be able to configure agents." %}</div>
+            {% endfor %}
+        </div>
+        <button class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#providerModal">{% trans "Create a new provider" %}</button>
+    </div>
+
+    <!-- Agents tab -->
+    <div class="tab-pane fade" id="agents" role="tabpanel">
+        {% trans "Delete" as delete_trans %}
+        <div class="row">
+            <div class="col-md-6">
+                <h3>{% trans "My agents" %}</h3>
+                {% for agent in agents_normal|dictsort:"name" %}
+                <div class="card mb-2">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5>{{ agent.name }}</h5>
+                            <p class="text-muted mb-0">{{ agent.llm_provider.name }}</p>
+                            <p class="text-muted mb-0">
+                                <small>
+                                {% with tool_count=agent.tools.count %}
+                                  {% if tool_count %}
+                                    {% blocktrans count tool_count=tool_count %}
+                                      {{ tool_count }} tool
+                                    {% plural %}
+                                      {{ tool_count }} tools
+                                    {% endblocktrans %}
+                                  {% else %}
+                                    {% trans "No tools configured" %}
+                                  {% endif %}
+                                {% endwith %}
+                                {% if agent.id == user_profile.default_agent.id %}
+                                    – {% trans "Default agent" %}
+                                {% endif %}
+                                </small>
+                            </p>
+                        </div>
+                        <div>
+                            <button class="btn btn-sm btn-outline-primary me-2 edit-agent-btn"
+                                    data-id="{{ agent.id }}" data-name="{{ agent.name|escapejs }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
+                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-tool-description="{{ agent.tool_description|escapejs }}"
+                                    data-is-tool="{{ agent.is_tool }}" data-tools="{% for tool in agent.tools.all %}{{ tool.id }}{% if not forloop.last %},{% endif %}{% endfor %}"
+                                    data-agent-tools="{% for atool in agent.agent_tools.all %}{{ atool.id }}{% if not forloop.last %},{% endif %}{% endfor %}">
+                                {% trans "Edit" %}
+                            </button>
+                            <a class="btn btn-sm btn-outline-primary {% if agent.id == user_profile.default_agent.id %} disabled {% endif %}" href="{% url 'make_default_agent' agent.id %}">
+                                {% trans "Set default" %}
+                            </a>
+                            <form method="post" action="{% url 'delete_agent' agent.id %}" class="d-inline" onsubmit="return confirm('{{ delete_trans }} {{ agent.name }} ?')">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="col-md-6">
+                <h3>{% trans "My agent-tools" %}</h3>
+                {% for agent in agents_tools|dictsort:"name" %}
+                <div class="card mb-2">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5>{{ agent.name }}</h5>
+                            <p class="text-muted mb-0">{{ agent.llm_provider.name }}</p>
+                            <p class="text-muted mb-0">
+                                <small>
+                                {% with tool_count=agent.tools.count %}
+                                  {% if tool_count %}
+                                    {% blocktrans count tool_count=tool_count %}
+                                      {{ tool_count }} tool
+                                    {% plural %}
+                                      {{ tool_count }} tools
+                                    {% endblocktrans %}
+                                  {% else %}
+                                    {% trans "No tools configured" %}
+                                  {% endif %}
+                                {% endwith %}
+                                </small>
+                            </p>
+                        </div>
+                        <div>
+                            <button class="btn btn-sm btn-outline-primary me-2 edit-agent-btn"
+                                    data-id="{{ agent.id }}" data-name="{{ agent.name|escapejs }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
+                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-tool-description="{{ agent.tool_description|escapejs }}"
+                                    data-is-tool="{{ agent.is_tool }}" data-tools="{% for tool in agent.tools.all %}{{ tool.id }}{% if not forloop.last %},{% endif %}{% endfor %}"
+                                    data-agent-tools="{% for atool in agent.agent_tools.all %}{{ atool.id }}{% if not forloop.last %},{% endif %}{% endfor %}">
+                                {% trans "Edit" %}
+                            </button>
+                            <form method="post" action="{% url 'delete_agent' agent.id %}" class="d-inline" onsubmit="return confirm('{{ delete_trans }} {{ agent.name }} ?')">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% if llm_providers %}
+            <button class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#agentModal">{% trans "Create an agent" %}</button>
+        {% else %}
+            <div class="alert alert-warning mt-3">
+                {% trans "You must first create an LLM provider before you can create an agent." %}
+                <a href="#" data-bs-toggle="tab" data-bs-target="#providers" class="alert-link">{% trans "Go to LLM Providers panel" %}</a>
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Tools tab -->
+    {% include "nova/tool_list.html" %}
+
+    <!-- General Config tab -->
+    <div class="tab-pane fade" id="general-config" role="tabpanel">
+        <h3>{% trans "General Config" %}</h3>
+        <form method="post" action="{% url 'user_config' %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="save_settings">
+            <div class="mb-3 form-check">
+                <input class="form-check-input" type="checkbox" id="allow-trace" name="allow_langfuse" {% if user_params.allow_langfuse %}checked{% endif %}>
+                <label class="form-check-label" for="allow-trace">{% trans "Allow trace (langfuse)" %}</label>
+            </div>
+            <div id="langfuse-fields" {% if not user_params.allow_langfuse %}style="display: none;"{% endif %}>
+                <div class="mb-3">
+                    <label class="form-label" for="langfuse-public-key">{% trans "Langfuse Public Key" %}</label>
+                    <input type="text" class="form-control" id="langfuse-public-key" name="langfuse_public_key" value="{{ user_params.langfuse_public_key }}" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="langfuse-secret-key">{% trans "Langfuse Secret Key" %}</label>
+                    <input type="password" class="form-control" id="langfuse-secret-key" name="langfuse_secret_key" value="{{ user_params.langfuse_secret_key }}" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="langfuse-host">{% trans "Langfuse Host" %}</label>
+                    <input type="url" class="form-control" id="langfuse-host" name="langfuse_host" value="{{ user_params.langfuse_host }}" placeholder="https://cloud.langfuse.com">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
+        </form>
+    </div>
+</div>
+
+<!-- Includes for modals -->
+{% include "nova/partials/_provider_modals.html" %}
+{% include "nova/partials/_agent_modals.html" %}
+
+<!-- JS -->
+<script src="{% url 'javascript-catalog' %}"></script>
+<script src="{% static 'js/user_config.js' %}"></script>
+<script src="{% static 'js/tool_management.js' %}"></script>
+<script>
+    document.getElementById('allow-trace').addEventListener('change', function() {
+        document.getElementById('langfuse-fields').style.display = this.checked ? 'block' : 'none';
+    });
+</script>
+{% endblock %}

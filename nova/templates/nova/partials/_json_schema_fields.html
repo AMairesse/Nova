@@ -1,0 +1,20 @@
+<!-- nova/templates/nova/partials/_json_schema_fields.html -->
+{% load i18n %}
+
+<div class="mb-3 api-field mcp-field" {% if tool and tool.tool_type == 'builtin' %}style="display: none;"{% elif not tool %}style="display: none;"{% endif %}>
+    <label for="{{ prefix }}input_schema{% if tool %}_{{ tool.id }}{% endif %}" class="form-label">{% trans "Input schema (JSON)" %}</label>
+    <textarea class="form-control json-editor" 
+              id="{{ prefix }}input_schema{% if tool %}_{{ tool.id }}{% endif %}" 
+              name="input_schema" 
+              rows="5">{% if tool %}{{ tool.input_schema|default_if_none:'{}'|safe }}{% endif %}</textarea>
+    <small class="form-text text-muted">{% trans "Example:" %} {"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}</small>
+</div>
+
+<div class="mb-3 api-field mcp-field" {% if tool and tool.tool_type == 'builtin' %}style="display: none;"{% elif not tool %}style="display: none;"{% endif %}>
+    <label for="{{ prefix }}output_schema{% if tool %}_{{ tool.id }}{% endif %}" class="form-label">{% trans "Output schema (JSON)" %}</label>
+    <textarea class="form-control json-editor" 
+              id="{{ prefix }}output_schema{% if tool %}_{{ tool.id }}{% endif %}" 
+              name="output_schema" 
+              rows="5">{% if tool %}{{ tool.output_schema|default_if_none:'{}'|safe }}{% endif %}</textarea>
+    <small class="form-text text-muted">{% trans "Example:" %} {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"}}}}</small>
+</div>

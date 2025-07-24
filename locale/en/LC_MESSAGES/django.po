@@ -1,0 +1,753 @@
+#: nova/forms.py:91
+msgid "Agents to expose as tools"
+msgstr "Agents to expose as tools"
+
+#: nova/forms.py:139
+msgid "Required when using as tool."
+msgstr "Required when using as tool."
+
+#: nova/forms.py:151
+msgid "Builtin tool subtype"
+msgstr "Builtin tool subtype"
+
+#: nova/forms.py:152
+msgid "Select a builtin tool subtype"
+msgstr "Select a builtin tool subtype"
+
+#: nova/forms.py:159
+msgid "JSON schema describing the tool inputs"
+msgstr "JSON schema describing the tool inputs"
+
+#: nova/forms.py:166
+msgid "JSON schema describing the tool outputs"
+msgstr "JSON schema describing the tool outputs"
+
+#: nova/forms.py:246
+msgid "A BUILTIN tool must have a subtype defined."
+msgstr "A BUILTIN tool must have a subtype defined."
+
+#: nova/forms.py:266
+msgid "Name is required for API/MCP tools."
+msgstr "Name is required for API/MCP tools."
+
+#: nova/forms.py:268
+msgid "Description is required for API/MCP tools."
+msgstr "Description is required for API/MCP tools."
+
+#: nova/forms.py:270
+msgid "Endpoint URL is required for API/MCP tools."
+msgstr "Endpoint URL is required for API/MCP tools."
+
+#: nova/forms.py:297
+msgid "CalDav server URL"
+msgstr "CalDav server URL"
+
+#: nova/models.py:15
+msgid "User"
+msgstr "User"
+
+#: nova/models.py:16
+msgid "Agent"
+msgstr "Agent"
+
+#: nova/models.py:39
+msgid "LLM providers"
+msgstr "LLM providers"
+
+#: nova/models.py:66
+msgid "User messages"
+msgstr "User messages"
+
+#: nova/models.py:80 nova/templates/nova/partials/_tool_form_fields.html:13
+msgid "Builtin"
+msgstr "Builtin"
+
+#: nova/models.py:81
+msgid "API HTTP/REST"
+msgstr "API HTTP/REST"
+
+#: nova/models.py:82
+msgid "MCP Server"
+msgstr "MCP Server"
+
+#: nova/models.py:87 nova/templates/nova/user_config.html:22
+msgid "Tools"
+msgstr "Tools"
+
+#: nova/models.py:109
+msgid "Available functions for this tool, if any."
+msgstr "Available functions for this tool, if any."
+
+#: nova/models.py:122
+msgid "A BUILTIN tool must select a subtype."
+msgstr "A BUILTIN tool must select a subtype."
+
+#: nova/models.py:127
+#, python-format
+msgid "Invalid builtin subtype: %s"
+msgstr "Invalid builtin subtype: %s"
+
+#: nova/models.py:138
+msgid "Endpoint is mandatory for API or MCP tools."
+msgstr "Endpoint is mandatory for API or MCP tools."
+
+#: nova/models.py:147
+msgid "User agents"
+msgstr "User agents"
+
+#: nova/models.py:152 nova/models.py:156
+#: nova/templates/nova/user_config.html:17
+msgid "Agents"
+msgstr "Agents"
+
+#: nova/models.py:159
+msgid "If true, this agent can be used as a tool by other agents."
+msgstr "If true, this agent can be used as a tool by other agents."
+
+#: nova/models.py:168
+msgid "Used by agents"
+msgstr "Used by agents"
+
+#: nova/models.py:176
+msgid ""
+"Description of this agent when used as a tool (required if is_tool=True)"
+msgstr ""
+"Description of this agent when used as a tool (required if is_tool=True)"
+
+#: nova/models.py:193
+msgid "Tool description is required when 'is_tool' is True."
+msgstr "Tool description is required when 'is_tool' is True."
+
+#: nova/models.py:202
+msgid "Found a cyclic dependency between agents."
+msgstr "Found a cyclic dependency between agents."
+
+#: nova/models.py:250
+msgid "Tool credentials"
+msgstr "Tool credentials"
+
+#: nova/models.py:254
+msgid "Credentials"
+msgstr "Credentials"
+
+#: nova/models.py:259 nova/templates/nova/partials/_tool_config_modal.html:54
+msgid "No Authentication"
+msgstr "No Authentication"
+
+#: nova/models.py:260 nova/templates/nova/partials/_auth_fields.html:11
+#: nova/templates/nova/partials/_tool_config_modal.html:55
+msgid "Basic Auth"
+msgstr "Basic Auth"
+
+#: nova/models.py:261 nova/templates/nova/partials/_auth_fields.html:12
+#: nova/templates/nova/partials/_tool_config_modal.html:56
+msgid "Token Auth"
+msgstr "Token Auth"
+
+#: nova/models.py:262 nova/templates/nova/partials/_auth_fields.html:14
+#: nova/templates/nova/partials/_tool_config_modal.html:58
+msgid "OAuth"
+msgstr "OAuth"
+
+#: nova/models.py:263 nova/templates/nova/partials/_auth_fields.html:13
+#: nova/templates/nova/partials/_tool_config_modal.html:57
+msgid "API Key"
+msgstr "API Key"
+
+#: nova/models.py:264 nova/templates/nova/partials/_auth_fields.html:15
+#: nova/templates/nova/partials/_tool_config_modal.html:59
+msgid "Custom"
+msgstr "Custom"
+
+#: nova/models.py:295
+msgid "{}'s credentials for {}"
+msgstr "{}'s credentials for {}"
+
+#: nova/models.py:302
+msgid "User threads"
+msgstr "User threads"
+
+#: nova/models.py:313
+msgid "Invalid actor: {}"
+msgstr "Invalid actor: {}"
+
+#: nova/templates/base.html:8
+msgid "Nova Application"
+msgstr "Nova Application"
+
+#: nova/templates/base.html:115
+msgid "Config"
+msgstr "Config"
+
+#: nova/templates/base.html:119
+msgid "Admin"
+msgstr "Admin"
+
+#: nova/templates/base.html:123
+msgid "Logout"
+msgstr "Logout"
+
+#: nova/templates/nova/message_container.html:24
+msgid "Show details"
+msgstr "Show details"
+
+#: nova/templates/nova/message_container.html:59
+msgid "No agents available"
+msgstr "No agents available"
+
+#: nova/templates/nova/message_container.html:78
+#, fuzzy
+#| msgid "Add a new message"
+msgid "Add a new message"
+msgstr "Add a new message"
+
+#: nova/templates/nova/partials/_agent_modals.html:9
+#: nova/templates/nova/user_config.html:161
+msgid "Create an agent"
+msgstr "Create an agent"
+
+#: nova/templates/nova/partials/_agent_modals.html:18
+msgid "Agent name"
+msgstr "Agent name"
+
+#: nova/templates/nova/partials/_agent_modals.html:24
+#: nova/templates/nova/partials/_agent_modals.html:125
+msgid "LLM provider"
+msgstr "LLM provider"
+
+#: nova/templates/nova/partials/_agent_modals.html:26
+#: nova/templates/nova/partials/_provider_modals.html:21
+msgid "Choose a provider"
+msgstr "Choose a provider"
+
+#: nova/templates/nova/partials/_agent_modals.html:37
+#: nova/templates/nova/partials/_agent_modals.html:136
+msgid "System prompt"
+msgstr "System prompt"
+
+#: nova/templates/nova/partials/_agent_modals.html:45
+#: nova/templates/nova/partials/_agent_modals.html:144
+msgid "Use as a tool"
+msgstr "Use as a tool"
+
+#: nova/templates/nova/partials/_agent_modals.html:51
+#: nova/templates/nova/partials/_agent_modals.html:150
+msgid "Tool description"
+msgstr "Tool description"
+
+#: nova/templates/nova/partials/_agent_modals.html:53
+#: nova/templates/nova/partials/_agent_modals.html:152
+msgid "Describe how this agent can be used as a tool."
+msgstr "Describe how this agent can be used as a tool."
+
+#: nova/templates/nova/partials/_agent_modals.html:59
+msgid "Available tools"
+msgstr "Available tools"
+
+#: nova/templates/nova/partials/_agent_modals.html:77
+#: nova/templates/nova/partials/_agent_modals.html:174
+msgid "Agents available as tools"
+msgstr "Agents available as tools"
+
+#: nova/templates/nova/partials/_agent_modals.html:96
+#: nova/templates/nova/partials/_agent_modals.html:197
+#: nova/templates/nova/partials/_modal_create_tool.html:17
+#: nova/templates/nova/partials/_modal_edit_tool.html:17
+#: nova/templates/nova/partials/_provider_modals.html:32
+#: nova/templates/nova/partials/_provider_modals.html:72
+#: nova/templates/nova/partials/_tool_config_modal.html:112
+#: nova/templates/nova/partials/_tool_delete_modal.html:21
+msgid "Cancel"
+msgstr "Cancel"
+
+#: nova/templates/nova/partials/_agent_modals.html:98
+#: nova/templates/nova/partials/_modal_create_tool.html:20
+#: nova/templates/nova/partials/_provider_modals.html:35
+msgid "Create"
+msgstr "Create"
+
+#: nova/templates/nova/partials/_agent_modals.html:110
+#: nova/templates/nova/tool_list.html:35
+#: nova/templates/nova/user_config.html:49
+#: nova/templates/nova/user_config.html:103
+#: nova/templates/nova/user_config.html:148
+msgid "Edit"
+msgstr "Edit"
+
+#: nova/templates/nova/partials/_agent_modals.html:120
+#: nova/templates/nova/partials/_provider_modals.html:15
+#: nova/templates/nova/partials/_provider_modals.html:56
+#: nova/templates/nova/partials/_tool_form_fields.html:42
+#: nova/templates/nova/tool_list.html:17
+msgid "Name"
+msgstr "Name"
+
+#: nova/templates/nova/partials/_agent_modals.html:157
+msgid "Associated tools"
+msgstr "Associated tools"
+
+#: nova/templates/nova/partials/_agent_modals.html:199
+#: nova/templates/nova/partials/_modal_edit_tool.html:18
+#: nova/templates/nova/partials/_provider_modals.html:74
+#: nova/templates/nova/partials/_tool_config_modal.html:113
+#: nova/templates/nova/user_config.html:197
+msgid "Save"
+msgstr "Save"
+
+#: nova/templates/nova/partials/_auth_fields.html:6
+#: nova/templates/nova/partials/_tool_config_modal.html:51
+msgid "Authentication type"
+msgstr "Authentication type"
+
+#: nova/templates/nova/partials/_json_schema_fields.html:5
+msgid "Input schema (JSON)"
+msgstr "Input schema (JSON)"
+
+#: nova/templates/nova/partials/_json_schema_fields.html:10
+#: nova/templates/nova/partials/_json_schema_fields.html:19
+msgid "Example:"
+msgstr "Example:"
+
+#: nova/templates/nova/partials/_json_schema_fields.html:14
+msgid "Output schema (JSON)"
+msgstr "Output schema (JSON)"
+
+#: nova/templates/nova/partials/_modal_create_tool.html:7
+#: nova/templates/nova/tool_list.html:8
+msgid "Create a tool"
+msgstr "Create a tool"
+
+#: nova/templates/nova/partials/_modal_create_tool.html:8
+msgid "Close"
+msgstr "Close"
+
+#: nova/templates/nova/partials/_modal_edit_tool.html:8
+#, python-format
+msgid "Edit %(tool.name)s"
+msgstr "Edit %(tool.name)s"
+
+#: nova/templates/nova/partials/_provider_modals.html:8
+msgid "Create a LLM provider"
+msgstr "Create a LLM provider"
+
+#: nova/templates/nova/partials/_provider_modals.html:19
+#: nova/templates/nova/partials/_provider_modals.html:60
+#: nova/templates/nova/partials/_tool_form_fields.html:5
+#: nova/templates/nova/tool_list.html:18
+msgid "Type"
+msgstr "Type"
+
+#: nova/templates/nova/partials/_provider_modals.html:48
+msgid "Edit provider"
+msgstr "Edit provider"
+
+#: nova/templates/nova/partials/_thread_item.html:14
+msgid "Delete Thread"
+msgstr "Delete Thread"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:9
+#, python-format
+msgid " Configure %(tool.name)s "
+msgstr "Configure %(tool.name)s"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:35
+msgid "No configuration required for this tool."
+msgstr "No configuration required for this tool."
+
+#: nova/templates/nova/partials/_tool_config_modal.html:40
+msgid "Test"
+msgstr "Test"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:67
+msgid "Test MCP connection"
+msgstr "Test MCP connection"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:75
+#: nova/tools/builtins/caldav.py:267
+msgid "Username"
+msgstr "Username"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:80
+#: nova/tools/builtins/caldav.py:268
+msgid "Password"
+msgstr "Password"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:87
+msgid "Token / API Key"
+msgstr "Token / API Key"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:92
+msgid "Token type"
+msgstr "Token type"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:99
+msgid "Client ID"
+msgstr "Client ID"
+
+#: nova/templates/nova/partials/_tool_config_modal.html:104
+msgid "Client Secret"
+msgstr "Client Secret"
+
+#: nova/templates/nova/partials/_tool_delete_modal.html:8
+#, python-format
+msgid " Delete tool %(tool.name)s "
+msgstr "Delete Tool %(tool.name)s "
+
+#: nova/templates/nova/partials/_tool_delete_modal.html:12
+msgid ""
+"Are you sure you want to delete this tool ? This action cannot be undone."
+msgstr ""
+"Are you sure you want to delete this tool ? This action cannot be undone."
+
+#: nova/templates/nova/partials/_tool_delete_modal.html:15
+msgid "Warning :"
+msgstr "Warning :"
+
+#: nova/templates/nova/partials/_tool_delete_modal.html:15
+#, python-format
+msgid " This tool is used by %(tool.agents.count)s agents. "
+msgstr " This tool is used by %(tool.agents.count)s agents. "
+
+#: nova/templates/nova/partials/_tool_delete_modal.html:16
+msgid "Deleting it will also delete these agents."
+msgstr "Deleting it will also delete these agents."
+
+#: nova/templates/nova/partials/_tool_delete_modal.html:24
+#: nova/templates/nova/tool_list.html:39
+#: nova/templates/nova/user_config.html:54
+#: nova/templates/nova/user_config.html:68
+#: nova/templates/nova/user_config.html:110
+#: nova/templates/nova/user_config.html:152
+msgid "Delete"
+msgstr "Delete"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:12
+#, fuzzy
+#| msgid " Select a type "
+msgid " Select a type "
+msgstr " Select a type "
+
+#: nova/templates/nova/partials/_tool_form_fields.html:14
+msgid "HTTP / REST API"
+msgstr "HTTP / REST API"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:15
+msgid "MCP server"
+msgstr "MCP Server"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:24
+msgid "Builtin subtype"
+msgstr "Builtin subtype"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:29
+#, fuzzy
+#| msgid " Select a subtype "
+msgid " Select a subtype "
+msgstr " Select a subtype "
+
+#: nova/templates/nova/partials/_tool_form_fields.html:50
+#: nova/templates/nova/tool_list.html:19
+msgid "Description"
+msgstr "Description"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:58
+msgid "Endpoint URL"
+msgstr "Endpoint URL"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:79
+#: nova/templates/nova/tool_list.html:20
+msgid "Active"
+msgstr "Active"
+
+#: nova/templates/nova/tool_list.html:6
+msgid "My tools"
+msgstr "My tools"
+
+#: nova/templates/nova/tool_list.html:21
+msgid "Actions"
+msgstr "Actions"
+
+#: nova/templates/nova/tool_list.html:30
+msgid "Yes"
+msgstr "Yes"
+
+#: nova/templates/nova/tool_list.html:30
+msgid "No"
+msgstr "No"
+
+#: nova/templates/nova/tool_list.html:43
+msgid "Configure"
+msgstr "Configure"
+
+#: nova/templates/nova/tool_list.html:53
+msgid "No tools available."
+msgstr "No tools available."
+
+#: nova/templates/nova/user_config.html:6
+msgid "User Config"
+msgstr "User Config"
+
+#: nova/templates/nova/user_config.html:12
+msgid "LLM Providers"
+msgstr "LLM Providers"
+
+#: nova/templates/nova/user_config.html:27
+#: nova/templates/nova/user_config.html:175
+msgid "General Config"
+msgstr "General Config"
+
+#: nova/templates/nova/user_config.html:36
+msgid "My LLM providers"
+msgstr "My LLM providers"
+
+#: nova/templates/nova/user_config.html:60
+msgid "No LLM providers configured. Create one to be able to configure agents."
+msgstr ""
+"No LLM providers configured. Create one to be able to configure agents."
+
+#: nova/templates/nova/user_config.html:63
+msgid "Create a new provider"
+msgstr "Create a new provider"
+
+#: nova/templates/nova/user_config.html:71
+msgid "My agents"
+msgstr "My agents"
+
+#: nova/templates/nova/user_config.html:82
+#: nova/templates/nova/user_config.html:130
+#, fuzzy, python-format
+#| msgid ""
+#| "\n"
+#| "                                  %(tool_count)s tool\n"
+#| "                                "
+#| msgid_plural ""
+#| "\n"
+#| "                                  %(tool_count)s tools\n"
+#| "                                "
+msgid ""
+"\n"
+"                                      %(tool_count)s tool\n"
+"                                    "
+msgid_plural ""
+"\n"
+"                                      %(tool_count)s tools\n"
+"                                    "
+msgstr[0] "%(tool_count)s tool"
+msgstr[1] "%(tool_count)s tools"
+
+#: nova/templates/nova/user_config.html:88
+#: nova/templates/nova/user_config.html:136
+msgid "No tools configured"
+msgstr "No tools configured"
+
+#: nova/templates/nova/user_config.html:92
+msgid "Default agent"
+msgstr "Default agent"
+
+#: nova/templates/nova/user_config.html:106
+msgid "Set default"
+msgstr "Set default"
+
+#: nova/templates/nova/user_config.html:119
+msgid "My agent-tools"
+msgstr "My agent-tools"
+
+#: nova/templates/nova/user_config.html:164
+msgid "You must first create an LLM provider before you can create an agent."
+msgstr "You must first create an LLM provider before you can create an agent."
+
+#: nova/templates/nova/user_config.html:165
+msgid "Go to LLM Providers panel"
+msgstr "Go to LLM Providers panel"
+
+#: nova/templates/nova/user_config.html:181
+msgid "Allow trace (langfuse)"
+msgstr "Allow trace (langfuse)"
+
+#: nova/templates/nova/user_config.html:185
+msgid "Langfuse Public Key"
+msgstr "Langfuse Public Key"
+
+#: nova/templates/nova/user_config.html:189
+msgid "Langfuse Secret Key"
+msgstr "Langfuse Secret Key"
+
+#: nova/templates/nova/user_config.html:193
+msgid "Langfuse Host"
+msgstr "Langfuse Host"
+
+#: nova/templates/registration/login.html:7
+msgid "Your username and password didn't match. Please try again."
+msgstr "Your username and password didn't match. Please try again."
+
+#: nova/templates/registration/login.html:12
+msgid ""
+"Your account doesn't have access to this page. To proceed, please login with "
+"an account that has access."
+msgstr ""
+"Your account doesn't have access to this page. To proceed, please login with "
+"an account that has access."
+
+#: nova/templates/registration/login.html:14
+msgid "Please login to see this page."
+msgstr "Please login to see this page."
+
+#: nova/templates/registration/login.html:31
+msgid "Login"
+msgstr "Login"
+
+#: nova/templates/registration/login.html:36
+msgid "Lost password ?"
+msgstr "Lost password ?"
+
+#: nova/tools/__init__.py:54
+msgid "Invalid python_path: Must be under 'nova.tools.builtins.'."
+msgstr "Invalid python_path: Must be under 'nova.tools.builtins.'."
+
+#: nova/tools/__init__.py:60
+#, python-format
+msgid "Could not import module: %s"
+msgstr "Could not import module: %s"
+
+#: nova/tools/agent_tool_wrapper.py:75
+#, python-format
+msgid "Question or instruction sent to the agent %(name)s"
+msgstr "Question or instruction sent to the agent %(name)s"
+
+#: nova/tools/builtins/caldav.py:18
+msgid "Incomplete CalDav configuration"
+msgstr "Incomplete CalDav configuration"
+
+#: nova/tools/builtins/caldav.py:29
+#, python-brace-format
+msgid "No CalDav credential found for tool {tool_id}"
+msgstr "No CalDav credential found for tool {tool_id}"
+
+#: nova/tools/builtins/caldav.py:46 nova/tools/builtins/caldav.py:132
+#: nova/tools/builtins/caldav.py:181 nova/tools/builtins/caldav.py:210
+msgid "No calendars available."
+msgstr "No calendars available."
+
+#: nova/tools/builtins/caldav.py:48
+msgid "Available calendars :\n"
+msgstr "Available calendars :\n"
+
+#: nova/tools/builtins/caldav.py:55
+msgid "Error when retrieving calendars : {}"
+msgstr "Error when retrieving calendars : {}"
+
+#: nova/tools/builtins/caldav.py:105 nova/tools/builtins/caldav.py:155
+msgid "Error when retrieving events : {}"
+msgstr "Error when retrieving events : {}"
+
+#: nova/tools/builtins/caldav.py:127 nova/tools/builtins/caldav.py:176
+#, python-brace-format
+msgid "Calendar '{calendar_name}' not found."
+msgstr "Calendar '{calendar_name}' not found."
+
+#: nova/tools/builtins/caldav.py:151
+msgid "No events found"
+msgstr "No events found"
+
+#: nova/tools/builtins/caldav.py:187
+msgid "Event not found."
+msgstr "Event not found."
+
+#: nova/tools/builtins/caldav.py:190
+msgid "Error when retrieving event's details : {}"
+msgstr "Error when retrieving event's details : {}"
+
+#: nova/tools/builtins/caldav.py:226 nova/tools/builtins/caldav.py:231
+msgid "Error when searching events : {}"
+msgstr "Error when searching events : {}"
+
+#: nova/tools/builtins/caldav.py:244
+msgid "No calendars found"
+msgstr "No calendars found"
+
+#: nova/tools/builtins/caldav.py:249
+#, python-format
+msgid "%(count)d calendar found"
+msgid_plural "%(count)d calendars found"
+msgstr[0] "%(count)d calendar found"
+msgstr[1] "%(count)d calendars found"
+
+#: nova/tools/builtins/caldav.py:257
+#, python-format
+msgid "Connection error: %(err)s"
+msgstr "Connection error: %(err)s"
+
+#: nova/tools/builtins/caldav.py:266
+msgid "URL CalDav"
+msgstr "URL CalDav"
+
+#: nova/views/tools_views.py:164
+msgid "Success connecting - No tools found"
+msgstr "Success connecting - No tools found"
+
+#: nova/views/tools_views.py:169
+#, fuzzy, python-format
+#| msgid "Success connecting  %(count)d tool found"
+#| msgid_plural "Success connecting  %(count)d tools found"
+msgid "Success connecting - %(count)d tool found"
+msgid_plural "Success connecting - %(count)d tools found"
+msgstr[0] "Success connecting  %(count)d tool found"
+msgstr[1] "Success connecting  %(count)d tools found"
+
+#: nova/views/tools_views.py:182
+#, python-format
+msgid "MCP connection error: %(err)s"
+msgstr "MCP connection error: %(err)s"
+
+#: nova/views/tools_views.py:212
+#, python-format
+msgid "Tool testing error: %(err)s"
+msgstr "Tool testing error: %(err)s"
+
+#: nova/views/tools_views.py:217
+msgid "No test implemented for this tool type"
+msgstr "No test implemented for this tool type"
+
+#: nova/views/tools_views.py:220
+msgid "No credentials found for this user and tool."
+msgstr "No credentials found for this user and tool."
+
+#~ msgid "URL of the CalDav server"
+#~ msgstr "URL of the CalDav server"
+
+#~ msgid "Test CalDav connection"
+#~ msgstr "Test CalDav connection"
+
+#~ msgid "Interact with a CalDav server (calendars)"
+#~ msgstr "Interact with a CalDav server (calendars)"
+
+#~ msgid "Manipulate dates and times"
+#~ msgstr "Manipulate dates and times"
+
+#~ msgid "Select an agent"
+#~ msgstr "Select an agent"
+
+#~ msgid "This will also delete all associated agents."
+#~ msgstr "This will also delete all associated agents."
+
+#~ msgid "Agent used as tool"
+#~ msgstr "Agent used as tool"
+
+#~ msgid "Model"
+#~ msgstr "Model"
+
+#~ msgid "API key"
+#~ msgstr "API key"
+
+#~ msgid "A key is already registered ; leave empty to keep it."
+#~ msgstr "A key is already registered ; leave empty to keep it."
+
+#~ msgid "Base URL (optional)"
+#~ msgstr "Base URL (optional)"
+
+#~ msgid "Base URL"
+#~ msgstr "Base URL"
+
+#, python-format
+#~ msgid "Wrapped agent \"%(name)s\". %(prompt)s"
+#~ msgstr "Wrapped agent \"%(name)s\". %(prompt)s"
