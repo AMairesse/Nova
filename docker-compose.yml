@@ -41,7 +41,7 @@ services:
       - static_data:/app/static
       - media_data:/app/media
     ports:
-      - "80:80" # Change to 443 for HTTPS later
+      - "${HOST_PORT}:80"
     depends_on:
       - web
 
