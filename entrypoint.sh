@@ -50,4 +50,4 @@ exec gunicorn nova.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers 3 \
     --log-level info \
-    --timeout 30
+    --timeout 300
