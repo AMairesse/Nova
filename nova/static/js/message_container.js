@@ -158,7 +158,7 @@
       stack: [], // [{depth, el}]
       phaseStack: [],
       answerBuf: "",
-      detailsVisible: false
+      detailsVisible: false,
     };
 
     // Helper: Create details card
@@ -199,61 +199,6 @@
       }
     }
 
-    // Event mapper
-    function mapEvent(ev) {
-      const evt      = ev["event"];          // ex: on_chain_start
-      const depth    = ev["parent_ids"]?.length ?? 0;
-      const name     = ev["name"];
-      const kind     = evt.startsWith("on_chain") ? "agent" : "tool";
-
-      if (evt.endsWith("_start")) {
-        return {
-          "event": "start",
-          "kind" : kind,
-          "name" : name,
-          "depth": depth
-        };
-      }
-
-      if (evt.endsWith("_stream")) {
-        const chunk = ev["data"]?.["chunk"] ?? "";
-
-        function isCall(obj) {
-          if (typeof obj === "string") {
-            return /^\s*\[\s*{\s*"name"\s*:/.test(obj);
-          }
-          if (typeof obj === "object" && obj !== null) {
-            return !!obj.tool_calls;
-          }
-          return false;
-        }
-
-        if (isCall(chunk)) return null;
-        const txt = typeof chunk === "object" ? JSON.stringify(chunk) : chunk;
-        if (!txt) return null;
-        return {
-          "event"  : "stream",
-          "kind"   : kind,
-          "name"   : name,
-          "depth"  : depth,
-          "chunk"  : txt // Raw; markdown in handler if needed
-        };
-      }
-
-      if (evt.endsWith("_end")) {
-        const out = ev["data"]?.["output"] ?? "";
-        const txt = typeof out === "object" ? JSON.stringify(out) : out;
-        return {
-          "event"  : "end",
-          "kind"   : kind,
-          "name"   : name,
-          "depth"  : depth,
-          "output" : txt
-        };
-      }
-      return null;
-    }
-
     // Toggle details
     $("#toggle-details")
       .off("click")
@@ -261,7 +206,9 @@
         streamState.detailsVisible = !streamState.detailsVisible;
         $(".llm-block").toggle(streamState.detailsVisible);
         $("#toggle-details").text(
-          streamState.detailsVisible ? gettext("Hide details") : gettext("Show details")
+          streamState.detailsVisible
+            ? gettext("Hide details")
+            : gettext("Show details")
         );
       });
 
@@ -269,16 +216,13 @@
 
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      const mapped = mapEvent(msg);
-      if (!mapped) return;
-
-      switch (mapped.event) {
+      switch (msg.event) {
         case "start": {
-          const title = `${mapped.kind} › ${mapped.name}`;
-          const card = createCard(mapped.depth, title);
-          streamState.stack[mapped.depth] = { depth: mapped.depth, el: card };
+          const title = `${msg.kind} › ${msg.name}`;
+          const card = createCard(msg.depth, title);
+          streamState.stack[msg.depth] = { depth: msg.depth, el: card };
 
-          if (mapped.depth === 0) {
+          if (msg.depth === 0) {
             $("#conversation-container").append(
               `<div class="message agent"><p id="agent-answer-${threadId}"></p></div>`
             );
@@ -286,19 +230,19 @@
             $("#toggle-details").hide();
           }
 
-          if (mapped.depth === 0) {
+          if (msg.depth === 0) {
             $("#agent-stream-container").after(card);
-          } else if (streamState.stack[mapped.depth - 1]) {
-            streamState.stack[mapped.depth - 1].el.append(card);
+          } else if (streamState.stack[msg.depth - 1]) {
+            streamState.stack[msg.depth - 1].el.append(card);
           }
           if (!streamState.detailsVisible) card.hide();
           $("#toggle-details").show();
 
-          if (mapped.depth === 0) {
+          if (msg.depth === 0) {
             pushPhase(gettext("Agent is thinking…"));
           }
-          if (mapped.kind === "tool") {
-            const niceName = mapped.name || "tool";
+          if (msg.kind === "tool") {
+            const niceName = msg.name || "tool";
             pushPhase(
               interpolate(
                 gettext("Agent is using tool « %s »…"),
@@ -312,30 +256,30 @@
         }
 
         case "stream": {
-          const block = streamState.stack[mapped.depth];
+          const block = streamState.stack[msg.depth];
           if (!block) break;
-          block.el.find(".stream").append(mapped.chunk);
+          block.el.find(".stream").append(msg.chunk); // Backend already markdown'd it
 
-          if (mapped.depth === 0) {
-            streamState.answerBuf += mapped.chunk;
+          if (msg.depth === 0) {
+            streamState.answerBuf += msg.chunk;
             const p = $(`#agent-answer-${threadId}`);
-            p.html(streamState.answerBuf); // Render progressive (assumes chunk is raw text/markup)
+            p.html(streamState.answerBuf); // Render progressive HTML
             // No timeout: Observer will handle
           }
           break;
         }
 
         case "end": {
-          const block = streamState.stack[mapped.depth];
-          if (block && mapped.output) {
-            block.el.find(".stream").append(mapped.output);
+          const block = streamState.stack[msg.depth];
+          if (block && msg.output) {
+            block.el.find(".stream").append(msg.output); // Backend already markdown'd
           }
 
           popPhase();
 
-          if (mapped.depth === 0) {
-            let finalTxt = mapped.output || streamState.answerBuf;
-            // Special handling for agent-tool JSON output
+          if (msg.depth === 0) {
+            let finalTxt = msg.output || streamState.answerBuf;
+            // Special handling for agent-tool JSON output (from backend's extract_final_answer)
             try {
               const parsed = JSON.parse(finalTxt);
               if (
