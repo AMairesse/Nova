@@ -293,6 +293,24 @@ def stream_llm_response(request, thread_id):
     return StreamingHttpResponse(llm_stream(), content_type='text/event-stream')
 
 
+@login_required
+def task_detail(request, task_id):
+    """
+    JSON endpoint to get task details for polling.
+    Returns status, logs, result, and timestamps.
+    """
+    task = get_object_or_404(Task, id=task_id, user=request.user)  # Ensure ownership
+    return JsonResponse({
+        'id': task.id,
+        'status': task.status,
+        'progress_logs': task.progress_logs,  # JSON list of steps
+        'result': task.result,
+        'created_at': task.created_at.isoformat(),
+        'updated_at': task.updated_at.isoformat(),
+        'is_completed': task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED],
+    })
+
+
 # Updated helper function for background thread
 def run_ai_task(task_id, user_id, thread_id, agent_id):
     """
@@ -315,11 +333,12 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         })
         task.save()
 
-        # Get message history (similar to original logic)
+        # Get message history
         messages = thread.get_messages()
         msg_history = [[m.actor, m.text] for m in messages]
         if msg_history:
             msg_history.pop()  # Exclude last user message for consistency
+        # Last message is the prompt to send
         last_message = messages.last().text
 
         # Create LLMAgent

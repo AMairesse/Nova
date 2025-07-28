@@ -1,4 +1,4 @@
-/* message_container.js */
+/* nova/static/js/message_container.js */
 (function ($) {
   /* ----------- Public function called after each injection ----------- */
   window.initMessageContainer = function () {
@@ -123,7 +123,8 @@
               $("#message-container").html(html);
               window.initMessageContainer();
               scrollToBottomIfNeeded();
-              startAgentSSE(currentAgentId);
+              // Start polling for task progress (replaces SSE)
+              startTaskPolling(data.task_id);
             },
           });
         },
@@ -146,179 +147,61 @@
     $("#dropdownMenuButton").text(label);
   });
 
-  /* -------------------------- SSE AGENT -------------------------- */
-  function startAgentSSE(forcedAgentId = null) {
-    const threadId = $('input[name="thread_id"]').val();
-    const agentId = forcedAgentId ?? ($("#selectedAgentInput").val() || "");
-    const es = new EventSource(
-      `/stream-llm-response/${threadId}/?agent_id=${agentId}`
-    );
+  /* -------------------------- Task Polling for Progress -------------------------- */
+  function startTaskPolling(taskId) {
+    if (!taskId) return;
 
-    const streamState = {
-      stack: [], // [{depth, el}]
-      phaseStack: [],
-      answerBuf: "",
-      detailsVisible: false,
-    };
+    const progressDiv = $("#task-progress");
+    const logsList = $("#progress-logs");
+    progressDiv.show();
 
-    // Helper: Create details card
-    function createCard(depth, title) {
-      const el = $(`
-        <details class="llm-block" data-depth="${depth}">
-          <summary>${title}</summary>
-          <div class="stream" style="white-space:pre-wrap"></div>
-        </details>
-      `);
-      el.css("margin-left", depth * 10 + "px");
-      return el;
-    }
+    const pollInterval = setInterval(() => {
+      fetch(`/task/${taskId}/`)
+        .then((response) => response.json())
+        .then((data) => {
+          // Clear and render logs
+          logsList.empty();
+          data.progress_logs.forEach((log) => {
+            const li = document.createElement("li");
+            li.innerHTML = `<small>${log.timestamp}: ${
+              log.step || log.event
+            } - ${log.kind || ""} ${log.name || ""} ${
+              log.chunk || log.output || ""
+            }</small>`;
+            logsList.append(li);
+          });
 
-    // Helper: Status updates
-    function showStatus(text) {
-      $("#agent-stream-container")
-        .html(
-          `<span class="spinner-border spinner-border-sm me-2" role="status"></span>${text}`
-        )
-        .show();
-    }
-    function hideStatus() {
-      $("#agent-stream-container").hide().empty();
-    }
-
-    // Phase management
-    function pushPhase(label) {
-      streamState.phaseStack.push(label);
-      showStatus(label);
-    }
-    function popPhase() {
-      streamState.phaseStack.pop();
-      if (streamState.phaseStack.length) {
-        showStatus(streamState.phaseStack[streamState.phaseStack.length - 1]);
-      } else {
-        hideStatus();
-      }
-    }
-
-    // Toggle details
-    $("#toggle-details")
-      .off("click")
-      .on("click", () => {
-        streamState.detailsVisible = !streamState.detailsVisible;
-        $(".llm-block").toggle(streamState.detailsVisible);
-        $("#toggle-details").text(
-          streamState.detailsVisible
-            ? gettext("Hide details")
-            : gettext("Show details")
-        );
-      });
-
-    showStatus(gettext("Starting agent…"));
-
-    es.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      switch (msg.event) {
-        case "start": {
-          const title = `${msg.kind} › ${msg.name}`;
-          const card = createCard(msg.depth, title);
-          streamState.stack[msg.depth] = { depth: msg.depth, el: card };
-
-          if (msg.depth === 0) {
-            $("#conversation-container").append(
-              `<div class="message agent"><p id="agent-answer-${threadId}"></p></div>`
-            );
-            streamState.answerBuf = "";
-            $("#toggle-details").hide();
-          }
-
-          if (msg.depth === 0) {
-            $("#agent-stream-container").after(card);
-          } else if (streamState.stack[msg.depth - 1]) {
-            streamState.stack[msg.depth - 1].el.append(card);
-          }
-          if (!streamState.detailsVisible) card.hide();
-          $("#toggle-details").show();
-
-          if (msg.depth === 0) {
-            pushPhase(gettext("Agent is thinking…"));
-          }
-          if (msg.kind === "tool") {
-            const niceName = msg.name || "tool";
-            pushPhase(
-              interpolate(
-                gettext("Agent is using tool « %s »…"),
-                [niceName],
-                false
-              )
-            );
-          }
-          // No timeout: Observer will handle
-          break;
-        }
-
-        case "stream": {
-          const block = streamState.stack[msg.depth];
-          if (!block) break;
-          block.el.find(".stream").append(msg.chunk); // Backend already markdown'd it
-
-          if (msg.depth === 0) {
-            streamState.answerBuf += msg.chunk;
-            const p = $(`#agent-answer-${threadId}`);
-            p.html(streamState.answerBuf); // Render progressive HTML
-            // No timeout: Observer will handle
-          }
-          break;
-        }
-
-        case "end": {
-          const block = streamState.stack[msg.depth];
-          if (block && msg.output) {
-            block.el.find(".stream").append(msg.output); // Backend already markdown'd
-          }
-
-          popPhase();
-
-          if (msg.depth === 0) {
-            let finalTxt = msg.output || streamState.answerBuf;
-            // Special handling for agent-tool JSON output (from backend's extract_final_answer)
-            try {
-              const parsed = JSON.parse(finalTxt);
-              if (
-                parsed.agent &&
-                parsed.agent.messages &&
-                parsed.agent.messages[0] &&
-                parsed.agent.messages[0].content
-              ) {
-                finalTxt = parsed.agent.messages[0].content;
-              }
-            } catch (e) {
-              // Not JSON, keep as is
-            }
-            $(`#agent-answer-${threadId}`).html(finalTxt); // Set final rendered
-            hideStatus();
+          // If completed, stop polling and re-enable send button
+          if (data.is_completed) {
+            clearInterval(pollInterval);
             $("#send-btn").prop("disabled", false);
-            streamState.answerBuf = ""; // Clean buffer
-            // No timeout: Observer will handle
+            if (data.status === "COMPLETED") {
+              progressDiv.html(
+                '<p class="text-success">Task completed successfully.</p>'
+              );
+            } else {
+              progressDiv.html(
+                '<p class="text-danger">Task failed: ' + data.result + "</p>"
+              );
+            }
+            // Reload messages to show final result
+            const threadId = $('input[name="thread_id"]').val();
+            $.get(window.urls.messageList, { thread_id: threadId }, (html) => {
+              $("#message-container").html(html);
+              initMessageContainer();
+              scrollToBottomIfNeeded();
+            });
           }
-          break;
-        }
-      }
-    };
-
-    es.onerror = () => {
-      es.close();
-      hideStatus();
-      $("#send-btn").prop("disabled", false);
-      streamState.answerBuf = ""; // Clean on error
-      if (observer) observer.disconnect(); // Clean observer
-    };
-
-    es.addEventListener("close", (e) => {
-      es.close();
-      $("#send-btn").prop("disabled", false);
-      $(`.thread-link[data-thread-id="${threadId}"]`).text(e.data);
-      if (observer) observer.disconnect(); // Clean observer
-    });
+        })
+        .catch((err) => {
+          console.error("Polling error:", err);
+          clearInterval(pollInterval);
+          progressDiv.html(
+            '<p class="text-danger">Error fetching progress.</p>'
+          );
+        });
+    }, 5000); // Poll every 5 seconds
   }
 
-  window.startAgentSSE = startAgentSSE;
+  window.startTaskPolling = startTaskPolling;
 })(jQuery);

@@ -1,4 +1,4 @@
-<!-- message_container.html -->
+<!-- nova/templates/nova/message_container.html -->
 {% load static %} {% load i18n %}
 
 <div class="chat-wrapper d-flex flex-column h-100">
@@ -25,6 +25,14 @@
   </button>
 
   <div id="agent-stream-container" style="display: none"></div>
+  <div
+    id="task-progress"
+    class="mb-3 p-3 border rounded bg-light"
+    style="display: none"
+  >
+    <h6>Task Progress:</h6>
+    <ul id="progress-logs" class="list-unstyled"></ul>
+  </div>
 
   {% with nb_agents=user_agents|length %} {% if nb_agents == 0 %}
   <div class="alert alert-info text-center my-3">
@@ -83,7 +91,7 @@
       <textarea
         class="form-control flex-grow-1"
         name="new_message"
-        placeholder="{% trans 'Add a new message…' %}"
+        placeholder="{% trans 'Add a new message' %}"
         rows="1"
         autofocus
       ></textarea>
