@@ -293,11 +293,12 @@ def stream_llm_response(request, thread_id):
     return StreamingHttpResponse(llm_stream(), content_type='text/event-stream')
 
 
-# New helper function for background thread (added)
+# Updated helper function for background thread
 def run_ai_task(task_id, user_id, thread_id, agent_id):
     """
     Background function to run AI task in a thread.
-    Executes LLMAgent, updates Task status and logs.
+    Uses stream_events to capture progress, logs each event to Task.progress_logs,
+    and handles final output.
     """
     from django.contrib.auth.models import User  # Import inside to avoid circular issues
     try:
@@ -306,9 +307,12 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         thread = Thread.objects.get(id=thread_id)
         agent_obj = Agent.objects.get(id=agent_id) if agent_id else None
 
-        # Set task to running
+        # Set task to running and log start
         task.status = TaskStatus.RUNNING
-        task.progress_logs.append({"step": "Starting AI processing", "timestamp": str(dt.datetime.now())})
+        task.progress_logs.append({
+            "step": "Starting AI processing",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc))
+        })
         task.save()
 
         # Get message history (similar to original logic)
@@ -318,22 +322,70 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
             msg_history.pop()  # Exclude last user message for consistency
         last_message = messages.last().text
 
-        # Create and invoke LLMAgent
+        # Create LLMAgent
         llm = LLMAgent(user, thread_id, msg_history=msg_history, agent=agent_obj)
-        result = llm.invoke(last_message)  # Use invoke for non-streaming async execution
+
+        # Function to map events to log dicts (simplified from map_event)
+        def map_event_to_log(ev: dict):
+            evt = ev["event"]
+            depth = len(ev.get("parent_ids", []))
+            name = ev["name"]
+            kind = "agent" if evt.startswith("on_chain") else "tool"
+            timestamp = str(dt.datetime.now(dt.timezone.utc))
+
+            if evt.endswith("_start"):
+                return {"event": "start", "kind": kind, "name": name, "depth": depth, "timestamp": timestamp}
+            if evt.endswith("_stream"):
+                chunk = extract_final_answer(ev["data"].get("chunk", ""))
+                if not chunk:
+                    return None
+                return {"event": "stream", "kind": kind, "name": name, "depth": depth, "chunk": chunk, "timestamp": timestamp}
+            if evt.endswith("_end"):
+                output = extract_final_answer(ev["data"].get("output", ""))
+                return {"event": "end", "kind": kind, "name": name, "depth": depth, "output": output, "timestamp": timestamp}
+            return None
+
+        # Stream events and log progress
+        final_output = ""
+        for ev in llm.stream_events(last_message):
+            log_entry = map_event_to_log(ev)
+            if log_entry:
+                task.progress_logs.append(log_entry)
+                task.save()  # Save incrementally for real-time persistence
+
+            # Capture final output at root depth
+            if log_entry and log_entry["event"] == "end" and log_entry["depth"] == 0:
+                final_output = log_entry.get("output", "")
 
         # Log completion and save result
-        task.progress_logs.append({"step": "AI processing completed", "timestamp": str(dt.datetime.now())})
-        task.result = result
+        task.progress_logs.append({
+            "step": "AI processing completed",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc))
+        })
+        task.result = final_output
         task.status = TaskStatus.COMPLETED
-
-        # Add final message to thread (similar to original)
-        thread.add_message(result, actor=Actor.AGENT)
         task.save()
+
+        # Add final message to thread
+        if final_output:
+            thread.add_message(final_output, actor=Actor.AGENT)
+
+        # Update thread subject if needed (similar to original)
+        if thread.subject.startswith("thread n°"):
+            short_title = llm.invoke(
+                "Give me a short title for this conversation (1–3 words maximum)."
+                "Use the same language as the conversation."
+                "Answer by giving only the title, nothing else."
+            )
+            thread.subject = short_title.strip()
+            thread.save()
 
     except Exception as e:
         # Handle failure
         task.status = TaskStatus.FAILED
         task.result = f"Error: {str(e)}"
-        task.progress_logs.append({"step": f"Error occurred: {str(e)}", "timestamp": str(dt.datetime.now())})
+        task.progress_logs.append({
+            "step": f"Error occurred: {str(e)}",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc))
+        })
         task.save()
