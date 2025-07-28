@@ -3,6 +3,7 @@ from typing import Optional, List, Dict, Any
 import caldav
 from caldav.elements import dav
 from icalendar import Calendar, Event as iCalEvent
+from django.http import JsonResponse
 from django.utils.translation import gettext_lazy as _, ngettext
 from nova.models import ToolCredential
 

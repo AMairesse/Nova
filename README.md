@@ -148,7 +148,7 @@ For development or testing only (uses SQLite, less scalable). Not recommended fo
 5. Launch dev server:
 
    ```
-   python manage.py runserver
+   daphne -b 0.0.0.0 -p 8000 nova.asgi:application
    ```
 
 6. Open `http://localhost:8000`, log in, and configure via **Config › LLM Providers**.

@@ -12,7 +12,7 @@ from django.contrib.auth.models import User
 
 from nova.views.main_views import (
     index, message_list, create_thread, delete_thread, 
-    add_message, stream_llm_response
+    add_message
 )
 from nova.views.user_config_views import UserConfigView
 from nova.views.provider_views import create_provider, edit_provider, delete_provider
@@ -65,12 +65,6 @@ class URLResolutionTests(TestCase):
         url = reverse('add_message')
         resolver = resolve(url)
         self.assertEqual(resolver.func, add_message)
-
-    def test_stream_llm_response_url_resolves(self):
-        """Test that stream-llm-response URL resolves correctly."""
-        url = reverse('stream_llm_response', args=[1])
-        resolver = resolve(url)
-        self.assertEqual(resolver.func, stream_llm_response)
 
     # ------------------------------------------------------------------ #
     #  User config views                                                 #
@@ -237,9 +231,7 @@ class URLPatternTests(TestCase):
         """Test that thread ID URLs accept integers."""
         url = reverse('delete_thread', args=[123])
         self.assertEqual(url, '/delete-thread/123/')
-        
-        url = reverse('stream_llm_response', args=[456])
-        self.assertEqual(url, '/stream-llm-response/456/')
+
 
     def test_provider_id_url_pattern(self):
         """Test that provider ID URLs accept integers."""
