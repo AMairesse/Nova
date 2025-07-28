@@ -218,6 +218,8 @@
           $(".list-group").html(newThreads);
           attachThreadEventHandlers();
         });
+        // Hide progress div after short delay for UX
+        setTimeout(() => progressDiv.fadeOut(), 2000);
       }
     };
 

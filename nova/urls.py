@@ -2,7 +2,7 @@
 from django.contrib import admin
 from django.urls import include, path
 from django.views.i18n import JavaScriptCatalog
-from .views.main_views import index, message_list, create_thread, delete_thread, add_message#, task_detail
+from .views.main_views import index, message_list, create_thread, delete_thread, add_message
 from .views.user_config_views import UserConfigView
 from .views.provider_views import create_provider, edit_provider, delete_provider
 from .views.agent_views import create_agent, edit_agent, delete_agent, make_default_agent
@@ -16,7 +16,6 @@ urlpatterns = [
     path("create-thread/", create_thread, name="create_thread"), 
     path("delete-thread/<int:thread_id>/", delete_thread, name="delete_thread"), 
     path("add-message/", add_message, name="add_message"), 
-    #path("task/<int:task_id>/", task_detail, name="task_detail"),
     # User config
     path("user-config/", UserConfigView.as_view(), name="user_config"),
     # Provider management

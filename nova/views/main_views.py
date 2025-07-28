@@ -17,7 +17,7 @@ from ..models import Actor, Thread, Agent, UserProfile, Task, TaskStatus
 from ..llm_agent import LLMAgent
 from ..utils import extract_final_answer
 from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync  # Changed to async_to_sync for sync context
+from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 
 
@@ -159,24 +159,7 @@ def add_message(request):
         "threadHtml": thread_html
     })
 
-@login_required
-def task_detail(request, task_id):
-    """
-    JSON endpoint to get task details for polling.
-    Returns status, logs, result, and timestamps.
-    """
-    task = get_object_or_404(Task, id=task_id, user=request.user)  # Ensure ownership
-    return JsonResponse({
-        'id': task.id,
-        'status': task.status,
-        'progress_logs': task.progress_logs,  # JSON list of steps
-        'result': task.result,
-        'created_at': task.created_at.isoformat(),
-        'updated_at': task.updated_at.isoformat(),
-        'is_completed': task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED],
-    })
-
-@database_sync_to_async  # Add this decorator
+@database_sync_to_async
 def get_task_state(task_id):
     """Sync helper to get task state for publishing."""
     try:
@@ -203,7 +186,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
     async def async_publish_update():
         """Async function to publish task state to group."""
-        state = await get_task_state(task_id)  # Add await here
+        state = await get_task_state(task_id)
         await channel_layer.group_send(
             f'task_{task_id}',
             {
