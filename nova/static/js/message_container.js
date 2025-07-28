@@ -123,8 +123,12 @@
               $("#message-container").html(html);
               window.initMessageContainer();
               scrollToBottomIfNeeded();
-              // Start WS for task progress
-              startTaskWebSocket(data.task_id);
+
+              // Step 3: Store task_id in localStorage for persistence
+              window.addStoredTask(data.thread_id, data.task_id);
+
+              // Start WS for task progress (pass threadId for cleanup)
+              startTaskWebSocket(data.thread_id, data.task_id);
             },
           });
         },
@@ -148,7 +152,7 @@
   });
 
   /* -------------------------- Task WebSocket for Real-Time Progress -------------------------- */
-  function startTaskWebSocket(taskId) {
+  function startTaskWebSocket(threadId, taskId) {
     if (!taskId) return;
 
     const progressDiv = $("#task-progress");
@@ -166,7 +170,6 @@
     const maxReconnects = 5;
 
     socket.onopen = function () {
-      console.log("WebSocket connected for task " + taskId);
       reconnectAttempts = 0; // Reset on success
     };
 
@@ -205,15 +208,19 @@
               "</p>"
           );
         }
-        // Full refresh of messages and thread list
-        const threadId = $('input[name="thread_id"]').val();
-        $.get(window.urls.messageList, { thread_id: threadId }, (html) => {
+        // Step 3: Clean stored task on complete/failed
+        window.removeStoredTask(threadId, taskId);
+
+        // Full refresh of messages and thread list (add timestamp for no-cache)
+        const timestamp = Date.now();
+        const currentThreadId = $('input[name="thread_id"]').val();
+        $.get(`${window.urls.messageList}?thread_id=${currentThreadId}&t=${timestamp}`, (html) => {
           $("#message-container").html(html);
           initMessageContainer();
           scrollToBottomIfNeeded();
         });
-        // Refresh thread list for subject updates
-        $.get(window.location.href, (fullHtml) => {
+        // Refresh thread list for subject updates with no-cache
+        $.get(`${window.location.href}?t=${timestamp}`, (fullHtml) => {
           const newThreads = $(fullHtml).find(".list-group").html();
           $(".list-group").html(newThreads);
           attachThreadEventHandlers();
@@ -224,7 +231,6 @@
     };
 
     socket.onclose = function (e) {
-      console.log("WebSocket closed");
       if (reconnectAttempts < maxReconnects && !e.wasClean) {
         // Reconnect if unexpected close
         reconnectAttempts++;
@@ -235,11 +241,11 @@
     };
 
     socket.onerror = function (err) {
-      console.error("WebSocket error:", err);
       statusDiv.html('<p class="text-danger">WebSocket connection error.</p>');
       loadingSpinner.hide();
     };
   }
 
   window.startTaskWebSocket = startTaskWebSocket;
+  window.scrollToBottomIfNeeded = scrollToBottomIfNeeded;
 })(jQuery);

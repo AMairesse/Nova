@@ -292,3 +292,17 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         })
         task.save()
         sync_publish()  # Publish failure
+
+@login_required
+def running_tasks(request, thread_id):
+    """
+    JSON endpoint to get running task IDs for a thread.
+    Returns list of task_ids in 'RUNNING' status for the current user.
+    """
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    running_ids = Task.objects.filter(
+        thread=thread,
+        user=request.user,
+        status=TaskStatus.RUNNING
+    ).values_list('id', flat=True)
+    return JsonResponse({'running_task_ids': list(running_ids)})
