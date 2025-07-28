@@ -153,25 +153,39 @@
 
     const progressDiv = $("#task-progress");
     const logsList = $("#progress-logs");
+    const loadingSpinner = $("#progress-loading");
     progressDiv.show();
+    loadingSpinner.show();
 
+    let pollCount = 0;
+    const maxPolls = 360; // ~30min at 5s interval
     const pollInterval = setInterval(() => {
+      if (pollCount >= maxPolls) {
+        clearInterval(pollInterval);
+        progressDiv.html(
+          '<p class="text-warning">Polling timeout - Task may be stuck.</p>'
+        );
+        $("#send-btn").prop("disabled", false);
+        return;
+      }
+      pollCount++;
+
       fetch(`/task/${taskId}/`)
         .then((response) => response.json())
         .then((data) => {
-          // Clear and render logs
+          loadingSpinner.hide();
+          // Clear and render logs with Markdown
           logsList.empty();
           data.progress_logs.forEach((log) => {
             const li = document.createElement("li");
-            li.innerHTML = `<small>${log.timestamp}: ${
-              log.step || log.event
-            } - ${log.kind || ""} ${log.name || ""} ${
-              log.chunk || log.output || ""
-            }</small>`;
+            const logText = `${log.timestamp}: ${log.step || log.event} - ${
+              log.kind || ""
+            } ${log.name || ""} ${log.chunk || log.output || ""}`;
+            li.innerHTML = `<small>${marked.parse(logText)}</small>`; // Use marked for basic Markdown
             logsList.append(li);
           });
 
-          // If completed, stop polling and re-enable send button
+          // If completed, stop polling, refresh conversation, and re-enable send button
           if (data.is_completed) {
             clearInterval(pollInterval);
             $("#send-btn").prop("disabled", false);
@@ -181,24 +195,34 @@
               );
             } else {
               progressDiv.html(
-                '<p class="text-danger">Task failed: ' + data.result + "</p>"
+                '<p class="text-danger">Task failed: ' +
+                  marked.parse(data.result) +
+                  "</p>"
               );
             }
-            // Reload messages to show final result
+            // Full refresh of messages and thread list (to catch subject updates)
             const threadId = $('input[name="thread_id"]').val();
             $.get(window.urls.messageList, { thread_id: threadId }, (html) => {
               $("#message-container").html(html);
               initMessageContainer();
               scrollToBottomIfNeeded();
             });
+            // Optional: Refresh thread list if subject changed
+            $.get(window.location.href, (fullHtml) => {
+              const newThreads = $(fullHtml).find(".list-group").html();
+              $(".list-group").html(newThreads);
+              attachThreadEventHandlers();
+            });
           }
         })
         .catch((err) => {
           console.error("Polling error:", err);
           clearInterval(pollInterval);
+          loadingSpinner.hide();
           progressDiv.html(
             '<p class="text-danger">Error fetching progress.</p>'
           );
+          $("#send-btn").prop("disabled", false);
         });
     }, 5000); // Poll every 5 seconds
   }

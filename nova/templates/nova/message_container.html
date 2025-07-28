@@ -24,13 +24,20 @@
     {% trans "Show details" %}
   </button>
 
-  <div id="agent-stream-container" style="display: none"></div>
   <div
     id="task-progress"
     class="mb-3 p-3 border rounded bg-light"
     style="display: none"
   >
     <h6>Task Progress:</h6>
+    <div
+      id="progress-loading"
+      class="spinner-border spinner-border-sm"
+      role="status"
+      style="display: block"
+    >
+      <span class="visually-hidden">Loading...</span>
+    </div>
     <ul id="progress-logs" class="list-unstyled"></ul>
   </div>
 
