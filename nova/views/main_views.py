@@ -16,6 +16,9 @@ from django.utils.safestring import mark_safe
 from ..models import Actor, Thread, Agent, UserProfile, Task, TaskStatus
 from ..llm_agent import LLMAgent
 from ..utils import extract_final_answer
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync  # Changed to async_to_sync for sync context
+from channels.db import database_sync_to_async
 
 
 ALLOWED_TAGS = [
@@ -148,11 +151,11 @@ def add_message(request):
     # Launch background thread to run the AI task
     threading.Thread(target=run_ai_task, args=(task.id, request.user.id, thread.id, agent_obj.id if agent_obj else None)).start()
 
-    # Return immediately with task_id for client-side polling (in later steps)
+    # Return immediately with task_id for client-side WS connection
     return JsonResponse({
         "status": "OK",
         "thread_id": thread.id,
-        "task_id": task.id,  # Client can use this to poll for updates
+        "task_id": task.id,  # Client uses this for WS
         "threadHtml": thread_html
     })
 
@@ -173,15 +176,45 @@ def task_detail(request, task_id):
         'is_completed': task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED],
     })
 
+@database_sync_to_async  # Add this decorator
+def get_task_state(task_id):
+    """Sync helper to get task state for publishing."""
+    try:
+        task = Task.objects.get(id=task_id)  # Note: No user check here as it's internal; consumer handles auth
+        return {
+            'status': task.status,
+            'progress_logs': task.progress_logs,
+            'result': task.result,
+            'updated_at': task.updated_at.isoformat(),
+            'is_completed': task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED],
+        }
+    except Task.DoesNotExist:
+        return {'error': 'Task not found'}
 
 # Updated helper function for background thread
 def run_ai_task(task_id, user_id, thread_id, agent_id):
     """
     Background function to run AI task in a thread.
     Uses stream_events to capture progress, logs each event to Task.progress_logs,
-    and handles final output.
+    and publishes updates via Channels.
     """
     from django.contrib.auth.models import User  # Import inside to avoid circular issues
+    channel_layer = get_channel_layer()  # Get layer for publishing
+
+    async def async_publish_update():
+        """Async function to publish task state to group."""
+        state = await get_task_state(task_id)  # Add await here
+        await channel_layer.group_send(
+            f'task_{task_id}',
+            {
+                'type': 'task.update',
+                'message': state
+            }
+        )
+
+    # Wrap the async function to make it callable from sync context
+    sync_publish = async_to_sync(async_publish_update)
+
     try:
         task = Task.objects.get(id=task_id)
         user = User.objects.get(id=user_id)
@@ -195,6 +228,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
             "timestamp": str(dt.datetime.now(dt.timezone.utc))
         })
         task.save()
+        sync_publish()  # Publish initial update
 
         # Get message history
         messages = thread.get_messages()
@@ -233,7 +267,8 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
             log_entry = map_event_to_log(ev)
             if log_entry:
                 task.progress_logs.append(log_entry)
-                task.save()  # Save incrementally for real-time persistence
+                task.save()
+                sync_publish()  # Publish after each save for live updates
 
             # Capture final output at root depth
             if log_entry and log_entry["event"] == "end" and log_entry["depth"] == 0:
@@ -247,6 +282,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         task.result = final_output
         task.status = TaskStatus.COMPLETED
         task.save()
+        sync_publish()  # Final publish
 
         # Add final message to thread
         if final_output:
@@ -261,6 +297,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
             )
             thread.subject = short_title.strip()
             thread.save()
+            # Optional: Publish again if subject change affects state, but not necessary here
 
     except Exception as e:
         # Handle failure
@@ -271,3 +308,4 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
             "timestamp": str(dt.datetime.now(dt.timezone.utc))
         })
         task.save()
+        sync_publish()  # Publish failure

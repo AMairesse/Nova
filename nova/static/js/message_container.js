@@ -123,8 +123,8 @@
               $("#message-container").html(html);
               window.initMessageContainer();
               scrollToBottomIfNeeded();
-              // Start polling for task progress (replaces SSE)
-              startTaskPolling(data.task_id);
+              // Start WS for task progress
+              startTaskWebSocket(data.task_id);
             },
           });
         },
@@ -147,85 +147,97 @@
     $("#dropdownMenuButton").text(label);
   });
 
-  /* -------------------------- Task Polling for Progress -------------------------- */
-  function startTaskPolling(taskId) {
+  /* -------------------------- Task WebSocket for Real-Time Progress -------------------------- */
+  function startTaskWebSocket(taskId) {
     if (!taskId) return;
 
     const progressDiv = $("#task-progress");
     const logsList = $("#progress-logs");
     const loadingSpinner = $("#progress-loading");
+    const statusDiv = $("#task-status");
     progressDiv.show();
     loadingSpinner.show();
 
-    let pollCount = 0;
-    const maxPolls = 360; // ~30min at 5s interval
-    const pollInterval = setInterval(() => {
-      if (pollCount >= maxPolls) {
-        clearInterval(pollInterval);
-        progressDiv.html(
-          '<p class="text-warning">Polling timeout - Task may be stuck.</p>'
-        );
-        $("#send-btn").prop("disabled", false);
+    // Determine protocol (ws or wss)
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://${window.location.host}/ws/task/${taskId}/`;
+    let socket = new WebSocket(wsUrl);
+    let reconnectAttempts = 0;
+    const maxReconnects = 5;
+
+    socket.onopen = function () {
+      console.log("WebSocket connected for task " + taskId);
+      reconnectAttempts = 0; // Reset on success
+    };
+
+    socket.onmessage = function (event) {
+      const data = JSON.parse(event.data);
+      if (data.error) {
+        statusDiv.html('<p class="text-danger">' + data.error + "</p>");
+        loadingSpinner.hide();
         return;
       }
-      pollCount++;
 
-      fetch(`/task/${taskId}/`)
-        .then((response) => response.json())
-        .then((data) => {
-          loadingSpinner.hide();
-          // Clear and render logs with Markdown
-          logsList.empty();
-          data.progress_logs.forEach((log) => {
-            const li = document.createElement("li");
-            const logText = `${log.timestamp}: ${log.step || log.event} - ${
-              log.kind || ""
-            } ${log.name || ""} ${log.chunk || log.output || ""}`;
-            li.innerHTML = `<small>${marked.parse(logText)}</small>`; // Use marked for basic Markdown
-            logsList.append(li);
-          });
+      loadingSpinner.hide();
+      // Render logs with Markdown
+      logsList.empty();
+      data.progress_logs.forEach((log) => {
+        const li = document.createElement("li");
+        const logText = `${log.timestamp}: ${log.step || log.event} - ${
+          log.kind || ""
+        } ${log.name || ""} ${log.chunk || log.output || ""}`;
+        li.innerHTML = `<small>${marked.parse(logText)}</small>`;
+        logsList.append(li);
+      });
 
-          // If completed, stop polling, refresh conversation, and re-enable send button
-          if (data.is_completed) {
-            clearInterval(pollInterval);
-            $("#send-btn").prop("disabled", false);
-            if (data.status === "COMPLETED") {
-              progressDiv.html(
-                '<p class="text-success">Task completed successfully.</p>'
-              );
-            } else {
-              progressDiv.html(
-                '<p class="text-danger">Task failed: ' +
-                  marked.parse(data.result) +
-                  "</p>"
-              );
-            }
-            // Full refresh of messages and thread list (to catch subject updates)
-            const threadId = $('input[name="thread_id"]').val();
-            $.get(window.urls.messageList, { thread_id: threadId }, (html) => {
-              $("#message-container").html(html);
-              initMessageContainer();
-              scrollToBottomIfNeeded();
-            });
-            // Optional: Refresh thread list if subject changed
-            $.get(window.location.href, (fullHtml) => {
-              const newThreads = $(fullHtml).find(".list-group").html();
-              $(".list-group").html(newThreads);
-              attachThreadEventHandlers();
-            });
-          }
-        })
-        .catch((err) => {
-          console.error("Polling error:", err);
-          clearInterval(pollInterval);
-          loadingSpinner.hide();
-          progressDiv.html(
-            '<p class="text-danger">Error fetching progress.</p>'
+      // Handle completion
+      if (data.is_completed) {
+        socket.close(); // Close WS
+        $("#send-btn").prop("disabled", false);
+        if (data.status === "COMPLETED") {
+          statusDiv.html(
+            '<p class="text-success">Task completed successfully.</p>'
           );
-          $("#send-btn").prop("disabled", false);
+        } else {
+          statusDiv.html(
+            '<p class="text-danger">Task failed: ' +
+              marked.parse(data.result) +
+              "</p>"
+          );
+        }
+        // Full refresh of messages and thread list
+        const threadId = $('input[name="thread_id"]').val();
+        $.get(window.urls.messageList, { thread_id: threadId }, (html) => {
+          $("#message-container").html(html);
+          initMessageContainer();
+          scrollToBottomIfNeeded();
         });
-    }, 5000); // Poll every 5 seconds
+        // Refresh thread list for subject updates
+        $.get(window.location.href, (fullHtml) => {
+          const newThreads = $(fullHtml).find(".list-group").html();
+          $(".list-group").html(newThreads);
+          attachThreadEventHandlers();
+        });
+      }
+    };
+
+    socket.onclose = function (e) {
+      console.log("WebSocket closed");
+      if (reconnectAttempts < maxReconnects && !e.wasClean) {
+        // Reconnect if unexpected close
+        reconnectAttempts++;
+        setTimeout(() => {
+          socket = new WebSocket(wsUrl);
+        }, 1000 * reconnectAttempts); // Exponential backoff
+      }
+    };
+
+    socket.onerror = function (err) {
+      console.error("WebSocket error:", err);
+      statusDiv.html('<p class="text-danger">WebSocket connection error.</p>');
+      loadingSpinner.hide();
+    };
   }
 
-  window.startTaskPolling = startTaskPolling;
+  window.startTaskWebSocket = startTaskWebSocket;
 })(jQuery);
