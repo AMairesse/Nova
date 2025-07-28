@@ -1,6 +1,9 @@
+# nova/views/main_views.py
 import json
 import re
 import bleach
+import threading
+import datetime as dt
 from markdown import markdown
 from django.core.cache import cache
 from django.http import JsonResponse, StreamingHttpResponse
@@ -10,7 +13,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
-from ..models import Actor, Thread, Agent, UserProfile
+from ..models import Actor, Thread, Agent, UserProfile, Task, TaskStatus
 from ..llm_agent import LLMAgent
 from ..utils import extract_final_answer
 
@@ -121,15 +124,37 @@ def add_message(request):
         thread       = Thread.objects.get(id=thread_id)
         thread_html  = None
 
+    # Add the user message to the thread
     thread.add_message(new_message, actor=Actor.USER)
 
-    # Return the thread_id to the client because it's needed for SSE
+    # Get the agent object
+    agent_obj = None
+    if selected_agent:
+        agent_obj = get_object_or_404(Agent, id=selected_agent, user=request.user)
+    else:
+        try:
+            agent_obj = request.user.userprofile.default_agent
+        except UserProfile.DoesNotExist:
+            pass  # Proceed without agent if none set
+
+    # Create a Task for async processing
+    task = Task.objects.create(
+        user=request.user,
+        thread=thread,
+        agent=agent_obj,
+        status=TaskStatus.PENDING
+    )
+
+    # Launch background thread to run the AI task
+    threading.Thread(target=run_ai_task, args=(task.id, request.user.id, thread.id, agent_obj.id if agent_obj else None)).start()
+
+    # Return immediately with task_id for client-side polling (in later steps)
     return JsonResponse({
         "status": "OK",
         "thread_id": thread.id,
+        "task_id": task.id,  # Client can use this to poll for updates
         "threadHtml": thread_html
     })
-
 
 @login_required(login_url='login')
 def stream_llm_response(request, thread_id):
@@ -266,3 +291,49 @@ def stream_llm_response(request, thread_id):
         yield f"data: {thread.subject}\n\n"
 
     return StreamingHttpResponse(llm_stream(), content_type='text/event-stream')
+
+
+# New helper function for background thread (added)
+def run_ai_task(task_id, user_id, thread_id, agent_id):
+    """
+    Background function to run AI task in a thread.
+    Executes LLMAgent, updates Task status and logs.
+    """
+    from django.contrib.auth.models import User  # Import inside to avoid circular issues
+    try:
+        task = Task.objects.get(id=task_id)
+        user = User.objects.get(id=user_id)
+        thread = Thread.objects.get(id=thread_id)
+        agent_obj = Agent.objects.get(id=agent_id) if agent_id else None
+
+        # Set task to running
+        task.status = TaskStatus.RUNNING
+        task.progress_logs.append({"step": "Starting AI processing", "timestamp": str(dt.datetime.now())})
+        task.save()
+
+        # Get message history (similar to original logic)
+        messages = thread.get_messages()
+        msg_history = [[m.actor, m.text] for m in messages]
+        if msg_history:
+            msg_history.pop()  # Exclude last user message for consistency
+        last_message = messages.last().text
+
+        # Create and invoke LLMAgent
+        llm = LLMAgent(user, thread_id, msg_history=msg_history, agent=agent_obj)
+        result = llm.invoke(last_message)  # Use invoke for non-streaming async execution
+
+        # Log completion and save result
+        task.progress_logs.append({"step": "AI processing completed", "timestamp": str(dt.datetime.now())})
+        task.result = result
+        task.status = TaskStatus.COMPLETED
+
+        # Add final message to thread (similar to original)
+        thread.add_message(result, actor=Actor.AGENT)
+        task.save()
+
+    except Exception as e:
+        # Handle failure
+        task.status = TaskStatus.FAILED
+        task.result = f"Error: {str(e)}"
+        task.progress_logs.append({"step": f"Error occurred: {str(e)}", "timestamp": str(dt.datetime.now())})
+        task.save()
