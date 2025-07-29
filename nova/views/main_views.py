@@ -181,6 +181,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             logger.error(f"Error in on_chat_model_start: {e}")
 
     async def on_llm_new_token(self, token: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+        #TODO: filter sub agents but use it as a progress update
         try:
             self.final_chunks.append(token)
             await self.publish_update('response_chunk', {'chunk': token})
