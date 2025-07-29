@@ -34,7 +34,7 @@ register_provider(
         mistral_api_key=p.api_key,
         temperature=0,
         max_retries=2,
-        streaming=True  # Correction: Active streaming pour chunks
+        streaming=True
     )
 )
 register_provider(
@@ -45,7 +45,7 @@ register_provider(
         base_url=p.base_url,
         temperature=0,
         max_retries=2,
-        streaming=True  # Correction: Active streaming
+        streaming=True
     )
 )
 register_provider(
@@ -55,7 +55,7 @@ register_provider(
         base_url=p.base_url or "http://localhost:11434",
         temperature=0,
         max_retries=2,
-        streaming=True  # Correction: Active streaming
+        streaming=True
     )
 )
 register_provider(
@@ -66,7 +66,7 @@ register_provider(
         base_url=p.base_url or "http://localhost:1234/v1",
         temperature=0,
         max_retries=2,
-        streaming=True  # Correction: Active streaming
+        streaming=True
     )
 )
 
@@ -127,6 +127,8 @@ class LLMAgent:
             self.config.update({"configurable": {"thread_id": thread_id}})
 
         # Merge custom callbacks with existing ones (e.g., Langfuse)
+        # Create a copy of the config without custom callbacks for "silent_mode"
+        self.silent_config = self.config.copy()
         if 'callbacks' in self.config:
             self.config['callbacks'].extend(callbacks)
         else:
@@ -312,50 +314,12 @@ class LLMAgent:
             raise ValueError(f"Unsupported provider type: {provider.provider_type}")
         return factory(provider)
 
-    def invoke(self, question: str):
-        result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
-                                config=self.config)
+    def invoke(self, question: str, silent_mode=False):
+        if silent_mode:
+            result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
+                                       config=self.silent_config)
+        else:
+            result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
+                                       config=self.config)
         final_msg = extract_final_answer(result)
         return final_msg
-
-    def stream(self, question: str):
-        return(self.agent.stream({ "messages": [HumanMessage(content=question)] }, config=self.config, stream_mode="messages"))
-
-    # ───────────────────────────────────────────────────────────────
-    #                STREAMING ASYNC GENERATOR
-    # ───────────────────────────────────────────────────────────────
-    def stream_events(self, question: str):
-        """
-        Stream events
-        """
-        import asyncio, threading, queue
-
-        q: queue.Queue = queue.Queue()
-        SENTINEL = object()
-
-        async def _run():
-            async for ev in self.agent.astream_events(
-                { "messages": [HumanMessage(content=question)] },
-                config=self.config,
-                version="v2"
-            ):
-                q.put(ev)
-            q.put(SENTINEL)
-
-        def _start():
-            asyncio.run(_run())
-
-        threading.Thread(target=_start, daemon=True).start()
-
-        while True:
-            item = q.get()
-            if item is SENTINEL:
-                break
-            yield item
-            
-    async def astream(self, question: str):
-        async for chunk in self.agent.astream(
-            {"messages": [HumanMessage(content=question)]},
-            config=self.config,
-        ):
-            yield chunk

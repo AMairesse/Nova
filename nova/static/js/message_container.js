@@ -23,28 +23,7 @@
 
     // Auto-scroll management
     initAutoScroll();
-
-    // Toggle logs (initially collapsed)
-    initLogsToggle();
   };
-
-  // Logs toggle logic
-  function initLogsToggle() {
-    const toggleBtn = $("#toggle-details");
-    const logsList = $("#progress-logs");
-    toggleBtn.show(); // Activate button
-    toggleBtn.text("Show details"); // Initial text
-
-    toggleBtn.on("click", function () {
-      if (logsList.hasClass("collapsed")) {
-        logsList.removeClass("collapsed");
-        toggleBtn.text("Hide details");
-      } else {
-        logsList.addClass("collapsed");
-        toggleBtn.text("Show details");
-      }
-    });
-  }
 
   // Auto-scroll logic
   let isAtBottom = true;
@@ -219,11 +198,8 @@
 
     const progressDiv = $("#task-progress");
     const logsList = $("#progress-logs");
-    const loadingSpinner = $("#progress-loading");
     const statusDiv = $("#task-status");
     progressDiv.show();
-    loadingSpinner.show();
-    logsList.addClass("collapsed"); // Start collapsed
 
     // Determine protocol (ws or wss)
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -243,7 +219,6 @@
       heartbeatInterval = setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'ping' }));
-          console.log('Sent ping'); // Debug
           heartbeatTimeout = setTimeout(() => {
             console.error('Heartbeat timeout: Closing WebSocket');
             socket.close(1006, 'Heartbeat timeout'); // Abnormal closure
@@ -254,7 +229,6 @@
 
     function handlePong() {
       clearTimeout(heartbeatTimeout);
-      console.log('Received pong'); // Debug
     }
 
     socket.onopen = function () {
@@ -270,32 +244,15 @@
       }
       if (data.error) {
         statusDiv.html('<p class="text-danger">' + data.error + "</p>");
-        loadingSpinner.hide();
         return;
       }
 
-      loadingSpinner.hide();
-
       if (data.type === 'progress_update') {
-        // Render logs: full if expanded, last only if collapsed
-        logsList.empty();
-        const logs = data.progress_logs || [];
-        if (logsList.hasClass("collapsed") && logs.length > 0) {
-          // Show only last log
-          const lastLog = logs[logs.length - 1];
-          const li = document.createElement("li");
-          const logText = `${lastLog.timestamp}: ${lastLog.step}`;
-          li.innerHTML = `<small>${marked.parse(logText)}</small>`;
-          logsList.append(li);
-        } else {
-          // Show all
-          logs.forEach((log) => {
-            const li = document.createElement("li");
-            const logText = `${log.timestamp}: ${log.step}`;
-            li.innerHTML = `<small>${marked.parse(logText)}</small>`;
-            logsList.append(li);
-          });
-        }
+        const log = data.progress_log || "undefined";
+        const li = document.createElement("li");
+        li.innerHTML = `<small>${marked.parse(log)}</small>`;
+        logsList.append(li);
+        scrollToBottomIfNeeded();
         return;
       }
 
@@ -308,35 +265,30 @@
       }
 
       if (data.type === 'task_complete') {
-        // Handle completion
-        socket.close(); // Close WS
+        // Activate send button
         $("#send-btn").prop("disabled", false);
-        if (data.status === "COMPLETED") {
-          statusDiv.html('<p class="text-success">Task completed successfully.</p>');
-          // Finalize streaming div (remove class)
-          $(".message.streaming").removeClass("streaming");
-        } else {
+        // If only the answer is done the hide the progressDiv
+        if (data.status === "RESPONSE_COMPLETED") {
+          progressDiv.hide();
+        }
+        // If the task is fully completed
+        else if (data.status === "TASK_COMPLETED") {
+          // Close WS
+          socket.close();
+          // Refresh thread list for subject updates with no-cache
+          const timestamp = Date.now();
+          $.get(`${window.location.href}?t=${timestamp}`, (fullHtml) => {
+            const newThreads = $(fullHtml).find(".list-group").html();
+            $(".list-group").html(newThreads);
+            attachThreadEventHandlers();
+          });
+        }
+        // If the task failed
+        else {
           statusDiv.html('<p class="text-danger">Task failed: ' + marked.parse(data.result) + "</p>");
         }
         // Clean stored task
         window.removeStoredTask(threadId, taskId);
-
-        // Full refresh of messages and thread list (add timestamp for no-cache)
-        const timestamp = Date.now();
-        const currentThreadId = $('input[name="thread_id"]').val();
-        $.get(`${window.urls.messageList}?thread_id=${currentThreadId}&t=${timestamp}`, (html) => {
-          $("#message-container").html(html);
-          initMessageContainer();
-          scrollToBottomIfNeeded();
-        });
-        // Refresh thread list for subject updates with no-cache
-        $.get(`${window.location.href}?t=${timestamp}`, (fullHtml) => {
-          const newThreads = $(fullHtml).find(".list-group").html();
-          $(".list-group").html(newThreads);
-          attachThreadEventHandlers();
-        });
-        // Hide progress div after short delay for UX
-        setTimeout(() => progressDiv.fadeOut(), 2000);
         return;
       }
     };
@@ -360,7 +312,6 @@
 
     socket.onerror = function (err) {
       statusDiv.html('<p class="text-danger">WebSocket connection error.</p>');
-      loadingSpinner.hide();
     };
   }
 

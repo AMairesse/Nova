@@ -20,9 +20,6 @@ class TaskProgressConsumer(AsyncWebsocketConsumer):
 
         await self.accept()
 
-        # Send initial task state as progress_update
-        await self.send_initial_state()
-
     async def disconnect(self, close_code):
         # Leave room group
         await self.channel_layer.group_discard(
@@ -50,26 +47,6 @@ class TaskProgressConsumer(AsyncWebsocketConsumer):
     # Receive message from room group (pushed from views/thread)
     async def task_update(self, event):
         message = event['message']
-        # Log for debug
-        logger.debug(f"Sending update: {message}")
         # Send message to WebSocket
         await self.send(text_data=json.dumps(message))
 
-    @database_sync_to_async
-    def get_task_state(self):
-        try:
-            task = Task.objects.get(id=self.task_id, user=self.scope['user'])
-            return {
-                'type': 'progress_update',  # Align with new types
-                'status': task.status,
-                'progress_logs': task.progress_logs,
-                'result': task.result,
-                'updated_at': task.updated_at.isoformat(),
-                'is_completed': task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED],
-            }
-        except Task.DoesNotExist:
-            return {'type': 'error', 'error': 'Task not found or access denied'}
-
-    async def send_initial_state(self):
-        state = await self.get_task_state()
-        await self.send(text_data=json.dumps(state))
