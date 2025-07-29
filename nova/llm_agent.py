@@ -2,7 +2,7 @@
 from datetime import date
 import re
 import inspect
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 from functools import wraps
 
 # Load the langchain tools
@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import StructuredTool
+from langchain_core.callbacks import BaseCallbackHandler  # For custom callbacks
 from .models import Actor, Tool, ProviderType, LLMProvider
 from .utils import extract_final_answer
 
@@ -32,7 +33,8 @@ register_provider(
         model=p.model,
         mistral_api_key=p.api_key,
         temperature=0,
-        max_retries=2
+        max_retries=2,
+        streaming=True  # Correction: Active streaming pour chunks
     )
 )
 register_provider(
@@ -42,7 +44,8 @@ register_provider(
         openai_api_key=p.api_key,
         base_url=p.base_url,
         temperature=0,
-        max_retries=2
+        max_retries=2,
+        streaming=True  # Correction: Active streaming
     )
 )
 register_provider(
@@ -51,7 +54,8 @@ register_provider(
         model=p.model,
         base_url=p.base_url or "http://localhost:11434",
         temperature=0,
-        max_retries=2
+        max_retries=2,
+        streaming=True  # Correction: Active streaming
     )
 )
 register_provider(
@@ -61,7 +65,8 @@ register_provider(
         openai_api_key="None",
         base_url=p.base_url or "http://localhost:1234/v1",
         temperature=0,
-        max_retries=2
+        max_retries=2,
+        streaming=True  # Correction: Active streaming
     )
 )
 
@@ -70,9 +75,11 @@ register_provider(
 # ---------------------------------------------------------------------------- #
 
 class LLMAgent:
-    def __init__(self, user, thread_id, msg_history=None, agent=None, parent_config=None):
+    def __init__(self, user, thread_id, msg_history=None, agent=None, parent_config=None, callbacks: List[BaseCallbackHandler] = None):
         if msg_history is None:
             msg_history = []
+        if callbacks is None:
+            callbacks = []  # Default to empty list for custom callbacks
         self.user = user
         self.django_agent = agent
 
@@ -118,6 +125,12 @@ class LLMAgent:
                     print(e)  # Log error but continue without Langfuse
                     self.config = {}
             self.config.update({"configurable": {"thread_id": thread_id}})
+
+        # Merge custom callbacks with existing ones (e.g., Langfuse)
+        if 'callbacks' in self.config:
+            self.config['callbacks'].extend(callbacks)
+        else:
+            self.config['callbacks'] = callbacks
 
         # Store the parent config in order to be able to propagate it to child agents
         self._parent_config = self.config.copy()
@@ -339,3 +352,10 @@ class LLMAgent:
             if item is SENTINEL:
                 break
             yield item
+            
+    async def astream(self, question: str):
+        async for chunk in self.agent.astream(
+            {"messages": [HumanMessage(content=question)]},
+            config=self.config,
+        ):
+            yield chunk

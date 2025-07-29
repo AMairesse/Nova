@@ -23,7 +23,28 @@
 
     // Auto-scroll management
     initAutoScroll();
+
+    // Toggle logs (initially collapsed)
+    initLogsToggle();
   };
+
+  // Logs toggle logic
+  function initLogsToggle() {
+    const toggleBtn = $("#toggle-details");
+    const logsList = $("#progress-logs");
+    toggleBtn.show(); // Activate button
+    toggleBtn.text("Show details"); // Initial text
+
+    toggleBtn.on("click", function () {
+      if (logsList.hasClass("collapsed")) {
+        logsList.removeClass("collapsed");
+        toggleBtn.text("Hide details");
+      } else {
+        logsList.addClass("collapsed");
+        toggleBtn.text("Show details");
+      }
+    });
+  }
 
   // Auto-scroll logic
   let isAtBottom = true;
@@ -124,6 +145,10 @@
               window.initMessageContainer();
               scrollToBottomIfNeeded();
 
+              // Create streaming placeholder
+              const streamingDiv = $('<div class="message streaming"><p></p></div>');
+              $("#conversation-container").append(streamingDiv);
+
               // Step 3: Store task_id in localStorage for persistence
               window.addStoredTask(data.thread_id, data.task_id);
 
@@ -198,6 +223,7 @@
     const statusDiv = $("#task-status");
     progressDiv.show();
     loadingSpinner.show();
+    logsList.addClass("collapsed"); // Start collapsed
 
     // Determine protocol (ws or wss)
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -249,33 +275,50 @@
       }
 
       loadingSpinner.hide();
-      // Render logs with Markdown
-      logsList.empty();
-      data.progress_logs.forEach((log) => {
-        const li = document.createElement("li");
-        const logText = `${log.timestamp}: ${log.step || log.event} - ${
-          log.kind || ""
-        } ${log.name || ""} ${log.chunk || log.output || ""}`;
-        li.innerHTML = `<small>${marked.parse(logText)}</small>`;
-        logsList.append(li);
-      });
 
-      // Handle completion
-      if (data.is_completed) {
+      if (data.type === 'progress_update') {
+        // Render logs: full if expanded, last only if collapsed
+        logsList.empty();
+        const logs = data.progress_logs || [];
+        if (logsList.hasClass("collapsed") && logs.length > 0) {
+          // Show only last log
+          const lastLog = logs[logs.length - 1];
+          const li = document.createElement("li");
+          const logText = `${lastLog.timestamp}: ${lastLog.step}`;
+          li.innerHTML = `<small>${marked.parse(logText)}</small>`;
+          logsList.append(li);
+        } else {
+          // Show all
+          logs.forEach((log) => {
+            const li = document.createElement("li");
+            const logText = `${log.timestamp}: ${log.step}`;
+            li.innerHTML = `<small>${marked.parse(logText)}</small>`;
+            logsList.append(li);
+          });
+        }
+        return;
+      }
+
+      if (data.type === 'response_chunk') {
+        // Append chunk to streaming div (progressive display)
+        const streamingP = $(".message.streaming p");
+        streamingP.append(data.chunk); // Simple append for typewriter effect
+        scrollToBottomIfNeeded();
+        return;
+      }
+
+      if (data.type === 'task_complete') {
+        // Handle completion
         socket.close(); // Close WS
         $("#send-btn").prop("disabled", false);
         if (data.status === "COMPLETED") {
-          statusDiv.html(
-            '<p class="text-success">Task completed successfully.</p>'
-          );
+          statusDiv.html('<p class="text-success">Task completed successfully.</p>');
+          // Finalize streaming div (remove class)
+          $(".message.streaming").removeClass("streaming");
         } else {
-          statusDiv.html(
-            '<p class="text-danger">Task failed: ' +
-              marked.parse(data.result) +
-              "</p>"
-          );
+          statusDiv.html('<p class="text-danger">Task failed: ' + marked.parse(data.result) + "</p>");
         }
-        // Step 3: Clean stored task on complete/failed
+        // Clean stored task
         window.removeStoredTask(threadId, taskId);
 
         // Full refresh of messages and thread list (add timestamp for no-cache)
@@ -294,6 +337,7 @@
         });
         // Hide progress div after short delay for UX
         setTimeout(() => progressDiv.fadeOut(), 2000);
+        return;
       }
     };
 

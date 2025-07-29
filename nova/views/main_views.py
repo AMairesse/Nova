@@ -3,7 +3,10 @@ import json
 import re
 import bleach
 import threading
+import asyncio
 import datetime as dt
+from uuid import UUID  # Correction: Pour signatures Langchain
+from typing import Any, Dict, List, Optional  # Pour signatures
 from markdown import markdown
 from django.core.cache import cache
 from django.http import JsonResponse, StreamingHttpResponse
@@ -19,7 +22,11 @@ from ..utils import extract_final_answer
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
+from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.messages import HumanMessage  # Import pour astream
 
+import logging
+logger = logging.getLogger(__name__)
 
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
@@ -174,25 +181,103 @@ def get_task_state(task_id):
     except Task.DoesNotExist:
         return {'error': 'Task not found'}
 
+# Custom callback handler for synthesis and streaming (signatures aligned with Langchain)
+class TaskProgressHandler(AsyncCallbackHandler):
+    def __init__(self, task_id, channel_layer):
+        self.task_id = task_id
+        self.channel_layer = channel_layer
+        self.sync_publish = async_to_sync(self.publish_update)
+        self.progress_logs = []  # In-memory for synthesis
+        self.final_chunks = []  # Collect final response chunks
+        self.current_tool = None
+
+    async def publish_update(self, message_type, data):
+        logger.debug(f"Publishing {message_type}: {data}")  # Debug
+        await self.channel_layer.group_send(
+            f'task_{self.task_id}',
+            {'type': 'task_update', 'message': {'type': message_type, **data}}
+        )
+
+    # Implémentation vide pour éviter NotImplementedError
+    async def on_chat_model_start(self, serialized: Dict[str, Any], messages: List[List[Any]], *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
+        logger.debug(f"Ignoring on_chat_model_start for run_id: {run_id}")  # Debug
+        pass
+
+    async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
+        try:
+            tool_name = serialized.get('name', 'Unknown')
+            self.current_tool = tool_name
+            log = {"timestamp": str(dt.datetime.now(dt.timezone.utc)), "step": f"Appel tool: {tool_name}"}
+            self.progress_logs.append(log)
+            if len(self.progress_logs) > 10:  # Limit FIFO
+                self.progress_logs.pop(0)
+            await self.publish_update('progress_update', {'progress_logs': self.progress_logs})
+        except Exception as e:
+            logger.error(f"Error in on_tool_start: {e}")
+
+    async def on_tool_end(self, output: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+        try:
+            if self.current_tool:
+                log = {"timestamp": str(dt.datetime.now(dt.timezone.utc)), "step": f"Retour: {output[:50]}..."}  # Simplified result
+                self.progress_logs.append(log)
+                if len(self.progress_logs) > 10:
+                    self.progress_logs.pop(0)
+                await self.publish_update('progress_update', {'progress_logs': self.progress_logs})
+                self.current_tool = None
+        except Exception as e:
+            logger.error(f"Error in on_tool_end: {e}")
+
+    async def on_chain_stream(self, event: Any, run_id: UUID, *, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
+        try:
+            logger.debug(f"on_chain_stream called with event: {event}")  # Debug: Dump event pour voir structure
+            # Only process root events
+            if parent_run_id is None:
+                data = event.get('data', {})
+                chunk_data = data.get('chunk', {})
+                # Filtrage flexible: Cherche 'content' dans messages ou output
+                if 'messages' in chunk_data:
+                    for msg in chunk_data['messages']:
+                        if hasattr(msg, 'content') and msg.content:
+                            chunk = msg.content
+                            self.final_chunks.append(chunk)
+                            await self.publish_update('response_chunk', {'chunk': chunk})
+                            logger.debug(f"Streamed chunk: {chunk}")
+                            return
+                elif 'output' in chunk_data and chunk_data['output']:
+                    chunk = extract_final_answer(chunk_data['output'])
+                    if chunk:
+                        self.final_chunks.append(chunk)
+                        await self.publish_update('response_chunk', {'chunk': chunk})
+        except Exception as e:
+            logger.error(f"Error in on_chain_stream: {e}")
+
+    async def on_chain_end(self, outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+        try:
+            logger.debug(f"on_chain_end called with outputs: {outputs}")  # Debug
+            # Only process root events
+            if parent_run_id is None:
+                # Fallback: Capture output final si pas streamé
+                final_output = extract_final_answer(outputs) if outputs else ''.join(self.final_chunks)
+                if final_output and not self.final_chunks:  # Si pas de chunks, append ici
+                    self.final_chunks = [final_output]  # Pour cohérence
+                await self.publish_update('task_complete', {'result': final_output, 'status': 'COMPLETED'})
+        except Exception as e:
+            logger.error(f"Error in on_chain_end: {e}")
+
 # Updated helper function for background thread
 def run_ai_task(task_id, user_id, thread_id, agent_id):
     """
     Background function to run AI task in a thread.
-    Uses stream_events to capture progress, logs each event to Task.progress_logs,
-    and publishes updates via Channels.
+    Uses custom callbacks for progress synthesis and streaming.
     """
     from django.contrib.auth.models import User  # Import inside to avoid circular issues
     channel_layer = get_channel_layer()  # Get layer for publishing
 
-    async def async_publish_update():
+    async def async_publish_update(message_type, data):
         """Async function to publish task state to group."""
-        state = await get_task_state(task_id)
         await channel_layer.group_send(
             f'task_{task_id}',
-            {
-                'type': 'task.update',
-                'message': state
-            }
+            {'type': 'task_update', 'message': {'type': message_type, **data}}
         )
 
     # Wrap the async function to make it callable from sync context
@@ -206,12 +291,9 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         # Set task to running and log start
         task.status = TaskStatus.RUNNING
-        task.progress_logs.append({
-            "step": "Starting AI processing",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc))
-        })
+        task.progress_logs = [{"step": "Starting AI processing", "timestamp": str(dt.datetime.now(dt.timezone.utc))}]
         task.save()
-        sync_publish()  # Publish initial update
+        sync_publish('progress_update', {'progress_logs': task.progress_logs})  # Initial update
 
         # Get message history
         messages = thread.get_messages()
@@ -221,57 +303,34 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Last message is the prompt to send
         last_message = messages.last().text
 
-        # Create LLMAgent
-        llm = LLMAgent(user, thread_id, msg_history=msg_history, agent=agent_obj)
+        # Create custom handler and LLMAgent with callbacks
+        handler = TaskProgressHandler(task_id, channel_layer)
+        llm = LLMAgent(user, thread_id, msg_history=msg_history, agent=agent_obj, callbacks=[handler])
 
-        # Function to map events to log dicts (simplified from map_event)
-        def map_event_to_log(ev: dict):
-            evt = ev["event"]
-            depth = len(ev.get("parent_ids", []))
-            name = ev["name"]
-            kind = "agent" if evt.startswith("on_chain") else "tool"
-            timestamp = str(dt.datetime.now(dt.timezone.utc))
+        # Consume astream to trigger callbacks (avec gestion erreurs globale)
+        async def consume_astream():
+            try:
+                async for _ in llm.astream(last_message):  # Itère pour déclencher events/callbacks
+                    pass  # Pas besoin des yields, callbacks gèrent
+            except Exception as e:
+                logger.error(f"Error consuming astream: {e}")
+                # Publish failure si crash
+                await handler.publish_update('task_complete', {'result': str(e), 'status': 'FAILED'})
 
-            if evt.endswith("_start"):
-                return {"event": "start", "kind": kind, "name": name, "depth": depth, "timestamp": timestamp}
-            if evt.endswith("_stream"):
-                chunk = extract_final_answer(ev["data"].get("chunk", ""))
-                if not chunk:
-                    return None
-                return {"event": "stream", "kind": kind, "name": name, "depth": depth, "chunk": chunk, "timestamp": timestamp}
-            if evt.endswith("_end"):
-                output = extract_final_answer(ev["data"].get("output", ""))
-                return {"event": "end", "kind": kind, "name": name, "depth": depth, "output": output, "timestamp": timestamp}
-            return None
+        asyncio.run(consume_astream())  # Lance et consomme dans sync thread
 
-        # Stream events and log progress
-        final_output = ""
-        for ev in llm.stream_events(last_message):
-            log_entry = map_event_to_log(ev)
-            if log_entry:
-                task.progress_logs.append(log_entry)
-                task.save()
-                sync_publish()  # Publish after each save for live updates
-
-            # Capture final output at root depth
-            if log_entry and log_entry["event"] == "end" and log_entry["depth"] == 0:
-                final_output = log_entry.get("output", "")
-
-        # Log completion and save result
-        task.progress_logs.append({
-            "step": "AI processing completed",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc))
-        })
-        task.result = final_output
+        # Log completion and save result (use full final_output)
+        task.progress_logs.append({"step": "AI processing completed", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
+        task.result = ''.join(handler.final_chunks) if handler.final_chunks else ""  # Full join
         task.status = TaskStatus.COMPLETED
         task.save()
-        sync_publish()  # Final publish
+        logger.debug(f"Task {task_id} completed with result: {task.result[:50]}...")  # Debug
 
         # Add final message to thread
-        if final_output:
-            thread.add_message(final_output, actor=Actor.AGENT)
+        if task.result:
+            thread.add_message(task.result, actor=Actor.AGENT)
 
-        # Update thread subject if needed (similar to original)
+        # Update thread subject if needed
         if thread.subject.startswith("thread n°"):
             short_title = llm.invoke(
                 "Give me a short title for this conversation (1–3 words maximum)."
@@ -280,18 +339,15 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
             )
             thread.subject = short_title.strip()
             thread.save()
-            # Optional: Publish again if subject change affects state, but not necessary here
 
     except Exception as e:
         # Handle failure
         task.status = TaskStatus.FAILED
         task.result = f"Error: {str(e)}"
-        task.progress_logs.append({
-            "step": f"Error occurred: {str(e)}",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc))
-        })
+        task.progress_logs.append({"step": f"Error occurred: {str(e)}", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
         task.save()
-        sync_publish()  # Publish failure
+        sync_publish('task_complete', {'result': task.result, 'status': 'FAILED'})  # Publish failure
+        logger.error(f"Task {task_id} failed: {e}")
 
 @login_required
 def running_tasks(request, thread_id):
