@@ -45,9 +45,7 @@ if [ ! -z "$DJANGO_SUPERUSER_USERNAME" ] && [ ! -z "$DJANGO_SUPERUSER_PASSWORD" 
 fi
 
 # Start Gunicorn
-echo "Starting Gunicorn..."
-exec gunicorn nova.wsgi:application \
-    --bind 0.0.0.0:8000 \
-    --workers 3 \
-    --log-level info \
-    --timeout 300
+echo "Starting Daphne..."
+exec daphne nova.asgi:application \
+    -b 0.0.0.0 \
+    -p 8000

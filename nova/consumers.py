@@ -27,9 +27,17 @@ class TaskProgressConsumer(AsyncWebsocketConsumer):
             self.channel_name
         )
 
-    # Receive message from WebSocket (optional, for client-to-server if needed)
+    # Receive message from WebSocket (handle ping/pong and optional client messages)
     async def receive(self, text_data):
-        # Can handle client messages here if needed (e.g., request refresh)
+        text_data_json = json.loads(text_data)
+        message_type = text_data_json.get('type')
+
+        if message_type == 'ping':
+            # Respond with pong for heartbeat
+            await self.send(text_data=json.dumps({'type': 'pong'}))
+            return  # Exit early
+
+        # Can handle other client messages here if needed (e.g., request refresh)
         pass
 
     # Receive message from room group (pushed from views/thread)

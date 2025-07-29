@@ -151,6 +151,43 @@
     $("#dropdownMenuButton").text(label);
   });
 
+  /* -------------------------- LocalStorage with Expiration -------------------------- */
+  // Helper to set item with expiry (TTL in ms, default 1h)
+  function setWithExpiry(key, value, ttl = 3600000) {
+    const now = new Date().getTime();
+    const item = { value: value, expiry: now + ttl };
+    localStorage.setItem(key, JSON.stringify(item));
+  }
+
+  // Helper to get item and check expiry
+  function getWithExpiry(key) {
+    const itemStr = localStorage.getItem(key);
+    if (!itemStr) return null;
+    const item = JSON.parse(itemStr);
+    const now = new Date().getTime();
+    if (now > item.expiry) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return item.value;
+  }
+
+  // Store task_id for a thread_id (using expiry)
+  window.addStoredTask = function(threadId, taskId) {
+    if (!threadId || !taskId) return;
+    const key = `storedTask_${threadId}`;
+    setWithExpiry(key, taskId);
+  };
+
+  // Remove stored task and clean if expired
+  window.removeStoredTask = function(threadId, taskId) {
+    const key = `storedTask_${threadId}`;
+    const storedTask = getWithExpiry(key); // Auto-cleans if expired
+    if (storedTask === taskId) {
+      localStorage.removeItem(key);
+    }
+  };
+
   /* -------------------------- Task WebSocket for Real-Time Progress -------------------------- */
   function startTaskWebSocket(threadId, taskId) {
     if (!taskId) return;
@@ -169,12 +206,42 @@
     let reconnectAttempts = 0;
     const maxReconnects = 5;
 
+    // Heartbeat variables
+    let heartbeatInterval = null;
+    let heartbeatTimeout = null;
+
+    function startHeartbeat() {
+      clearInterval(heartbeatInterval);
+      clearTimeout(heartbeatTimeout);
+
+      heartbeatInterval = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'ping' }));
+          console.log('Sent ping'); // Debug
+          heartbeatTimeout = setTimeout(() => {
+            console.error('Heartbeat timeout: Closing WebSocket');
+            socket.close(1006, 'Heartbeat timeout'); // Abnormal closure
+          }, 10000); // 10s timeout
+        }
+      }, 30000); // Every 30s
+    }
+
+    function handlePong() {
+      clearTimeout(heartbeatTimeout);
+      console.log('Received pong'); // Debug
+    }
+
     socket.onopen = function () {
       reconnectAttempts = 0; // Reset on success
+      startHeartbeat(); // Start heartbeat
     };
 
     socket.onmessage = function (event) {
       const data = JSON.parse(event.data);
+      if (data.type === 'pong') {
+        handlePong();
+        return;
+      }
       if (data.error) {
         statusDiv.html('<p class="text-danger">' + data.error + "</p>");
         loadingSpinner.hide();
@@ -231,11 +298,18 @@
     };
 
     socket.onclose = function (e) {
+      clearInterval(heartbeatInterval);
+      clearTimeout(heartbeatTimeout);
       if (reconnectAttempts < maxReconnects && !e.wasClean) {
         // Reconnect if unexpected close
         reconnectAttempts++;
         setTimeout(() => {
           socket = new WebSocket(wsUrl);
+          // Re-attach event handlers here if needed
+          socket.onopen = this.onopen; // Reuse handlers
+          socket.onmessage = this.onmessage;
+          socket.onclose = this.onclose;
+          socket.onerror = this.onerror;
         }, 1000 * reconnectAttempts); // Exponential backoff
       }
     };
