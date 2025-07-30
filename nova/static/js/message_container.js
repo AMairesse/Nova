@@ -25,10 +25,9 @@
     initAutoScroll();
   };
 
-  // Auto-scroll logic
-  let isAtBottom = true;
-  let userScrolled = false;
-  let observer = null;
+  // Auto-scroll logic (simplified: no observer, manual calls after updates)
+  let containerAtBottom = true;
+  let windowAtBottom = true;
 
   function initAutoScroll() {
     const container = $("#conversation-container");
@@ -36,46 +35,52 @@
       return;
     }
 
-    // Disconnect previous observer if exists
-    if (observer) observer.disconnect();
-
-    // Detect if user scrolls up
-    container.on("scroll", function () {
-      updateIsAtBottom();
-      userScrolled = !isAtBottom;
+    // Listener for container scroll
+    container.off("scroll").on("scroll", function () {
+      updateContainerAtBottom();
     });
 
-    // MutationObserver to detect DOM changes (appends) and scroll
-    observer = new MutationObserver(() => {
-      // Force reflow
-      void container[0].offsetHeight;
-      updateIsAtBottom(); // Recheck after mutation
-      scrollToBottomIfNeeded();
-    });
-    observer.observe(container[0], {
-      childList: true,
-      subtree: true,
-      characterData: true,
+    // Listener for window scroll
+    $(window).off("scroll.auto").on("scroll.auto", function () {
+      updateWindowAtBottom();
     });
 
-    // Initial scroll to bottom
-    updateIsAtBottom();
-    scrollToBottomIfNeeded();
+    // Initial unconditional scroll to bottom
+    const containerEl = container[0];
+    containerEl.scrollTop = containerEl.scrollHeight;
+
+    const bottomElement = $('textarea[name="new_message"]')[0];
+    if (bottomElement) {
+      bottomElement.scrollIntoView({ behavior: "smooth" });
+    }
+
+    // Update flags after initial scroll
+    updateContainerAtBottom();
+    updateWindowAtBottom();
   }
 
-  function updateIsAtBottom() {
-    const container = $("#conversation-container");
-    const scrollTop = container.scrollTop();
-    const scrollHeight = container.prop("scrollHeight");
-    const height = container.height();
-    isAtBottom = scrollTop + height >= scrollHeight - 1; // Tolerance reduced
+  function updateContainerAtBottom() {
+    const container = $("#conversation-container")[0];
+    containerAtBottom = (container.scrollTop + container.clientHeight >= container.scrollHeight - 10);
+  }
+
+  function updateWindowAtBottom() {
+    const doc = document.documentElement;
+    const scrollTop = (window.pageYOffset || doc.scrollTop) - (doc.clientTop || 0);
+    const windowHeight = window.innerHeight;
+    const docHeight = doc.scrollHeight;
+    windowAtBottom = (scrollTop + windowHeight >= docHeight - 10);
   }
 
   function scrollToBottomIfNeeded() {
-    const textarea = $('textarea[name="new_message"]');
-    if (isAtBottom && !userScrolled) {
-      // Smooth scroll to keep the message input visible
-      textarea[0].scrollIntoView({ behavior: "smooth" });
+    const container = $("#conversation-container")[0];
+    if (container && containerAtBottom) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
+
+    const bottomElement = $('textarea[name="new_message"]')[0];
+    if (bottomElement && windowAtBottom) {
+      bottomElement.scrollIntoView({ behavior: "smooth" });
     }
   }
 
@@ -123,6 +128,7 @@
               // Create streaming placeholder
               const streamingDiv = $('<div class="message streaming"><p></p></div>');
               $("#conversation-container").append(streamingDiv);
+              scrollToBottomIfNeeded(); // Added: manual call after append
 
               // Step 3: Store task_id in localStorage for persistence
               window.addStoredTask(data.thread_id, data.task_id);
