@@ -72,14 +72,10 @@
   }
 
   function scrollToBottomIfNeeded() {
-    const container = $("#conversation-container");
-    if (container.length === 0) return;
+    const textarea = $('textarea[name="new_message"]');
     if (isAtBottom && !userScrolled) {
-      const target = container.prop("scrollHeight");
-      // Use rAF to set after reflow/paint
-      requestAnimationFrame(() => {
-        container[0].scrollTop = target;
-      });
+      // Smooth scroll to keep the message input visible
+      textarea[0].scrollIntoView({ behavior: "smooth" });
     }
   }
 
@@ -259,7 +255,7 @@
       if (data.type === 'response_chunk') {
         // Append chunk to streaming div (progressive display)
         const streamingP = $(".message.streaming p");
-        streamingP.append(data.chunk); // Simple append for typewriter effect
+        streamingP.append(data.chunk);
         scrollToBottomIfNeeded();
         return;
       }
