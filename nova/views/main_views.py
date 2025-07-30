@@ -277,6 +277,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         task.result = f"Error: {str(e)}"
         task.progress_logs.append({"step": f"Error occurred: {str(e)}", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
         task.save()
+        asyncio.run(handler.publish_update('task_complete', {'status': "TASK_COMPLETED", 'error': str(e)}))
         logger.error(f"Task {task_id} failed: {e}")
 
 @login_required
