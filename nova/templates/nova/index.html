@@ -108,9 +108,6 @@
         if (typeof initMessageContainer === "function") {
           initMessageContainer();
         }
-        if (typeof window.scrollToBottomIfNeeded === "function") {
-          window.scrollToBottomIfNeeded();
-        }
 
         // Step 2: Fetch running tasks if threadId exists
         if (threadId) {
@@ -134,9 +131,6 @@
                 tasksToResume.forEach((taskId) => {
                   startTaskWebSocket(threadId, taskId);  // Pass threadId for cleanup
                 });
-                if (typeof window.scrollToBottomIfNeeded === "function") {
-                  window.scrollToBottomIfNeeded();
-                }
               }
             },
 

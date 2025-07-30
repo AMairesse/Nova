@@ -184,7 +184,15 @@ class TaskProgressHandler(AsyncCallbackHandler):
         #TODO: filter sub agents but use it as a progress update
         try:
             self.final_chunks.append(token)
-            await self.publish_update('response_chunk', {'chunk': token})
+            full_response = ''.join(self.final_chunks)
+            raw_html = markdown(full_response, extensions=["extra"])
+            clean_html = bleach.clean(
+                raw_html,
+                tags=ALLOWED_TAGS,
+                attributes=ALLOWED_ATTRS,
+                strip=True,
+            )
+            await self.publish_update('response_chunk', {'chunk': clean_html})
         except Exception as e:
             logger.error(f"Error in on_llm_new_token: {e}")
     

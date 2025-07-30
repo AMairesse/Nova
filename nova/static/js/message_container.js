@@ -20,69 +20,7 @@
       this.style.height = "38px";
       this.style.height = this.scrollHeight + "px";
     });
-
-    // Auto-scroll management
-    initAutoScroll();
   };
-
-  // Auto-scroll logic (simplified: no observer, manual calls after updates)
-  let containerAtBottom = true;
-  let windowAtBottom = true;
-
-  function initAutoScroll() {
-    const container = $("#conversation-container");
-    if (container.length === 0) {
-      return;
-    }
-
-    // Listener for container scroll
-    container.off("scroll").on("scroll", function () {
-      updateContainerAtBottom();
-    });
-
-    // Listener for window scroll
-    $(window).off("scroll.auto").on("scroll.auto", function () {
-      updateWindowAtBottom();
-    });
-
-    // Initial unconditional scroll to bottom
-    const containerEl = container[0];
-    containerEl.scrollTop = containerEl.scrollHeight;
-
-    const bottomElement = $('textarea[name="new_message"]')[0];
-    if (bottomElement) {
-      bottomElement.scrollIntoView({ behavior: "smooth" });
-    }
-
-    // Update flags after initial scroll
-    updateContainerAtBottom();
-    updateWindowAtBottom();
-  }
-
-  function updateContainerAtBottom() {
-    const container = $("#conversation-container")[0];
-    containerAtBottom = (container.scrollTop + container.clientHeight >= container.scrollHeight - 10);
-  }
-
-  function updateWindowAtBottom() {
-    const doc = document.documentElement;
-    const scrollTop = (window.pageYOffset || doc.scrollTop) - (doc.clientTop || 0);
-    const windowHeight = window.innerHeight;
-    const docHeight = doc.scrollHeight;
-    windowAtBottom = (scrollTop + windowHeight >= docHeight - 10);
-  }
-
-  function scrollToBottomIfNeeded() {
-    const container = $("#conversation-container")[0];
-    if (container && containerAtBottom) {
-      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-    }
-
-    const bottomElement = $('textarea[name="new_message"]')[0];
-    if (bottomElement && windowAtBottom) {
-      bottomElement.scrollIntoView({ behavior: "smooth" });
-    }
-  }
 
   // Form submit (add trim + empty check)
   $(document).on("submit", "#message-form", function (e) {
@@ -123,12 +61,10 @@
             success: function (html) {
               $("#message-container").html(html);
               window.initMessageContainer();
-              scrollToBottomIfNeeded();
 
               // Create streaming placeholder
               const streamingDiv = $('<div class="message streaming"><p></p></div>');
               $("#conversation-container").append(streamingDiv);
-              scrollToBottomIfNeeded(); // Added: manual call after append
 
               // Step 3: Store task_id in localStorage for persistence
               window.addStoredTask(data.thread_id, data.task_id);
@@ -254,15 +190,13 @@
         const li = document.createElement("li");
         li.innerHTML = `<small>${marked.parse(log)}</small>`;
         logsList.append(li);
-        scrollToBottomIfNeeded();
         return;
       }
 
       if (data.type === 'response_chunk') {
-        // Append chunk to streaming div (progressive display)
+        // Set full parsed HTML (replaces content each time)
         const streamingP = $(".message.streaming p");
-        streamingP.append(data.chunk);
-        scrollToBottomIfNeeded();
+        streamingP.html(data.chunk);
         return;
       }
 
@@ -318,5 +252,4 @@
   }
 
   window.startTaskWebSocket = startTaskWebSocket;
-  window.scrollToBottomIfNeeded = scrollToBottomIfNeeded;
 })(jQuery);
