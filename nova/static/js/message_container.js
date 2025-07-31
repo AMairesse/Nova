@@ -1,151 +1,149 @@
 /* nova/static/js/message_container.js */
-(function ($) {
+(function () {
+  'use strict';
+
   /* ----------- Public function called after each injection ----------- */
   window.initMessageContainer = function () {
-    const textarea = $("#message-container").find(
-      'textarea[name="new_message"]'
-    );
-    textarea.focus();
+    const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+    if (textarea) {
+      textarea.focus();
 
-    // Manage the Enter key
-    textarea.on("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        $("#message-form").submit();
+      // Manage the Enter key
+      textarea.addEventListener('keydown', function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const form = document.getElementById('message-form');
+          if (form) {
+            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          }
+        }
+      });
+
+      // Auto-resize for textareas with the auto-resize class
+      if (textarea.classList.contains('auto-resize-textarea')) {
+        textarea.addEventListener('input', function () {
+          this.style.height = "38px";
+          this.style.height = this.scrollHeight + "px";
+        });
       }
-    });
-
-    // Auto-resize for textareas with the auto-resize class
-    textarea.filter('.auto-resize-textarea').on("input", function () {
-      this.style.height = "38px";
-      this.style.height = this.scrollHeight + "px";
-    });
+    }
   };
 
   // Form submit (add trim + empty check)
-  $(document).on("submit", "#message-form", function (e) {
+  document.addEventListener('submit', async function (e) {
+    if (e.target.id !== 'message-form') return;
+    
     e.preventDefault();
-    const msg = $('textarea[name="new_message"]').val().trim();
+    const textarea = document.querySelector('textarea[name="new_message"]');
+    const msg = textarea ? textarea.value.trim() : '';
     if (!msg) return; // Prevent empty
-    $("#send-btn").prop("disabled", true);
+    
+    const sendBtn = document.getElementById('send-btn');
+    if (sendBtn) sendBtn.disabled = true;
 
-    const formData = $(this).serialize();
+    try {
+      const token = await window.getCSRFToken();
+      const formData = new FormData(e.target);
+      
+      const response = await fetch(window.NovaApp.urls.addMessage, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-AJAX': 'true',
+          'X-CSRFToken': token
+        }
+      });
 
-    getCSRFToken().then((token) =>
-      $.ajax({
-        type: "POST",
-        url: window.NovaApp.urls.addMessage,
-        data: formData,
-        headers: { "X-AJAX": "true", "X-CSRFToken": token },
+      const data = await response.json();
+      
+      // 1) Memorize selected agent BEFORE updating the DOM
+      const selectedAgentInput = document.getElementById('selectedAgentInput');
+      const currentAgentId = selectedAgentInput ? selectedAgentInput.value : '';
 
-        success: function (data) {
-          // 1) Memorize selected agent BEFORE updating the DOM
-          const currentAgentId = $("#selectedAgentInput").val() || "";
+      // Update or create the thread
+      const threadIdInput = document.querySelector('input[name="thread_id"]');
+      if (threadIdInput) threadIdInput.value = data.thread_id;
 
-          // Update or create the thread
-          $('input[name="thread_id"]').val(data.thread_id);
+      // If we get HTML for a new thread then we add it
+      if (data.threadHtml) {
+        const threadList = document.querySelector('.list-group');
+        if (threadList) {
+          threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
+        }
+      }
 
-          // If we get HTML for a new thread then we add it
-          if (data.threadHtml) {
-            $(".list-group").prepend(data.threadHtml);
-            attachThreadEventHandlers();
-          }
+      // Thread's messages reload
+      const params = new URLSearchParams({
+        thread_id: data.thread_id,
+        agent_id: currentAgentId
+      });
+      
+      const messageResponse = await fetch(`${window.NovaApp.urls.messageList}?${params}`, {
+        headers: { 'X-AJAX': 'true' }
+      });
+      
+      const html = await messageResponse.text();
+      const messageContainer = document.getElementById('message-container');
+      if (messageContainer) {
+        messageContainer.innerHTML = html;
+        window.initMessageContainer();
 
-          // Thread's messages reload
-          $.ajax({
-            type: "GET",
-            url: window.NovaApp.urls.messageList,
-            data: { thread_id: data.thread_id, agent_id: currentAgentId },
-            headers: { "X-AJAX": "true" },
+        // Create streaming placeholder with card layout
+        const conversationContainer = document.getElementById('conversation-container');
+        if (conversationContainer) {
+          const streamingDiv = document.createElement('div');
+          streamingDiv.className = 'message streaming mb-3';
+          streamingDiv.innerHTML = `
+            <div class="card border-secondary">
+              <div class="card-body py-2">
+                <div class="streaming-content"></div>
+              </div>
+            </div>
+          `;
+          conversationContainer.appendChild(streamingDiv);
+        }
 
-            success: function (html) {
-              $("#message-container").html(html);
-              window.initMessageContainer();
+        // Store task_id in localStorage for persistence
+        window.StorageUtils.addStoredTask(data.thread_id, data.task_id);
 
-              // Create streaming placeholder with card layout
-              const streamingDiv = $(`
-                <div class="message streaming mb-3">
-                  <div class="card border-secondary">
-                    <div class="card-body py-2">
-                      <div class="streaming-content"></div>
-                    </div>
-                  </div>
-                </div>
-              `);
-              $("#conversation-container").append(streamingDiv);
-
-              // Step 3: Store task_id in localStorage for persistence
-              window.addStoredTask(data.thread_id, data.task_id);
-
-              // Start WS for task progress (pass threadId for cleanup)
-              startTaskWebSocket(data.thread_id, data.task_id);
-            },
-          });
-        },
-
-        error: function (_, __, err) {
-          console.error("Error adding message:", err);
-          $("#send-btn").prop("disabled", false);
-        },
-      })
-    );
+        // Start WS for task progress
+        startTaskWebSocket(data.thread_id, data.task_id);
+      }
+    } catch (error) {
+      console.error("Error adding message:", error);
+      if (sendBtn) sendBtn.disabled = false;
+    }
   });
 
   // Select an agent in the dropdown (only for agent dropdown items)
-  $(document).on("click", ".agent-dropdown-item", function (e) {
-    e.preventDefault();
-    const value = $(this).data("value");
-    const label = $(this).text();
+  document.addEventListener('click', function (e) {
+    if (e.target.matches('.agent-dropdown-item') || e.target.closest('.agent-dropdown-item')) {
+      e.preventDefault();
+      const item = e.target.matches('.agent-dropdown-item') ? e.target : e.target.closest('.agent-dropdown-item');
+      const value = item.dataset.value;
+      const label = item.textContent;
 
-    $("#selectedAgentInput").val(value);
-    $("#dropdownMenuButton").text(label);
+      const selectedAgentInput = document.getElementById('selectedAgentInput');
+      const dropdownButton = document.getElementById('dropdownMenuButton');
+      
+      if (selectedAgentInput) selectedAgentInput.value = value;
+      if (dropdownButton) dropdownButton.textContent = label;
+    }
   });
 
-  /* -------------------------- LocalStorage with Expiration -------------------------- */
-  // Helper to set item with expiry (TTL in ms, default 1h)
-  function setWithExpiry(key, value, ttl = 3600000) {
-    const now = new Date().getTime();
-    const item = { value: value, expiry: now + ttl };
-    localStorage.setItem(key, JSON.stringify(item));
-  }
-
-  // Helper to get item and check expiry
-  function getWithExpiry(key) {
-    const itemStr = localStorage.getItem(key);
-    if (!itemStr) return null;
-    const item = JSON.parse(itemStr);
-    const now = new Date().getTime();
-    if (now > item.expiry) {
-      localStorage.removeItem(key);
-      return null;
-    }
-    return item.value;
-  }
-
-  // Store task_id for a thread_id (using expiry)
-  window.addStoredTask = function(threadId, taskId) {
-    if (!threadId || !taskId) return;
-    const key = `storedTask_${threadId}`;
-    setWithExpiry(key, taskId);
-  };
-
-  // Remove stored task and clean if expired
-  window.removeStoredTask = function(threadId, taskId) {
-    const key = `storedTask_${threadId}`;
-    const storedTask = getWithExpiry(key); // Auto-cleans if expired
-    if (storedTask === taskId) {
-      localStorage.removeItem(key);
-    }
-  };
+  // Note: localStorage helpers are now in utils.js - keeping backward compatibility
+  window.addStoredTask = window.StorageUtils.addStoredTask.bind(window.StorageUtils);
+  window.removeStoredTask = window.StorageUtils.removeStoredTask.bind(window.StorageUtils);
 
   /* -------------------------- Task WebSocket for Real-Time Progress -------------------------- */
   function startTaskWebSocket(threadId, taskId) {
     if (!taskId) return;
 
-    const progressDiv = $("#task-progress");
-    const progressLogs = $("#progress-logs");
-    const statusDiv = $("#task-status");
-    progressDiv.removeClass('d-none');
+    const progressDiv = document.getElementById('task-progress');
+    const progressLogs = document.getElementById('progress-logs');
+    const statusDiv = document.getElementById('task-status');
+    
+    if (progressDiv) progressDiv.classList.remove('d-none');
 
     // Determine protocol (ws or wss)
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -167,10 +165,10 @@
           socket.send(JSON.stringify({ type: 'ping' }));
           heartbeatTimeout = setTimeout(() => {
             console.error('Heartbeat timeout: Closing WebSocket');
-            socket.close(1006, 'Heartbeat timeout'); // Abnormal closure
-          }, 10000); // 10s timeout
+            socket.close(1006, 'Heartbeat timeout');
+          }, 10000);
         }
-      }, 30000); // Every 30s
+      }, 30000);
     }
 
     function handlePong() {
@@ -178,8 +176,8 @@
     }
 
     socket.onopen = function () {
-      reconnectAttempts = 0; // Reset on success
-      startHeartbeat(); // Start heartbeat
+      reconnectAttempts = 0;
+      startHeartbeat();
     };
 
     socket.onmessage = function (event) {
@@ -189,41 +187,52 @@
         return;
       }
       if (data.error) {
-        statusDiv.html('<p class="text-danger">' + data.error + "</p>");
+        if (statusDiv) statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
         return;
       }
 
       if (data.type === 'progress_update') {
         const log = data.progress_log || "undefined";
-        progressLogs.text(log);
+        if (progressLogs) progressLogs.textContent = log;
         return;
       }
 
       if (data.type === 'response_chunk') {
         // When the streaming starts remove the progressDiv
-        if (!progressDiv.hasClass('d-none') && data.chunk !== '') {
-          progressDiv.addClass('d-none');
+        if (progressDiv && !progressDiv.classList.contains('d-none') && data.chunk !== '') {
+          progressDiv.classList.add('d-none');
         }
         // Set full parsed HTML (replaces content each time)
-        const streamingContent = $(".message.streaming .streaming-content");
-        streamingContent.html(data.chunk);
+        const streamingContent = document.querySelector(".message.streaming .streaming-content");
+        if (streamingContent) streamingContent.innerHTML = data.chunk;
         return;
       }
 
       if (data.type === 'task_complete') {
         // Activate send button
-        $("#send-btn").prop("disabled", false);
+        const sendBtn = document.getElementById('send-btn');
+        if (sendBtn) sendBtn.disabled = false;
+        
         // Close WS
         socket.close();
+        
         // Refresh thread list for subject updates with no-cache
         const timestamp = Date.now();
-        $.get(`${window.location.href}?t=${timestamp}`, (fullHtml) => {
-          const newThreads = $(fullHtml).find(".list-group").html();
-          $(".list-group").html(newThreads);
-          attachThreadEventHandlers();
-        });
+        fetch(`${window.location.href}?t=${timestamp}`)
+          .then(response => response.text())
+          .then(fullHtml => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(fullHtml, 'text/html');
+            const newThreadsHtml = doc.querySelector('.list-group');
+            const currentThreadList = document.querySelector('.list-group');
+            if (newThreadsHtml && currentThreadList) {
+              currentThreadList.innerHTML = newThreadsHtml.innerHTML;
+            }
+          })
+          .catch(error => console.error('Error refreshing thread list:', error));
+        
         // Clean stored task
-        window.removeStoredTask(threadId, taskId);
+        window.StorageUtils.removeStoredTask(threadId, taskId);
         return;
       }
     };
@@ -232,23 +241,21 @@
       clearInterval(heartbeatInterval);
       clearTimeout(heartbeatTimeout);
       if (reconnectAttempts < maxReconnects && !e.wasClean) {
-        // Reconnect if unexpected close
         reconnectAttempts++;
         setTimeout(() => {
           socket = new WebSocket(wsUrl);
-          // Re-attach event handlers here if needed
-          socket.onopen = this.onopen; // Reuse handlers
+          socket.onopen = this.onopen;
           socket.onmessage = this.onmessage;
           socket.onclose = this.onclose;
           socket.onerror = this.onerror;
-        }, 1000 * reconnectAttempts); // Exponential backoff
+        }, 1000 * reconnectAttempts);
       }
     };
 
     socket.onerror = function (err) {
-      statusDiv.html('<p class="text-danger">WebSocket connection error.</p>');
+      if (statusDiv) statusDiv.innerHTML = '<p class="text-danger">WebSocket connection error.</p>';
     };
   }
 
   window.startTaskWebSocket = startTaskWebSocket;
-})(jQuery);
+})();

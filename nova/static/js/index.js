@@ -148,13 +148,9 @@
       this.loadMessages(lastThreadId);
     },
 
-    // localStorage helpers (simplified)
+    // Use centralized storage utilities
     getStoredRunningTasks(threadId) {
-      try {
-        return JSON.parse(localStorage.getItem(`runningTasks_${threadId}`)) || [];
-      } catch {
-        return [];
-      }
+      return window.StorageUtils.getStoredRunningTasks(threadId);
     }
   };
 
