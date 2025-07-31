@@ -108,8 +108,6 @@ class LLMAgent:
                 try:
                     from langfuse import Langfuse
                     from langfuse.langchain import CallbackHandler
-                    import uuid
-                    session_id = str(uuid.uuid4())
 
                     # Create/Configure Langfuse client (once at startup)
                     langfuse = Langfuse(

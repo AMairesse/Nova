@@ -17,13 +17,16 @@
     {% endfor %}
   </div>
 
-  <div
-    id="task-progress"
-    class="mb-3 p-3 border rounded bg-light"
-    style="display: none"
-  >
-    <ul id="progress-logs" class="list-unstyled"></ul>
-    <div id="task-status" class="mt-2"></div>
+  <div id="task-progress" class="d-none">
+    <div class="d-flex align-items-center">
+      <div class="spinner-border" role="status">
+        <span class="visually-hidden">Working...</span>
+      </div>
+      <div>
+        <small id="progress-logs" class="text-muted"></small>
+      </div>
+      <div id="task-status" class="mt-2"></div>
+    </div>
   </div>
 
   {% with nb_agents=user_agents|length %} {% if nb_agents == 0 %}

@@ -165,6 +165,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
         self.channel_layer = channel_layer
         self.final_chunks = []
         self.current_tool = None
+        self.token_count = 0
 
     async def publish_update(self, message_type, data):
         await self.channel_layer.group_send(
@@ -174,47 +175,89 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
     # Implement needed callbacks from
     # https://python.langchain.com/docs/concepts/callbacks/
+    # https://python.langchain.com/api_reference/core/callbacks/langchain_core.callbacks.base.AsyncCallbackHandler.html
+    async def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None,
+                             tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
+        pass
+
+    async def on_chain_end(self, outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None,
+                           tags: Optional[List[str]] = None, **kwargs: Any) -> None:
+        pass
+
     async def on_chat_model_start(self, serialized: Dict[str, Any], messages: List[Any], **kwargs: Any) -> Any:
         try:
-            await self.publish_update('progress_update', {'progress_log': "Chat model started"})
+            if self.current_tool is None:
+                await self.publish_update('progress_update', {'progress_log': f"Agent started"})
+            else:
+                await self.publish_update('progress_update', {'progress_log': f"Sub-agent started"})
         except Exception as e:
             logger.error(f"Error in on_chat_model_start: {e}")
 
-    async def on_llm_new_token(self, token: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
-        #TODO: filter sub agents but use it as a progress update
+    async def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any):
         try:
-            self.final_chunks.append(token)
-            full_response = ''.join(self.final_chunks)
-            raw_html = markdown(full_response, extensions=["extra"])
-            clean_html = bleach.clean(
-                raw_html,
-                tags=ALLOWED_TAGS,
-                attributes=ALLOWED_ATTRS,
-                strip=True,
-            )
-            await self.publish_update('response_chunk', {'chunk': clean_html})
+            if self.current_tool is None:
+                await self.publish_update('progress_update', {'progress_log': f"Agent started"})
+            else:
+                await self.publish_update('progress_update', {'progress_log': f"Sub-agent started"})
+        except Exception as e:
+            logger.error(f"Error in on_llm_end: {e}")
+
+    async def on_llm_new_token(self, token: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+        try:
+            # Send only chunks from the root run
+            if self.current_tool is None:
+                self.final_chunks.append(token)
+                full_response = ''.join(self.final_chunks)
+                raw_html = markdown(full_response, extensions=["extra"])
+                clean_html = bleach.clean(
+                    raw_html,
+                    tags=ALLOWED_TAGS,
+                    attributes=ALLOWED_ATTRS,
+                    strip=True,
+                )
+                await self.publish_update('response_chunk', {'chunk': clean_html})
+            else:
+                # If a sub agent is generating a response, send it as a progress update every 100 tokens
+                self.token_count += 1
+                if self.token_count % 100 == 0:
+                    await self.publish_update('progress_update', {'progress_log': "Sub-agent still working..."})
         except Exception as e:
             logger.error(f"Error in on_llm_new_token: {e}")
     
+    async def on_llm_end(self, response: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+        try:
+            if self.current_tool is None:
+                await self.publish_update('progress_update', {'progress_log': f"Agent finished"})
+            else:
+                await self.publish_update('progress_update', {'progress_log': f"Sub-agent finished"})
+        except Exception as e:
+            logger.error(f"Error in on_llm_end: {e}")
+
     async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
         try:
+            # If a tool is starting, store it to avoid sending response chunks back to the user
             tool_name = serialized.get('name', 'Unknown')
             self.current_tool = tool_name
-            await self.publish_update('progress_update', {'progress_log': f"Calling tool: {tool_name}"})
+            await self.publish_update('progress_update', {'progress_log': f"Tool '{tool_name}' started"})
         except Exception as e:
             logger.error(f"Error in on_tool_start: {e}")
 
-    async def on_tool_end(self, output: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+    async def on_tool_end(self, output: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
         try:
-            if self.current_tool:
-                await self.publish_update('progress_update', {'progress_log': f"{self.current_tool} finished with result: {output[:50]}..."})
-                self.current_tool = None
+            await self.publish_update('progress_update', {'progress_log': f"Tool '{self.current_tool}' finished"})
+            # If a tool is ending, reset the current tool so that we may send response chunks if the main agent is generating
+            self.current_tool = None
         except Exception as e:
             logger.error(f"Error in on_tool_end: {e}")
     
     async def on_agent_finish(self, finish: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
-        pass
-
+        try:
+            if self.current_tool is None:
+                await self.publish_update('progress_update', {'progress_log': f"Agent finished"})
+            else:
+                await self.publish_update('progress_update', {'progress_log': f"Sub-agent finished"})
+        except Exception as e:
+            logger.error(f"Error in on_chat_model_start: {e}")
 
 # Updated helper function for background thread
 def run_ai_task(task_id, user_id, thread_id, agent_id):
@@ -251,10 +294,6 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Run LLMAgent
         final_output = llm.invoke(last_message)
 
-        # Send a final progress update for the LLM response
-        # This will be used for closing the status display of the task
-        asyncio.run(handler.publish_update('task_complete', {'status': "RESPONSE_COMPLETED", 'result': final_output}))
-
         # Log completion and save result
         task.progress_logs.append({"step": "AI processing completed", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
         task.result = final_output
@@ -275,7 +314,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         # Send a final progress update for task
         # This will be used for updating the thread name and closing the socket
-        asyncio.run(handler.publish_update('task_complete', {'status': "TASK_COMPLETED", 'result': final_output}))
+        asyncio.run(handler.publish_update('task_complete', {'result': final_output}))
         task.status = TaskStatus.COMPLETED
         task.save()
 
@@ -285,7 +324,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         task.result = f"Error: {str(e)}"
         task.progress_logs.append({"step": f"Error occurred: {str(e)}", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
         task.save()
-        asyncio.run(handler.publish_update('task_complete', {'status': "TASK_COMPLETED", 'error': str(e)}))
+        asyncio.run(handler.publish_update('task_complete', {'error': str(e)}))
         logger.error(f"Task {task_id} failed: {e}")
 
 @login_required

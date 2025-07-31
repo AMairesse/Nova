@@ -135,9 +135,9 @@
     if (!taskId) return;
 
     const progressDiv = $("#task-progress");
-    const logsList = $("#progress-logs");
+    const progressLogs = $("#progress-logs");
     const statusDiv = $("#task-status");
-    progressDiv.show();
+    progressDiv.removeClass('d-none');
 
     // Determine protocol (ws or wss)
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -187,13 +187,15 @@
 
       if (data.type === 'progress_update') {
         const log = data.progress_log || "undefined";
-        const li = document.createElement("li");
-        li.innerHTML = `<small>${marked.parse(log)}</small>`;
-        logsList.append(li);
+        progressLogs.text(log);
         return;
       }
 
       if (data.type === 'response_chunk') {
+        // When the streaming starts remove the progressDiv
+        if (!progressDiv.hasClass('d-none') && data.chunk !== '') {
+          progressDiv.addClass('d-none');
+        }
         // Set full parsed HTML (replaces content each time)
         const streamingP = $(".message.streaming p");
         streamingP.html(data.chunk);
@@ -203,26 +205,15 @@
       if (data.type === 'task_complete') {
         // Activate send button
         $("#send-btn").prop("disabled", false);
-        // If only the answer is done the hide the progressDiv
-        if (data.status === "RESPONSE_COMPLETED") {
-          progressDiv.hide();
-        }
-        // If the task is fully completed
-        else if (data.status === "TASK_COMPLETED") {
-          // Close WS
-          socket.close();
-          // Refresh thread list for subject updates with no-cache
-          const timestamp = Date.now();
-          $.get(`${window.location.href}?t=${timestamp}`, (fullHtml) => {
-            const newThreads = $(fullHtml).find(".list-group").html();
-            $(".list-group").html(newThreads);
-            attachThreadEventHandlers();
-          });
-        }
-        // If the task failed
-        else {
-          statusDiv.html('<p class="text-danger">Task failed: ' + marked.parse(data.result) + "</p>");
-        }
+        // Close WS
+        socket.close();
+        // Refresh thread list for subject updates with no-cache
+        const timestamp = Date.now();
+        $.get(`${window.location.href}?t=${timestamp}`, (fullHtml) => {
+          const newThreads = $(fullHtml).find(".list-group").html();
+          $(".list-group").html(newThreads);
+          attachThreadEventHandlers();
+        });
         // Clean stored task
         window.removeStoredTask(threadId, taskId);
         return;
