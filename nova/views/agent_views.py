@@ -13,7 +13,8 @@ def create_agent(request):
             agent = form.save(commit=False)
             agent.user = request.user
             agent.save()
-            form.save_m2m()                  # Many-to-Many : tools & agent_tools
+            # Many-to-Many : tools & agent_tools
+            form.save_m2m()
             return redirect(reverse('user_config') + '?tab=agents')
         # Invalid form : store errors
         request.session['agent_errors'] = form.errors.as_json()
@@ -21,6 +22,7 @@ def create_agent(request):
 
     # Invalid request
     return redirect(reverse('user_config') + '?tab=agents')
+
 
 @login_required
 def edit_agent(request, agent_id):
@@ -37,6 +39,7 @@ def edit_agent(request, agent_id):
 
     return redirect(reverse('user_config') + '?tab=agents')
 
+
 @login_required
 @require_POST
 def delete_agent(request, agent_id):
@@ -44,8 +47,8 @@ def delete_agent(request, agent_id):
     if agent:
         # Delete the agent
         agent.delete()
-            
     return redirect(reverse('user_config') + '?tab=agents')
+
 
 @login_required
 def make_default_agent(request, agent_id):

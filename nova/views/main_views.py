@@ -1,6 +1,7 @@
 # nova/views/main_views.py
 import bleach
-import threading, asyncio
+import threading
+import asyncio
 import datetime as dt
 from uuid import UUID
 from typing import Any, Dict, List, Optional
@@ -39,6 +40,7 @@ def index(request):
         'threads': threads,
     })
 
+
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
@@ -47,13 +49,15 @@ def message_list(request):
     for a given thread.
     """
     user_agents = Agent.objects.filter(user=request.user, is_tool=False)
-    
+
     agent_id = request.GET.get('agent_id')
     default_agent = None
     if agent_id:
-        default_agent = Agent.objects.filter(id=agent_id, user=request.user).first()
+        default_agent = Agent.objects.filter(id=agent_id,
+                                             user=request.user).first()
     if not default_agent:
-        default_agent = getattr(request.user.userprofile, "default_agent", None)
+        default_agent = getattr(request.user.userprofile,
+                                "default_agent", None)
 
     selected_thread_id = request.GET.get('thread_id')
     messages = None
@@ -73,7 +77,7 @@ def message_list(request):
                 strip=True,
             )
             m.rendered_html = mark_safe(clean_html)
-    
+
     return render(request, 'nova/message_container.html', {
         'messages': messages,
         'thread_id': selected_thread_id or '',
@@ -81,17 +85,19 @@ def message_list(request):
         'default_agent': default_agent
     })
 
+
 def new_thread(request):
     count = Thread.objects.filter(user=request.user).count() + 1
     thread_subject = f"thread n°{count}"
     thread = Thread.objects.create(subject=thread_subject, user=request.user)
 
     # Render the thread item template
-    thread_html = render_to_string('nova/partials/_thread_item.html', 
-                                 {'thread': thread}, 
-                                 request=request)
+    thread_html = render_to_string('nova/partials/_thread_item.html',
+                                   {'thread': thread},
+                                   request=request)
 
     return thread, thread_html
+
 
 @require_POST
 @login_required(login_url='login')
@@ -104,12 +110,14 @@ def create_thread(request):
         'threadHtml': thread_html
     })
 
+
 @require_POST
 @login_required(login_url='login')
 def delete_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
     thread.delete()
     return redirect('index')
+
 
 @csrf_protect
 @require_POST
@@ -123,8 +131,8 @@ def add_message(request):
         # New thread
         thread, thread_html = new_thread(request)
     else:
-        thread       = Thread.objects.get(id=thread_id)
-        thread_html  = None
+        thread = Thread.objects.get(id=thread_id)
+        thread_html = None
 
     # Add the user message to the thread
     thread.add_message(new_message, actor=Actor.USER)
@@ -132,7 +140,8 @@ def add_message(request):
     # Get the agent object
     agent_obj = None
     if selected_agent:
-        agent_obj = get_object_or_404(Agent, id=selected_agent, user=request.user)
+        agent_obj = get_object_or_404(Agent, id=selected_agent,
+                                      user=request.user)
     else:
         try:
             agent_obj = request.user.userprofile.default_agent
@@ -148,7 +157,8 @@ def add_message(request):
     )
 
     # Launch background thread to run the AI task
-    threading.Thread(target=run_ai_task, args=(task.id, request.user.id, thread.id, agent_obj.id if agent_obj else None)).start()
+    threading.Thread(target=run_ai_task, args=(task.id, request.user.id,
+                     thread.id, agent_obj.id if agent_obj else None)).start()
 
     # Return immediately with task_id for client-side WS connection
     return JsonResponse({
@@ -158,7 +168,9 @@ def add_message(request):
         "threadHtml": thread_html
     })
 
-# Custom callback handler for synthesis and streaming (signatures aligned with Langchain)
+
+# Custom callback handler for synthesis and streaming
+# (signatures aligned with Langchain)
 class TaskProgressHandler(AsyncCallbackHandler):
     def __init__(self, task_id, channel_layer):
         self.task_id = task_id
@@ -176,35 +188,51 @@ class TaskProgressHandler(AsyncCallbackHandler):
     # Implement needed callbacks from
     # https://python.langchain.com/docs/concepts/callbacks/
     # https://python.langchain.com/api_reference/core/callbacks/langchain_core.callbacks.base.AsyncCallbackHandler.html
-    async def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None,
-                             tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
+    async def on_chain_start(self, serialized: Dict[str, Any],
+                             inputs: Dict[str, Any], *, run_id: UUID,
+                             parent_run_id: Optional[UUID] = None,
+                             tags: Optional[List[str]] = None,
+                             metadata: Optional[Dict[str, Any]] = None,
+                             **kwargs: Any) -> None:
         pass
 
-    async def on_chain_end(self, outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None,
-                           tags: Optional[List[str]] = None, **kwargs: Any) -> None:
+    async def on_chain_end(self, outputs: Dict[str, Any], *,
+                           run_id: UUID, parent_run_id: Optional[UUID] = None,
+                           tags: Optional[List[str]] = None,
+                           **kwargs: Any) -> None:
         pass
 
-    async def on_chat_model_start(self, serialized: Dict[str, Any], messages: List[Any], **kwargs: Any) -> Any:
+    async def on_chat_model_start(self, serialized: Dict[str, Any],
+                                  messages: List[Any], **kwargs: Any) -> Any:
         try:
             if self.current_tool is None:
-                await self.publish_update('progress_update', {'progress_log': f"Agent started"})
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent started"})
             else:
-                await self.publish_update('progress_update', {'progress_log': f"Sub-agent started"})
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent started"})
         except Exception as e:
             logger.error(f"Error in on_chat_model_start: {e}")
 
-    async def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any):
+    async def on_llm_start(self, serialized: Dict[str, Any],
+                           prompts: List[str], **kwargs: Any):
         try:
             if self.current_tool is None:
-                await self.publish_update('progress_update', {'progress_log': f"Agent started"})
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent started"})
             else:
-                await self.publish_update('progress_update', {'progress_log': f"Sub-agent started"})
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent started"})
         except Exception as e:
             logger.error(f"Error in on_llm_end: {e}")
 
-    async def on_llm_new_token(self, token: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+    async def on_llm_new_token(self, token: str, *, run_id: UUID,
+                               parent_run_id: Optional[UUID] = None,
+                               **kwargs: Any) -> Any:
         try:
-            # Send only chunks from the root run
+            # Send only chunks from the root run
             if self.current_tool is None:
                 self.final_chunks.append(token)
                 full_response = ''.join(self.final_chunks)
@@ -215,49 +243,77 @@ class TaskProgressHandler(AsyncCallbackHandler):
                     attributes=ALLOWED_ATTRS,
                     strip=True,
                 )
-                await self.publish_update('response_chunk', {'chunk': clean_html})
+                await self.publish_update('response_chunk',
+                                          {'chunk': clean_html})
             else:
-                # If a sub agent is generating a response, send it as a progress update every 100 tokens
+                # If a sub agent is generating a response,
+                # send it as a progress update every 100 tokens
                 self.token_count += 1
                 if self.token_count % 100 == 0:
-                    await self.publish_update('progress_update', {'progress_log': "Sub-agent still working..."})
+                    await self.publish_update('progress_update',
+                                              {'progress_log':
+                                               "Sub-agent still working..."})
         except Exception as e:
             logger.error(f"Error in on_llm_new_token: {e}")
-    
-    async def on_llm_end(self, response: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+
+    async def on_llm_end(self, response: Any, *, run_id: UUID,
+                         parent_run_id: Optional[UUID] = None,
+                         **kwargs: Any) -> Any:
         try:
             if self.current_tool is None:
-                await self.publish_update('progress_update', {'progress_log': f"Agent finished"})
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent finished"})
             else:
-                await self.publish_update('progress_update', {'progress_log': f"Sub-agent finished"})
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent finished"})
         except Exception as e:
             logger.error(f"Error in on_llm_end: {e}")
 
-    async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
+    async def on_tool_start(self, serialized: Dict[str, Any],
+                            input_str: str, *, run_id: UUID,
+                            parent_run_id: Optional[UUID] = None,
+                            tags: Optional[List[str]] = None,
+                            metadata: Optional[Dict[str, Any]] = None,
+                            **kwargs: Any) -> Any:
         try:
-            # If a tool is starting, store it to avoid sending response chunks back to the user
+            # If a tool is starting,
+            # store it to avoid sending response chunks back to the user
             tool_name = serialized.get('name', 'Unknown')
             self.current_tool = tool_name
-            await self.publish_update('progress_update', {'progress_log': f"Tool '{tool_name}' started"})
+            await self.publish_update('progress_update',
+                                      {'progress_log':
+                                       f"Tool '{tool_name}' started"})
         except Exception as e:
             logger.error(f"Error in on_tool_start: {e}")
 
-    async def on_tool_end(self, output: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+    async def on_tool_end(self, output: Any, *, run_id: UUID,
+                          parent_run_id: Optional[UUID] = None,
+                          **kwargs: Any) -> Any:
         try:
-            await self.publish_update('progress_update', {'progress_log': f"Tool '{self.current_tool}' finished"})
-            # If a tool is ending, reset the current tool so that we may send response chunks if the main agent is generating
+            await self.publish_update('progress_update',
+                                      {'progress_log':
+                                       f"Tool '{self.current_tool}' finished"})
+            # If a tool is ending, reset the current tool so that we may
+            # send response chunks if the main agent is generating
             self.current_tool = None
         except Exception as e:
             logger.error(f"Error in on_tool_end: {e}")
-    
-    async def on_agent_finish(self, finish: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any:
+
+    async def on_agent_finish(self, finish: Any, *, run_id: UUID,
+                              parent_run_id: Optional[UUID] = None,
+                              **kwargs: Any) -> Any:
         try:
             if self.current_tool is None:
-                await self.publish_update('progress_update', {'progress_log': f"Agent finished"})
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent finished"})
             else:
-                await self.publish_update('progress_update', {'progress_log': f"Sub-agent finished"})
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent finished"})
         except Exception as e:
             logger.error(f"Error in on_chat_model_start: {e}")
+
 
 # Updated helper function for background thread
 def run_ai_task(task_id, user_id, thread_id, agent_id):
@@ -265,7 +321,9 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
     Background function to run AI task in a thread.
     Uses custom callbacks for progress synthesis and streaming.
     """
-    from django.contrib.auth.models import User  # Import inside to avoid circular issues
+    # Import inside to avoid circular issues
+    from django.contrib.auth.models import User
+
     channel_layer = get_channel_layer()  # Get layer for publishing
 
     try:
@@ -276,7 +334,9 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         # Set task to running and log start
         task.status = TaskStatus.RUNNING
-        task.progress_logs = [{"step": "Starting AI processing", "timestamp": str(dt.datetime.now(dt.timezone.utc))}]
+        task.progress_logs = [{"step": "Starting AI processing",
+                              "timestamp":
+                               str(dt.datetime.now(dt.timezone.utc))}]
         task.save()
 
         # Get message history
@@ -289,13 +349,16 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         # Create custom handler and LLMAgent with callbacks
         handler = TaskProgressHandler(task_id, channel_layer)
-        llm = LLMAgent(user, thread_id, msg_history=msg_history, agent=agent_obj, callbacks=[handler])
+        llm = LLMAgent(user, thread_id, msg_history=msg_history,
+                       agent=agent_obj, callbacks=[handler])
 
         # Run LLMAgent
         final_output = llm.invoke(last_message)
 
         # Log completion and save result
-        task.progress_logs.append({"step": "AI processing completed", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
+        task.progress_logs.append({"step": "AI processing completed",
+                                  "timestamp":
+                                   str(dt.datetime.now(dt.timezone.utc))})
         task.result = final_output
 
         # Add final message to thread
@@ -304,7 +367,7 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Update thread subject if needed
         if thread.subject.startswith("thread n°"):
             short_title = llm.invoke(
-                "Give me a short title for this conversation (1–3 words maximum).\
+                "Give a short title for this conversation (1–3 words maximum).\
                  Use the same language as the conversation.\
                  Answer by giving only the title, nothing else.",
                 silent_mode=True
@@ -314,7 +377,8 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         # Send a final progress update for task
         # This will be used for updating the thread name and closing the socket
-        asyncio.run(handler.publish_update('task_complete', {'result': final_output}))
+        asyncio.run(handler.publish_update('task_complete',
+                                           {'result': final_output}))
         task.status = TaskStatus.COMPLETED
         task.save()
 
@@ -322,10 +386,13 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Handle failure
         task.status = TaskStatus.FAILED
         task.result = f"Error: {str(e)}"
-        task.progress_logs.append({"step": f"Error occurred: {str(e)}", "timestamp": str(dt.datetime.now(dt.timezone.utc))})
+        task.progress_logs.append({"step": f"Error occurred: {str(e)}",
+                                  "timestamp":
+                                   str(dt.datetime.now(dt.timezone.utc))})
         task.save()
         asyncio.run(handler.publish_update('task_complete', {'error': str(e)}))
         logger.error(f"Task {task_id} failed: {e}")
+
 
 @login_required
 def running_tasks(request, thread_id):
