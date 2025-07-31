@@ -2,25 +2,25 @@
 {% load i18n %} {% load static %}
 
 {% block content %}
-<div class="d-flex flex-column h-100">
-  <div class="row flex-fill">
-    <div class="col-md-4 sidebar-sticky">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h4 mb-0">{% trans "Threads" %}</h2>
-        <button class="btn btn-sm btn-outline-primary create-thread-btn">
-          {% trans "Create Thread" %}
-        </button>
-      </div>
-      <ul class="list-group thread-list border">
-        {% for thread in threads %}
-          {% include 'nova/partials/_thread_item.html' with thread=thread %}
-        {% endfor %}
-      </ul>
+<div class="chat-layout">
+  <div class="col-md-4 sidebar-sticky p-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="h4 mb-0">{% trans "Threads" %}</h2>
+      <button class="btn btn-sm btn-outline-primary create-thread-btn">
+        {% trans "Create Thread" %}
+      </button>
     </div>
-    <div class="col-md-8 d-flex flex-column">
+    <ul class="list-group thread-list border">
+      {% for thread in threads %}
+        {% include 'nova/partials/_thread_item.html' with thread=thread %}
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="col-md-8 message-area">
+    <div class="p-3 pb-0">
       <h2 class="h4 mb-3">{% trans "Messages" %}</h2>
-      <div id="message-container" class="flex-fill"></div>
     </div>
+    <div id="message-container" class="flex-fill"></div>
   </div>
 </div>
 

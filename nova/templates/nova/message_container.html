@@ -3,7 +3,8 @@
 
 
 <div class="d-flex flex-column h-100">
-  <div id="conversation-container" class="flex-grow-1 overflow-auto p-3">
+  <!-- Scrollable conversation area -->
+  <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
     {% for message in messages %}
     <div class="message mb-3">
       {% if message.actor == Actor.USER %}
@@ -23,7 +24,8 @@
     {% endfor %}
   </div>
 
-  <div id="task-progress" class="d-none border-top p-3 bg-light">
+  <!-- Progress indicator - fixed position when visible -->
+  <div id="task-progress" class="d-none message-input-area p-3">
     <div class="d-flex align-items-center gap-3">
       <div class="spinner-border spinner-border-sm text-primary" role="status">
         <span class="visually-hidden">{% trans "Working..." %}</span>
@@ -35,15 +37,16 @@
     </div>
   </div>
 
+  <!-- Message input area - always visible at bottom -->
   {% with nb_agents=user_agents|length %} {% if nb_agents == 0 %}
-  <div class="alert alert-info text-center m-3">
+  <div class="alert alert-info text-center message-input-area m-0 rounded-0">
     {% trans "No agents configured yet." %}<br />
     <a href="{% url 'user_config' %}?tab=agents" class="alert-link">
       {% trans "Create one now" %}
     </a>
   </div>
   {% else %}
-  <div class="border-top p-3 bg-light">
+  <div class="message-input-area p-3">
     <form id="message-form" method="post">
       {% csrf_token %}
       <input
