@@ -8,55 +8,67 @@ document.addEventListener("DOMContentLoaded", () => {
     const toolId = selectElement.getAttribute("data-tool-id") || "new";
     const dynamicFieldsContainer = selectElement
       .closest(".modal-body")
-      .querySelector(`.dynamic-fields[data-tool-id="${toolId}"]`);
+      ?.querySelector(`.dynamic-fields[data-tool-id="${toolId}"]`);
+    
     if (!dynamicFieldsContainer) return;
 
-    /* Hide all groups and unset “required” */
-    dynamicFieldsContainer
-      .querySelectorAll(".field-group")
-      .forEach((g) => (g.style.display = "none"));
-    dynamicFieldsContainer
-      .querySelectorAll("input, select, textarea")
-      .forEach((i) => i.removeAttribute("required"));
+    // Hide all field groups and remove required attributes
+    const fieldGroups = dynamicFieldsContainer.querySelectorAll(".field-group");
+    const formElements = dynamicFieldsContainer.querySelectorAll("input, select, textarea");
+    
+    fieldGroups.forEach(group => group.style.display = "none");
+    formElements.forEach(element => element.removeAttribute("required"));
 
-    if (toolType === "builtin") {
-      const builtinFields =
-        dynamicFieldsContainer.querySelector(".builtin-fields");
-      if (builtinFields) {
-        builtinFields.style.display = "block";
-        const subtypeSelect = builtinFields.querySelector(
-          'select[name="tool_subtype"]'
-        );
-        if (subtypeSelect) subtypeSelect.setAttribute("required", "required");
-      }
-    } else if (toolType === "api" || toolType === "mcp") {
-      const apiMcpFields =
-        dynamicFieldsContainer.querySelector(".api-mcp-fields");
-      if (apiMcpFields) {
-        apiMcpFields.style.display = "block";
-        const nameInput = apiMcpFields.querySelector('input[name="name"]');
-        const descriptionInput = apiMcpFields.querySelector(
-          'textarea[name="description"]'
-        );
-        const endpointInput = apiMcpFields.querySelector(
-          'input[name="endpoint"]'
-        );
-        if (nameInput) nameInput.setAttribute("required", "required");
-        if (descriptionInput)
-          descriptionInput.setAttribute("required", "required");
-        if (endpointInput) endpointInput.setAttribute("required", "required");
-      }
-      if (toolType === "api") {
-        const apiFields = dynamicFieldsContainer.querySelector(".api-fields");
-        if (apiFields) apiFields.style.display = "block";
-      }
+    // Show relevant fields based on tool type
+    switch (toolType) {
+      case "builtin":
+        showBuiltinFields(dynamicFieldsContainer);
+        break;
+      case "api":
+      case "mcp":
+        showApiMcpFields(dynamicFieldsContainer, toolType);
+        break;
     }
   }
 
-  /* Initialise selects on load + on change */
-  document.querySelectorAll(".tool-type-select").forEach((sel) => {
-    sel.addEventListener("change", () => toggleToolFields(sel));
-    if (sel.value) toggleToolFields(sel);
+  function showBuiltinFields(container) {
+    const builtinFields = container.querySelector(".builtin-fields");
+    if (builtinFields) {
+      builtinFields.style.display = "block";
+      const subtypeSelect = builtinFields.querySelector('select[name="tool_subtype"]');
+      if (subtypeSelect) subtypeSelect.setAttribute("required", "required");
+    }
+  }
+
+  function showApiMcpFields(container, toolType) {
+    const apiMcpFields = container.querySelector(".api-mcp-fields");
+    if (apiMcpFields) {
+      apiMcpFields.style.display = "block";
+      
+      // Set required fields
+      const requiredFields = [
+        'input[name="name"]',
+        'textarea[name="description"]',
+        'input[name="endpoint"]'
+      ];
+      
+      requiredFields.forEach(selector => {
+        const field = apiMcpFields.querySelector(selector);
+        if (field) field.setAttribute("required", "required");
+      });
+    }
+    
+    if (toolType === "api") {
+      const apiFields = container.querySelector(".api-fields");
+      if (apiFields) apiFields.style.display = "block";
+    }
+  }
+
+  // Initialize tool type selects
+  const toolTypeSelects = document.querySelectorAll(".tool-type-select");
+  toolTypeSelects.forEach(select => {
+    select.addEventListener("change", () => toggleToolFields(select));
+    if (select.value) toggleToolFields(select);
   });
 
   /* Auth-type toggles -------------------------------------------------- */

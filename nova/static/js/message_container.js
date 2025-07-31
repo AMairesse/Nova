@@ -15,8 +15,8 @@
       }
     });
 
-    // Auto-resize
-    textarea.on("input", function () {
+    // Auto-resize for textareas with the auto-resize class
+    textarea.filter('.auto-resize-textarea').on("input", function () {
       this.style.height = "38px";
       this.style.height = this.scrollHeight + "px";
     });
@@ -62,8 +62,16 @@
               $("#message-container").html(html);
               window.initMessageContainer();
 
-              // Create streaming placeholder
-              const streamingDiv = $('<div class="message streaming"><p></p></div>');
+              // Create streaming placeholder with card layout
+              const streamingDiv = $(`
+                <div class="message streaming mb-3">
+                  <div class="card border-secondary">
+                    <div class="card-body py-2">
+                      <div class="streaming-content"></div>
+                    </div>
+                  </div>
+                </div>
+              `);
               $("#conversation-container").append(streamingDiv);
 
               // Step 3: Store task_id in localStorage for persistence
@@ -197,8 +205,8 @@
           progressDiv.addClass('d-none');
         }
         // Set full parsed HTML (replaces content each time)
-        const streamingP = $(".message.streaming p");
-        streamingP.html(data.chunk);
+        const streamingContent = $(".message.streaming .streaming-content");
+        streamingContent.html(data.chunk);
         return;
       }
 
