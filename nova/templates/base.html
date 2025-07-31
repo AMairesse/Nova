@@ -100,27 +100,25 @@
         </button>
         
         <div class="collapse navbar-collapse" id="navbarNav">
-          <ul class="navbar-nav me-auto">
-            <li class="nav-item">
-              <a class="nav-link" href="{% url 'user_config' %}">
-                <i class="bi bi-gear me-1"></i>{% trans "Config" %}
-              </a>
-            </li>
-            {% if user.is_superuser %}
-            <li class="nav-item">
-              <a class="nav-link" href="{% url 'admin:index' %}">
-                <i class="bi bi-shield-check me-1"></i>{% trans "Admin" %}
-              </a>
-            </li>
-            {% endif %}
-          </ul>
-          
-          <div class="navbar-nav">
+          <div class="navbar-nav ms-auto">
             <div class="nav-item dropdown">
               <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                 <i class="bi bi-person-circle me-1"></i>{{ user.username }}
               </a>
               <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                  <a class="dropdown-item" href="{% url 'user_config' %}">
+                    <i class="bi bi-gear me-2"></i>{% trans "Config" %}
+                  </a>
+                </li>
+                {% if user.is_superuser %}
+                <li>
+                  <a class="dropdown-item" href="{% url 'admin:index' %}">
+                    <i class="bi bi-shield-check me-2"></i>{% trans "Admin" %}
+                  </a>
+                </li>
+                {% endif %}
+                <li><hr class="dropdown-divider"></li>
                 <li>
                   <form action="{% url 'logout' %}" method="post" class="d-inline">
                     {% csrf_token %}
