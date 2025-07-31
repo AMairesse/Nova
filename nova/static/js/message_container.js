@@ -34,7 +34,7 @@
     getCSRFToken().then((token) =>
       $.ajax({
         type: "POST",
-        url: window.urls.addMessage,
+        url: window.NovaApp.urls.addMessage,
         data: formData,
         headers: { "X-AJAX": "true", "X-CSRFToken": token },
 
@@ -54,7 +54,7 @@
           // Thread's messages reload
           $.ajax({
             type: "GET",
-            url: window.urls.messageList,
+            url: window.NovaApp.urls.messageList,
             data: { thread_id: data.thread_id, agent_id: currentAgentId },
             headers: { "X-AJAX": "true" },
 
