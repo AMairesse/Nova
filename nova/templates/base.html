@@ -95,7 +95,6 @@
         </a>
         
         {% if user.is_authenticated %}
-        {% csrf_token %}
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
           <span class="navbar-toggler-icon"></span>
         </button>
@@ -124,6 +123,7 @@
               <ul class="dropdown-menu dropdown-menu-end">
                 <li>
                   <form action="{% url 'logout' %}" method="post" class="d-inline">
+                    {% csrf_token %}
                     <button class="dropdown-item" type="submit">
                       <i class="bi bi-box-arrow-right me-2"></i>{% trans "Logout" %}
                     </button>

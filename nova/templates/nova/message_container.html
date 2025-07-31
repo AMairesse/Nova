@@ -74,11 +74,11 @@
           <ul class="dropdown-menu">
             {% for agent in user_agents %}
             <li>
-              <a class="dropdown-item" href="#" data-value="{{ agent.id }}">
+              <a class="dropdown-item agent-dropdown-item" href="#" data-value="{{ agent.id }}">
                 <i class="bi bi-robot me-2"></i>{{ agent.name }}
               </a>
             </li>
-            {% endfor %} 
+            {% endfor %}
             {% if nb_agents == 0 %}
             <li>
               <span class="dropdown-item-text text-muted">

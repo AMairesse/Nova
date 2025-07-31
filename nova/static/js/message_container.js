@@ -91,8 +91,8 @@
     );
   });
 
-  // Select an agent in the dropdown
-  $(document).on("click", ".dropdown-item", function (e) {
+  // Select an agent in the dropdown (only for agent dropdown items)
+  $(document).on("click", ".agent-dropdown-item", function (e) {
     e.preventDefault();
     const value = $(this).data("value");
     const label = $(this).text();
