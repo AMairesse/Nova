@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-07-24 19:35+0200\n"
+"POT-Creation-Date: 2025-08-01 15:04+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,60 +18,39 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: nova/static/js/message_container.js:264
-msgid "Hide details"
-msgstr "Hide details"
-
-#: nova/static/js/message_container.js:264
-msgid "Show details"
-msgstr "Show details"
-
-#: nova/static/js/message_container.js:268
-msgid "Starting agent…"
-msgstr "Starting agent…"
-
-#: nova/static/js/message_container.js:298
-msgid "Agent is thinking…"
-msgstr "Agent is thinking…"
-
-#: nova/static/js/message_container.js:304
-#, javascript-format
-msgid "Agent is using tool « %s »…"
-msgstr "Agent is using tool « %s »…"
-
-#: nova/static/js/tool_management.js:88
+#: nova/static/js/tool_management.js:100
 msgid "Invalid JSON: "
 msgstr "Invalid JSON: "
 
-#: nova/static/js/tool_management.js:108
+#: nova/static/js/tool_management.js:120
 msgid "Testing…"
 msgstr "Testing…"
 
-#: nova/static/js/tool_management.js:131
+#: nova/static/js/tool_management.js:143
 msgid "Available calendars:"
 msgstr "Available calendars:"
 
-#: nova/static/js/tool_management.js:139
+#: nova/static/js/tool_management.js:151
 msgid "MCP tools available:"
 msgstr "MCP tools available:"
 
-#: nova/static/js/tool_management.js:151
+#: nova/static/js/tool_management.js:163
 msgid "input_schema"
 msgstr "input_schema"
 
-#: nova/static/js/tool_management.js:157
+#: nova/static/js/tool_management.js:169
 msgid "output_schema"
 msgstr "output_schema"
 
-#: nova/static/js/tool_management.js:166
+#: nova/static/js/tool_management.js:178
 msgid "Error"
 msgstr "Error"
 
-#: nova/static/js/tool_management.js:167
+#: nova/static/js/tool_management.js:179
 msgid "Unknown error"
 msgstr "Unknown error"
 
-#: nova/static/js/tool_management.js:175
+#: nova/static/js/tool_management.js:187
 msgid "Network error: "
 msgstr "Network error: "
 

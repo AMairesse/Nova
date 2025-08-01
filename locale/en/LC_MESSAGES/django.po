@@ -46,7 +46,7 @@ msgstr "CalDav server URL"
 msgid "User"
 msgstr "User"
 
-#: nova/models.py:16
+#: nova/models.py:16 nova/models.py:342
 msgid "Agent"
 msgstr "Agent"
 
@@ -171,35 +171,85 @@ msgstr "User threads"
 msgid "Invalid actor: {}"
 msgstr "Invalid actor: {}"
 
+#: nova/models.py:323
+msgid "Pending"
+msgstr "Pending"
+
+#: nova/models.py:324
+msgid "Running"
+msgstr "Running"
+
+#: nova/models.py:325
+msgid "Completed"
+msgstr "Completed"
+
+#: nova/models.py:326
+msgid "Failed"
+msgstr "Failed"
+
+#: nova/models.py:332
+msgid "User tasks"
+msgstr "User tasks"
+
+#: nova/models.py:336
+msgid "Thread"
+msgstr "Thread"
+
 #: nova/templates/base.html:8
 msgid "Nova Application"
 msgstr "Nova Application"
 
-#: nova/templates/base.html:115
+#: nova/templates/base.html:42
 msgid "Config"
 msgstr "Config"
 
-#: nova/templates/base.html:119
+#: nova/templates/base.html:48
 msgid "Admin"
 msgstr "Admin"
 
-#: nova/templates/base.html:123
+#: nova/templates/base.html:57
 msgid "Logout"
 msgstr "Logout"
 
-#: nova/templates/nova/message_container.html:24
-msgid "Show details"
-msgstr "Show details"
+#: nova/templates/nova/index.html:8
+msgid "Threads"
+msgstr "Threads"
 
-#: nova/templates/nova/message_container.html:59
+#: nova/templates/nova/index.html:10
+msgid "Create Thread"
+msgstr "Create Thread"
+
+#: nova/templates/nova/index.html:21
+msgid "Messages"
+msgstr "Messages"
+
+#: nova/templates/nova/message_container.html:31
+msgid "Working..."
+msgstr "Working..."
+
+#: nova/templates/nova/message_container.html:43
+msgid "No agents configured yet."
+msgstr "No agents configured yet."
+
+#: nova/templates/nova/message_container.html:45
+msgid "Create one now"
+msgstr "Create one now"
+
+#: nova/templates/nova/message_container.html:71
+msgid "Select an agent"
+msgstr "Select an agent"
+
+#: nova/templates/nova/message_container.html:85
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:78
-#, fuzzy
-#| msgid "Add a new message"
-msgid "Add a new message"
-msgstr "Add a new message"
+#: nova/templates/nova/message_container.html:106
+msgid "Type your message..."
+msgstr "Type your message..."
+
+#: nova/templates/nova/message_container.html:117
+msgid "Send"
+msgstr "Send"
 
 #: nova/templates/nova/partials/_agent_modals.html:9
 #: nova/templates/nova/user_config.html:161
@@ -363,12 +413,12 @@ msgid "Test MCP connection"
 msgstr "Test MCP connection"
 
 #: nova/templates/nova/partials/_tool_config_modal.html:75
-#: nova/tools/builtins/caldav.py:267
+#: nova/tools/builtins/caldav.py:268
 msgid "Username"
 msgstr "Username"
 
 #: nova/templates/nova/partials/_tool_config_modal.html:80
-#: nova/tools/builtins/caldav.py:268
+#: nova/tools/builtins/caldav.py:269
 msgid "Password"
 msgstr "Password"
 
@@ -422,10 +472,8 @@ msgid "Delete"
 msgstr "Delete"
 
 #: nova/templates/nova/partials/_tool_form_fields.html:12
-#, fuzzy
-#| msgid " Select a type "
-msgid " Select a type "
-msgstr " Select a type "
+msgid "Select a type"
+msgstr "Select a type"
 
 #: nova/templates/nova/partials/_tool_form_fields.html:14
 msgid "HTTP / REST API"
@@ -440,10 +488,8 @@ msgid "Builtin subtype"
 msgstr "Builtin subtype"
 
 #: nova/templates/nova/partials/_tool_form_fields.html:29
-#, fuzzy
-#| msgid " Select a subtype "
-msgid " Select a subtype "
-msgstr " Select a subtype "
+msgid "Select a subtype"
+msgstr "Select a subtype"
 
 #: nova/templates/nova/partials/_tool_form_fields.html:50
 #: nova/templates/nova/tool_list.html:19
@@ -576,11 +622,16 @@ msgstr "Langfuse Secret Key"
 msgid "Langfuse Host"
 msgstr "Langfuse Host"
 
-#: nova/templates/registration/login.html:7
+#: nova/templates/registration/login.html:9
+#: nova/templates/registration/login.html:67
+msgid "Login"
+msgstr "Login"
+
+#: nova/templates/registration/login.html:13
 msgid "Your username and password didn't match. Please try again."
 msgstr "Your username and password didn't match. Please try again."
 
-#: nova/templates/registration/login.html:12
+#: nova/templates/registration/login.html:20
 msgid ""
 "Your account doesn't have access to this page. To proceed, please login with "
 "an account that has access."
@@ -588,17 +639,13 @@ msgstr ""
 "Your account doesn't have access to this page. To proceed, please login with "
 "an account that has access."
 
-#: nova/templates/registration/login.html:14
+#: nova/templates/registration/login.html:24
 msgid "Please login to see this page."
 msgstr "Please login to see this page."
 
-#: nova/templates/registration/login.html:31
-msgid "Login"
-msgstr "Login"
-
-#: nova/templates/registration/login.html:36
-msgid "Lost password ?"
-msgstr "Lost password ?"
+#: nova/templates/registration/login.html:76
+msgid "Lost password?"
+msgstr "Lost password?"
 
 #: nova/tools/__init__.py:54
 msgid "Invalid python_path: Must be under 'nova.tools.builtins.'."
@@ -614,78 +661,82 @@ msgstr "Could not import module: %s"
 msgid "Question or instruction sent to the agent %(name)s"
 msgstr "Question or instruction sent to the agent %(name)s"
 
-#: nova/tools/builtins/caldav.py:18
+#: nova/tools/builtins/caldav.py:19
 msgid "Incomplete CalDav configuration"
 msgstr "Incomplete CalDav configuration"
 
-#: nova/tools/builtins/caldav.py:29
+#: nova/tools/builtins/caldav.py:30
 #, python-brace-format
 msgid "No CalDav credential found for tool {tool_id}"
 msgstr "No CalDav credential found for tool {tool_id}"
 
-#: nova/tools/builtins/caldav.py:46 nova/tools/builtins/caldav.py:132
-#: nova/tools/builtins/caldav.py:181 nova/tools/builtins/caldav.py:210
+#: nova/tools/builtins/caldav.py:47 nova/tools/builtins/caldav.py:133
+#: nova/tools/builtins/caldav.py:182 nova/tools/builtins/caldav.py:211
 msgid "No calendars available."
 msgstr "No calendars available."
 
-#: nova/tools/builtins/caldav.py:48
+#: nova/tools/builtins/caldav.py:49
 msgid "Available calendars :\n"
 msgstr "Available calendars :\n"
 
-#: nova/tools/builtins/caldav.py:55
+#: nova/tools/builtins/caldav.py:56
 msgid "Error when retrieving calendars : {}"
 msgstr "Error when retrieving calendars : {}"
 
-#: nova/tools/builtins/caldav.py:105 nova/tools/builtins/caldav.py:155
+#: nova/tools/builtins/caldav.py:106 nova/tools/builtins/caldav.py:156
 msgid "Error when retrieving events : {}"
 msgstr "Error when retrieving events : {}"
 
-#: nova/tools/builtins/caldav.py:127 nova/tools/builtins/caldav.py:176
+#: nova/tools/builtins/caldav.py:128 nova/tools/builtins/caldav.py:177
 #, python-brace-format
 msgid "Calendar '{calendar_name}' not found."
 msgstr "Calendar '{calendar_name}' not found."
 
-#: nova/tools/builtins/caldav.py:151
+#: nova/tools/builtins/caldav.py:152
 msgid "No events found"
 msgstr "No events found"
 
-#: nova/tools/builtins/caldav.py:187
+#: nova/tools/builtins/caldav.py:188
 msgid "Event not found."
 msgstr "Event not found."
 
-#: nova/tools/builtins/caldav.py:190
+#: nova/tools/builtins/caldav.py:191
 msgid "Error when retrieving event's details : {}"
 msgstr "Error when retrieving event's details : {}"
 
-#: nova/tools/builtins/caldav.py:226 nova/tools/builtins/caldav.py:231
+#: nova/tools/builtins/caldav.py:227 nova/tools/builtins/caldav.py:232
 msgid "Error when searching events : {}"
 msgstr "Error when searching events : {}"
 
-#: nova/tools/builtins/caldav.py:244
+#: nova/tools/builtins/caldav.py:245
 msgid "No calendars found"
 msgstr "No calendars found"
 
-#: nova/tools/builtins/caldav.py:249
+#: nova/tools/builtins/caldav.py:250
 #, python-format
 msgid "%(count)d calendar found"
 msgid_plural "%(count)d calendars found"
 msgstr[0] "%(count)d calendar found"
 msgstr[1] "%(count)d calendars found"
 
-#: nova/tools/builtins/caldav.py:257
+#: nova/tools/builtins/caldav.py:258
 #, python-format
 msgid "Connection error: %(err)s"
 msgstr "Connection error: %(err)s"
 
-#: nova/tools/builtins/caldav.py:266
+#: nova/tools/builtins/caldav.py:267
 msgid "URL CalDav"
 msgstr "URL CalDav"
 
-#: nova/views/tools_views.py:164
+#: nova/views/tools_views.py:112
+msgid "No credentials found for this tool."
+msgstr "No credentials found for this tool."
+
+#: nova/views/tools_views.py:168
 msgid "Success connecting - No tools found"
 msgstr "Success connecting - No tools found"
 
-#: nova/views/tools_views.py:169
+#: nova/views/tools_views.py:173
 #, fuzzy, python-format
 #| msgid "Success connecting  %(count)d tool found"
 #| msgid_plural "Success connecting  %(count)d tools found"
@@ -694,60 +745,16 @@ msgid_plural "Success connecting - %(count)d tools found"
 msgstr[0] "Success connecting  %(count)d tool found"
 msgstr[1] "Success connecting  %(count)d tools found"
 
-#: nova/views/tools_views.py:182
+#: nova/views/tools_views.py:186
 #, python-format
 msgid "MCP connection error: %(err)s"
 msgstr "MCP connection error: %(err)s"
 
-#: nova/views/tools_views.py:212
+#: nova/views/tools_views.py:216
 #, python-format
 msgid "Tool testing error: %(err)s"
 msgstr "Tool testing error: %(err)s"
 
-#: nova/views/tools_views.py:217
+#: nova/views/tools_views.py:221
 msgid "No test implemented for this tool type"
 msgstr "No test implemented for this tool type"
-
-#: nova/views/tools_views.py:220
-msgid "No credentials found for this user and tool."
-msgstr "No credentials found for this user and tool."
-
-#~ msgid "URL of the CalDav server"
-#~ msgstr "URL of the CalDav server"
-
-#~ msgid "Test CalDav connection"
-#~ msgstr "Test CalDav connection"
-
-#~ msgid "Interact with a CalDav server (calendars)"
-#~ msgstr "Interact with a CalDav server (calendars)"
-
-#~ msgid "Manipulate dates and times"
-#~ msgstr "Manipulate dates and times"
-
-#~ msgid "Select an agent"
-#~ msgstr "Select an agent"
-
-#~ msgid "This will also delete all associated agents."
-#~ msgstr "This will also delete all associated agents."
-
-#~ msgid "Agent used as tool"
-#~ msgstr "Agent used as tool"
-
-#~ msgid "Model"
-#~ msgstr "Model"
-
-#~ msgid "API key"
-#~ msgstr "API key"
-
-#~ msgid "A key is already registered ; leave empty to keep it."
-#~ msgstr "A key is already registered ; leave empty to keep it."
-
-#~ msgid "Base URL (optional)"
-#~ msgstr "Base URL (optional)"
-
-#~ msgid "Base URL"
-#~ msgstr "Base URL"
-
-#, python-format
-#~ msgid "Wrapped agent \"%(name)s\". %(prompt)s"
-#~ msgstr "Wrapped agent \"%(name)s\". %(prompt)s"

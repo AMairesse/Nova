@@ -9,7 +9,7 @@
           name="tool_type" required
           data-prefix="{{ prefix }}"
           data-tool-id="{{ tool.id|default:'new' }}">
-    <option value="">{% trans "— Select a type —" %}</option>
+    <option value="">— {% trans "Select a type" %} —</option>
     <option value="builtin" {% if tool.tool_type == 'builtin' %}selected{% endif %}>{% trans "Builtin" %}</option>
     <option value="api"     {% if tool.tool_type == 'api' %}selected{% endif %}>{% trans "HTTP / REST API" %}</option>
     <option value="mcp"     {% if tool.tool_type == 'mcp' %}selected{% endif %}>{% trans "MCP server" %}</option>
@@ -26,7 +26,7 @@
     <select class="form-select"
             id="{{ prefix }}tool_subtype_{{ tool.id|default:'new' }}"
             name="tool_subtype">
-      <option value="">{% trans "— Select a subtype —" %}</option>
+      <option value="">— {% trans "Select a subtype" %} —</option>
       {% for key, value in tool_types.items %}
         <option value="{{ key }}" {% if tool.tool_subtype == key %}selected{% endif %}>
           {{ value.name }}
