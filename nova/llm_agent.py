@@ -195,7 +195,7 @@ class LLMAgent:
             cred = tool_obj.credentials.filter(user=self.user).first()
             try:
                 from nova.mcp.client import MCPClient
-                client = MCPClient(tool_obj.endpoint, cred)
+                client = MCPClient(tool_obj.endpoint, cred, tool_obj.transport_type)
 
                 # Prefer the cached snapshot
                 if tool_obj.available_functions:

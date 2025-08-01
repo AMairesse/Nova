@@ -174,6 +174,7 @@ class ToolForm(forms.ModelForm):
             "tool_type",
             "tool_subtype",
             "endpoint",
+            "transport_type",
             "input_schema",
             "output_schema",
             "is_active",

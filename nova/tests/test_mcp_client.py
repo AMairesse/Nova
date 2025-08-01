@@ -53,6 +53,11 @@ class MCPClientTestCase(TestCase):
         # Client doesn't normalize endpoints
         self.assertEqual(client.endpoint, 'https://example.com/mcp')
         self.assertEqual(client.credential, self.credential)
+        self.assertEqual(client.transport_type, 'streamable_http')  # default
+        
+        # Test with explicit transport type
+        client_sse = MCPClient(self.tool.endpoint, self.credential, 'sse')
+        self.assertEqual(client_sse.transport_type, 'sse')
     
     def test_endpoint_stored_as_is(self):
         """Test that endpoints are stored without modification."""
@@ -92,6 +97,26 @@ class MCPClientTestCase(TestCase):
         auth = client._auth_object()
         
         self.assertIsNone(auth)
+    
+    @patch('nova.mcp.client.StreamableHttpTransport')
+    @patch('nova.mcp.client.SSETransport')
+    def test_transport_selection(self, mock_sse_transport, mock_streamable_transport):
+        """Test that the correct transport is selected based on transport_type."""
+        # Test default (streamable_http)
+        client = MCPClient(self.tool.endpoint, self.credential)
+        client._transport()
+        mock_streamable_transport.assert_called_once()
+        mock_sse_transport.assert_not_called()
+        
+        # Reset mocks
+        mock_streamable_transport.reset_mock()
+        mock_sse_transport.reset_mock()
+        
+        # Test SSE transport
+        client_sse = MCPClient(self.tool.endpoint, self.credential, 'sse')
+        client_sse._transport()
+        mock_sse_transport.assert_called_once()
+        mock_streamable_transport.assert_not_called()
     
     @patch('nova.mcp.client.FastMCPClient')
     def test_list_tools_sync(self, mock_client_class):

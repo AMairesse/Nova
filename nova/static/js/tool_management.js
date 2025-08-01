@@ -61,6 +61,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (toolType === "api") {
       const apiFields = container.querySelector(".api-fields");
       if (apiFields) apiFields.style.display = "block";
+    } else if (toolType === "mcp") {
+      const mcpFields = container.querySelector(".mcp-fields");
+      if (mcpFields) mcpFields.style.display = "block";
     }
   }
 

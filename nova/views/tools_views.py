@@ -145,7 +145,7 @@ def test_tool_connection(request, tool_id):
             # MCP connection test
             try:
                 from nova.mcp.client import MCPClient
-                client = MCPClient(tool.endpoint, temp_credential)
+                client = MCPClient(tool.endpoint, temp_credential, tool.transport_type)
                 tools = client.list_tools(user_id=request.user.id)
                 
                 # Store result in DB

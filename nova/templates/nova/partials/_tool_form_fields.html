@@ -64,6 +64,28 @@
     </div>
   </div>
 
+  {# MCP-specific fields ----------------------------------------------- #}
+  <div class="field-group mcp-fields" style="display:none;">
+    <div class="mb-3">
+      <label for="{{ prefix }}transport_type_{{ tool.id|default:'new' }}" class="form-label">
+        {% trans "Transport Type" %}
+      </label>
+      <select class="form-select"
+              id="{{ prefix }}transport_type_{{ tool.id|default:'new' }}"
+              name="transport_type">
+        <option value="streamable_http" {% if tool.transport_type == 'streamable_http' or not tool.transport_type %}selected{% endif %}>
+          {% trans "Streamable HTTP (Default)" %}
+        </option>
+        <option value="sse" {% if tool.transport_type == 'sse' %}selected{% endif %}>
+          {% trans "SSE (Legacy)" %}
+        </option>
+      </select>
+      <div class="form-text">
+        {% trans "Choose the transport method for this MCP server. Use SSE (Legacy) only if the server requires it." %}
+      </div>
+    </div>
+  </div>
+
   {# JSON-schema fields (API only) ------------------------------------- #}
   <div class="field-group api-fields" style="display:none;">
     {% include 'nova/partials/_json_schema_fields.html' with prefix=prefix tool=tool %}

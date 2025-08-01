@@ -11,7 +11,7 @@ from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 from django.http import Http404
 from fastmcp.client import Client as FastMCPClient
-from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.client.transports import StreamableHttpTransport, SSETransport
 from fastmcp.client.auth import BearerAuth
 from nova.models import ToolCredential
 from nova.utils import normalize_url
@@ -35,9 +35,10 @@ def _ensure_sync_context() -> None:
 
 class MCPClient:
     """Thin wrapper around FastMCP – cache + auth + async-first API."""
-    def __init__(self, endpoint: str, credential: Optional[ToolCredential] = None):
+    def __init__(self, endpoint: str, credential: Optional[ToolCredential] = None, transport_type: str = "streamable_http"):
         self.endpoint  = normalize_url(endpoint)
         self.credential = credential
+        self.transport_type = transport_type
         self.user_id = getattr(credential.user if credential else None, 'id', None)
         self.safe_endpoint = slugify(self.endpoint)[:80]
 
@@ -52,10 +53,13 @@ class MCPClient:
             return None
         return BearerAuth(cred.token) if cred.token else None
 
-    def _transport(self) -> StreamableHttpTransport:
+    def _transport(self) -> StreamableHttpTransport or SSETransport:
         auth = self._auth_object()
-        return StreamableHttpTransport(self.endpoint, auth=auth) if auth else \
-               StreamableHttpTransport(self.endpoint)
+        
+        if self.transport_type == "sse":
+            return SSETransport(url=self.endpoint, auth=auth) if auth else SSETransport(url=self.endpoint)
+        else:  # default to streamable_http
+            return StreamableHttpTransport(url=self.endpoint, auth=auth) if auth else StreamableHttpTransport(url=self.endpoint)
 
     # ---------- Async API -------------------------------------------------
     async def alist_tools(self, force_refresh: bool = False) -> List[Dict[str, Any]]:

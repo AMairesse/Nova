@@ -80,6 +80,10 @@ class Tool(models.Model):
         BUILTIN = "builtin", _("Builtin")
         API     = "api",     _("API HTTP/REST")
         MCP     = "mcp",     _("MCP Server")
+    
+    class TransportType(models.TextChoices):
+        STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
+        SSE = "sse", _("SSE (Legacy)")
         
     user = models.ForeignKey(settings.AUTH_USER_MODEL, 
                              on_delete=models.CASCADE, 
@@ -98,6 +102,15 @@ class Tool(models.Model):
 
     python_path = models.CharField(max_length=255, blank=True)  # ex: "my_pkg.utils.search"
     endpoint    = models.URLField(blank=True)                   # ex: "https://weather.xyz/v1"
+
+    # Transport type for MCP servers
+    transport_type = models.CharField(
+        max_length=20,
+        choices=TransportType.choices,
+        default=TransportType.STREAMABLE_HTTP,
+        blank=True,
+        help_text=_("Transport method for MCP servers")
+    )
 
     # I/O JSON-Schema contract
     input_schema  = models.JSONField(default=get_default_schema, blank=True, null=True)
