@@ -1,2 +1,4 @@
 [run]
-omit = manage.py
+omit = 
+    manage.py
+    */tests/*
