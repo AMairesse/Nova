@@ -71,14 +71,20 @@ class MCPClient:
             if cached is not None:
                 return cached
 
+        def _get_attr(obj, *attrs, default=None):
+            for attr in attrs:
+                if hasattr(obj, attr):
+                    return getattr(obj, attr)
+            return default
+
         async with FastMCPClient(self._transport()) as client:
             tools = await client.list_tools()
             result = [
                 dict(
                     name=t.name,
                     description=getattr(t, "description", ""),
-                    input_schema=getattr(t, "input_schema", {}),
-                    output_schema=getattr(t, "output_schema", {}),
+                    input_schema=_get_attr(t, "input_schema", "inputSchema", {}),
+                    output_schema=_get_attr(t, "output_schema", "outputSchema", {}),
                 )
                 for t in tools
             ]
