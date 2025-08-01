@@ -100,8 +100,8 @@ class Tool(models.Model):
     endpoint    = models.URLField(blank=True)                   # ex: "https://weather.xyz/v1"
 
     # I/O JSON-Schema contract
-    input_schema  = models.JSONField(default=get_default_schema, blank=True)
-    output_schema = models.JSONField(default=get_default_schema, blank=True)
+    input_schema  = models.JSONField(default=get_default_schema, blank=True, null=True)
+    output_schema = models.JSONField(default=get_default_schema, blank=True, null=True)
 
     available_functions = models.JSONField(
         default=dict,

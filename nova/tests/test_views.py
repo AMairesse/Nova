@@ -179,7 +179,8 @@ class AddMessageViewTest(TestCase):
         # Verify the actual function is never called due to mocking
         mock_run_ai_task.assert_not_called()
 
-    def test_add_message_no_agent(self):
+    @patch("nova.views.main_views.run_ai_task")
+    def test_add_message_no_agent(self, mock_run_ai_task):
         """Test add_message without selected_agent uses default."""
         thread = Thread.objects.create(subject="Test Thread", user=self.user)
         post_data = {"thread_id": thread.id, "new_message": "Test message"}

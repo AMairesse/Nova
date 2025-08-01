@@ -125,37 +125,6 @@ class AjaxViewsTests(TestCase):
         self.assertEqual(len(data["tools"]), 2)
         mock_list_tools.assert_called_once_with(user_id=self.user.id)
 
-    #@patch("nova.mcp.client.MCPClient.list_tools", create=True)
-    #def test_tool_connection_mcp_failure(self, mock_list_tools):
-    #    """
-    #    Simulate a failed MCP connection (e.g., exception).
-    #    """
-    #    mock_list_tools.side_effect = Exception("Connection failed")
-    #
-    #    url = reverse("test_tool_connection", args=[self.tool_mcp.id])
-    #    resp = self.client.post(url, {"auth_type": "none"})
-    #    self.assertEqual(resp.status_code, 200)
-    #
-    #    data = json.loads(resp.content)
-    #    self.assertEqual(data["status"], "error")
-    #    self.assertIn("Connection failed", data["message"])
-    #    mock_list_tools.assert_called_once_with(user_id=self.user.id)
-
-    def test_tool_connection_no_credential(self):
-        """
-        Test when credential is absent.
-        """
-        # Delete credential to simulate absence
-        ToolCredential.objects.filter(tool=self.tool_mcp).delete()
-
-        url = reverse("test_tool_connection", args=[self.tool_mcp.id])
-        resp = self.client.post(url, {"auth_type": "none"})
-        self.assertEqual(resp.status_code, 200)
-
-        data = json.loads(resp.content)
-        self.assertEqual(data["status"], "error")
-        self.assertIn("No credentials found", data["message"])
-
     @patch("nova.mcp.client.MCPClient.list_tools", create=True)
     def test_tool_connection_invalid_credential(self, mock_list_tools):
         """
@@ -179,47 +148,3 @@ class AjaxViewsTests(TestCase):
         self.assertIn(resp.status_code, (403, 405))
         mock_list_tools.assert_not_called()
 
-    # ------------------------------------------------------------------ #
-    #  test_tool_connection (Builtin/CalDav)                             #
-    # ------------------------------------------------------------------ #
-    #@patch("nova.tools.builtins.caldav.test_caldav_access")
-    #def test_tool_connection_builtin_ok(self, mock_test):
-    #    """
-    #    Simulate a successful test for builtin tool (e.g., CalDav).
-    #    """
-    #    mock_test.return_value = {"status": "success", "message": "Connected"}
-    #
-    #    url = reverse("test_tool_connection", args=[self.tool_builtin.id])
-    #    resp = self.client.post(url, {
-    #        "auth_type": "basic",
-    #        "username": "testuser",
-    #        "password": "testpass",
-    #        "caldav_url": "https://example.com/caldav/"
-    #    })
-    #    self.assertEqual(resp.status_code, 200)
-    #
-    #    data = json.loads(resp.content)
-    #    self.assertEqual(data["status"], "success")
-    #    self.assertEqual(data["message"], "Connected")
-    #    mock_test.assert_called_once_with(self.user, self.tool_builtin.id)
-
-    #@patch("nova.tools.builtins.caldav.test_caldav_access")
-    #def test_tool_connection_builtin_failure(self, mock_test):
-    #    """
-    #    Simulate a failed test for builtin tool (e.g., CalDav).
-    #    """
-    #    mock_test.return_value = {"status": "error", "message": "Connection failed"}
-    #
-    #    url = reverse("test_tool_connection", args=[self.tool_builtin.id])
-    #    resp = self.client.post(url, {
-    #        "auth_type": "basic",
-    #        "username": "testuser",
-    #        "password": "testpass",
-    #        "caldav_url": "https://example.com/caldav/"
-    #    })
-    #    self.assertEqual(resp.status_code, 200)
-    #
-    #    data = json.loads(resp.content)
-    #    self.assertEqual(data["status"], "error")
-    #    self.assertIn("Connection failed", data["message"])
-    #    mock_test.assert_called_once_with(self.user, self.tool_builtin.id)

@@ -105,13 +105,6 @@ def configure_tool(request, tool_id):
 def test_tool_connection(request, tool_id):
     tool = get_object_or_404(Tool, id=tool_id, user=request.user)
     
-    # Early check for credential existence
-    if not ToolCredential.objects.filter(user=request.user, tool=tool).exists():
-        return JsonResponse({
-            "status": "error",
-            "message": _("No credentials found for this tool.")
-        })
-    
     try:
         auth_type = request.POST.get('auth_type', 'basic')
         username = request.POST.get('username', '')
