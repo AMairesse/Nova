@@ -105,43 +105,47 @@ def configure_tool(request, tool_id):
 def test_tool_connection(request, tool_id):
     tool = get_object_or_404(Tool, id=tool_id, user=request.user)
     
+    # Early check for credential existence
+    if not ToolCredential.objects.filter(user=request.user, tool=tool).exists():
+        return JsonResponse({
+            "status": "error",
+            "message": _("No credentials found for this tool.")
+        })
+    
     try:
-        if request.method == 'POST':
-            auth_type = request.POST.get('auth_type', 'basic')
-            username = request.POST.get('username', '')
-            password = request.POST.get('password', '')
-            token = request.POST.get('token', '')
-            caldav_url = request.POST.get('caldav_url', '')
-            
-            temp_credential, created = ToolCredential.objects.get_or_create(
-                user=request.user,
-                tool=tool,
-                defaults={
-                    'auth_type': auth_type,
-                    'username': username,
-                    'password': password,
-                    'token': token,
-                    'config': {
-                        'caldav_url': caldav_url,
-                        'username': username,
-                        'password': password
-                    }
-                }
-            )
-            
-            if not created:
-                temp_credential.auth_type = auth_type
-                temp_credential.username = username
-                temp_credential.password = password if password else temp_credential.password
-                temp_credential.token = token if token else temp_credential.token
-                temp_credential.config = {
+        auth_type = request.POST.get('auth_type', 'basic')
+        username = request.POST.get('username', '')
+        password = request.POST.get('password', '')
+        token = request.POST.get('token', '')
+        caldav_url = request.POST.get('caldav_url', '')
+        
+        temp_credential, created = ToolCredential.objects.get_or_create(
+            user=request.user,
+            tool=tool,
+            defaults={
+                'auth_type': auth_type,
+                'username': username,
+                'password': password,
+                'token': token,
+                'config': {
                     'caldav_url': caldav_url,
                     'username': username,
-                    'password': password if password else temp_credential.config.get('password', '')
+                    'password': password
                 }
-                temp_credential.save()
-        else:
-            temp_credential = ToolCredential.objects.get(user=request.user, tool=tool)
+            }
+        )
+        
+        if not created:
+            temp_credential.auth_type = auth_type
+            temp_credential.username = username
+            temp_credential.password = password if password else temp_credential.password
+            temp_credential.token = token if token else temp_credential.token
+            temp_credential.config.update({
+                'caldav_url': caldav_url,
+                'username': username,
+                'password': password if password else temp_credential.config.get('password', '')
+            })
+            temp_credential.save()
         
         # Test connection
         if tool.tool_type == Tool.ToolType.MCP:
@@ -204,7 +208,7 @@ def test_tool_connection(request, tool_id):
 
                 # Call the function
                 result = test_function(*args)
-                return JsonResponse(result) if result else result
+                return JsonResponse(result) if isinstance(result, dict) else JsonResponse({"status": "error", "message": str(result)})
 
             except Exception as e:
                 return JsonResponse({
@@ -216,7 +220,5 @@ def test_tool_connection(request, tool_id):
             # Pour les autres types d'outils
             return JsonResponse({"status": "not_implemented", "message": _("No test implemented for this tool type")})
     
-    except ToolCredential.DoesNotExist:
-        return JsonResponse({"status": "error", "message": _("No credentials found for this user and tool.")})
     except Exception as e:
         return JsonResponse({"status": "error", "message": str(e)})

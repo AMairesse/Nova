@@ -8,7 +8,8 @@ Instead of sending every prompt to a remote model, Nova lets you decide – tran
 - **Bring-your-own models** – Connect to OpenAI or Mistral if the task is public, but switch to local back-ends such as Ollama or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
 - **Privacy by design** – API keys and tokens are stored encrypted; only the minimal data required for a given call ever leaves your machine.
 - **Pluggable tools** – Besides built-in utilities (e.g., a CalDav calendar helper), Nova can talk to external micro-services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.
-- **Human-in-the-loop UI** – A lightweight web interface lets you chat with agents, watch their reasoning in real time, and manage providers / agents / tools without touching code.
+- **Human-in-the-loop UI** – A lightweight web interface lets you chat with agents, watch their progress in real time, and manage providers / agents / tools without touching code.
+- **Asynchronous calls** – You can safely invoke agents from the UI, and they will run in the background so you can do other things at the same time.
 
 In short, Nova aims to make “agents with autonomy, privacy and extensibility” a reality for everyday users – giving you powerful automation while keeping your data yours.
 
@@ -16,7 +17,7 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 
 - ✅ Tool-aware agents: Agents can invoke classic Python helpers, CalDav calendar queries, remote REST/MCP services **or even other agents**.
 - ✅ Local-first LLM routing: Decide per-agent which provider to use: OpenAI, Mistral, Ollama, LM Studio or any future backend. Local models are preferred for sensitive data; the switch is transparent for you.
-- ✅ Live reasoning viewer: A web UI streams the internal “chain-of-thought”, tool calls and sub-agent calls in real time so you can follow (and debug) what happens under the hood.
+- ✅ Live streaming: you will see tool calls and sub-agent calls in real time so you can follow what happens under the hood. Then the agent's response will be streamed.
 - ✅ Plug-and-play MCP client: Connect to any Model Context Protocol server, cache its tool catalogue and call remote tools with automatic input validation.
 - ✅ Multilingual & i18n-ready: All UI strings use Django translations; English only currently.
 - ✅ Extensible by design: Drop a Python module exposing a `get_functions()` map and it instantly becomes a multi-function “builtin” tool.
@@ -47,6 +48,7 @@ Nova uses a `.env` file for configuration. Copy `.env.example` to `.env` and edi
 
 - **Note:**
   - `DB_ENGINE`: Set to `postgresql` for prod (default in Docker), or `sqlite` for dev.
+  - `REDIS_HOST`: Set to `redis` for Docker, use 127.0.0.1 and start a local Redis server for dev.
 
 **Security Note:** Never commit `.env` to version control. Use strong, unique values.
 
@@ -133,25 +135,32 @@ For development or testing only (uses SQLite, less scalable). Not recommended fo
    pip install -r requirements.txt
    ```
 
-3. Configure `.env` (from `.env.example`):
+3. Launch a redis server:
+
+   ```
+   redis-server
+   ```
+
+4. Configure `.env` (from `.env.example`):
 
    - Set `DB_ENGINE` to `sqlite` or remove all `DB_*` from `.env` file
    - Fill `DJANGO_SECRET_KEY`, `FIELD_ENCRYPTION_KEY`.
+   - Fill `REDIS_HOST`, `REDIS_PORT` for your local Redis server.
 
-4. Run migrations and create superuser:
+5. Run migrations and create superuser:
 
    ```
    python manage.py migrate
    python manage.py createsuperuser
    ```
 
-5. Launch dev server:
+6. Launch dev server:
 
    ```
-   python manage.py runserver
+   daphne -b 0.0.0.0 -p 8000 nova.asgi:application
    ```
 
-6. Open `http://localhost:8000`, log in, and configure via **Config › LLM Providers**.
+7. Open `http://localhost:8000`, log in, and configure via **Config › LLM Providers**.
 
 **Tip:** For local models, use Ollama as above.
 
@@ -170,10 +179,11 @@ nova/
 
 ## Roadmap
 
-1. Refined UI (better management of "thinking models", ...)
-2. File management : add a file, receive a file as a result, file support for MCP tools, ...
-3. Add a scratchpad tool (acting like a memory for long task)
-4. Add a canvas tool (acting like a UI component for the agent to interact with the user)
+1. Add a "internet search" tool and a "web browser" tool
+2. Management of "thinking models"
+3. File management : add a file, receive a file as a result, file support for MCP tools, ...
+4. Add a scratchpad tool (acting like a memory for long task)
+5. Add a canvas tool (acting like a UI component for the agent to interact with the user)
 
 ## Contributing
 
@@ -203,7 +213,7 @@ Made with ❤️ and a healthy concern for data privacy.
 
 ## Troubleshooting
 
-- **Port conflicts:** Ensure ports 80 (Nginx), 8000 (Gunicorn), and 5432 (PostgreSQL) are free. Stop conflicting services or edit `docker-compose.yml`.
+- **Port conflicts:** Ensure ports 80 (Nginx), 8000 (Daphne), and 5432 (PostgreSQL) are free. Stop conflicting services or edit `docker-compose.yml`.
 - **DB not ready:** If web container fails with DB errors, check PostgreSQL logs (`docker compose logs db`). Increase healthcheck timeouts if needed.
 - **No superuser:** Set `DJANGO_SUPERUSER_*` in `.env` and restart. Or run `docker compose exec web python manage.py createsuperuser`.
 - **Ollama unreachable:** Use `host.docker.internal` (Docker Desktop) or your machine's IP for Base URL. Ensure Ollama runs on the host.

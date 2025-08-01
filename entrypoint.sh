@@ -24,6 +24,19 @@ if [ "$DB_ENGINE" = "postgresql" ]; then
     echo "PostgreSQL is ready"
 fi
 
+# Wait for Redis
+echo "Waiting for Redis (timeout 30s)..."
+timeout=30
+while ! redis-cli -h redis -p 6379 ping >/dev/null 2>&1; do
+    sleep 1
+    ((timeout--))
+    if [ $timeout -le 0 ]; then
+        echo "Error: Redis not ready after 30s."
+        exit 1
+    fi
+done
+echo "Redis is ready"
+
 # Collect static files
 echo "Collecting static files..."
 python manage.py collectstatic --noinput --clear
@@ -44,10 +57,8 @@ if [ ! -z "$DJANGO_SUPERUSER_USERNAME" ] && [ ! -z "$DJANGO_SUPERUSER_PASSWORD" 
         --email "${DJANGO_SUPERUSER_EMAIL:-admin@example.com}" || true  # Ignore if exists
 fi
 
-# Start Gunicorn
-echo "Starting Gunicorn..."
-exec gunicorn nova.wsgi:application \
-    --bind 0.0.0.0:8000 \
-    --workers 3 \
-    --log-level info \
-    --timeout 300
+# Start Daphne
+echo "Starting Daphne..."
+exec daphne nova.asgi:application \
+    -b 0.0.0.0 \
+    -p 8000

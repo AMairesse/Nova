@@ -14,6 +14,16 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: redis-server
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   web:
     build:
       context: .
@@ -21,6 +31,8 @@ services:
     restart: unless-stopped
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - .:/app

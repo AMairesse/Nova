@@ -1,19 +1,25 @@
-import json
-import re
+# nova/views/main_views.py
 import bleach
+import threading
+import asyncio
+import datetime as dt
+from uuid import UUID
+from typing import Any, Dict, List, Optional
 from markdown import markdown
-from django.core.cache import cache
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
-from ..models import Actor, Thread, Agent, UserProfile
+from ..models import Actor, Thread, Agent, UserProfile, Task, TaskStatus
 from ..llm_agent import LLMAgent
-from ..utils import extract_final_answer
+from channels.layers import get_channel_layer
+from langchain_core.callbacks import AsyncCallbackHandler
 
+import logging
+logger = logging.getLogger(__name__)
 
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
@@ -34,6 +40,7 @@ def index(request):
         'threads': threads,
     })
 
+
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
@@ -42,13 +49,15 @@ def message_list(request):
     for a given thread.
     """
     user_agents = Agent.objects.filter(user=request.user, is_tool=False)
-    
+
     agent_id = request.GET.get('agent_id')
     default_agent = None
     if agent_id:
-        default_agent = Agent.objects.filter(id=agent_id, user=request.user).first()
+        default_agent = Agent.objects.filter(id=agent_id,
+                                             user=request.user).first()
     if not default_agent:
-        default_agent = getattr(request.user.userprofile, "default_agent", None)
+        default_agent = getattr(request.user.userprofile,
+                                "default_agent", None)
 
     selected_thread_id = request.GET.get('thread_id')
     messages = None
@@ -68,7 +77,7 @@ def message_list(request):
                 strip=True,
             )
             m.rendered_html = mark_safe(clean_html)
-    
+
     return render(request, 'nova/message_container.html', {
         'messages': messages,
         'thread_id': selected_thread_id or '',
@@ -76,17 +85,19 @@ def message_list(request):
         'default_agent': default_agent
     })
 
+
 def new_thread(request):
     count = Thread.objects.filter(user=request.user).count() + 1
     thread_subject = f"thread n°{count}"
     thread = Thread.objects.create(subject=thread_subject, user=request.user)
 
     # Render the thread item template
-    thread_html = render_to_string('nova/partials/_thread_item.html', 
-                                 {'thread': thread}, 
-                                 request=request)
+    thread_html = render_to_string('nova/partials/_thread_item.html',
+                                   {'thread': thread},
+                                   request=request)
 
     return thread, thread_html
+
 
 @require_POST
 @login_required(login_url='login')
@@ -99,12 +110,14 @@ def create_thread(request):
         'threadHtml': thread_html
     })
 
+
 @require_POST
 @login_required(login_url='login')
 def delete_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
     thread.delete()
     return redirect('index')
+
 
 @csrf_protect
 @require_POST
@@ -118,151 +131,299 @@ def add_message(request):
         # New thread
         thread, thread_html = new_thread(request)
     else:
-        thread       = Thread.objects.get(id=thread_id)
-        thread_html  = None
+        thread = Thread.objects.get(id=thread_id)
+        thread_html = None
 
+    # Add the user message to the thread
     thread.add_message(new_message, actor=Actor.USER)
 
-    # Return the thread_id to the client because it's needed for SSE
+    # Get the agent object
+    agent_obj = None
+    if selected_agent:
+        agent_obj = get_object_or_404(Agent, id=selected_agent,
+                                      user=request.user)
+    else:
+        try:
+            agent_obj = request.user.userprofile.default_agent
+        except UserProfile.DoesNotExist:
+            pass  # Proceed without agent if none set
+
+    # Create a Task for async processing
+    task = Task.objects.create(
+        user=request.user,
+        thread=thread,
+        agent=agent_obj,
+        status=TaskStatus.PENDING
+    )
+
+    # Launch background thread to run the AI task
+    threading.Thread(target=run_ai_task, args=(task.id, request.user.id,
+                     thread.id, agent_obj.id if agent_obj else None)).start()
+
+    # Return immediately with task_id for client-side WS connection
     return JsonResponse({
         "status": "OK",
         "thread_id": thread.id,
+        "task_id": task.id,  # Client uses this for WS
         "threadHtml": thread_html
     })
 
 
-@login_required(login_url='login')
-def stream_llm_response(request, thread_id):
-    # Retrieve the thread and all associated messages
-    thread   = get_object_or_404(Thread, id=thread_id, user=request.user)
-    messages = thread.get_messages()
+# Custom callback handler for synthesis and streaming
+# (signatures aligned with Langchain)
+class TaskProgressHandler(AsyncCallbackHandler):
+    def __init__(self, task_id, channel_layer):
+        self.task_id = task_id
+        self.channel_layer = channel_layer
+        self.final_chunks = []
+        self.current_tool = None
+        self.token_count = 0
 
-    # ---------- 1) Which agent ----------
-    agent_id = request.GET.get('agent_id')
-    agent_obj = None
-    if agent_id:
+    async def publish_update(self, message_type, data):
+        await self.channel_layer.group_send(
+            f'task_{self.task_id}',
+            {'type': 'task_update', 'message': {'type': message_type, **data}}
+        )
+
+    # Implement needed callbacks from
+    # https://python.langchain.com/docs/concepts/callbacks/
+    # https://python.langchain.com/api_reference/core/callbacks/langchain_core.callbacks.base.AsyncCallbackHandler.html
+    async def on_chain_start(self, serialized: Dict[str, Any],
+                             inputs: Dict[str, Any], *, run_id: UUID,
+                             parent_run_id: Optional[UUID] = None,
+                             tags: Optional[List[str]] = None,
+                             metadata: Optional[Dict[str, Any]] = None,
+                             **kwargs: Any) -> None:
+        pass
+
+    async def on_chain_end(self, outputs: Dict[str, Any], *,
+                           run_id: UUID, parent_run_id: Optional[UUID] = None,
+                           tags: Optional[List[str]] = None,
+                           **kwargs: Any) -> None:
+        pass
+
+    async def on_chat_model_start(self, serialized: Dict[str, Any],
+                                  messages: List[Any], **kwargs: Any) -> Any:
         try:
-            agent_obj = Agent.objects.get(id=agent_id, user=request.user)
-        except Agent.DoesNotExist:
-            pass
+            if self.current_tool is None:
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent started"})
+            else:
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent started"})
+        except Exception as e:
+            logger.error(f"Error in on_chat_model_start: {e}")
 
-    if not agent_obj:
+    async def on_llm_start(self, serialized: Dict[str, Any],
+                           prompts: List[str], **kwargs: Any):
         try:
-            agent_obj = request.user.userprofile.default_agent
-        except UserProfile.DoesNotExist:
-            agent_obj = None
+            if self.current_tool is None:
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent started"})
+            else:
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent started"})
+        except Exception as e:
+            logger.error(f"Error in on_llm_end: {e}")
 
-    # ---------- 2) Cache ----------
-    agent_key = agent_obj.id if agent_obj else 'none'
-    llm_key   = f"{request.user.username}-llm-{thread_id}-{agent_key}"
-    llm       = cache.get(llm_key)
+    async def on_llm_new_token(self, token: str, *, run_id: UUID,
+                               parent_run_id: Optional[UUID] = None,
+                               **kwargs: Any) -> Any:
+        try:
+            # Send only chunks from the root run
+            if self.current_tool is None:
+                self.final_chunks.append(token)
+                full_response = ''.join(self.final_chunks)
+                raw_html = markdown(full_response, extensions=["extra"])
+                clean_html = bleach.clean(
+                    raw_html,
+                    tags=ALLOWED_TAGS,
+                    attributes=ALLOWED_ATTRS,
+                    strip=True,
+                )
+                await self.publish_update('response_chunk',
+                                          {'chunk': clean_html})
+            else:
+                # If a sub agent is generating a response,
+                # send it as a progress update every 100 tokens
+                self.token_count += 1
+                if self.token_count % 100 == 0:
+                    await self.publish_update('progress_update',
+                                              {'progress_log':
+                                               "Sub-agent still working..."})
+        except Exception as e:
+            logger.error(f"Error in on_llm_new_token: {e}")
 
-    if not llm:
-        # Get previous messages except the last one
+    async def on_llm_end(self, response: Any, *, run_id: UUID,
+                         parent_run_id: Optional[UUID] = None,
+                         **kwargs: Any) -> Any:
+        try:
+            if self.current_tool is None:
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent finished"})
+            else:
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent finished"})
+        except Exception as e:
+            logger.error(f"Error in on_llm_end: {e}")
+
+    async def on_tool_start(self, serialized: Dict[str, Any],
+                            input_str: str, *, run_id: UUID,
+                            parent_run_id: Optional[UUID] = None,
+                            tags: Optional[List[str]] = None,
+                            metadata: Optional[Dict[str, Any]] = None,
+                            **kwargs: Any) -> Any:
+        try:
+            # If a tool is starting,
+            # store it to avoid sending response chunks back to the user
+            tool_name = serialized.get('name', 'Unknown')
+            self.current_tool = tool_name
+            await self.publish_update('progress_update',
+                                      {'progress_log':
+                                       f"Tool '{tool_name}' started"})
+        except Exception as e:
+            logger.error(f"Error in on_tool_start: {e}")
+
+    async def on_tool_end(self, output: Any, *, run_id: UUID,
+                          parent_run_id: Optional[UUID] = None,
+                          **kwargs: Any) -> Any:
+        try:
+            await self.publish_update('progress_update',
+                                      {'progress_log':
+                                       f"Tool '{self.current_tool}' finished"})
+            # If a tool is ending, reset the current tool so that we may
+            # send response chunks if the main agent is generating
+            self.current_tool = None
+        except Exception as e:
+            logger.error(f"Error in on_tool_end: {e}")
+
+    async def on_agent_finish(self, finish: Any, *, run_id: UUID,
+                              parent_run_id: Optional[UUID] = None,
+                              **kwargs: Any) -> Any:
+        try:
+            if self.current_tool is None:
+                await self.publish_update('progress_update',
+                                          {'progress_log': "Agent finished"})
+            else:
+                await self.publish_update('progress_update',
+                                          {'progress_log':
+                                           "Sub-agent finished"})
+        except Exception as e:
+            logger.error(f"Error in on_chat_model_start: {e}")
+
+
+# Updated helper function for background thread
+def run_ai_task(task_id, user_id, thread_id, agent_id):
+    """
+    Background function to run AI task in a thread.
+    Uses custom callbacks for progress synthesis and streaming.
+    """
+    # Import inside to avoid circular issues
+    from django.contrib.auth.models import User
+
+    # Initialize variables to avoid UnboundLocalError in exception handler
+    task = None
+    handler = None
+    channel_layer = get_channel_layer()  # Get layer for publishing
+
+    try:
+        # Get all required objects with proper error handling
+        task = Task.objects.get(id=task_id)
+        user = User.objects.get(id=user_id)
+        thread = Thread.objects.get(id=thread_id)
+        agent_obj = Agent.objects.get(id=agent_id) if agent_id else None
+
+        # Set task to running and log start
+        task.status = TaskStatus.RUNNING
+        task.progress_logs = [{"step": "Starting AI processing",
+                              "timestamp":
+                               str(dt.datetime.now(dt.timezone.utc))}]
+        task.save()
+
+        # Get message history
+        messages = thread.get_messages()
         msg_history = [[m.actor, m.text] for m in messages]
         if msg_history:
-            msg_history.pop()
-        llm = LLMAgent(
-            request.user,
-            thread_id,
-            msg_history=msg_history,
-            agent=agent_obj
-        )
-        # cache.set(llm_key, llm, 3600)
-
-    def llm_stream():
+            msg_history.pop()  # Exclude last user message for consistency
+        # Last message is the prompt to send
         last_message = messages.last().text
 
-        # --------- Map events ----------
-        from markdown import markdown
+        # Create custom handler and LLMAgent with callbacks
+        handler = TaskProgressHandler(task_id, channel_layer)
+        llm = LLMAgent(user, thread_id, msg_history=msg_history,
+                       agent=agent_obj, callbacks=[handler])
 
-        def to_text(raw):
-            """
-            Garantit une string :
-            - str inchangée
-            - liste / dict  → json.dumps(default=str)
-            - autre objet   → str(obj)
-            """
-            if isinstance(raw, str):
-                return raw
-            if isinstance(raw, (list, dict)):
-                return json.dumps(raw, ensure_ascii=False, default=str)
-            return str(raw)
+        # Run LLMAgent
+        final_output = llm.invoke(last_message)
 
-        def map_event(ev: dict):
-            evt      = ev["event"]          # ex: on_chain_start
-            depth    = len(ev.get("parent_ids", []))
-            name     = ev["name"]
-            kind     = "agent" if evt.startswith("on_chain") else "tool"
+        # Log completion and save result
+        task.progress_logs.append({"step": "AI processing completed",
+                                  "timestamp":
+                                   str(dt.datetime.now(dt.timezone.utc))})
+        task.result = final_output
 
-            if evt.endswith("_start"):
-                return {
-                    "event": "start",
-                    "kind" : kind,
-                    "name" : name,
-                    "depth": depth
-                }
+        # Add final message to thread
+        thread.add_message(final_output, actor=Actor.AGENT)
 
-            if evt.endswith("_stream"):
-                chunk = ev["data"].get("chunk", "")
-
-                def is_call(obj):
-                    if isinstance(obj, str):
-                        return bool(re.match(r'^\s*\[\s*{\s*"name"\s*:', obj))
-                    if isinstance(obj, dict):
-                        return bool(obj.get("tool_calls"))
-                    return False
-
-                if is_call(chunk):
-                    return None 
-                txt   = to_text(chunk)
-                if not txt:
-                    return None
-                return {
-                    "event"  : "stream",
-                    "kind"   : kind,
-                    "name"   : name,
-                    "depth"  : depth,
-                    "chunk"  : markdown(txt, extensions=['extra'])
-                }
-
-            if evt.endswith("_end"):
-                out = ev["data"].get("output", "")
-                txt = extract_final_answer(out)
-                return {
-                    "event"  : "end",
-                    "kind"   : kind,
-                    "name"   : name,
-                    "depth"  : depth,
-                    "output" : markdown(txt, extensions=['extra'])
-                }
-            return None
-
-        # --------------- Server-sent events -------------------------------
-        final_output = None
-        for ev in llm.stream_events(last_message):
-            payload = map_event(ev)
-            if not payload:
-                continue
-
-            # Keep the final output into the database
-            if (payload["event"] == "end") and payload["depth"] == 0:
-                final_output = payload.get("output", "")
-                thread.add_message(final_output.lstrip(), actor=Actor.AGENT)
-
-            yield "data: " + json.dumps(payload) + "\n\n"
-
-        # --- Stream ends ----------------------------------------
+        # Update thread subject if needed
         if thread.subject.startswith("thread n°"):
             short_title = llm.invoke(
-                "Give me a short title for this conversation (1–3 words maximum)."
-                "Use the same language as the conversation."
-                "Answer by giving only the title, nothing else."
+                "Give a short title for this conversation (1–3 words maximum).\
+                 Use the same language as the conversation.\
+                 Answer by giving only the title, nothing else.",
+                silent_mode=True
             )
             thread.subject = short_title.strip()
             thread.save()
 
-        yield "event: close\n"
-        yield f"data: {thread.subject}\n\n"
+        # Send a final progress update for task
+        # This will be used for updating the thread name and closing the socket
+        asyncio.run(handler.publish_update('task_complete',
+                                           {'result': final_output}))
+        task.status = TaskStatus.COMPLETED
+        task.save()
 
-    return StreamingHttpResponse(llm_stream(), content_type='text/event-stream')
+    except Exception as e:
+        # Handle failure - safely handle case where task might be None
+        logger.error(f"Task {task_id} failed: {e}")
+        
+        if task is not None:
+            try:
+                task.status = TaskStatus.FAILED
+                task.result = f"Error: {str(e)}"
+                if hasattr(task, 'progress_logs') and task.progress_logs:
+                    task.progress_logs.append({"step": f"Error occurred: {str(e)}",
+                                              "timestamp":
+                                               str(dt.datetime.now(dt.timezone.utc))})
+                else:
+                    task.progress_logs = [{"step": f"Error occurred: {str(e)}",
+                                          "timestamp":
+                                           str(dt.datetime.now(dt.timezone.utc))}]
+                task.save()
+            except Exception as save_error:
+                logger.error(f"Failed to save task {task_id} error state: {save_error}")
+        
+        # Only try to publish update if handler was created
+        if handler is not None:
+            try:
+                asyncio.run(handler.publish_update('task_complete', {'error': str(e)}))
+            except Exception as publish_error:
+                logger.error(f"Failed to publish task {task_id} error update: {publish_error}")
+
+
+@login_required
+def running_tasks(request, thread_id):
+    """
+    JSON endpoint to get running task IDs for a thread.
+    Returns list of task_ids in 'RUNNING' status for the current user.
+    """
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    running_ids = Task.objects.filter(
+        thread=thread,
+        user=request.user,
+        status=TaskStatus.RUNNING
+    ).values_list('id', flat=True)
+    return JsonResponse({'running_task_ids': list(running_ids)})

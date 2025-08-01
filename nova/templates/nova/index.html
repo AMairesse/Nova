@@ -1,118 +1,40 @@
 {% extends 'base.html' %}
-{% load static %}
+{% load i18n %} {% load static %}
 
 {% block content %}
-<div class="container">
-  <div class="row" style="flex: 1;">
-    <div class="col-md-4">
-      <h2>Threads</h2>
-      <button class="btn btn-sm btn-outline-primary me-2 create-thread-btn">Create Thread</button>
-      <ul class="list-group">
-        {% for thread in threads %}
-          {% include 'nova/partials/_thread_item.html' with thread=thread %}
-        {% endfor %}
-      </ul>
+<div class="chat-layout">
+  <div class="col-md-4 sidebar-sticky p-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="h4 mb-0">{% trans "Threads" %}</h2>
+      <button class="btn btn-sm btn-outline-primary create-thread-btn">
+        {% trans "Create Thread" %}
+      </button>
     </div>
-    <div class="col-md-8">
-      <h2>Messages</h2>
-      <div id="message-container">
-      </div>
+    <ul class="list-group thread-list border">
+      {% for thread in threads %}
+        {% include 'nova/partials/_thread_item.html' with thread=thread %}
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="col-md-8 message-area">
+    <div class="p-3 pb-0">
+      <h2 class="h4 mb-3">{% trans "Messages" %}</h2>
     </div>
+    <div id="message-container" class="flex-fill"></div>
   </div>
 </div>
 
-<!-- Import message_container.js -->
 <script>
-  window.urls = {
+  // Configure URLs for the JavaScript modules
+  window.NovaApp = window.NovaApp || {};
+  window.NovaApp.urls = {
     addMessage: "{% url 'add_message' %}",
-    messageList: "{% url 'message_list' %}"
+    messageList: "{% url 'message_list' %}",
+    runningTasksBase: "/running-tasks/",
+    createThread: "{% url 'create_thread' %}",
+    deleteThread: "{% url 'delete_thread' 0 %}"
   };
 </script>
 <script src="{% static 'js/message_container.js' %}" defer></script>
-
-<script>
-  // Ajax create thread
-  $('.create-thread-btn').click(function (e) {
-    e.preventDefault();
-    getCSRFToken().then((token) => $.ajax({
-      type: 'POST',
-      url: '{% url "create_thread" %}',
-      headers: { 'X-AJAX': 'true', 'X-CSRFToken': token },
-      success: function (data) {
-        // Add the new thread to the list
-        $('.list-group').prepend(data.threadHtml);
-        // Reattach event handlers to the new element
-        attachThreadEventHandlers();
-        // Load the messages for the new thread
-        loadMessages(data.thread_id);
-      }
-    }));
-  });
-
-  // Function to attach event handlers
-  function attachThreadEventHandlers() {
-    // Thread click handler
-    $('.thread-link').off('click').on('click', function (e) {
-        e.preventDefault();
-        var threadId = $(this).data('thread-id');
-        loadMessages(threadId);
-    });
-
-    // Delete button handler
-    $('.delete-thread-btn').off('click').on('click', function (e) {
-        e.preventDefault();
-        var threadId = $(this).data('thread-id');
-        deleteThread(threadId);
-    });
-  }
-
-  function loadMessages(threadId) {
-    $.ajax({
-        type   : 'GET',
-        url    : '{% url "message_list" %}',
-        data   : { thread_id: threadId },
-        headers: { 'X-AJAX': 'true' },
-
-        success: function (data) {
-            $('#message-container').html(data);
-            if (typeof initMessageContainer === 'function') {
-                initMessageContainer();
-            }
-        }
-    });
-  }
-
-  function deleteThread(threadId) {
-      getCSRFToken().then((token) => $.ajax({
-          type: 'POST',
-          url: '{% url "delete_thread" 0 %}'.replace('0', threadId),
-          headers: { 'X-AJAX': 'true', 'X-CSRFToken': token },
-          success: function (data) {
-              $('#thread-item-' + threadId).remove();
-              // Reload the first thread
-              var lastThread = $('.thread-link').first().data('thread-id');
-              loadMessages(lastThread);
-          },
-          error: function (xhr, textStatus, errorThrown) {
-              console.log('Error deleting thread:', errorThrown);
-          }
-      }));
-  }
-
-  $(document).ready(function () {
-    attachThreadEventHandlers();
-    loadMessages(null);
-  });
-
-  // Limit visible threads (ex: max 20, based on screen height)
-  $(document).ready(function() {
-    const maxThreads = Math.floor($(window).height() / 50) - 2;  // Approx 50px/thread
-    const threads = $('.list-group li');
-    if (threads.length > maxThreads) {
-      threads.slice(maxThreads).hide();
-      $('.list-group').append('<li class="list-group-item text-center"><button class="btn btn-link load-more">Load more</button></li>');
-      $('.load-more').click(function() { threads.show(); $(this).parent().remove(); });
-    }
-  });
-</script>
+<script src="{% static 'js/index.js' %}" defer></script>
 {% endblock %}

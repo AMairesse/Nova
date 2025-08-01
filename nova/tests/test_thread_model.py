@@ -8,19 +8,17 @@ Focus on Thread-specific behavior:
 - message ordering
 """
 
-from django.test import TestCase
-from django.contrib.auth.models import User
 from django.db.models.query import QuerySet
+from django.contrib.auth.models import User
 
 from nova.models import Thread, Message, Actor
+from .base import BaseModelTestCase
 
 
-class ThreadModelTests(TestCase):
+class ThreadModelTests(BaseModelTestCase):
     def setUp(self):
-        self.user = User.objects.create_user(
-            username='testuser',
-            password='testpass123'
-        )
+        """Set up test data including thread."""
+        super().setUp()
         
         # Create a test thread
         self.thread = Thread.objects.create(

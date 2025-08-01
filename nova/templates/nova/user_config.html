@@ -6,25 +6,25 @@
 <h2>{% trans "User Config" %}</h2>
 
 <!-- Tabs navigation -->
-<ul class="nav nav-tabs" id="configTabs" role="tablist">
+<ul class="nav nav-tabs mb-4" id="configTabs" role="tablist">
     <li class="nav-item" role="presentation">
         <button class="nav-link active" id="providers-tab" data-bs-toggle="tab" data-bs-target="#providers" type="button" role="tab">
-            {% trans "LLM Providers" %}
+            <i class="bi bi-cloud-arrow-up me-2"></i>{% trans "LLM Providers" %}
         </button>
     </li>
     <li class="nav-item" role="presentation">
         <button class="nav-link" id="agents-tab" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">
-            {% trans "Agents" %}
+            <i class="bi bi-robot me-2"></i>{% trans "Agents" %}
         </button>
     </li>
     <li class="nav-item" role="presentation">
         <button class="nav-link" id="tools-tab" data-bs-toggle="tab" data-bs-target="#tools" type="button" role="tab">
-            {% trans "Tools" %}
+            <i class="bi bi-tools me-2"></i>{% trans "Tools" %}
         </button>
     </li>
     <li class="nav-item" role="presentation">
         <button class="nav-link" id="general-config-tab" data-bs-toggle="tab" data-bs-target="#general-config" type="button" role="tab">
-            {% trans "General Config" %}
+            <i class="bi bi-gear me-2"></i>{% trans "General Config" %}
         </button>
     </li>
 </ul>

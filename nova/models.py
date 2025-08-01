@@ -317,3 +317,36 @@ class Thread(models.Model):
     
     def get_messages(self):
         return Message.objects.filter(thread=self, user=self.user)
+
+# ----- Task Model for Asynchronous AI Tasks -----
+class TaskStatus(models.TextChoices):
+    PENDING = "PENDING", _("Pending")
+    RUNNING = "RUNNING", _("Running")
+    COMPLETED = "COMPLETED", _("Completed")
+    FAILED = "FAILED", _("Failed")
+
+class Task(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.CASCADE,
+                             related_name='tasks',
+                             verbose_name=_("User tasks"))
+    thread = models.ForeignKey('Thread',
+                               on_delete=models.CASCADE,
+                               related_name='tasks',
+                               verbose_name=_("Thread"))
+    agent = models.ForeignKey('Agent',
+                              on_delete=models.SET_NULL,
+                              null=True,
+                              blank=True,
+                              related_name='tasks',
+                              verbose_name=_("Agent"))
+    status = models.CharField(max_length=10,
+                              choices=TaskStatus.choices,
+                              default=TaskStatus.PENDING)
+    progress_logs = models.JSONField(default=list, blank=True)  # List of dicts, e.g., [{"step": "Calling tool X", "timestamp": "2025-07-28T03:58:00Z"}]
+    result = models.TextField(blank=True, null=True)  # Final output or error message
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Task {self.id} for Thread {self.thread.subject} ({self.status})"

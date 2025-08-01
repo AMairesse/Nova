@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from nova.models import UserParameters, UserProfile
 
-from .models import Agent, Tool, ToolCredential, Thread, Message, LLMProvider
+from .models import Agent, Tool, ToolCredential, Thread, Message, LLMProvider, Task
 admin.site.site_header = "Nova Admin"
 admin.site.register(Agent)
 admin.site.register(Tool)
@@ -11,6 +11,7 @@ admin.site.register(ToolCredential)
 admin.site.register(Thread)
 admin.site.register(Message)
 admin.site.register(LLMProvider)
+admin.site.register(Task)
 
 class UserParametersInline(admin.StackedInline):
     model = UserParameters

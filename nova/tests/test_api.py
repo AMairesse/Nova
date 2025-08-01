@@ -7,49 +7,11 @@ stubbed so the nova.llm_agent module can be imported even when the
 real libraries are absent in the test environment.
 """
 from __future__ import annotations
-
 # --------------------------------------------------------------------------- #
 #  Make the optional “langchain* / langgraph*” stacks inert                   #
 # --------------------------------------------------------------------------- #
 import sys
 import types
-
-def _stub(mod_name: str, attrs: dict[str, object] | None = None) -> None:
-    """
-    Register a dummy module so that `import` statements do not fail.
-
-    attrs – optional mapping of attribute → object to expose.
-    """
-    parts = mod_name.split(".")
-    for i in range(1, len(parts) + 1):
-        sub = ".".join(parts[:i])
-        if sub not in sys.modules:
-            sys.modules[sub] = types.ModuleType(sub)
-
-    if attrs:
-        mod = sys.modules[mod_name]
-        for k, v in attrs.items():
-            setattr(mod, k, v)
-
-# Core helpers expected by nova.llm_agent
-_stub("langchain_core.messages", {"HumanMessage": object, "AIMessage": object})
-_stub("langchain_core.tools", {"StructuredTool": object})
-_stub("langchain_core")
-
-# Chat model back-ends
-_stub("langchain_mistralai.chat_models", {"ChatMistralAI": object})
-_stub("langchain_mistralai")
-_stub("langchain_ollama.chat_models", {"ChatOllama": object})
-_stub("langchain_ollama")
-_stub("langchain_openai.chat_models", {"ChatOpenAI": object})
-_stub("langchain_openai")
-
-# LangGraph shortcuts
-_stub("langgraph.checkpoint.memory", {"MemorySaver": object})
-_stub("langgraph.checkpoint")
-_stub("langgraph.prebuilt", {"create_react_agent": lambda *a, **kw: object()})
-_stub("langgraph")
-
 # --------------------------------------------------------------------------- #
 #  Regular test imports                                                       #
 # --------------------------------------------------------------------------- #
@@ -58,7 +20,6 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth.models import User
 from unittest.mock import patch, MagicMock
-
 from ..models import UserProfile, LLMProvider, Agent
 
 
@@ -67,8 +28,65 @@ class QuestionAnswerViewTests(APITestCase):
     Smoke-tests for the async Question-Answer API view.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Appliquer les stubs seulement pour cette classe de tests
+        cls._apply_stubs()
+
+    @classmethod
+    def _apply_stubs(cls):
+        # Votre fonction _stub() ici (copiez-la si besoin)
+        def _stub(mod_name: str,
+                  attrs: dict[str, object] | None = None) -> None:
+            parts = mod_name.split(".")
+            for i in range(1, len(parts) + 1):
+                sub = ".".join(parts[:i])
+                if sub not in sys.modules:
+                    sys.modules[sub] = types.ModuleType(sub)
+            if attrs:
+                mod = sys.modules[mod_name]
+                for k, v in attrs.items():
+                    setattr(mod, k, v)
+
+        # Appliquer les stubs
+        _stub("langchain_core.messages",
+              {"HumanMessage": object, "AIMessage": object})
+        _stub("langchain_core.tools", {"StructuredTool": object})
+        _stub("langchain_core")
+        # Chat model back-ends
+        _stub("langchain_mistralai.chat_models", {"ChatMistralAI": object})
+        _stub("langchain_mistralai")
+        _stub("langchain_ollama.chat_models", {"ChatOllama": object})
+        _stub("langchain_ollama")
+        _stub("langchain_openai.chat_models", {"ChatOpenAI": object})
+        _stub("langchain_openai")
+        # LangGraph shortcuts
+        _stub("langgraph.checkpoint.memory", {"MemorySaver": object})
+        _stub("langgraph.checkpoint")
+        _stub("langgraph.prebuilt", {"create_react_agent": lambda *a,
+                                     **kw: object()})
+        _stub("langgraph")
+
+    @classmethod
+    def tearDownClass(cls):
+        # Nettoyer les stubs après les tests pour éviter fuites
+        stubs_to_remove = [
+            "langchain_core.messages", "langchain_core.tools",
+            "langchain_core", "langchain_mistralai.chat_models",
+            "langchain_mistralai", "langchain_ollama.chat_models",
+            "langchain_ollama", "langchain_openai.chat_models",
+            "langchain_openai", "langgraph.checkpoint.memory",
+            "langgraph.checkpoint", "langgraph.prebuilt",
+            "langgraph"
+        ]
+        for stub in stubs_to_remove:
+            sys.modules.pop(stub, None)
+        super().tearDownClass()
+
     def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="testpass")
+        self.user = User.objects.create_user(username="testuser",
+                                             password="testpass")
 
         # Minimal provider + agent so LLMAgent initialisation succeeds
         self.llm_provider = LLMProvider.objects.create(
@@ -87,7 +105,7 @@ class QuestionAnswerViewTests(APITestCase):
         profile, created = UserProfile.objects.get_or_create(user=self.user)
         profile.default_agent = self.agent
         profile.save()
-        
+
         self.url = reverse("ask-question")
 
     # ------------------------------------------------------------------ #
@@ -143,5 +161,6 @@ class QuestionAnswerViewTests(APITestCase):
     #  POST /api/ask/ – authentication required                          #
     # ------------------------------------------------------------------ #
     def test_post_question_answer_view_unauthenticated(self):
-        response = self.client.post(self.url, {"question": "Ping"}, format="json")
+        response = self.client.post(self.url, {"question": "Ping"},
+                                    format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

@@ -1,324 +1,261 @@
-/* message_container.js */
-(function ($) {
+/* nova/static/js/message_container.js */
+(function () {
+  'use strict';
+
   /* ----------- Public function called after each injection ----------- */
   window.initMessageContainer = function () {
-    const textarea = $("#message-container").find(
-      'textarea[name="new_message"]'
-    );
-    textarea.focus();
+    const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+    if (textarea) {
+      textarea.focus();
 
-    // Manage the Enter key
-    textarea.on("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        $("#message-form").submit();
+      // Manage the Enter key
+      textarea.addEventListener('keydown', function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const form = document.getElementById('message-form');
+          if (form) {
+            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          }
+        }
+      });
+
+      // Auto-resize for textareas with the auto-resize class
+      if (textarea.classList.contains('auto-resize-textarea')) {
+        textarea.addEventListener('input', function () {
+          this.style.height = "38px";
+          this.style.height = this.scrollHeight + "px";
+        });
       }
-    });
-
-    // Auto-resize
-    textarea.on("input", function () {
-      this.style.height = "38px";
-      this.style.height = this.scrollHeight + "px";
-    });
-
-    // Auto-scroll management
-    initAutoScroll();
+    }
   };
 
-  // Auto-scroll logic
-  let isAtBottom = true;
-  let userScrolled = false;
-  let observer = null;
-
-  function initAutoScroll() {
-    const container = $("#conversation-container");
-    if (container.length === 0) {
-      return;
-    }
-
-    // Disconnect previous observer if exists
-    if (observer) observer.disconnect();
-
-    // Detect if user scrolls up
-    container.on("scroll", function () {
-      updateIsAtBottom();
-      userScrolled = !isAtBottom;
-    });
-
-    // MutationObserver to detect DOM changes (appends) and scroll
-    observer = new MutationObserver(() => {
-      // Force reflow
-      void container[0].offsetHeight;
-      updateIsAtBottom(); // Recheck after mutation
-      scrollToBottomIfNeeded();
-    });
-    observer.observe(container[0], {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-
-    // Initial scroll to bottom
-    updateIsAtBottom();
-    scrollToBottomIfNeeded();
-  }
-
-  function updateIsAtBottom() {
-    const container = $("#conversation-container");
-    const scrollTop = container.scrollTop();
-    const scrollHeight = container.prop("scrollHeight");
-    const height = container.height();
-    isAtBottom = scrollTop + height >= scrollHeight - 1; // Tolerance reduced
-  }
-
-  function scrollToBottomIfNeeded() {
-    const container = $("#conversation-container");
-    if (container.length === 0) return;
-    if (isAtBottom && !userScrolled) {
-      const target = container.prop("scrollHeight");
-      // Use rAF to set after reflow/paint
-      requestAnimationFrame(() => {
-        container[0].scrollTop = target;
-      });
-    }
-  }
-
   // Form submit (add trim + empty check)
-  $(document).on("submit", "#message-form", function (e) {
+  document.addEventListener('submit', async function (e) {
+    if (e.target.id !== 'message-form') return;
+    
     e.preventDefault();
-    const msg = $('textarea[name="new_message"]').val().trim();
+    const textarea = document.querySelector('textarea[name="new_message"]');
+    const msg = textarea ? textarea.value.trim() : '';
     if (!msg) return; // Prevent empty
-    $("#send-btn").prop("disabled", true);
+    
+    const sendBtn = document.getElementById('send-btn');
+    if (sendBtn) sendBtn.disabled = true;
 
-    const formData = $(this).serialize();
-
-    getCSRFToken().then((token) =>
-      $.ajax({
-        type: "POST",
-        url: window.urls.addMessage,
-        data: formData,
-        headers: { "X-AJAX": "true", "X-CSRFToken": token },
-
-        success: function (data) {
-          // 1) Memorize selected agent BEFORE updating the DOM
-          const currentAgentId = $("#selectedAgentInput").val() || "";
-
-          // Update or create the thread
-          $('input[name="thread_id"]').val(data.thread_id);
-
-          // If we get HTML for a new thread then we add it
-          if (data.threadHtml) {
-            $(".list-group").prepend(data.threadHtml);
-            attachThreadEventHandlers();
-          }
-
-          // Thread's messages reload
-          $.ajax({
-            type: "GET",
-            url: window.urls.messageList,
-            data: { thread_id: data.thread_id, agent_id: currentAgentId },
-            headers: { "X-AJAX": "true" },
-
-            success: function (html) {
-              $("#message-container").html(html);
-              window.initMessageContainer();
-              scrollToBottomIfNeeded();
-              startAgentSSE(currentAgentId);
-            },
-          });
-        },
-
-        error: function (_, __, err) {
-          console.error("Error adding message:", err);
-          $("#send-btn").prop("disabled", false);
-        },
-      })
-    );
-  });
-
-  // Select an agent in the dropdown
-  $(document).on("click", ".dropdown-item", function (e) {
-    e.preventDefault();
-    const value = $(this).data("value");
-    const label = $(this).text();
-
-    $("#selectedAgentInput").val(value);
-    $("#dropdownMenuButton").text(label);
-  });
-
-  /* -------------------------- SSE AGENT -------------------------- */
-  function startAgentSSE(forcedAgentId = null) {
-    const threadId = $('input[name="thread_id"]').val();
-    const agentId = forcedAgentId ?? ($("#selectedAgentInput").val() || "");
-    const es = new EventSource(
-      `/stream-llm-response/${threadId}/?agent_id=${agentId}`
-    );
-
-    const streamState = {
-      stack: [], // [{depth, el}]
-      phaseStack: [],
-      answerBuf: "",
-      detailsVisible: false,
-    };
-
-    // Helper: Create details card
-    function createCard(depth, title) {
-      const el = $(`
-        <details class="llm-block" data-depth="${depth}">
-          <summary>${title}</summary>
-          <div class="stream" style="white-space:pre-wrap"></div>
-        </details>
-      `);
-      el.css("margin-left", depth * 10 + "px");
-      return el;
-    }
-
-    // Helper: Status updates
-    function showStatus(text) {
-      $("#agent-stream-container")
-        .html(
-          `<span class="spinner-border spinner-border-sm me-2" role="status"></span>${text}`
-        )
-        .show();
-    }
-    function hideStatus() {
-      $("#agent-stream-container").hide().empty();
-    }
-
-    // Phase management
-    function pushPhase(label) {
-      streamState.phaseStack.push(label);
-      showStatus(label);
-    }
-    function popPhase() {
-      streamState.phaseStack.pop();
-      if (streamState.phaseStack.length) {
-        showStatus(streamState.phaseStack[streamState.phaseStack.length - 1]);
-      } else {
-        hideStatus();
-      }
-    }
-
-    // Toggle details
-    $("#toggle-details")
-      .off("click")
-      .on("click", () => {
-        streamState.detailsVisible = !streamState.detailsVisible;
-        $(".llm-block").toggle(streamState.detailsVisible);
-        $("#toggle-details").text(
-          streamState.detailsVisible
-            ? gettext("Hide details")
-            : gettext("Show details")
-        );
+    try {
+      const token = await window.getCSRFToken();
+      const formData = new FormData(e.target);
+      
+      const response = await fetch(window.NovaApp.urls.addMessage, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-AJAX': 'true',
+          'X-CSRFToken': token
+        }
       });
 
-    showStatus(gettext("Starting agent…"));
+      const data = await response.json();
+      
+      // 1) Memorize selected agent BEFORE updating the DOM
+      const selectedAgentInput = document.getElementById('selectedAgentInput');
+      const currentAgentId = selectedAgentInput ? selectedAgentInput.value : '';
 
-    es.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      switch (msg.event) {
-        case "start": {
-          const title = `${msg.kind} › ${msg.name}`;
-          const card = createCard(msg.depth, title);
-          streamState.stack[msg.depth] = { depth: msg.depth, el: card };
+      // Update or create the thread
+      const threadIdInput = document.querySelector('input[name="thread_id"]');
+      if (threadIdInput) threadIdInput.value = data.thread_id;
 
-          if (msg.depth === 0) {
-            $("#conversation-container").append(
-              `<div class="message agent"><p id="agent-answer-${threadId}"></p></div>`
-            );
-            streamState.answerBuf = "";
-            $("#toggle-details").hide();
-          }
+      // If we get HTML for a new thread then we add it
+      if (data.threadHtml) {
+        const threadList = document.querySelector('.list-group');
+        if (threadList) {
+          threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
+        }
+      }
 
-          if (msg.depth === 0) {
-            $("#agent-stream-container").after(card);
-          } else if (streamState.stack[msg.depth - 1]) {
-            streamState.stack[msg.depth - 1].el.append(card);
-          }
-          if (!streamState.detailsVisible) card.hide();
-          $("#toggle-details").show();
+      // Thread's messages reload
+      const params = new URLSearchParams({
+        thread_id: data.thread_id,
+        agent_id: currentAgentId
+      });
+      
+      const messageResponse = await fetch(`${window.NovaApp.urls.messageList}?${params}`, {
+        headers: { 'X-AJAX': 'true' }
+      });
+      
+      const html = await messageResponse.text();
+      const messageContainer = document.getElementById('message-container');
+      if (messageContainer) {
+        messageContainer.innerHTML = html;
+        window.initMessageContainer();
 
-          if (msg.depth === 0) {
-            pushPhase(gettext("Agent is thinking…"));
-          }
-          if (msg.kind === "tool") {
-            const niceName = msg.name || "tool";
-            pushPhase(
-              interpolate(
-                gettext("Agent is using tool « %s »…"),
-                [niceName],
-                false
-              )
-            );
-          }
-          // No timeout: Observer will handle
-          break;
+        // Create streaming placeholder with card layout
+        const conversationContainer = document.getElementById('conversation-container');
+        if (conversationContainer) {
+          const streamingDiv = document.createElement('div');
+          streamingDiv.className = 'message streaming mb-3';
+          streamingDiv.innerHTML = `
+            <div class="card border-secondary">
+              <div class="card-body py-2">
+                <div class="streaming-content"></div>
+              </div>
+            </div>
+          `;
+          conversationContainer.appendChild(streamingDiv);
         }
 
-        case "stream": {
-          const block = streamState.stack[msg.depth];
-          if (!block) break;
-          block.el.find(".stream").append(msg.chunk); // Backend already markdown'd it
+        // Store task_id in localStorage for persistence
+        window.StorageUtils.addStoredTask(data.thread_id, data.task_id);
 
-          if (msg.depth === 0) {
-            streamState.answerBuf += msg.chunk;
-            const p = $(`#agent-answer-${threadId}`);
-            p.html(streamState.answerBuf); // Render progressive HTML
-            // No timeout: Observer will handle
-          }
-          break;
+        // Start WS for task progress
+        startTaskWebSocket(data.thread_id, data.task_id);
+      }
+    } catch (error) {
+      console.error("Error adding message:", error);
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  });
+
+  // Select an agent in the dropdown (only for agent dropdown items)
+  document.addEventListener('click', function (e) {
+    if (e.target.matches('.agent-dropdown-item') || e.target.closest('.agent-dropdown-item')) {
+      e.preventDefault();
+      const item = e.target.matches('.agent-dropdown-item') ? e.target : e.target.closest('.agent-dropdown-item');
+      const value = item.dataset.value;
+      const label = item.textContent;
+
+      const selectedAgentInput = document.getElementById('selectedAgentInput');
+      const dropdownButton = document.getElementById('dropdownMenuButton');
+      
+      if (selectedAgentInput) selectedAgentInput.value = value;
+      if (dropdownButton) dropdownButton.textContent = label;
+    }
+  });
+
+  // Note: localStorage helpers are now in utils.js - keeping backward compatibility
+  window.addStoredTask = window.StorageUtils.addStoredTask.bind(window.StorageUtils);
+  window.removeStoredTask = window.StorageUtils.removeStoredTask.bind(window.StorageUtils);
+
+  /* -------------------------- Task WebSocket for Real-Time Progress -------------------------- */
+  function startTaskWebSocket(threadId, taskId) {
+    if (!taskId) return;
+
+    const progressDiv = document.getElementById('task-progress');
+    const progressLogs = document.getElementById('progress-logs');
+    const statusDiv = document.getElementById('task-status');
+    
+    if (progressDiv) progressDiv.classList.remove('d-none');
+
+    // Determine protocol (ws or wss)
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://${window.location.host}/ws/task/${taskId}/`;
+    let socket = new WebSocket(wsUrl);
+    let reconnectAttempts = 0;
+    const maxReconnects = 5;
+
+    // Heartbeat variables
+    let heartbeatInterval = null;
+    let heartbeatTimeout = null;
+
+    function startHeartbeat() {
+      clearInterval(heartbeatInterval);
+      clearTimeout(heartbeatTimeout);
+
+      heartbeatInterval = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'ping' }));
+          heartbeatTimeout = setTimeout(() => {
+            console.error('Heartbeat timeout: Closing WebSocket');
+            socket.close(1006, 'Heartbeat timeout');
+          }, 10000);
         }
+      }, 30000);
+    }
 
-        case "end": {
-          const block = streamState.stack[msg.depth];
-          if (block && msg.output) {
-            block.el.find(".stream").append(msg.output); // Backend already markdown'd
-          }
+    function handlePong() {
+      clearTimeout(heartbeatTimeout);
+    }
 
-          popPhase();
+    socket.onopen = function () {
+      reconnectAttempts = 0;
+      startHeartbeat();
+    };
 
-          if (msg.depth === 0) {
-            let finalTxt = msg.output || streamState.answerBuf;
-            // Special handling for agent-tool JSON output (from backend's extract_final_answer)
-            try {
-              const parsed = JSON.parse(finalTxt);
-              if (
-                parsed.agent &&
-                parsed.agent.messages &&
-                parsed.agent.messages[0] &&
-                parsed.agent.messages[0].content
-              ) {
-                finalTxt = parsed.agent.messages[0].content;
-              }
-            } catch (e) {
-              // Not JSON, keep as is
+    socket.onmessage = function (event) {
+      const data = JSON.parse(event.data);
+      if (data.type === 'pong') {
+        handlePong();
+        return;
+      }
+      if (data.error) {
+        if (statusDiv) statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
+        return;
+      }
+
+      if (data.type === 'progress_update') {
+        const log = data.progress_log || "undefined";
+        if (progressLogs) progressLogs.textContent = log;
+        return;
+      }
+
+      if (data.type === 'response_chunk') {
+        // When the streaming starts remove the progressDiv
+        if (progressDiv && !progressDiv.classList.contains('d-none') && data.chunk !== '') {
+          progressDiv.classList.add('d-none');
+        }
+        // Set full parsed HTML (replaces content each time)
+        const streamingContent = document.querySelector(".message.streaming .streaming-content");
+        if (streamingContent) streamingContent.innerHTML = data.chunk;
+        return;
+      }
+
+      if (data.type === 'task_complete') {
+        // Activate send button
+        const sendBtn = document.getElementById('send-btn');
+        if (sendBtn) sendBtn.disabled = false;
+        
+        // Close WS
+        socket.close();
+        
+        // Refresh thread list for subject updates with no-cache
+        const timestamp = Date.now();
+        fetch(`${window.location.href}?t=${timestamp}`)
+          .then(response => response.text())
+          .then(fullHtml => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(fullHtml, 'text/html');
+            const newThreadsHtml = doc.querySelector('.list-group');
+            const currentThreadList = document.querySelector('.list-group');
+            if (newThreadsHtml && currentThreadList) {
+              currentThreadList.innerHTML = newThreadsHtml.innerHTML;
             }
-            $(`#agent-answer-${threadId}`).html(finalTxt); // Set final rendered
-            hideStatus();
-            $("#send-btn").prop("disabled", false);
-            streamState.answerBuf = ""; // Clean buffer
-            // No timeout: Observer will handle
-          }
-          break;
-        }
+          })
+          .catch(error => console.error('Error refreshing thread list:', error));
+        
+        // Clean stored task
+        window.StorageUtils.removeStoredTask(threadId, taskId);
+        return;
       }
     };
 
-    es.onerror = () => {
-      es.close();
-      hideStatus();
-      $("#send-btn").prop("disabled", false);
-      streamState.answerBuf = ""; // Clean on error
-      if (observer) observer.disconnect(); // Clean observer
+    socket.onclose = function (e) {
+      clearInterval(heartbeatInterval);
+      clearTimeout(heartbeatTimeout);
+      if (reconnectAttempts < maxReconnects && !e.wasClean) {
+        reconnectAttempts++;
+        setTimeout(() => {
+          socket = new WebSocket(wsUrl);
+          socket.onopen = this.onopen;
+          socket.onmessage = this.onmessage;
+          socket.onclose = this.onclose;
+          socket.onerror = this.onerror;
+        }, 1000 * reconnectAttempts);
+      }
     };
 
-    es.addEventListener("close", (e) => {
-      es.close();
-      $("#send-btn").prop("disabled", false);
-      $(`.thread-link[data-thread-id="${threadId}"]`).text(e.data);
-      if (observer) observer.disconnect(); // Clean observer
-    });
+    socket.onerror = function (err) {
+      if (statusDiv) statusDiv.innerHTML = '<p class="text-danger">WebSocket connection error.</p>';
+    };
   }
 
-  window.startAgentSSE = startAgentSSE;
-})(jQuery);
+  window.startTaskWebSocket = startTaskWebSocket;
+})();
