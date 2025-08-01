@@ -68,6 +68,7 @@ class QuestionAnswerViewTests(APITestCase):
                                      **kw: object()})
         _stub("langgraph")
 
+    @classmethod
     def tearDownClass(cls):
         # Nettoyer les stubs après les tests pour éviter fuites
         stubs_to_remove = [

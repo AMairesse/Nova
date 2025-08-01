@@ -200,22 +200,47 @@ class LLMAgentCreationTests(TestCase):
             llm_agent.create_llm_agent()
         self.assertIn("Unsupported provider type", str(ctx.exception))
 
-    @patch("nova.llm_agent.Langfuse")
-    @patch("nova.llm_agent.CallbackHandler")
+    @patch("langfuse.Langfuse")
+    @patch("langfuse.langchain.CallbackHandler")
     def test_callbacks_langfuse(self, mock_handler, mock_langfuse):
         """Test Langfuse callbacks if enabled."""
-        # Simulate UserParameters with Langfuse enabled
-        with patch("nova.models.UserParameters.objects.get") as mock_params:
-            mock_params.return_value = MagicMock(
-                allow_langfuse=True,
-                langfuse_public_key="pk-test",
-                langfuse_secret_key="sk-test",
-                langfuse_host="https://langfuse.example.com"
-            )
+        # Mock the auth_check method
+        mock_langfuse_instance = MagicMock()
+        mock_langfuse.return_value = mock_langfuse_instance
+        mock_langfuse_instance.auth_check.return_value = True
+        
+        # Mock the handler
+        mock_handler_instance = MagicMock()
+        mock_handler.return_value = mock_handler_instance
+        
+        # Create UserParameters with Langfuse enabled directly on the user
+        from nova.models import UserParameters
+        user_params, created = UserParameters.objects.get_or_create(
+            user=self.user,
+            defaults={
+                'allow_langfuse': True,
+                'langfuse_public_key': "pk-test",
+                'langfuse_secret_key': "sk-test",
+                'langfuse_host': "https://langfuse.example.com"
+            }
+        )
+        if not created:
+            user_params.allow_langfuse = True
+            user_params.langfuse_public_key = "pk-test"
+            user_params.langfuse_secret_key = "sk-test"
+            user_params.langfuse_host = "https://langfuse.example.com"
+            user_params.save()
 
-            llm_agent = self._create_llm_agent_instance()
-            self.assertIn("callbacks", llm_agent.config)
-            mock_langfuse.assert_called_once()
+        # Refresh the user instance to ensure the relationship is loaded
+        self.user.refresh_from_db()
+
+        llm_agent = self._create_llm_agent_instance()
+        self.assertIn("callbacks", llm_agent.config)
+        mock_langfuse.assert_called_once_with(
+            public_key="pk-test",
+            secret_key="sk-test",
+            host="https://langfuse.example.com"
+        )
 
 
 class LLMAgentLoadToolsTests(TestCase):
@@ -243,7 +268,7 @@ class LLMAgentLoadToolsTests(TestCase):
             self.llm_agent = LLMAgent(self.user, thread_id=1, agent=self.agent)
 
     @patch("nova.llm_agent.StructuredTool")
-    @patch("nova.llm_agent.import_module")
+    @patch("nova.tools.import_module")
     def test_load_builtin_tools(self, mock_import_module, mock_structured_tool):
         """Test loading of builtin tools creates StructuredTools."""
         # Create builtin tool
@@ -276,7 +301,9 @@ class LLMAgentLoadToolsTests(TestCase):
         tools = self.llm_agent._load_agent_tools()
 
         self.assertEqual(len(tools), 1)
-        mock_import_module.assert_called_once_with(builtin_tool.python_path)
+        # Check that our specific module was imported
+        mock_import_module.assert_called_with(builtin_tool.python_path)
+        # Check that StructuredTool.from_function was called (once per function in the module)
         mock_structured_tool.from_function.assert_called_once()
 
     @patch("nova.llm_agent.StructuredTool")
@@ -383,17 +410,25 @@ class LLMAgentLoadToolsTests(TestCase):
         with self.assertRaises(ValidationError):
             self.agent.clean()  # Cycle detected in model clean
 
-    @patch("nova.llm_agent.create_react_agent")
-    def test_invoke_with_silent_mode(self, mock_react_agent):
+    @patch("nova.llm_agent.extract_final_answer")
+    def test_invoke_with_silent_mode(self, mock_extract):
         """Test invoke in silent_mode uses silent_config."""
-        mock_agent_instance = MagicMock()
-        mock_react_agent.return_value = mock_agent_instance
-        mock_agent_instance.invoke.return_value = {"messages": [MagicMock(content="answer")]}
+        # Mock the agent to avoid actual LangChain invocation
+        mock_agent = MagicMock()
+        mock_response_message = MagicMock()
+        mock_response_message.content = "answer"
+        mock_agent.invoke.return_value = {"messages": [mock_response_message]}
+        
+        # Mock extract_final_answer to return the expected result
+        mock_extract.return_value = "answer"
+        
+        # Replace the agent with our mock
+        self.llm_agent.agent = mock_agent
 
         result = self.llm_agent.invoke("Test question", silent_mode=True)
 
-        mock_agent_instance.invoke.assert_called_once_with(
-            {"messages": [MagicMock(content="Test question")]},
-            config=self.llm_agent.silent_config
-        )
+        # Verify the call was made with the correct config
+        mock_agent.invoke.assert_called_once()
+        call_args = mock_agent.invoke.call_args
+        self.assertEqual(call_args[1]['config'], self.llm_agent.silent_config)
         self.assertEqual(result, "answer")

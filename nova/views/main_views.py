@@ -324,9 +324,13 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
     # Import inside to avoid circular issues
     from django.contrib.auth.models import User
 
+    # Initialize variables to avoid UnboundLocalError in exception handler
+    task = None
+    handler = None
     channel_layer = get_channel_layer()  # Get layer for publishing
 
     try:
+        # Get all required objects with proper error handling
         task = Task.objects.get(id=task_id)
         user = User.objects.get(id=user_id)
         thread = Thread.objects.get(id=thread_id)
@@ -383,15 +387,31 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         task.save()
 
     except Exception as e:
-        # Handle failure
-        task.status = TaskStatus.FAILED
-        task.result = f"Error: {str(e)}"
-        task.progress_logs.append({"step": f"Error occurred: {str(e)}",
-                                  "timestamp":
-                                   str(dt.datetime.now(dt.timezone.utc))})
-        task.save()
-        asyncio.run(handler.publish_update('task_complete', {'error': str(e)}))
+        # Handle failure - safely handle case where task might be None
         logger.error(f"Task {task_id} failed: {e}")
+        
+        if task is not None:
+            try:
+                task.status = TaskStatus.FAILED
+                task.result = f"Error: {str(e)}"
+                if hasattr(task, 'progress_logs') and task.progress_logs:
+                    task.progress_logs.append({"step": f"Error occurred: {str(e)}",
+                                              "timestamp":
+                                               str(dt.datetime.now(dt.timezone.utc))})
+                else:
+                    task.progress_logs = [{"step": f"Error occurred: {str(e)}",
+                                          "timestamp":
+                                           str(dt.datetime.now(dt.timezone.utc))}]
+                task.save()
+            except Exception as save_error:
+                logger.error(f"Failed to save task {task_id} error state: {save_error}")
+        
+        # Only try to publish update if handler was created
+        if handler is not None:
+            try:
+                asyncio.run(handler.publish_update('task_complete', {'error': str(e)}))
+            except Exception as publish_error:
+                logger.error(f"Failed to publish task {task_id} error update: {publish_error}")
 
 
 @login_required
