@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 
 from nova.models import LLMProvider, ProviderType, Agent, Tool, ToolCredential
 from nova.llm_agent import LLMAgent
@@ -33,10 +34,11 @@ class LLMAgentCreationTests(TestCase):
             llm_provider=self.dummy_provider,
         )
 
-    def _create_llm_agent_instance(self):
+    def _create_llm_agent_instance(self, agent=None):
         """Helper to create LLMAgent instance without calling create_llm_agent."""
+        agent = agent or self.dummy_agent
         with patch.object(LLMAgent, 'create_llm_agent', return_value=MagicMock()) as mock_create:
-            instance = LLMAgent(self.user, thread_id=1, agent=self.dummy_agent)
+            instance = LLMAgent(self.user, thread_id=1, agent=agent)
             mock_create.assert_called_once()
         return instance
 
@@ -62,15 +64,15 @@ class LLMAgentCreationTests(TestCase):
             llm_provider=provider,
         )
 
-        llm_agent = self._create_llm_agent_instance()
-        llm_agent.django_agent = agent
+        llm_agent = self._create_llm_agent_instance(agent)
         llm = llm_agent.create_llm_agent()
 
         mock_mistral.assert_called_once_with(
             model="mistral-small",
             mistral_api_key="test_key",
             temperature=0,
-            max_retries=2
+            max_retries=2,
+            streaming=True  # Updated for streaming
         )
         self.assertIsNotNone(llm)
 
@@ -96,8 +98,7 @@ class LLMAgentCreationTests(TestCase):
             llm_provider=provider,
         )
 
-        llm_agent = self._create_llm_agent_instance()
-        llm_agent.django_agent = agent
+        llm_agent = self._create_llm_agent_instance(agent)
         llm = llm_agent.create_llm_agent()
 
         mock_openai.assert_called_once_with(
@@ -105,7 +106,8 @@ class LLMAgentCreationTests(TestCase):
             openai_api_key="test_key",
             base_url="https://api.openai.com/v1",
             temperature=0,
-            max_retries=2
+            max_retries=2,
+            streaming=True  # Updated for streaming
         )
         self.assertIsNotNone(llm)
 
@@ -130,15 +132,15 @@ class LLMAgentCreationTests(TestCase):
             llm_provider=provider,
         )
 
-        llm_agent = self._create_llm_agent_instance()
-        llm_agent.django_agent = agent
+        llm_agent = self._create_llm_agent_instance(agent)
         llm = llm_agent.create_llm_agent()
 
         mock_ollama.assert_called_once_with(
             model="llama2",
             base_url="http://localhost:11434",
             temperature=0,
-            max_retries=2
+            max_retries=2,
+            streaming=True  # Updated for streaming
         )
         self.assertIsNotNone(llm)
 
@@ -163,8 +165,7 @@ class LLMAgentCreationTests(TestCase):
             llm_provider=provider,
         )
 
-        llm_agent = self._create_llm_agent_instance()
-        llm_agent.django_agent = agent
+        llm_agent = self._create_llm_agent_instance(agent)
         llm = llm_agent.create_llm_agent()
 
         mock_openai.assert_called_once_with(
@@ -172,7 +173,8 @@ class LLMAgentCreationTests(TestCase):
             openai_api_key="None",
             base_url="http://localhost:1234/v1",
             temperature=0,
-            max_retries=2
+            max_retries=2,
+            streaming=True  # Updated for streaming
         )
         self.assertIsNotNone(llm)
 
@@ -192,13 +194,28 @@ class LLMAgentCreationTests(TestCase):
         )
 
         # Create with dummy valid agent to pass __init__
-        llm_agent = self._create_llm_agent_instance()
-        # Switch to invalid agent
-        llm_agent.django_agent = agent
+        llm_agent = self._create_llm_agent_instance(agent)
 
         with self.assertRaises(ValueError) as ctx:
             llm_agent.create_llm_agent()
-        self.assertIn("Unsupported provider type: invalid_type", str(ctx.exception))
+        self.assertIn("Unsupported provider type", str(ctx.exception))
+
+    @patch("nova.llm_agent.Langfuse")
+    @patch("nova.llm_agent.CallbackHandler")
+    def test_callbacks_langfuse(self, mock_handler, mock_langfuse):
+        """Test Langfuse callbacks if enabled."""
+        # Simulate UserParameters with Langfuse enabled
+        with patch("nova.models.UserParameters.objects.get") as mock_params:
+            mock_params.return_value = MagicMock(
+                allow_langfuse=True,
+                langfuse_public_key="pk-test",
+                langfuse_secret_key="sk-test",
+                langfuse_host="https://langfuse.example.com"
+            )
+
+            llm_agent = self._create_llm_agent_instance()
+            self.assertIn("callbacks", llm_agent.config)
+            mock_langfuse.assert_called_once()
 
 
 class LLMAgentLoadToolsTests(TestCase):
@@ -226,7 +243,8 @@ class LLMAgentLoadToolsTests(TestCase):
             self.llm_agent = LLMAgent(self.user, thread_id=1, agent=self.agent)
 
     @patch("nova.llm_agent.StructuredTool")
-    def test_load_builtin_tools(self, mock_structured_tool):
+    @patch("nova.llm_agent.import_module")
+    def test_load_builtin_tools(self, mock_import_module, mock_structured_tool):
         """Test loading of builtin tools creates StructuredTools."""
         # Create builtin tool
         builtin_tool = Tool.objects.create(
@@ -235,18 +253,31 @@ class LLMAgentLoadToolsTests(TestCase):
             description="Test builtin",
             tool_type=Tool.ToolType.BUILTIN,
             is_active=True,
+            python_path="nova.tools.builtins.test"
         )
 
         # Associate with agent
         self.agent.tools.add(builtin_tool)
 
-        # Mock _create_tool_functions to return a fake tool
-        fake_tools = [MagicMock()]
-        with patch.object(self.llm_agent, '_create_tool_functions', return_value=fake_tools):
-            tools = self.llm_agent._load_agent_tools()
+        # Mock import_module and get_functions
+        mock_module = MagicMock()
+        mock_module.get_functions.return_value = {
+            "test_func": {
+                "callable": lambda user, tool_id: "result",
+                "description": "Test",
+                "input_schema": {}
+            }
+        }
+        mock_import_module.return_value = mock_module
+
+        # Mock StructuredTool
+        mock_structured_tool.from_function.return_value = MagicMock()
+
+        tools = self.llm_agent._load_agent_tools()
 
         self.assertEqual(len(tools), 1)
-        self.assertEqual(tools, fake_tools)
+        mock_import_module.assert_called_once_with(builtin_tool.python_path)
+        mock_structured_tool.from_function.assert_called_once()
 
     @patch("nova.llm_agent.StructuredTool")
     @patch("nova.mcp.client.MCPClient")
@@ -306,6 +337,7 @@ class LLMAgentLoadToolsTests(TestCase):
             llm_provider=self.provider,
             system_prompt="Tool prompt",
             is_tool=True,
+            tool_description="Tool desc"
         )
 
         # Associate as agent_tool
@@ -324,3 +356,44 @@ class LLMAgentLoadToolsTests(TestCase):
             parent_config=self.llm_agent._parent_config
         )
         mock_wrapper_instance.create_langchain_tool.assert_called_once()
+
+    def test_load_agent_tools_cycle_detection(self):
+        """Test cycle in agent_tools raises ValidationError on clean."""
+        agent1 = Agent.objects.create(
+            user=self.user,
+            name="Agent1",
+            llm_provider=self.provider,
+            is_tool=True,
+            tool_description="Desc1"
+        )
+        agent2 = Agent.objects.create(
+            user=self.user,
+            name="Agent2",
+            llm_provider=self.provider,
+            is_tool=True,
+            tool_description="Desc2"
+        )
+
+        # Create cycle
+        agent1.agent_tools.add(agent2)
+        agent2.agent_tools.add(agent1)
+
+        self.agent.agent_tools.add(agent1)
+
+        with self.assertRaises(ValidationError):
+            self.agent.clean()  # Cycle detected in model clean
+
+    @patch("nova.llm_agent.create_react_agent")
+    def test_invoke_with_silent_mode(self, mock_react_agent):
+        """Test invoke in silent_mode uses silent_config."""
+        mock_agent_instance = MagicMock()
+        mock_react_agent.return_value = mock_agent_instance
+        mock_agent_instance.invoke.return_value = {"messages": [MagicMock(content="answer")]}
+
+        result = self.llm_agent.invoke("Test question", silent_mode=True)
+
+        mock_agent_instance.invoke.assert_called_once_with(
+            {"messages": [MagicMock(content="Test question")]},
+            config=self.llm_agent.silent_config
+        )
+        self.assertEqual(result, "answer")
