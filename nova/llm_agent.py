@@ -210,18 +210,23 @@ class LLMAgent:
 
                     # ---------- safe factory captures current func_name & client -----------
                     def _remote_call_factory(_name: str, _client: MCPClient):
-                        async def _remote_call(**kwargs):
+                        async def _remote_call_async(**kwargs):
                             return await _client.acall(_name, **kwargs)
-                        return _remote_call
+
+                        def _remote_call_sync(**kwargs):
+                            return _client.call(_name, **kwargs)
+
+                        return _remote_call_sync, _remote_call_async
                     # -----------------------------------------------------------------------
 
-                    remote_call = _remote_call_factory(func_name, client)
+                    sync_f, async_f = _remote_call_factory(func_name, client)
 
                     wrapped = StructuredTool.from_function(
-                        coroutine=remote_call,
+                        func=sync_f,
+                        coroutine=async_f,
                         name=re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name)[:64],
                         description=description,
-                        args_schema=input_schema,
+                        args_schema=None if input_schema == {} else input_schema,
                     )
                     tools.append(wrapped)
 
