@@ -135,7 +135,12 @@ class LLMAgent:
         # Merge custom callbacks with existing ones (e.g., Langfuse)
         # Create a copy of the config without
         # custom callbacks for "silent_mode"
+        # Warning : this is not a deep copy because we need to keep
+        # the same callbacks but we also need to do an explicit copy
+        # of the callbacks' list so that the copy is not updated in sync
+        # with the original
         self.silent_config = self.config.copy()
+        self.silent_config['callbacks'] = list(self.config['callbacks'])
         if 'callbacks' in self.config:
             self.config['callbacks'].extend(callbacks)
         else:
@@ -335,9 +340,11 @@ class LLMAgent:
 
     def invoke(self, question: str, silent_mode=False):
         if silent_mode:
+            print("silent mode enabled, silent config =", self.silent_config)
             result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
                                        config=self.silent_config)
         else:
+            print("silent mode disabled, config =", self.config)
             result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
                                        config=self.config)
         final_msg = extract_final_answer(result)

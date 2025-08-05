@@ -177,6 +177,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
         self.channel_layer = channel_layer
         self.final_chunks = []
         self.current_tool = None
+        self.tool_depth = 0
         self.token_count = 0
 
     async def publish_update(self, message_type, data):
@@ -205,7 +206,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
     async def on_chat_model_start(self, serialized: Dict[str, Any],
                                   messages: List[Any], **kwargs: Any) -> Any:
         try:
-            if self.current_tool is None:
+            if self.tool_depth == 0:
                 await self.publish_update('progress_update',
                                           {'progress_log': "Agent started"})
             else:
@@ -218,7 +219,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
     async def on_llm_start(self, serialized: Dict[str, Any],
                            prompts: List[str], **kwargs: Any):
         try:
-            if self.current_tool is None:
+            if self.tool_depth == 0:
                 await self.publish_update('progress_update',
                                           {'progress_log': "Agent started"})
             else:
@@ -233,7 +234,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
                                **kwargs: Any) -> Any:
         try:
             # Send only chunks from the root run
-            if self.current_tool is None:
+            if self.tool_depth == 0:
                 self.final_chunks.append(token)
                 full_response = ''.join(self.final_chunks)
                 raw_html = markdown(full_response, extensions=["extra"])
@@ -260,7 +261,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
                          parent_run_id: Optional[UUID] = None,
                          **kwargs: Any) -> Any:
         try:
-            if self.current_tool is None:
+            if self.tool_depth == 0:
                 await self.publish_update('progress_update',
                                           {'progress_log': "Agent finished"})
             else:
@@ -281,6 +282,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             # store it to avoid sending response chunks back to the user
             tool_name = serialized.get('name', 'Unknown')
             self.current_tool = tool_name
+            self.tool_depth += 1
             await self.publish_update('progress_update',
                                       {'progress_log':
                                        f"Tool '{tool_name}' started"})
@@ -297,6 +299,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             # If a tool is ending, reset the current tool so that we may
             # send response chunks if the main agent is generating
             self.current_tool = None
+            self.tool_depth -= 1
         except Exception as e:
             logger.error(f"Error in on_tool_end: {e}")
 
@@ -304,7 +307,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
                               parent_run_id: Optional[UUID] = None,
                               **kwargs: Any) -> Any:
         try:
-            if self.current_tool is None:
+            if self.tool_depth == 0:
                 await self.publish_update('progress_update',
                                           {'progress_log': "Agent finished"})
             else:
