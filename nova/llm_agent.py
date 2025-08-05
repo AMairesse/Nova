@@ -340,11 +340,9 @@ class LLMAgent:
 
     def invoke(self, question: str, silent_mode=False):
         if silent_mode:
-            print("silent mode enabled, silent config =", self.silent_config)
             result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
                                        config=self.silent_config)
         else:
-            print("silent mode disabled, config =", self.config)
             result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
                                        config=self.config)
         final_msg = extract_final_answer(result)

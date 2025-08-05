@@ -35,7 +35,12 @@ def _ensure_sync_context() -> None:
 
 class MCPClient:
     """Thin wrapper around FastMCP – cache + auth + async-first API."""
-    def __init__(self, endpoint: str, credential: Optional[ToolCredential] = None, transport_type: str = "streamable_http"):
+    def __init__(
+        self,
+        endpoint: str,
+        credential: Optional[ToolCredential] = None,
+        transport_type: str = "streamable_http",
+    ):
         self.endpoint  = normalize_url(endpoint)
         self.credential = credential
         self.transport_type = transport_type
@@ -53,13 +58,13 @@ class MCPClient:
             return None
         return BearerAuth(cred.token) if cred.token else None
 
-    def _transport(self) -> StreamableHttpTransport or SSETransport:
+    def _transport(self) -> StreamableHttpTransport | SSETransport:
         auth = self._auth_object()
         
         if self.transport_type == "sse":
             return SSETransport(url=self.endpoint, auth=auth) if auth else SSETransport(url=self.endpoint)
-        else:  # default to streamable_http
-            return StreamableHttpTransport(url=self.endpoint, auth=auth) if auth else StreamableHttpTransport(url=self.endpoint)
+        # default: streamable_http
+        return StreamableHttpTransport(url=self.endpoint, auth=auth) if auth else StreamableHttpTransport(url=self.endpoint)
 
     # ---------- Async API -------------------------------------------------
     async def alist_tools(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
@@ -93,12 +98,16 @@ class MCPClient:
             return result
 
     async def acall(self, tool_name: str, **inputs):
-        """Async call to MCP tool with global Django cache."""
-        # Génère clé unique incluant inputs + user/tool context
+        """
+        Async call to a MCP tool with global Django cache.
+
+        NOTE: the dictionary `inputs` is passed *as one argument* to
+        FastMCPClient.call_tool().
+        """
+        # Generate a unique cache key that includes inputs + user/tool context
         input_key = json.dumps((tool_name, sorted(inputs.items())), sort_keys=True)
-        # Sanitize input_key → base64 safe
         safe_input_key = base64.urlsafe_b64encode(input_key.encode('utf-8')).decode('utf-8')
-        cache_key = f"mcp_call::{self.safe_endpoint}::{self.user_id or 'anon'}::{safe_input_key}"  
+        cache_key = f"mcp_call::{self.safe_endpoint}::{self.user_id or 'anon'}::{safe_input_key}"
               
         cached = cache.get(cache_key)
         if cached is not None:
@@ -106,8 +115,8 @@ class MCPClient:
 
         try:
             async with FastMCPClient(self._transport()) as client:
-                result = await client.call_tool(tool_name, **inputs)
-                cache.set(cache_key, result, timeout=300)  # TTL 5min
+                result = await client.call_tool(tool_name, inputs)
+                cache.set(cache_key, result, timeout=300)  # TTL 5 min
                 return result
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error calling {tool_name}: {e}")
@@ -117,6 +126,9 @@ class MCPClient:
         except httpx.RequestError as e:
             logger.error(f"Connection error calling {tool_name}: {e}")
             raise ConnectionError("MCP server unreachable") from e
+        except Exception as e:
+            logger.error(f"Error calling {tool_name}: {e}")
+            raise
 
     # ---------- Sync helpers (for Django views / form tests) --------------
     def list_tools(self, user_id: Optional[int] = None, force_refresh: bool = False):
