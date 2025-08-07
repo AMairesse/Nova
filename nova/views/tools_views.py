@@ -5,7 +5,9 @@ from django.utils.translation import gettext_lazy as _, ngettext
 from django.views.decorators.http import require_POST
 from nova.models import Tool, ToolCredential
 from nova.forms import ToolForm, ToolCredentialForm
+import logging
 
+logger = logging.getLogger(__name__)
 
 @login_required
 @require_POST
@@ -140,13 +142,21 @@ def test_tool_connection(request, tool_id):
             })
             temp_credential.save()
         
+        if not temp_credential:
+            logger.error(f"Failed to create credential for tool {tool_id}")
+            return JsonResponse({"status": "error", "message": _("Failed to create credential")})
+        
         # Test connection
         if tool.tool_type == Tool.ToolType.MCP:
             # MCP connection test
             try:
                 from nova.mcp.client import MCPClient
-                client = MCPClient(tool.endpoint, temp_credential, tool.transport_type)
-                tools = client.list_tools(user_id=request.user.id)
+                client = MCPClient(
+                    endpoint=tool.endpoint, 
+                    credential=temp_credential, 
+                    transport_type=tool.transport_type
+                )
+                tools = client.list_tools(user_id=request.user.id, force_refresh=True)
                 
                 # Store result in DB
                 tool.available_functions = {
@@ -174,6 +184,7 @@ def test_tool_connection(request, tool_id):
                     })
                     
             except Exception as e:
+                logger.error(f"MCP connection error for tool {tool_id}: {e}")
                 return JsonResponse({
                     "status": "error",
                     "message": _("MCP connection error: %(err)s") % {"err": e}
@@ -204,6 +215,7 @@ def test_tool_connection(request, tool_id):
                 return JsonResponse(result) if isinstance(result, dict) else JsonResponse({"status": "error", "message": str(result)})
 
             except Exception as e:
+                logger.error(f"Tool testing error for {tool_id}: {e}")
                 return JsonResponse({
                     "status": "error",
                     "message": _("Tool testing error: %(err)s") % {"err": e}
@@ -214,4 +226,5 @@ def test_tool_connection(request, tool_id):
             return JsonResponse({"status": "not_implemented", "message": _("No test implemented for this tool type")})
     
     except Exception as e:
+        logger.error(f"Unexpected error in test_tool_connection for {tool_id}: {e}")
         return JsonResponse({"status": "error", "message": str(e)})

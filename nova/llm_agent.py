@@ -89,6 +89,7 @@ class LLMAgent:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
         self.django_agent = agent
+        self.thread_id = thread_id
 
         # Get user parameters
         try:
@@ -200,7 +201,12 @@ class LLMAgent:
             cred = tool_obj.credentials.filter(user=self.user).first()
             try:
                 from nova.mcp.client import MCPClient
-                client = MCPClient(tool_obj.endpoint, cred, tool_obj.transport_type)
+                client = MCPClient(
+                    endpoint=tool_obj.endpoint, 
+                    thread_id=self.thread_id,
+                    credential=cred, 
+                    transport_type=tool_obj.transport_type
+                )
 
                 # Prefer the cached snapshot
                 if tool_obj.available_functions:
@@ -236,7 +242,6 @@ class LLMAgent:
                     tools.append(wrapped)
 
             except Exception as e:
-                # Log and skip unreachable MCP
                 logger = __import__('logging').getLogger(__name__)
                 logger.warning(f"Failed to load MCP tools from {tool_obj.endpoint}: {str(e)}")
 
