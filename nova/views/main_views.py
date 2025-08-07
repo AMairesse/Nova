@@ -21,6 +21,10 @@ from langchain_core.callbacks import AsyncCallbackHandler
 import logging
 logger = logging.getLogger(__name__)
 
+import os  # Added for DJANGO_ALLOW_ASYNC_UNSAFE
+from playwright.async_api import async_playwright  # Added for async browser init
+from playwright.sync_api import sync_playwright  # Added for sync browser init
+
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
     "br", "hr", "a",
@@ -157,7 +161,7 @@ def add_message(request):
     )
 
     # Launch background thread to run the AI task
-    threading.Thread(target=run_ai_task, args=(task.id, request.user.id,
+    threading.Thread(target=sync_run_ai_task, args=(task.id, request.user.id,
                      thread.id, agent_obj.id if agent_obj else None)).start()
 
     # Return immediately with task_id for client-side WS connection
@@ -318,12 +322,18 @@ class TaskProgressHandler(AsyncCallbackHandler):
             logger.error(f"Error in on_chat_model_start: {e}")
 
 
-# Updated helper function for background thread
-def run_ai_task(task_id, user_id, thread_id, agent_id):
+def sync_run_ai_task(*args):
+    """Sync wrapper to run async run_ai_task in thread."""
+    asyncio.run(run_ai_task(*args))
+
+async def run_ai_task(task_id, user_id, thread_id, agent_id):
     """
-    Background function to run AI task in a thread.
+    Async version of the AI task function to run in background thread via asyncio.run.
     Uses custom callbacks for progress synthesis and streaming.
     """
+    # Allow sync ORM in async context for this thread (dev hack)
+    os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+
     # Import inside to avoid circular issues
     from django.contrib.auth.models import User
 
@@ -331,6 +341,8 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
     task = None
     handler = None
     channel_layer = get_channel_layer()  # Get layer for publishing
+    async_browser = None
+    playwright_async = None
 
     try:
         # Get all required objects with proper error handling
@@ -354,13 +366,25 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Last message is the prompt to send
         last_message = messages.last().text
 
-        # Create custom handler and LLMAgent with callbacks
+        # Init only async browser
+        async def init_browsers_async():
+            nonlocal playwright_async, async_browser
+            playwright_async = await async_playwright().start()
+            async_browser = await playwright_async.chromium.launch(headless=True)
+            return async_browser, playwright_async
+
+        async_browser, playwright_async = await init_browsers_async()
+
+        # Create custom handler and LLMAgent with callbacks and injected browsers
         handler = TaskProgressHandler(task_id, channel_layer)
         llm = LLMAgent(user, thread_id, msg_history=msg_history,
-                       agent=agent_obj, callbacks=[handler])
+                    agent=agent_obj, callbacks=[handler],
+                    async_browser=async_browser,  # Only this
+                    playwright_async=playwright_async)  # Only this
 
-        # Run LLMAgent
-        final_output = llm.invoke(last_message)
+        # Run LLMAgent (now async)
+        final_output = await llm.invoke(last_message)  # Await the async invoke
+        await llm.close_browsers()  # Await cleanup (already async)
 
         # Log completion and save result
         task.progress_logs.append({"step": "AI processing completed",
@@ -371,9 +395,9 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Add final message to thread
         thread.add_message(final_output, actor=Actor.AGENT)
 
-        # Update thread subject if needed
+        # Update thread subject if needed (now async)
         if thread.subject.startswith("thread n°"):
-            short_title = llm.invoke(
+            short_title = await llm.invoke(  # Await the async invoke
                 "Give a short title for this conversation (1–3 words maximum).\
                  Use the same language as the conversation.\
                  Answer by giving only the title, nothing else.",
@@ -384,8 +408,8 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         # Send a final progress update for task
         # This will be used for updating the thread name and closing the socket
-        asyncio.run(handler.publish_update('task_complete',
-                                           {'result': final_output}))
+        await handler.publish_update('task_complete',
+                                     {'result': final_output})
         task.status = TaskStatus.COMPLETED
         task.save()
 
@@ -412,10 +436,12 @@ def run_ai_task(task_id, user_id, thread_id, agent_id):
         # Only try to publish update if handler was created
         if handler is not None:
             try:
-                asyncio.run(handler.publish_update('task_complete', {'error': str(e)}))
+                await handler.publish_update('task_complete', {'error': str(e)})
             except Exception as publish_error:
                 logger.error(f"Failed to publish task {task_id} error update: {publish_error}")
 
+    finally:
+        pass
 
 @login_required
 def running_tasks(request, thread_id):
@@ -430,3 +456,4 @@ def running_tasks(request, thread_id):
         status=TaskStatus.RUNNING
     ).values_list('id', flat=True)
     return JsonResponse({'running_task_ids': list(running_ids)})
+

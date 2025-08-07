@@ -2,7 +2,7 @@
 from datetime import date
 import re
 import inspect
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 from functools import wraps
 
 # Load the langchain tools
@@ -17,6 +17,12 @@ from langchain_core.callbacks import BaseCallbackHandler
 from .models import Actor, Tool, ProviderType, LLMProvider
 from .utils import extract_final_answer
 
+import asyncio
+import nest_asyncio
+nest_asyncio.apply()  # Enable nested loops for mixed sync/async compatibility
+from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
+from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
 
 # Factory dictionary for LLM creation
 # --------------------------------------------------------------------- #
@@ -82,7 +88,11 @@ register_provider(
 class LLMAgent:
     def __init__(self, user, thread_id, msg_history=None, agent=None,
                  parent_config=None,
-                 callbacks: List[BaseCallbackHandler] = None):
+                 callbacks: List[BaseCallbackHandler] = None,
+                 async_browser: Optional[Any] = None,
+                 sync_browser: Optional[Any] = None,
+                 playwright_async: Optional[Any] = None,
+                 playwright_sync: Optional[Any] = None):
         if msg_history is None:
             msg_history = []
         if callbacks is None:
@@ -151,7 +161,13 @@ class LLMAgent:
         # able to propagate it to child agents
         self._parent_config = self.config.copy()
 
-        # Get agent's tools
+        # Use provided browsers if available, else lazy init later
+        self.async_browser = async_browser
+        self.sync_browser = sync_browser
+        self.playwright_async = playwright_async
+        self.playwright_sync = playwright_sync
+
+        # Get agent's tools (will initialize browsers lazily if not provided)
         tools = self._load_agent_tools()
 
         memory = MemorySaver()
@@ -184,11 +200,11 @@ class LLMAgent:
         """
         tools = []
 
-        if not self.django_agent or (
-            not self.django_agent.tools.exists()
-            and not self.django_agent.agent_tools.exists()
-        ):
-            return tools
+        #if not self.django_agent or (
+        #    not self.django_agent.tools.exists()
+        #    and not self.django_agent.agent_tools.exists()
+        #):
+        #    return tools
 
         # Load builtin tools
         for tool_obj in self.django_agent.tools.filter(is_active=True,
@@ -258,7 +274,32 @@ class LLMAgent:
                 langchain_tool = wrapper.create_langchain_tool()
                 tools.append(langchain_tool)
 
+        # POC: Lazily init both async and sync browsers if not provided
+        if self.async_browser is None:
+            async def init_async_browser():
+                self.playwright_async = await async_playwright().start()
+                browser = await self.playwright_async.chromium.launch(headless=True)
+                return browser
+
+            # Init async browser
+            try:
+                loop = asyncio.get_running_loop()
+                self.async_browser = loop.run_until_complete(init_async_browser())
+            except RuntimeError:  # No running event loop
+                self.async_browser = asyncio.run(init_async_browser())
+
+        toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=self.async_browser)  # Only async
+        browser_tools = toolkit.get_tools()  # Get all native tools (navigate, extract, etc.)
+        tools.extend(browser_tools)  # Add to agent's tools list
+
         return tools
+
+    async def close_browsers(self):
+        """Async cleanup method to close browsers and stop Playwright instances when done."""
+        if self.async_browser and self.async_browser.is_connected():  # Updated check
+            await self.async_browser.close()
+        if self.playwright_async:
+            await self.playwright_async.stop()
 
     def _create_tool_functions(self, tool_obj):
         """
@@ -301,6 +342,7 @@ class LLMAgent:
 
                 langchain_tool = StructuredTool.from_function(
                     func=wrapped_func,
+                    coroutine=func_config["async_callable"],
                     name=safe_name,
                     description=func_config["description"],
                     args_schema=func_config["input_schema"],
@@ -343,12 +385,14 @@ class LLMAgent:
             raise ValueError(f"Unsupported provider type: {provider.provider_type}")
         return factory(provider)
 
-    def invoke(self, question: str, silent_mode=False):
-        if silent_mode:
-            result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
-                                       config=self.silent_config)
-        else:
-            result = self.agent.invoke({"messages":[HumanMessage(content=question)]},
-                                       config=self.config)
+    async def invoke(self, question: str, silent_mode=False):  # Now async
+        config = self.silent_config if silent_mode else self.config
+        result = await self.agent.ainvoke(  # Switch to ainvoke and await it
+            {"messages": [HumanMessage(content=question)]},
+            config=config
+        )
         final_msg = extract_final_answer(result)
         return final_msg
+
+
+
