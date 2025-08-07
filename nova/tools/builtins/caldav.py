@@ -1,5 +1,6 @@
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
+import requests
 import caldav
 from caldav.elements import dav
 from icalendar import Calendar, Event as iCalEvent
@@ -7,27 +8,41 @@ from django.http import JsonResponse
 from django.utils.translation import gettext_lazy as _, ngettext
 from nova.models import ToolCredential
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def get_caldav_client(user, tool_id):
     try:
-        credential = ToolCredential.objects.get( user=user, tool_id=tool_id )
+        credential = ToolCredential.objects.get(user=user, tool_id=tool_id)
         caldav_url = credential.config.get('caldav_url')
         username = credential.config.get('username')
         password = credential.config.get('password')
         
         if not all([caldav_url, username, password]):
-            raise ValueError(_("Incomplete CalDav configuration"))
-            
+            raise ValueError(_("Incomplete CalDav configuration: missing URL, username, or password"))
+        
         client = caldav.DAVClient(
             url=caldav_url,
             username=username,
             password=password
         )
         
-        return client
+        # Test auth
+        try:
+            client.principal()  # Early auth check
+        except caldav.lib.error.AuthorizationError as e:
+            raise ValueError(f"CalDav authorization failed: {str(e)}")
+        except Exception as e:
+            raise ConnectionError(f"CalDav connection failed: {str(e)}")
         
+        return client
+    
     except ToolCredential.DoesNotExist:
         raise ValueError(_("No CalDav credential found for tool {tool_id}").format(tool_id=tool_id))
+    except Exception as e:  # Catch-all
+        logger.error(f"CalDav client error: {str(e)}")
+        raise
 
 def list_calendars(user, tool_id) -> str:
     """ Get a list of available calendars.
@@ -45,17 +60,18 @@ def list_calendars(user, tool_id) -> str:
         
         if not calendars:
             return _("No calendars available.")
-            
+        
         result = _("Available calendars :\n")
         for cal in calendars:
             result += f"- {cal.name}\n"
-            
-        return result
         
+        return result
+    
+    except (ValueError, ConnectionError) as e:  # Specific handling
+        return _("CalDav error: {error}. Check credentials and server URL.").format(error=str(e))
     except Exception as e:
-        error_message = _("Error when retrieving calendars : {}")
-        return error_message.format(e)
-
+        return _("Unexpected error when retrieving calendars: {error}").format(error=str(e))
+    
 def describe_events(events: List[iCalEvent]) -> List[str]:
     # Generate a list of strings containing the events
     all_events = []

@@ -342,7 +342,7 @@ class LLMAgent:
 
                 langchain_tool = StructuredTool.from_function(
                     func=wrapped_func,
-                    coroutine=func_config["async_callable"],
+                    coroutine=func_config.get("async_callable"),  # Use .get() to make optional (None if missing)
                     name=safe_name,
                     description=func_config["description"],
                     args_schema=func_config["input_schema"],
