@@ -15,49 +15,26 @@ from nova.utils import normalize_url
 import json
 
 ALLOWED_TYPES = (str, int, float, bool, type(None))
-SESSION_TTL = 600  # TTL cache pour session_id (10 min)
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_sync_context() -> None:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    raise RuntimeError("Blocking method called from async context. Use the async counterpart instead.")
-
 class MCPClient:
-    """Thin wrapper around FastMCP – cache + auth + async-first API. Gère session_id via cache."""
+    """Thin wrapper around FastMCP – cache + auth + async-first API."""
     def __init__(
         self,
         endpoint: str,
         thread_id: Optional[int] = None,  # Optionnel (pour tests non-thread ; -1 pour fictif)
         credential: Optional[ToolCredential] = None,
         transport_type: str = "streamable_http",
+        user_id: Optional[int] = None,  # Provided by caller for cache keys
     ):
         self.thread_id = thread_id or -1  # -1 pour non-thread (ex: tests)
         self.endpoint = normalize_url(endpoint)
         self.credential = credential
         self.transport_type = transport_type
-        self.user_id = getattr(credential.user if credential else None, 'id', None)
+        self.user_id = user_id
         self.safe_endpoint = slugify(self.endpoint)[:80]
-
-    # ---------- Helpers pour session_id (stocké en cache) -----------
-    def _get_session_id(self) -> Optional[str]:
-        """Récupère session_id du cache pour ce thread/endpoint."""
-        cache_key = f"mcp_session::{self.thread_id}::{self.safe_endpoint}"
-        session_id = cache.get(cache_key)
-        logger.debug(f"Retrieved session_id: {session_id or 'None'} for thread {self.thread_id}")
-        print(f"Retrieved session_id: {session_id or 'None'} for thread {self.thread_id}")
-        return session_id
-
-    def _set_session_id(self, session_id: str):
-        """Stocke session_id en cache avec TTL."""
-        cache_key = f"mcp_session::{self.thread_id}::{self.safe_endpoint}"
-        cache.set(cache_key, session_id, timeout=SESSION_TTL)
-        logger.debug(f"Stored session_id {session_id} for thread {self.thread_id}")
-        print(f"Stored session_id {session_id} for thread {self.thread_id}")
 
     # ---------- Auth / transport helpers ---------------------------------
     def _auth_object(self):
@@ -70,9 +47,9 @@ class MCPClient:
             return None
         return BearerAuth(cred.token) if cred.token else None
 
-    def _transport(self, session_id: Optional[str] = None) -> StreamableHttpTransport | SSETransport:
+    def _transport(self) -> StreamableHttpTransport | SSETransport:
         auth = self._auth_object()
-        headers = {} if not session_id else {'mcp-session-id': session_id}  # Header correct du serveur
+        headers = {}
         
         if self.transport_type == "sse":
             return SSETransport(url=self.endpoint, auth=auth, headers=headers) if auth else SSETransport(url=self.endpoint, headers=headers)
@@ -112,10 +89,6 @@ class MCPClient:
         """
         Async call to a MCP tool with global Django cache.
         """
-        session_id = self._get_session_id()
-        if not session_id:
-            logger.warning(f"No session_id found for {tool_name} in thread {self.thread_id}; new session will be created")
-        
         input_key = json.dumps((tool_name, sorted(inputs.items())), sort_keys=True)
         safe_input_key = base64.urlsafe_b64encode(input_key.encode('utf-8')).decode('utf-8')
         cache_key = f"mcp_call::{self.safe_endpoint}::{self.user_id or 'anon'}::{safe_input_key}"
@@ -125,17 +98,9 @@ class MCPClient:
             return cached
 
         try:
-            transport = self._transport(session_id)
+            transport = self._transport()
             async with FastMCPClient(transport) as client:
                 result = await client.call_tool(tool_name, inputs)
-                # TODO : If no session_id, try to get it from result
-                if session_id is None:
-                    #TODO : find a way to get session_id from result
-                    session_id = None
-                    if session_id is None:
-                        logger.warning(f"First call to {tool_name} did not return session_id in result")
-                    else:
-                        self._set_session_id(result['session_id'])
                 cache.set(cache_key, result, timeout=300)
                 return result
         except httpx.HTTPStatusError as e:
@@ -150,13 +115,11 @@ class MCPClient:
             logger.error(f"Error calling {tool_name}: {e}")
             raise
 
-    # ---------- Sync helpers --------------
-    def list_tools(self, user_id: Optional[int] = None, force_refresh: bool = False):
-        _ensure_sync_context()
+    # ---------- Sync helpers (legacy) --------------
+    def list_tools(self, force_refresh: bool = False):
         return asyncio.run(self.alist_tools(force_refresh=force_refresh))
 
     def call(self, tool_name: str, **inputs):
-        _ensure_sync_context()
         self._validate_inputs(inputs)
         return asyncio.run(self.acall(tool_name, **inputs))
 
@@ -171,3 +134,4 @@ class MCPClient:
                 raise ValidationError(f"Unsupported type for '{k}': {type(v)}")
             if isinstance(v, str) and len(v) > 2048:
                 raise ValidationError(f"Value for '{k}' is too long")
+

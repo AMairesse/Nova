@@ -5,6 +5,7 @@ from django.utils.translation import gettext_lazy as _, ngettext
 from django.views.decorators.http import require_POST
 from nova.models import Tool, ToolCredential
 from nova.forms import ToolForm, ToolCredentialForm
+from asgiref.sync import sync_to_async  # For async-safe ORM
 import logging
 
 logger = logging.getLogger(__name__)
@@ -104,8 +105,9 @@ def configure_tool(request, tool_id):
 
 @login_required
 @require_POST
-def test_tool_connection(request, tool_id):
-    tool = get_object_or_404(Tool, id=tool_id, user=request.user)
+async def test_tool_connection(request, tool_id):
+    # Wrap sync get_object_or_404
+    tool = await sync_to_async(get_object_or_404)(Tool, id=tool_id, user=request.user)
     
     try:
         auth_type = request.POST.get('auth_type', 'basic')
@@ -114,33 +116,43 @@ def test_tool_connection(request, tool_id):
         token = request.POST.get('token', '')
         caldav_url = request.POST.get('caldav_url', '')
         
-        temp_credential, created = ToolCredential.objects.get_or_create(
-            user=request.user,
-            tool=tool,
-            defaults={
-                'auth_type': auth_type,
-                'username': username,
-                'password': password,
-                'token': token,
-                'config': {
+        # Sync function for get_or_create and initial setup
+        async def create_credential_sync():
+            temp_credential, created = await sync_to_async(ToolCredential.objects.get_or_create)(
+                user=request.user,
+                tool=tool,
+                defaults={
+                    'auth_type': auth_type,
+                    'username': username,
+                    'password': password,
+                    'token': token,
+                    'config': {
+                        'caldav_url': caldav_url,
+                        'username': username,
+                        'password': password
+                    }
+                }
+            )
+            return temp_credential, created
+        
+        temp_credential, created = await create_credential_sync()
+        
+        # Sync function for updating credential if not created
+        def update_credential_sync(temp_credential, auth_type, username, password, token, caldav_url):
+            if not created:
+                temp_credential.auth_type = auth_type
+                temp_credential.username = username
+                temp_credential.password = password if password else temp_credential.password
+                temp_credential.token = token if token else temp_credential.token
+                temp_credential.config.update({
                     'caldav_url': caldav_url,
                     'username': username,
-                    'password': password
-                }
-            }
-        )
+                    'password': password if password else temp_credential.config.get('password', '')
+                })
+                temp_credential.save()
+            return temp_credential
         
-        if not created:
-            temp_credential.auth_type = auth_type
-            temp_credential.username = username
-            temp_credential.password = password if password else temp_credential.password
-            temp_credential.token = token if token else temp_credential.token
-            temp_credential.config.update({
-                'caldav_url': caldav_url,
-                'username': username,
-                'password': password if password else temp_credential.config.get('password', '')
-            })
-            temp_credential.save()
+        temp_credential = await sync_to_async(update_credential_sync)(temp_credential, auth_type, username, password, token, caldav_url)
         
         if not temp_credential:
             logger.error(f"Failed to create credential for tool {tool_id}")
@@ -154,15 +166,19 @@ def test_tool_connection(request, tool_id):
                 client = MCPClient(
                     endpoint=tool.endpoint, 
                     credential=temp_credential, 
-                    transport_type=tool.transport_type
+                    transport_type=tool.transport_type,
+                    user_id=request.user.id  # Pass user_id explicitly
                 )
-                tools = client.list_tools(user_id=request.user.id, force_refresh=True)
+                tools = await client.alist_tools(force_refresh=True)
                 
-                # Store result in DB
-                tool.available_functions = {
-                    f["name"]: f for f in tools           # key = remote function name
-                }
-                tool.save(update_fields=["available_functions", "updated_at"])
+                # Sync function to store in DB
+                def save_available_functions_sync(tool, tools):
+                    tool.available_functions = {
+                        f["name"]: f for f in tools  # key = remote function name
+                    }
+                    tool.save(update_fields=["available_functions", "updated_at"])
+                
+                await sync_to_async(save_available_functions_sync)(tool, tools)
 
                 tool_count = len(tools)
                 if tool_count == 0:
@@ -191,7 +207,8 @@ def test_tool_connection(request, tool_id):
                 })
                 
         elif tool.tool_type == Tool.ToolType.BUILTIN:
-            try:
+            # Sync function for builtin test (wrap potential sync ops)
+            def builtin_test_sync(tool, request):
                 from nova.tools import import_module, get_metadata
                 module = import_module(tool.python_path)
                 metadata = get_metadata(tool.python_path)
@@ -212,14 +229,10 @@ def test_tool_connection(request, tool_id):
 
                 # Call the function
                 result = test_function(*args)
-                return JsonResponse(result) if isinstance(result, dict) else JsonResponse({"status": "error", "message": str(result)})
-
-            except Exception as e:
-                logger.error(f"Tool testing error for {tool_id}: {e}")
-                return JsonResponse({
-                    "status": "error",
-                    "message": _("Tool testing error: %(err)s") % {"err": e}
-                })
+                return result
+            
+            result = await sync_to_async(builtin_test_sync)(tool, request)
+            return JsonResponse(result) if isinstance(result, dict) else JsonResponse({"status": "error", "message": str(result)})
 
         else:
             # Pour les autres types d'outils
@@ -228,3 +241,4 @@ def test_tool_connection(request, tool_id):
     except Exception as e:
         logger.error(f"Unexpected error in test_tool_connection for {tool_id}: {e}")
         return JsonResponse({"status": "error", "message": str(e)})
+

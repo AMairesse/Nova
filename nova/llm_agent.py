@@ -1,8 +1,9 @@
 # nova/llm_agent.py
 from datetime import date
 import re
+import logging
 import inspect
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Dict
 from functools import wraps
 
 # Load the langchain tools
@@ -21,8 +22,11 @@ import asyncio
 import nest_asyncio
 nest_asyncio.apply()  # Enable nested loops for mixed sync/async compatibility
 from playwright.async_api import async_playwright
-from playwright.sync_api import sync_playwright
 from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
+from asgiref.sync import sync_to_async  # For async-safe ORM in factory
+
+logger = logging.getLogger(__name__)
+
 
 # Factory dictionary for LLM creation
 # --------------------------------------------------------------------- #
@@ -86,13 +90,100 @@ register_provider(
 # register_provider(ProviderType.ANTHROPIC, lambda p: ChatAnthropic(...))
 # --------------------------------------------------------------------- #
 class LLMAgent:
+    @staticmethod
+    async def create_browser(headless=True):
+        """Static method to create and return an async browser and playwright instance."""
+        playwright = await async_playwright().start()
+        browser = await playwright.chromium.launch(headless=headless)
+        return browser, playwright
+
+    @classmethod
+    async def create(cls, user, thread_id, msg_history=None, agent=None,
+                     parent_config=None,
+                     callbacks: List[BaseCallbackHandler] = None,
+                     async_browser: Optional[Any] = None,
+                     playwright_async: Optional[Any] = None):
+        """
+        Async factory to create an LLMAgent instance with async-safe ORM accesses.
+        Wraps sync field/related model fetches.
+        """
+        # Sync function to fetch user parameters safely
+        def fetch_user_params_sync(user):
+            try:
+                user_params = user.userparameters
+                allow_langfuse = user_params.allow_langfuse
+                langfuse_public_key = user_params.langfuse_public_key
+                langfuse_secret_key = user_params.langfuse_secret_key
+                langfuse_host = user_params.langfuse_host or None
+            except AttributeError:
+                allow_langfuse = False
+                langfuse_public_key = None
+                langfuse_secret_key = None
+                langfuse_host = None
+            return allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host
+
+        allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = await sync_to_async(fetch_user_params_sync)(user)
+
+        # Pre-fetch ORM data for _load_agent_tools
+        def fetch_agent_data_sync(agent, user):
+            if not agent:
+                return [], [], [], False, None, None
+            builtin_tools = list(agent.tools.filter(is_active=True, tool_type=Tool.ToolType.BUILTIN))
+            mcp_tools_data = []
+            mcp_tools = list(agent.tools.filter(tool_type=Tool.ToolType.MCP, is_active=True))
+            for tool in mcp_tools:
+                cred = tool.credentials.filter(user=user).first()
+                cred_user_id = cred.user.id if cred and cred.user else None
+                if tool.available_functions:
+                    func_metas = list(tool.available_functions.values())
+                else:
+                    func_metas = None
+                mcp_tools_data.append((tool, cred, func_metas, cred_user_id))
+            agent_tools = list(agent.agent_tools.filter(is_tool=True))
+            has_agent_tools = agent.agent_tools.exists()
+            system_prompt = agent.system_prompt
+            llm_provider = agent.llm_provider
+            return builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider
+
+        builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider = await sync_to_async(fetch_agent_data_sync)(agent, user)
+
+        instance = cls(
+            user=user,
+            thread_id=thread_id,
+            msg_history=msg_history,
+            agent=agent,
+            parent_config=parent_config,
+            callbacks=callbacks,
+            async_browser=async_browser,
+            playwright_async=playwright_async,
+            allow_langfuse=allow_langfuse,
+            langfuse_public_key=langfuse_public_key,
+            langfuse_secret_key=langfuse_secret_key,
+            langfuse_host=langfuse_host,
+            builtin_tools=builtin_tools,  # Pass pre-fetched
+            mcp_tools_data=mcp_tools_data,
+            agent_tools=agent_tools,
+            has_agent_tools=has_agent_tools,
+            system_prompt=system_prompt,
+            llm_provider=llm_provider
+        )
+        return instance
+
     def __init__(self, user, thread_id, msg_history=None, agent=None,
                  parent_config=None,
                  callbacks: List[BaseCallbackHandler] = None,
                  async_browser: Optional[Any] = None,
-                 sync_browser: Optional[Any] = None,
                  playwright_async: Optional[Any] = None,
-                 playwright_sync: Optional[Any] = None):
+                 allow_langfuse=False,
+                 langfuse_public_key=None,
+                 langfuse_secret_key=None,
+                 langfuse_host=None,
+                 builtin_tools=None,  # Pre-fetched params
+                 mcp_tools_data=None,
+                 agent_tools=None,
+                 has_agent_tools=False,
+                 system_prompt=None,
+                 llm_provider=None):
         if msg_history is None:
             msg_history = []
         if callbacks is None:
@@ -100,20 +191,6 @@ class LLMAgent:
         self.user = user
         self.django_agent = agent
         self.thread_id = thread_id
-
-        # Get user parameters
-        try:
-            user_params = user.userparameters
-            allow_langfuse = user_params.allow_langfuse
-            langfuse_public_key = user_params.langfuse_public_key
-            langfuse_secret_key = user_params.langfuse_secret_key
-            # Fallback to None if not set
-            langfuse_host = user_params.langfuse_host or None
-        except AttributeError:
-            allow_langfuse = False
-            langfuse_public_key = None
-            langfuse_secret_key = None
-            langfuse_host = None
 
         # Inherit from parent config
         if parent_config and 'callbacks' in parent_config:
@@ -139,7 +216,7 @@ class LLMAgent:
                     langfuse.auth_check()
                     self.config = {"callbacks": [langfuse_handler]}
                 except Exception as e:
-                    print(e)  # Log error but continue without Langfuse
+                    logger.error(f"Failed to create Langfuse client: {e}", exc_info=e)  # Log error but continue without Langfuse
                     self.config = {}
             self.config.update({"configurable": {"thread_id": thread_id}})
 
@@ -161,13 +238,19 @@ class LLMAgent:
         # able to propagate it to child agents
         self._parent_config = self.config.copy()
 
-        # Use provided browsers if available, else lazy init later
+        # Use provided browsers if available
         self.async_browser = async_browser
-        self.sync_browser = sync_browser
         self.playwright_async = playwright_async
-        self.playwright_sync = playwright_sync
 
-        # Get agent's tools (will initialize browsers lazily if not provided)
+        # Pre-fetched for tool loading and prompt/llm
+        self.builtin_tools = builtin_tools or []
+        self.mcp_tools_data = mcp_tools_data or []
+        self.agent_tools = agent_tools or []
+        self.has_agent_tools = has_agent_tools
+        self._system_prompt = system_prompt
+        self._llm_provider = llm_provider
+
+        # Get agent's tools (browsers must be injected)
         tools = self._load_agent_tools()
 
         memory = MemorySaver()
@@ -200,35 +283,27 @@ class LLMAgent:
         """
         tools = []
 
-        #if not self.django_agent or (
-        #    not self.django_agent.tools.exists()
-        #    and not self.django_agent.agent_tools.exists()
-        #):
-        #    return tools
-
-        # Load builtin tools
-        for tool_obj in self.django_agent.tools.filter(is_active=True,
-                                                       tool_type=Tool.ToolType.BUILTIN):
+        # Load builtin tools (pre-fetched)
+        for tool_obj in self.builtin_tools:
             tools.extend(self._create_tool_functions(tool_obj))
 
-        # Load MCP tools
-        for tool_obj in self.django_agent.tools.filter(tool_type=Tool.ToolType.MCP,
-                                                       is_active=True):
-            cred = tool_obj.credentials.filter(user=self.user).first()
+        # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
+        for tool_obj, cred, cached_func_metas, cred_user_id in self.mcp_tools_data:
             try:
                 from nova.mcp.client import MCPClient
                 client = MCPClient(
                     endpoint=tool_obj.endpoint, 
                     thread_id=self.thread_id,
                     credential=cred, 
-                    transport_type=tool_obj.transport_type
+                    transport_type=tool_obj.transport_type,
+                    user_id=cred_user_id
                 )
 
-                # Prefer the cached snapshot
-                if tool_obj.available_functions:
-                    func_metas = tool_obj.available_functions.values()
+                # Use pre-fetched or fetch via client
+                if cached_func_metas is not None:
+                    func_metas = cached_func_metas
                 else:
-                    func_metas = client.list_tools(user_id=self.user.id)
+                    func_metas = client.list_tools(force_refresh=True)
 
                 for meta in func_metas:
                     func_name = meta["name"]
@@ -258,14 +333,13 @@ class LLMAgent:
                     tools.append(wrapped)
 
             except Exception as e:
-                logger = __import__('logging').getLogger(__name__)
                 logger.warning(f"Failed to load MCP tools from {tool_obj.endpoint}: {str(e)}")
 
-        # Load agents used as tools
-        if self.django_agent.agent_tools.exists():
+        # Load agents used as tools (pre-fetched)
+        if self.has_agent_tools:
             from nova.tools.agent_tool_wrapper import AgentToolWrapper
 
-            for agent_tool in self.django_agent.agent_tools.filter(is_tool=True):
+            for agent_tool in self.agent_tools:
                 wrapper = AgentToolWrapper(
                     agent_tool, 
                     self.user,
@@ -274,29 +348,16 @@ class LLMAgent:
                 langchain_tool = wrapper.create_langchain_tool()
                 tools.append(langchain_tool)
 
-        # POC: Lazily init both async and sync browsers if not provided
-        if self.async_browser is None:
-            async def init_async_browser():
-                self.playwright_async = await async_playwright().start()
-                browser = await self.playwright_async.chromium.launch(headless=True)
-                return browser
-
-            # Init async browser
-            try:
-                loop = asyncio.get_running_loop()
-                self.async_browser = loop.run_until_complete(init_async_browser())
-            except RuntimeError:  # No running event loop
-                self.async_browser = asyncio.run(init_async_browser())
-
-        toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=self.async_browser)  # Only async
-        browser_tools = toolkit.get_tools()  # Get all native tools (navigate, extract, etc.)
-        tools.extend(browser_tools)  # Add to agent's tools list
+        # Load browser tools (assumes injected async_browser)
+        toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=self.async_browser)
+        browser_tools = toolkit.get_tools()
+        tools.extend(browser_tools)
 
         return tools
 
     async def close_browsers(self):
         """Async cleanup method to close browsers and stop Playwright instances when done."""
-        if self.async_browser and self.async_browser.is_connected():  # Updated check
+        if self.async_browser and self.async_browser.is_connected():
             await self.async_browser.close()
         if self.playwright_async:
             await self.playwright_async.stop()
@@ -350,9 +411,7 @@ class LLMAgent:
                 functions.append(langchain_tool)
 
         except Exception as e:
-            print(f"Error creating functions for tool {tool_obj.name}: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error creating functions for tool {tool_obj.name}: {str(e)}")
 
         return functions
 
@@ -362,8 +421,8 @@ class LLMAgent:
         """
         today = date.today().strftime("%A %d of %B, %Y")
 
-        if self.django_agent and self.django_agent.system_prompt:
-            sp = self.django_agent.system_prompt
+        if self._system_prompt:
+            sp = self._system_prompt
             if "{today}" in sp:
                 sp = sp.format(today=today)
             return sp
@@ -375,10 +434,10 @@ class LLMAgent:
         )
     
     def create_llm_agent(self):
-        if not self.django_agent or not self.django_agent.llm_provider:
+        if not self.django_agent or not self._llm_provider:
             raise Exception("No LLM provider configured")
             
-        provider = self.django_agent.llm_provider
+        provider = self._llm_provider
         
         factory = _provider_factories.get(provider.provider_type)
         if not factory:
@@ -393,6 +452,3 @@ class LLMAgent:
         )
         final_msg = extract_final_answer(result)
         return final_msg
-
-
-
