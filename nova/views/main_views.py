@@ -22,10 +22,6 @@ from asgiref.sync import sync_to_async
 import logging
 logger = logging.getLogger(__name__)
 
-import os  # Added for DJANGO_ALLOW_ASYNC_UNSAFE
-from playwright.async_api import async_playwright  # Added for async browser init
-from playwright.sync_api import sync_playwright  # Added for sync browser init
-
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
     "br", "hr", "a",
@@ -339,8 +335,7 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
     task = None
     handler = None
     channel_layer = get_channel_layer()  # Get layer for publishing
-    async_browser = None
-    playwright_async = None
+    llm = None
 
     try:
         # Get all required objects with proper error handling (async-safe)
@@ -369,52 +364,51 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
 
         msg_history, last_message = await sync_to_async(build_msg_history_sync)(messages)
 
-        # Init async browser
-        async_browser, playwright_async = await LLMAgent.create_browser()
-
-        # Create custom handler and LLMAgent with callbacks and injected browsers
+        # Create custom handler and LLMAgent with callbacks
         handler = TaskProgressHandler(task_id, channel_layer)
         llm = await LLMAgent.create(user, thread_id, msg_history=msg_history,
-                    agent=agent_obj, callbacks=[handler],
-                    async_browser=async_browser,
-                    playwright_async=playwright_async)
+                                    agent=agent_obj, callbacks=[handler])
 
-        # Run LLMAgent (now async)
-        final_output = await llm.invoke(last_message)  # Await the async invoke
-        await llm.close_browsers()  # Await cleanup (already async)
+        try:
+            # Run LLMAgent (now async)
+            final_output = await llm.invoke(last_message)  # Await the async invoke
 
-        # Log completion and save result
-        task.progress_logs.append({"step": "AI processing completed",
-                                  "timestamp":
-                                   str(dt.datetime.now(dt.timezone.utc))})
-        task.result = final_output
+            # Log completion and save result
+            task.progress_logs.append({"step": "AI processing completed",
+                                      "timestamp":
+                                       str(dt.datetime.now(dt.timezone.utc))})
+            task.result = final_output
 
-        # Add final message to thread
-        await sync_to_async(thread.add_message)(final_output, actor=Actor.AGENT)
+            # Add final message to thread
+            await sync_to_async(thread.add_message)(final_output, actor=Actor.AGENT)
 
-        # Update thread subject if needed (now async) - wrap field access
-        def check_and_update_subject_sync(thread):
-            if thread.subject.startswith("thread n°"):
-                return True
-            return False
+            # Update thread subject if needed (now async) - wrap field access
+            def check_and_update_subject_sync(thread):
+                if thread.subject.startswith("thread n°"):
+                    return True
+                return False
 
-        needs_title_update = await sync_to_async(check_and_update_subject_sync)(thread)
-        if needs_title_update:
-            short_title = await llm.invoke(  # Await the async invoke
-                "Give a short title for this conversation (1–3 words maximum).\
-                 Use the same language as the conversation.\
-                 Answer by giving only the title, nothing else.",
-                silent_mode=True
-            )
-            thread.subject = short_title.strip()
-            await sync_to_async(thread.save)()
+            needs_title_update = await sync_to_async(check_and_update_subject_sync)(thread)
+            if needs_title_update:
+                short_title = await llm.invoke(  # Await the async invoke
+                    "Give a short title for this conversation (1–3 words maximum).\
+                     Use the same language as the conversation.\
+                     Answer by giving only the title, nothing else.",
+                    silent_mode=True
+                )
+                thread.subject = short_title.strip()
+                await sync_to_async(thread.save)()
 
-        # Send a final progress update for task
-        # This will be used for updating the thread name and closing the socket
-        await handler.publish_update('task_complete',
-                                     {'result': final_output})
-        task.status = TaskStatus.COMPLETED
-        await sync_to_async(task.save)()
+            # Send a final progress update for task
+            # This will be used for updating the thread name and closing the socket
+            await handler.publish_update('task_complete',
+                                         {'result': final_output})
+            task.status = TaskStatus.COMPLETED
+            await sync_to_async(task.save)()
+
+        finally:
+            # Ensure cleanup even on error during invoke
+            await llm.cleanup()
 
     except Exception as e:
         # Handle failure - safely handle case where task might be None
@@ -443,8 +437,13 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
             except Exception as publish_error:
                 logger.error(f"Failed to publish task {task_id} error update: {publish_error}")
 
-    finally:
-        pass
+        # Cleanup if llm was created
+        if llm is not None:
+            try:
+                await llm.cleanup()
+            except Exception as cleanup_error:
+                logger.error(f"Failed to cleanup after error in task {task_id}: {cleanup_error}")
+
 
 @login_required
 def running_tasks(request, thread_id):

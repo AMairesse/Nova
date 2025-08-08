@@ -63,16 +63,11 @@ class AgentToolWrapper:
                 self.parent_config.get("configurable", {}).get("thread_id")
             )
 
-            # Create and inject browser for sub-agent
-            async_browser, playwright_async = await LLMAgent.create_browser()
-
             agent_llm = await LLMAgent.create(
                 user=self.parent_user,
                 thread_id=parent_thread_id,
                 agent=self.agent,
                 parent_config=self.parent_config,
-                async_browser=async_browser,
-                playwright_async=playwright_async
             )
 
             try:
@@ -81,7 +76,10 @@ class AgentToolWrapper:
                 logger.error(f"Sub-agent {self.agent.name} failed: {str(e)}")
                 return f"Error in sub-agent {self.agent.name}: {str(e)} (Check connections or config)"
             finally:
-                await agent_llm.close_browsers()  # Cleanup sub-agent browser
+                try:
+                    await agent_llm.cleanup()  # Generic cleanup (handles browser if assigned as builtin)
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to cleanup sub-agent {self.agent.name}: {str(cleanup_error)}")
             
         # ----------------------- Input schema --------------------------- #
         description = _(
@@ -114,4 +112,3 @@ class AgentToolWrapper:
             description=tool_description,
             args_schema=input_schema,  # Use raw dict as schema (simpler than pydantic for now)
         )
-

@@ -134,7 +134,7 @@ class Tool(models.Model):
             if not self.tool_subtype:
                 raise ValidationError(_("A BUILTIN tool must select a subtype."))
             
-            from nova.tools import get_tool_type, get_available_functions, get_metadata
+            from nova.tools import get_tool_type
             metadata = get_tool_type(self.tool_subtype)
             if not metadata:
                 raise ValidationError(_("Invalid builtin subtype: %s") % self.tool_subtype)
@@ -142,11 +142,7 @@ class Tool(models.Model):
             self.python_path = metadata.get("python_path", "")
             self.input_schema = metadata.get("input_schema", {})
             self.output_schema = metadata.get("output_schema", {})
-            
-            # Optional: Validate functions exist
-            if not get_available_functions(self.python_path):
-                logger.warning("No functions found for %s", self.python_path)
-        
+                    
         if self.tool_type in {self.ToolType.API, self.ToolType.MCP} and not self.endpoint:
             raise ValidationError(_("Endpoint is mandatory for API or MCP tools."))
 

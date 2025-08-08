@@ -21,8 +21,6 @@ from .utils import extract_final_answer
 import asyncio
 import nest_asyncio
 nest_asyncio.apply()  # Enable nested loops for mixed sync/async compatibility
-from playwright.async_api import async_playwright
-from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
 from asgiref.sync import sync_to_async  # For async-safe ORM in factory
 
 logger = logging.getLogger(__name__)
@@ -90,19 +88,10 @@ register_provider(
 # register_provider(ProviderType.ANTHROPIC, lambda p: ChatAnthropic(...))
 # --------------------------------------------------------------------- #
 class LLMAgent:
-    @staticmethod
-    async def create_browser(headless=True):
-        """Static method to create and return an async browser and playwright instance."""
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(headless=headless)
-        return browser, playwright
-
     @classmethod
-    async def create(cls, user, thread_id, msg_history=None, agent=None,
+    async def create(cls, user, thread_id, msg_history=[], agent=None,
                      parent_config=None,
-                     callbacks: List[BaseCallbackHandler] = None,
-                     async_browser: Optional[Any] = None,
-                     playwright_async: Optional[Any] = None):
+                     callbacks: List[BaseCallbackHandler] = None):
         """
         Async factory to create an LLMAgent instance with async-safe ORM accesses.
         Wraps sync field/related model fetches.
@@ -154,8 +143,6 @@ class LLMAgent:
             agent=agent,
             parent_config=parent_config,
             callbacks=callbacks,
-            async_browser=async_browser,
-            playwright_async=playwright_async,
             allow_langfuse=allow_langfuse,
             langfuse_public_key=langfuse_public_key,
             langfuse_secret_key=langfuse_secret_key,
@@ -167,13 +154,38 @@ class LLMAgent:
             system_prompt=system_prompt,
             llm_provider=llm_provider
         )
+
+        # Load tools async after init
+        tools = await instance._load_agent_tools()
+
+        memory = MemorySaver()
+
+        llm = instance.create_llm_agent()
+        system_prompt = instance.build_system_prompt()
+
+        # Create the agent
+        instance.agent = create_react_agent(llm, tools=tools,
+                                            prompt=system_prompt,
+                                            checkpointer=memory)
+
+        # Load previous exchanges
+        for actor, message in msg_history:
+            if actor == Actor.USER:
+                instance.agent.update_state(
+                    instance.config,
+                    {"messages": [HumanMessage(content=message)]}
+                )
+            else:
+                instance.agent.update_state(
+                    instance.config,
+                    {"messages": [AIMessage(content=message)]}
+                )
+
         return instance
 
-    def __init__(self, user, thread_id, msg_history=None, agent=None,
+    def __init__(self, user, thread_id, msg_history=[], agent=None,
                  parent_config=None,
                  callbacks: List[BaseCallbackHandler] = None,
-                 async_browser: Optional[Any] = None,
-                 playwright_async: Optional[Any] = None,
                  allow_langfuse=False,
                  langfuse_public_key=None,
                  langfuse_secret_key=None,
@@ -238,10 +250,6 @@ class LLMAgent:
         # able to propagate it to child agents
         self._parent_config = self.config.copy()
 
-        # Use provided browsers if available
-        self.async_browser = async_browser
-        self.playwright_async = playwright_async
-
         # Pre-fetched for tool loading and prompt/llm
         self.builtin_tools = builtin_tools or []
         self.mcp_tools_data = mcp_tools_data or []
@@ -250,33 +258,11 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self._llm_provider = llm_provider
 
-        # Get agent's tools (browsers must be injected)
-        tools = self._load_agent_tools()
+        # Initialize resources and loaded modules tracker
+        self._resources = {}
+        self._loaded_builtin_modules = []
 
-        memory = MemorySaver()
-
-        llm = self.create_llm_agent()
-        system_prompt = self.build_system_prompt()
-
-        # Create the agent
-        self.agent = create_react_agent(llm, tools=tools,
-                                        prompt=system_prompt,
-                                        checkpointer=memory)
-
-        # Load previous exchanges
-        for actor, message in msg_history:
-            if actor == Actor.USER:
-                self.agent.update_state(
-                    self.config,
-                    {"messages": [HumanMessage(content=message)]}
-                )
-            else:
-                self.agent.update_state(
-                    self.config,
-                    {"messages": [AIMessage(content=message)]}
-                )
-
-    def _load_agent_tools(self):
+    async def _load_agent_tools(self):
         """
         Load and initialize tools associated with the agent.
         Returns a list of Langchain-ready tools.
@@ -285,8 +271,28 @@ class LLMAgent:
 
         # Load builtin tools (pre-fetched)
         for tool_obj in self.builtin_tools:
-            tools.extend(self._create_tool_functions(tool_obj))
+            try:
+                from nova.tools import import_module
+                module = import_module(tool_obj.python_path)
+                if not module:
+                    logger.warning(f"Failed to import module for builtin tool: {tool_obj.python_path}")
+                    continue
 
+                # Call init if available (async)
+                if hasattr(module, 'init'):
+                    await module.init(self)
+
+                # Get tools (new signature, await in case async)
+                loaded_tools = await module.get_functions(tool=tool_obj, agent=self)
+
+                # Add to list
+                tools.extend(loaded_tools)
+
+                # Track module for cleanup
+                self._loaded_builtin_modules.append(module)
+            except Exception as e:
+                logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
+        
         # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
         for tool_obj, cred, cached_func_metas, cred_user_id in self.mcp_tools_data:
             try:
@@ -348,72 +354,13 @@ class LLMAgent:
                 langchain_tool = wrapper.create_langchain_tool()
                 tools.append(langchain_tool)
 
-        # Load browser tools (assumes injected async_browser)
-        toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=self.async_browser)
-        browser_tools = toolkit.get_tools()
-        tools.extend(browser_tools)
-
         return tools
 
-    async def close_browsers(self):
-        """Async cleanup method to close browsers and stop Playwright instances when done."""
-        if self.async_browser and self.async_browser.is_connected():
-            await self.async_browser.close()
-        if self.playwright_async:
-            await self.playwright_async.stop()
-
-    def _create_tool_functions(self, tool_obj):
-        """
-        Create Langchain tool functions from the tool object.
-        """
-        functions = []
-
-        try:
-            from nova.tools import import_module, get_metadata
-            module = import_module(tool_obj.python_path)
-
-            # Check if the module has a get_functions() method
-            if not module or not hasattr(module, 'get_functions'):
-                return functions
-
-            function_configs = module.get_functions()
-
-            for func_name, func_config in function_configs.items():
-                func = func_config["callable"]
-
-                sig = inspect.signature(func)
-                params = list(sig.parameters.keys())
-                needs_inj = len(params) >= 2 and params[0] == "user"\
-                    and params[1] == "tool_id"
-
-                if needs_inj:
-                    # ---------- safe wrapper captures current func & tool_id ------------
-                    def _inject_user_tool(f=func, _tool_id=tool_obj.id,
-                                          _user=self.user):
-                        @wraps(f)
-                        def wrapper(*args, **kwargs):
-                            return f(_user, _tool_id, *args, **kwargs)
-                        return wrapper
-                    wrapped_func = _inject_user_tool()
-                    # -------------------------------------------------------------------
-                else:
-                    wrapped_func = func
-
-                safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name)[:64]
-
-                langchain_tool = StructuredTool.from_function(
-                    func=wrapped_func,
-                    coroutine=func_config.get("async_callable"),  # Use .get() to make optional (None if missing)
-                    name=safe_name,
-                    description=func_config["description"],
-                    args_schema=func_config["input_schema"],
-                )
-                functions.append(langchain_tool)
-
-        except Exception as e:
-            logger.error(f"Error creating functions for tool {tool_obj.name}: {str(e)}")
-
-        return functions
+    async def cleanup(self):
+        """Async cleanup method to close resources for loaded builtin modules."""
+        for module in self._loaded_builtin_modules:
+            if hasattr(module, 'close'):
+                await module.close(self)
 
     def build_system_prompt(self):
         """

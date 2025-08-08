@@ -1,5 +1,8 @@
 from datetime import datetime, date, timedelta, timezone
 
+from langchain_core.tools import StructuredTool
+
+from nova.llm_agent import LLMAgent
 
 METADATA = {
     'name': 'Date / Time',
@@ -34,30 +37,37 @@ def count_days(start_date: str, end_date: str) -> int:
     delta = end_date - start_date
     return delta.days
 
-def get_functions():
-    return {
-        "current_date": {
-            "callable": current_date,
-            "description": "Return the current date (format: YYYY-MM-DD)",
-            "input_schema": {
+async def get_functions(tool, agent: LLMAgent):
+    """
+    Return a list of StructuredTool instances for the available functions.
+    Ignores 'tool' and 'agent' as this builtin is stateless.
+    """
+    return [
+        StructuredTool.from_function(
+            func=current_date,
+            name="current_date",
+            description="Return the current date (format: YYYY-MM-DD)",
+            args_schema={
                 "type": "object",
                 "properties": {},
                 "required": []
             }
-        },
-        "current_datetime": {
-            "callable": current_datetime,
-            "description": "Return the current date and time (format: YYYY-MM-DD HH:MM:SS)",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            func=current_datetime,
+            name="current_datetime",
+            description="Return the current date and time (format: YYYY-MM-DD HH:MM:SS)",
+            args_schema={
                 "type": "object",
                 "properties": {},
                 "required": []
             }
-        },
-        "add_days": {
-            "callable": add_days,
-            "description": "Add N days to the provided date",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            func=add_days,
+            name="add_days",
+            description="Add N days to the provided date",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "date": {
@@ -70,13 +80,14 @@ def get_functions():
                         "description": "number of days to add (can be negative)"
                     }
                 },
-                "required": ["date", "days_ahead"]
+                "required": ["date", "days"]
             }
-        },
-        "add_weeks": {
-            "callable": add_weeks,
-            "description": "Add N weeks to the provided date",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            func=add_weeks,
+            name="add_weeks",
+            description="Add N weeks to the provided date",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "date": {
@@ -89,13 +100,14 @@ def get_functions():
                         "description": "number of weeks to add (can be negative)"
                     }
                 },
-                "required": ["date", "weeks_ahead"]
+                "required": ["date", "weeks"]
             }
-        },
-        "count_days": {
-            "callable": count_days,
-            "description": "Count the number of days between two dates",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            func=count_days,
+            name="count_days",
+            description="Count the number of days between two dates",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "start_date": {
@@ -111,5 +123,5 @@ def get_functions():
                 },
                 "required": ["start_date", "end_date"]
             }
-        },
-    }
+        ),
+    ]
