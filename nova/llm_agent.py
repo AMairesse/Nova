@@ -232,19 +232,20 @@ class LLMAgent:
                     self.config = {}
             self.config.update({"configurable": {"thread_id": thread_id}})
 
-        # Merge custom callbacks with existing ones (e.g., Langfuse)
-        # Create a copy of the config without
-        # custom callbacks for "silent_mode"
+        # Ensure the 'callbacks' key exists and keep copies decoupled
+        existing_callbacks = list(self.config.get('callbacks', []))
+
+        # Copy config for silent mode, but with its own callbacks list
         # Warning : this is not a deep copy because we need to keep
         # the same callbacks but we also need to do an explicit copy
         # of the callbacks' list so that the copy is not updated in sync
         # with the original
         self.silent_config = self.config.copy()
-        self.silent_config['callbacks'] = list(self.config['callbacks'])
-        if 'callbacks' in self.config:
-            self.config['callbacks'].extend(callbacks)
-        else:
-            self.config['callbacks'] = callbacks
+        self.silent_config['callbacks'] = list(existing_callbacks)
+
+        # Merge custom callbacks into the main config
+        self.config['callbacks'] = existing_callbacks + (callbacks or [])
+
 
         # Store the parent config in order to be
         # able to propagate it to child agents

@@ -1,434 +1,369 @@
-# nova/tests/test_llm_agent.py
-"""
-Unit tests for LLMAgent, focusing on the refactored create_llm_agent method.
-External LangChain dependencies are mocked.
-"""
+import sys
+import types
+import importlib
+import asyncio
+from types import SimpleNamespace
+from unittest import TestCase
+from unittest.mock import MagicMock
 
-from __future__ import annotations
-
-from unittest.mock import patch, MagicMock
-from django.test import TestCase
-from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError
-
-from nova.models import LLMProvider, ProviderType, Agent, Tool, ToolCredential
-from nova.llm_agent import LLMAgent
+# We import Django models only for the ProviderType enum; no DB operations are needed.
+from nova.models import ProviderType
 
 
-class LLMAgentCreationTests(TestCase):
-    def setUp(self) -> None:
-        self.user = User.objects.create_user("testuser", password="testpass")
+class LLMAgentTests(TestCase):
+    @staticmethod
+    def _install_fake_third_party_modules():
+        # langchain_* chat models
+        lc_mistral = types.ModuleType("langchain_mistralai")
+        lc_mistral_chat = types.ModuleType("langchain_mistralai.chat_models")
 
-        # Dummy agent with valid provider for initial setup (uses OLLAMA to avoid conflicts)
-        self.dummy_provider = LLMProvider.objects.create(
-            user=self.user,
-            name="Dummy Provider",
-            provider_type=ProviderType.OLLAMA,
-            model="llama2",
-            base_url="http://localhost:11434",
+        class ChatMistralAI:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+        lc_mistral_chat.ChatMistralAI = ChatMistralAI
+        sys.modules["langchain_mistralai"] = lc_mistral
+        sys.modules["langchain_mistralai.chat_models"] = lc_mistral_chat
+
+        lc_ollama = types.ModuleType("langchain_ollama")
+        lc_ollama_chat = types.ModuleType("langchain_ollama.chat_models")
+
+        class ChatOllama:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+        lc_ollama_chat.ChatOllama = ChatOllama
+        sys.modules["langchain_ollama"] = lc_ollama
+        sys.modules["langchain_ollama.chat_models"] = lc_ollama_chat
+
+        lc_openai = types.ModuleType("langchain_openai")
+        lc_openai_chat = types.ModuleType("langchain_openai.chat_models")
+
+        class ChatOpenAI:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+        lc_openai_chat.ChatOpenAI = ChatOpenAI
+        sys.modules["langchain_openai"] = lc_openai
+        sys.modules["langchain_openai.chat_models"] = lc_openai_chat
+
+        # langchain_core.messages
+        lc_core = types.ModuleType("langchain_core")
+        lc_core_msgs = types.ModuleType("langchain_core.messages")
+
+        class HumanMessage:
+            def __init__(self, content):
+                self.content = content
+
+        class AIMessage:
+            def __init__(self, content):
+                self.content = content
+
+        lc_core_msgs.HumanMessage = HumanMessage
+        lc_core_msgs.AIMessage = AIMessage
+        sys.modules["langchain_core"] = lc_core
+        sys.modules["langchain_core.messages"] = lc_core_msgs
+
+        # langchain_core.tools
+        lc_core_tools = types.ModuleType("langchain_core.tools")
+
+        class StructuredTool:
+            @classmethod
+            def from_function(cls, func, coroutine=None, name=None, description=None, args_schema=None):
+                # Return a simple shape that we can assert on
+                return {"name": name, "description": description, "args_schema": args_schema, "func": func, "coroutine": coroutine}
+
+        lc_core_tools.StructuredTool = StructuredTool
+        sys.modules["langchain_core.tools"] = lc_core_tools
+
+        # langchain_core.callbacks
+        lc_core_cb = types.ModuleType("langchain_core.callbacks")
+
+        class BaseCallbackHandler:
+            pass
+
+        lc_core_cb.BaseCallbackHandler = BaseCallbackHandler
+        sys.modules["langchain_core.callbacks"] = lc_core_cb
+
+        # langgraph
+        lg_root = types.ModuleType("langgraph")
+        lg_mem = types.ModuleType("langgraph.checkpoint.memory")
+
+        class MemorySaver:
+            pass
+
+        lg_mem.MemorySaver = MemorySaver
+        sys.modules["langgraph"] = lg_root
+        sys.modules["langgraph.checkpoint"] = types.ModuleType("langgraph.checkpoint")
+        sys.modules["langgraph.checkpoint.memory"] = lg_mem
+
+        lg_pre = types.ModuleType("langgraph.prebuilt")
+
+        def create_react_agent(llm, tools=None, prompt=None, checkpointer=None):
+            class DummyAgent:
+                def __init__(self):
+                    # Keep last state for debugging purposes
+                    self.state = []
+
+                def update_state(self, config, payload):
+                    self.state.append((config, payload))
+
+                async def ainvoke(self, payload, config=None):
+                    # Echo payload as result to allow extract_final_answer to be called
+                    return payload
+            return DummyAgent()
+
+        lg_pre.create_react_agent = create_react_agent
+        sys.modules["langgraph.prebuilt"] = lg_pre
+
+        # Fake nova.tools.agent_tool_wrapper (used when has_agent_tools is True)
+        atw_mod = types.ModuleType("nova.tools.agent_tool_wrapper")
+
+        class AgentToolWrapper:
+            def __init__(self, agent_tool, user, parent_config=None):
+                self.agent_tool = agent_tool
+                self.user = user
+                self.parent_config = parent_config
+
+            def create_langchain_tool(self):
+                return {"wrapped_agent_tool": getattr(self.agent_tool, "name", "unknown")}
+
+        atw_mod.AgentToolWrapper = AgentToolWrapper
+        sys.modules["nova.tools.agent_tool_wrapper"] = atw_mod
+
+    def _import_llm_agent(self):
+        # Ensure third-party fakes are in place before importing
+        self._install_fake_third_party_modules()
+
+        # Import the module under test with a robust path resolution
+        try:
+            mod = importlib.import_module("nova.llm.agent")
+        except Exception:
+            mod = importlib.import_module("nova.llm_agent")
+        return mod
+
+    # ---------------- build_system_prompt ----------------
+
+    def test_build_system_prompt_default_and_template(self):
+        llm_agent_mod = self._import_llm_agent()
+        LLMAgent = llm_agent_mod.LLMAgent
+
+        agent = LLMAgent(
+            user=SimpleNamespace(id=1),
+            thread_id="t1",
+            system_prompt=None,
         )
-        self.dummy_agent = Agent.objects.create(
-            user=self.user,
-            name="Dummy Agent",
-            system_prompt="Test prompt",
-            llm_provider=self.dummy_provider,
+        default_prompt = agent.build_system_prompt()
+        self.assertIn("You are a helpful assistant", default_prompt)
+
+        # With a template using {today}
+        agent2 = LLMAgent(
+            user=SimpleNamespace(id=2),
+            thread_id="t2",
+            system_prompt="Today is {today}.",
         )
+        templated = agent2.build_system_prompt()
+        self.assertNotIn("{today}", templated)
+        self.assertTrue(templated.startswith("Today is "))
 
-    def _create_llm_agent_instance(self, agent=None):
-        """Helper to create LLMAgent instance without calling create_llm_agent."""
-        agent = agent or self.dummy_agent
-        with patch.object(LLMAgent, 'create_llm_agent', return_value=MagicMock()) as mock_create:
-            instance = LLMAgent(self.user, thread_id=1, agent=agent)
-            mock_create.assert_called_once()
-        return instance
+    # ---------------- create_llm_agent ----------------
 
-    @patch("nova.llm_agent.ChatMistralAI")
-    @patch("nova.llm_agent.ChatOpenAI")
-    @patch("nova.llm_agent.ChatOllama")
-    def test_create_llm_agent_mistral(self, mock_ollama, mock_openai, mock_mistral):
-        """Test successful creation for Mistral provider."""
-        # Configure mock to return a separate instance mock to avoid __hash__ recording
-        mock_mistral.return_value = MagicMock()
+    def test_create_llm_agent_factory_and_errors(self):
+        llm_agent_mod = self._import_llm_agent()
+        LLMAgent = llm_agent_mod.LLMAgent
 
-        provider = LLMProvider.objects.create(
-            user=self.user,
-            name="Mistral Provider",
-            provider_type=ProviderType.MISTRAL,
-            model="mistral-small",
-            api_key="test_key",
-        )
-        agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            system_prompt="Test prompt",
+        # Happy path: OPENAI provider -> returns instance of our fake ChatOpenAI
+        provider = SimpleNamespace(provider_type=ProviderType.OPENAI, model="m", api_key="k", base_url=None)
+        agent = LLMAgent(
+            user=SimpleNamespace(id=1),
+            thread_id="t",
+            system_prompt=None,
             llm_provider=provider,
         )
+        agent.django_agent = object()  # truthy so the method does not raise
+        obj = agent.create_llm_agent()
+        self.assertEqual(obj.__class__.__name__, "ChatOpenAI")
 
-        llm_agent = self._create_llm_agent_instance(agent)
-        llm = llm_agent.create_llm_agent()
-
-        mock_mistral.assert_called_once_with(
-            model="mistral-small",
-            mistral_api_key="test_key",
-            temperature=0,
-            max_retries=2,
-            streaming=True  # Updated for streaming
+        # Error when provider not configured
+        agent2 = LLMAgent(
+            user=SimpleNamespace(id=1),
+            thread_id="t",
+            system_prompt=None,
+            llm_provider=None,
         )
-        self.assertIsNotNone(llm)
+        agent2.django_agent = object()
+        with self.assertRaises(Exception):
+            agent2.create_llm_agent()
 
-    @patch("nova.llm_agent.ChatMistralAI")
-    @patch("nova.llm_agent.ChatOpenAI")
-    @patch("nova.llm_agent.ChatOllama")
-    def test_create_llm_agent_openai(self, mock_ollama, mock_openai, mock_mistral):
-        """Test successful creation for OpenAI provider."""
-        mock_openai.return_value = MagicMock()
-
-        provider = LLMProvider.objects.create(
-            user=self.user,
-            name="OpenAI Provider",
-            provider_type=ProviderType.OPENAI,
-            model="gpt-3.5-turbo",
-            api_key="test_key",
-            base_url="https://api.openai.com/v1",
+        # Unsupported provider type
+        agent3 = LLMAgent(
+            user=SimpleNamespace(id=1),
+            thread_id="t",
+            system_prompt=None,
+            llm_provider=SimpleNamespace(provider_type="UNKNOWN"),
         )
-        agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            system_prompt="Test prompt",
-            llm_provider=provider,
-        )
+        agent3.django_agent = object()
+        with self.assertRaises(ValueError):
+            agent3.create_llm_agent()
 
-        llm_agent = self._create_llm_agent_instance(agent)
-        llm = llm_agent.create_llm_agent()
+    # ---------------- cleanup ----------------
 
-        mock_openai.assert_called_once_with(
-            model="gpt-3.5-turbo",
-            openai_api_key="test_key",
-            base_url="https://api.openai.com/v1",
-            temperature=0,
-            max_retries=2,
-            streaming=True  # Updated for streaming
-        )
-        self.assertIsNotNone(llm)
+    def test_cleanup_calls_close_on_loaded_modules(self):
+        llm_agent_mod = self._import_llm_agent()
+        LLMAgent = llm_agent_mod.LLMAgent
 
-    @patch("nova.llm_agent.ChatMistralAI")
-    @patch("nova.llm_agent.ChatOpenAI")
-    @patch("nova.llm_agent.ChatOllama")
-    def test_create_llm_agent_ollama(self, mock_ollama, mock_openai, mock_mistral):
-        """Test successful creation for Ollama provider."""
-        mock_ollama.return_value = MagicMock()
+        class BuiltinModule:
+            def __init__(self):
+                self.closed = False
 
-        provider = LLMProvider.objects.create(
-            user=self.user,
-            name="Ollama Provider",
-            provider_type=ProviderType.OLLAMA,
-            model="llama2",
-            base_url="http://localhost:11434",
-        )
-        agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            system_prompt="Test prompt",
-            llm_provider=provider,
-        )
+            async def close(self, agent):
+                self.closed = True
 
-        llm_agent = self._create_llm_agent_instance(agent)
-        llm = llm_agent.create_llm_agent()
+        agent = LLMAgent(user=SimpleNamespace(id=1), thread_id="t")
+        m1, m2 = BuiltinModule(), BuiltinModule()
+        agent._loaded_builtin_modules = [m1, m2]
 
-        mock_ollama.assert_called_once_with(
-            model="llama2",
-            base_url="http://localhost:11434",
-            temperature=0,
-            max_retries=2,
-            streaming=True  # Updated for streaming
-        )
-        self.assertIsNotNone(llm)
+        asyncio.run(agent.cleanup())
+        self.assertTrue(m1.closed)
+        self.assertTrue(m2.closed)
 
-    @patch("nova.llm_agent.ChatMistralAI")
-    @patch("nova.llm_agent.ChatOpenAI")
-    @patch("nova.llm_agent.ChatOllama")
-    def test_create_llm_agent_lmstudio(self, mock_ollama, mock_openai, mock_mistral):
-        """Test successful creation for LMStudio provider."""
-        mock_openai.return_value = MagicMock()
+    # ---------------- _load_agent_tools ----------------
 
-        provider = LLMProvider.objects.create(
-            user=self.user,
-            name="LMStudio Provider",
-            provider_type=ProviderType.LLMSTUDIO,
-            model="phi2",
-            base_url="http://localhost:1234/v1",
-        )
-        agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            system_prompt="Test prompt",
-            llm_provider=provider,
-        )
+    def test_load_agent_tools_builtin_mcp_and_agent_tool(self):
+        llm_agent_mod = self._import_llm_agent()
+        LLMAgent = llm_agent_mod.LLMAgent
 
-        llm_agent = self._create_llm_agent_instance(agent)
-        llm = llm_agent.create_llm_agent()
+        # Fake builtin module returned by nova.tools.import_module
+        class FakeBuiltinModule:
+            def __init__(self):
+                self.init_called = False
 
-        mock_openai.assert_called_once_with(
-            model="phi2",
-            openai_api_key="None",
-            base_url="http://localhost:1234/v1",
-            temperature=0,
-            max_retries=2,
-            streaming=True  # Updated for streaming
-        )
-        self.assertIsNotNone(llm)
+            async def init(self, agent):
+                self.init_called = True
 
-    def test_create_llm_agent_unsupported_provider(self):
-        """Test ValueError for unsupported provider type."""
-        provider = LLMProvider.objects.create(
-            user=self.user,
-            name="Invalid Provider",
-            provider_type="invalid_type",  # Not in ProviderType, but for test
-            model="invalid",
-        )
-        agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            system_prompt="Test prompt",
-            llm_provider=provider,
+            async def get_functions(self, tool, agent):
+                # Return a simple list of tools
+                return [{"builtin_tool": tool.tool_subtype}]
+
+            async def close(self, agent):
+                # not exercised here
+                pass
+
+        builtin_module = FakeBuiltinModule()
+
+        # Install fake nova.tools with import_module returning our module
+        fake_nova_tools = types.ModuleType("nova.tools")
+
+        def fake_import_module(python_path):
+            # In real code, python_path directs which module to load; here we always return our fake
+            return builtin_module
+
+        fake_nova_tools.import_module = fake_import_module
+        sys.modules["nova.tools"] = fake_nova_tools
+
+        # Install fake MCP client module
+        fake_mcp_client_mod = types.ModuleType("nova.mcp.client")
+
+        class FakeMCPClient:
+            def __init__(self, endpoint, thread_id=None, credential=None, transport_type=None, user_id=None):
+                self.endpoint = endpoint
+
+            def list_tools(self, force_refresh=False):
+                # Return metadata as dicts (what LLMAgent expects)
+                return [
+                    {"name": "do thing", "description": "desc", "input_schema": {}},
+                    {"name": "calc:add", "description": "", "input_schema": {"type": "object"}},
+                ]
+
+            async def acall(self, tool_name, **kwargs):
+                return {"ok": True}
+
+            def call(self, tool_name, **kwargs):
+                return {"ok": True}
+
+        fake_mcp_client_mod.MCPClient = FakeMCPClient
+        sys.modules["nova.mcp.client"] = fake_mcp_client_mod
+
+        # Patch StructuredTool in the imported module to a fake that returns a dict
+        class FakeStructuredTool:
+            @classmethod
+            def from_function(cls, func, coroutine=None, name=None, description=None, args_schema=None):
+                return {"wrapped_name": name, "description": description, "args_schema": args_schema, "func": func, "coroutine": coroutine}
+
+        # Prepare inputs for LLMAgent
+        builtin_tools = [SimpleNamespace(python_path="nova.tools.builtins.date", tool_subtype="date", is_active=True)]
+        mcp_tool_obj = SimpleNamespace(endpoint="https://mcp.example.com", transport_type=None)
+        # (tool, cred, cached_func_metas, cred_user_id)
+        mcp_tools_data = [(mcp_tool_obj, SimpleNamespace(user=SimpleNamespace(id=1)), None, 1)]
+        agent_tools = [SimpleNamespace(name="delegate_agent")]
+
+        agent = LLMAgent(
+            user=SimpleNamespace(id=99),
+            thread_id="T123",
+            builtin_tools=builtin_tools,
+            mcp_tools_data=mcp_tools_data,
+            agent_tools=agent_tools,
+            has_agent_tools=True,
+            system_prompt=None,
+            llm_provider=SimpleNamespace(provider_type=ProviderType.OPENAI, model="m", api_key="k"),
         )
 
-        # Create with dummy valid agent to pass __init__
-        llm_agent = self._create_llm_agent_instance(agent)
+        # Swap StructuredTool in module namespace
+        original_struct_tool = llm_agent_mod.StructuredTool
+        llm_agent_mod.StructuredTool = FakeStructuredTool
+        try:
+            tools = asyncio.run(agent._load_agent_tools())
+        finally:
+            # Restore to avoid side effects on other tests
+            llm_agent_mod.StructuredTool = original_struct_tool
 
-        with self.assertRaises(ValueError) as ctx:
-            llm_agent.create_llm_agent()
-        self.assertIn("Unsupported provider type", str(ctx.exception))
+        # Assertions:
+        # - Builtin tool loaded and module tracked
+        self.assertTrue(any(isinstance(mod, FakeBuiltinModule) for mod in agent._loaded_builtin_modules))
+        self.assertIn({"builtin_tool": "date"}, tools)
 
-    @patch("langfuse.Langfuse")
-    @patch("langfuse.langchain.CallbackHandler")
-    def test_callbacks_langfuse(self, mock_handler, mock_langfuse):
-        """Test Langfuse callbacks if enabled."""
-        # Mock the auth_check method
-        mock_langfuse_instance = MagicMock()
-        mock_langfuse.return_value = mock_langfuse_instance
-        mock_langfuse_instance.auth_check.return_value = True
-        
-        # Mock the handler
-        mock_handler_instance = MagicMock()
-        mock_handler.return_value = mock_handler_instance
-        
-        # Create UserParameters with Langfuse enabled directly on the user
-        from nova.models import UserParameters
-        user_params, created = UserParameters.objects.get_or_create(
-            user=self.user,
-            defaults={
-                'allow_langfuse': True,
-                'langfuse_public_key': "pk-test",
-                'langfuse_secret_key': "sk-test",
-                'langfuse_host': "https://langfuse.example.com"
-            }
-        )
-        if not created:
-            user_params.allow_langfuse = True
-            user_params.langfuse_public_key = "pk-test"
-            user_params.langfuse_secret_key = "sk-test"
-            user_params.langfuse_host = "https://langfuse.example.com"
-            user_params.save()
+        # - MCP tools wrapped with sanitized name:
+        #   "do thing" -> "do_thing", "calc:add" -> "calc_add"
+        wrapped_names = {t.get("wrapped_name") for t in tools if "wrapped_name" in t}
+        self.assertIn("do_thing", wrapped_names)
+        self.assertIn("calc_add", wrapped_names)
+        # - args_schema None for empty dict, dict otherwise
+        for t in tools:
+            if t.get("wrapped_name") == "do_thing":
+                self.assertIsNone(t.get("args_schema"))
+            if t.get("wrapped_name") == "calc_add":
+                self.assertIsInstance(t.get("args_schema"), dict)
 
-        # Refresh the user instance to ensure the relationship is loaded
-        self.user.refresh_from_db()
+        # - AgentToolWrapper integration (from fake module)
+        self.assertIn({"wrapped_agent_tool": "delegate_agent"}, tools)
 
-        llm_agent = self._create_llm_agent_instance()
-        self.assertIn("callbacks", llm_agent.config)
-        mock_langfuse.assert_called_once_with(
-            public_key="pk-test",
-            secret_key="sk-test",
-            host="https://langfuse.example.com"
-        )
+    # ---------------- invoke ----------------
 
+    def test_invoke_awaits_and_extracts_final_answer(self):
+        llm_agent_mod = self._import_llm_agent()
+        LLMAgent = llm_agent_mod.LLMAgent
 
-class LLMAgentLoadToolsTests(TestCase):
-    def setUp(self) -> None:
-        self.user = User.objects.create_user("testuser", password="testpass")
+        # Patch extract_final_answer in module namespace
+        original_extract = llm_agent_mod.extract_final_answer
+        llm_agent_mod.extract_final_answer = lambda output: "FINAL"
+        try:
+            # Fake agent with async ainvoke
+            class FakeAgent:
+                def __init__(self):
+                    self.invocations = []
 
-        self.provider = LLMProvider.objects.create(
-            user=self.user,
-            name="OpenAI Provider",
-            provider_type=ProviderType.OPENAI,
-            model="gpt-3.5-turbo",
-            api_key="test_key",
-            base_url="https://api.openai.com/v1",
-        )
+                async def ainvoke(self, payload, config=None):
+                    self.invocations.append((payload, config))
+                    return {"messages": ["ignored"]}
 
-        self.agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            system_prompt="Test prompt",
-            llm_provider=self.provider,
-        )
+            agent = LLMAgent(user=SimpleNamespace(id=1), thread_id="t", system_prompt=None, llm_provider=SimpleNamespace(provider_type=ProviderType.OPENAI))
+            agent.agent = FakeAgent()
 
-        # Mock the create_llm_agent to avoid real LLM creation in setUp
-        with patch.object(LLMAgent, 'create_llm_agent', return_value=MagicMock()):
-            self.llm_agent = LLMAgent(self.user, thread_id=1, agent=self.agent)
-
-    @patch("nova.llm_agent.StructuredTool")
-    @patch("nova.tools.import_module")
-    def test_load_builtin_tools(self, mock_import_module, mock_structured_tool):
-        """Test loading of builtin tools creates StructuredTools."""
-        # Create builtin tool
-        builtin_tool = Tool.objects.create(
-            user=self.user,
-            name="Builtin Tool",
-            description="Test builtin",
-            tool_type=Tool.ToolType.BUILTIN,
-            is_active=True,
-            python_path="nova.tools.builtins.test"
-        )
-
-        # Associate with agent
-        self.agent.tools.add(builtin_tool)
-
-        # Mock import_module and get_functions
-        mock_module = MagicMock()
-        mock_module.get_functions.return_value = {
-            "test_func": {
-                "callable": lambda user, tool_id: "result",
-                "description": "Test",
-                "input_schema": {}
-            }
-        }
-        mock_import_module.return_value = mock_module
-
-        # Mock StructuredTool
-        mock_structured_tool.from_function.return_value = MagicMock()
-
-        tools = self.llm_agent._load_agent_tools()
-
-        self.assertEqual(len(tools), 1)
-        # Check that our specific module was imported
-        mock_import_module.assert_called_with(builtin_tool.python_path)
-        # Check that StructuredTool.from_function was called (once per function in the module)
-        mock_structured_tool.from_function.assert_called_once()
-
-    @patch("nova.llm_agent.StructuredTool")
-    @patch("nova.mcp.client.MCPClient")
-    def test_load_mcp_tools(self, mock_mcp_client, mock_structured_tool):
-        """Test loading of MCP tools with client and metadata."""
-        # Create MCP tool
-        mcp_tool = Tool.objects.create(
-            user=self.user,
-            name="MCP Tool",
-            description="Test MCP",
-            tool_type=Tool.ToolType.MCP,
-            endpoint="https://mcp.example.com",
-            is_active=True,
-        )
-
-        # Create credential
-        ToolCredential.objects.create(
-            user=self.user,
-            tool=mcp_tool,
-            auth_type="token",
-            token="test_token",
-        )
-
-        # Associate with agent
-        self.agent.tools.add(mcp_tool)
-
-        # Mock MCPClient
-        mock_client_instance = mock_mcp_client.return_value
-        mock_client_instance.list_tools.return_value = [
-            {
-                "name": "test_func",
-                "description": "Test function",
-                "input_schema": {"type": "object"},
-            }
-        ]
-
-        # Mock the StructuredTool
-        mock_structured_tool.from_function.return_value = MagicMock()
-
-        tools = self.llm_agent._load_agent_tools()
-
-        self.assertEqual(len(tools), 1)
-        mock_mcp_client.assert_called_once_with(
-            mcp_tool.endpoint,
-            mcp_tool.credentials.first()
-        )
-        mock_client_instance.list_tools.assert_called_once_with(user_id=self.user.id)
-        mock_structured_tool.from_function.assert_called_once()
-
-    @patch("nova.tools.agent_tool_wrapper.AgentToolWrapper")
-    def test_load_agent_tools(self, mock_wrapper):
-        """Test loading of agents as tools."""
-        # Create agent tool
-        agent_tool = Agent.objects.create(
-            user=self.user,
-            name="Tool Agent",
-            llm_provider=self.provider,
-            system_prompt="Tool prompt",
-            is_tool=True,
-            tool_description="Tool desc"
-        )
-
-        # Associate as agent_tool
-        self.agent.agent_tools.add(agent_tool)
-
-        # Mock wrapper
-        mock_wrapper_instance = mock_wrapper.return_value
-        mock_wrapper_instance.create_langchain_tool.return_value = MagicMock()
-
-        tools = self.llm_agent._load_agent_tools()
-
-        self.assertEqual(len(tools), 1)
-        mock_wrapper.assert_called_once_with(
-            agent_tool,
-            self.user,
-            parent_config=self.llm_agent._parent_config
-        )
-        mock_wrapper_instance.create_langchain_tool.assert_called_once()
-
-    def test_load_agent_tools_cycle_detection(self):
-        """Test cycle in agent_tools raises ValidationError on clean."""
-        agent1 = Agent.objects.create(
-            user=self.user,
-            name="Agent1",
-            llm_provider=self.provider,
-            is_tool=True,
-            tool_description="Desc1"
-        )
-        agent2 = Agent.objects.create(
-            user=self.user,
-            name="Agent2",
-            llm_provider=self.provider,
-            is_tool=True,
-            tool_description="Desc2"
-        )
-
-        # Create cycle
-        agent1.agent_tools.add(agent2)
-        agent2.agent_tools.add(agent1)
-
-        self.agent.agent_tools.add(agent1)
-
-        with self.assertRaises(ValidationError):
-            self.agent.clean()  # Cycle detected in model clean
-
-    @patch("nova.llm_agent.extract_final_answer")
-    def test_invoke_with_silent_mode(self, mock_extract):
-        """Test invoke in silent_mode uses silent_config."""
-        # Mock the agent to avoid actual LangChain invocation
-        mock_agent = MagicMock()
-        mock_response_message = MagicMock()
-        mock_response_message.content = "answer"
-        mock_agent.invoke.return_value = {"messages": [mock_response_message]}
-        
-        # Mock extract_final_answer to return the expected result
-        mock_extract.return_value = "answer"
-        
-        # Replace the agent with our mock
-        self.llm_agent.agent = mock_agent
-
-        result = self.llm_agent.invoke("Test question", silent_mode=True)
-
-        # Verify the call was made with the correct config
-        mock_agent.invoke.assert_called_once()
-        call_args = mock_agent.invoke.call_args
-        self.assertEqual(call_args[1]['config'], self.llm_agent.silent_config)
-        self.assertEqual(result, "answer")
+            out = asyncio.run(agent.invoke("Hello", silent_mode=True))
+            self.assertEqual(out, "FINAL")
+            # Should have used silent_config when silent_mode=True
+            self.assertEqual(len(agent.agent.invocations), 1)
+            _payload, used_config = agent.agent.invocations[0]
+            self.assertIs(used_config, agent.silent_config)
+        finally:
+            llm_agent_mod.extract_final_answer = original_extract

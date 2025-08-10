@@ -5,7 +5,9 @@ from django.utils.translation import gettext_lazy as _, ngettext
 from django.views.decorators.http import require_POST
 from nova.models import Tool, ToolCredential
 from nova.forms import ToolForm, ToolCredentialForm
-from asgiref.sync import sync_to_async  # For async-safe ORM
+from nova.tools import import_module, get_metadata, get_tool_type
+from nova.mcp.client import MCPClient
+from asgiref.sync import sync_to_async
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,6 @@ def create_tool(request):
             
             # Automatically create a ToolCredential for built-in tools
             if tool.tool_type == Tool.ToolType.BUILTIN:
-                from nova.tools import get_tool_type
                 tool_metadata = get_tool_type(tool.tool_subtype)
                 if tool_metadata:
                     ToolCredential.objects.get_or_create(
@@ -162,7 +163,6 @@ async def test_tool_connection(request, tool_id):
         if tool.tool_type == Tool.ToolType.MCP:
             # MCP connection test
             try:
-                from nova.mcp.client import MCPClient
                 client = MCPClient(
                     endpoint=tool.endpoint, 
                     credential=temp_credential, 
@@ -209,7 +209,6 @@ async def test_tool_connection(request, tool_id):
         elif tool.tool_type == Tool.ToolType.BUILTIN:
             # Sync function for builtin test (wrap potential sync ops)
             def builtin_test_sync(tool, request):
-                from nova.tools import import_module, get_metadata
                 module = import_module(tool.python_path)
                 metadata = get_metadata(tool.python_path)
                 

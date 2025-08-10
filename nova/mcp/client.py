@@ -65,8 +65,9 @@ class MCPClient:
                 return cached
 
         def _get_attr(obj, *attrs, default=None):
+            # Guard against non-string attrs and return default when none found
             for attr in attrs:
-                if hasattr(obj, attr):
+                if isinstance(attr, str) and hasattr(obj, attr):
                     return getattr(obj, attr)
             return default
 
@@ -76,8 +77,8 @@ class MCPClient:
                 dict(
                     name=t.name,
                     description=getattr(t, "description", ""),
-                    input_schema=_get_attr(t, "input_schema", "inputSchema", {}),
-                    output_schema=_get_attr(t, "output_schema", "outputSchema", {}),
+                    input_schema=_get_attr(t, "input_schema", "inputSchema", default={}),
+                    output_schema=_get_attr(t, "output_schema", "outputSchema", default={}),
                 )
                 for t in tools
             ]

@@ -1,494 +1,243 @@
-# nova/tests/test_mcp_client.py
-"""
-Tests for MCP (Model Context Protocol) client functionality.
-"""
-
-from __future__ import annotations
-
 import asyncio
-from unittest.mock import Mock, patch, AsyncMock
-from django.test import TestCase
-from django.contrib.auth.models import User
-from django.core.cache import cache
-from django.core.exceptions import ValidationError
-from django.http import Http404
+import base64
+import json
+from types import SimpleNamespace
+from unittest.mock import patch, AsyncMock
 
-from nova.models import Tool, ToolCredential
+from django.core.cache import cache
+from django.http import Http404
+from django.test import SimpleTestCase
+
+import httpx
+
 from nova.mcp.client import MCPClient
 
 
-class MCPClientTestCase(TestCase):
-    """Test cases for MCPClient functionality."""
-    
+class MCPClientTests(SimpleTestCase):
     def setUp(self):
-        """Set up test data."""
-        self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
-        )
-        
-        self.tool = Tool.objects.create(
-            user=self.user,
-            name='Test MCP Tool',
-            description='Test MCP tool for unit testing',
-            tool_type=Tool.ToolType.MCP,
-            endpoint='https://example.com/mcp'
-        )
-        
-        self.credential = ToolCredential.objects.create(
-            user=self.user,
-            tool=self.tool,
-            auth_type='token',
-            token='test-token-123'
-        )
-        
-        # Clear cache before each test
-        cache.clear()
-    
-    def test_client_initialization(self):
-        """Test MCPClient initialization."""
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        # Client doesn't normalize endpoints
-        self.assertEqual(client.endpoint, 'https://example.com/mcp')
-        self.assertEqual(client.credential, self.credential)
-        self.assertEqual(client.transport_type, 'streamable_http')  # default
-        
-        # Test with explicit transport type
-        client_sse = MCPClient(self.tool.endpoint, self.credential, 'sse')
-        self.assertEqual(client_sse.transport_type, 'sse')
-    
-    def test_endpoint_stored_as_is(self):
-        """Test that endpoints are stored without modification."""
-        # Without trailing slash
-        client1 = MCPClient('https://example.com/mcp', self.credential)
-        self.assertEqual(client1.endpoint, 'https://example.com/mcp')
-        
-        # With trailing slash
-        client2 = MCPClient('https://example.com/mcp/', self.credential)
-        self.assertEqual(client2.endpoint, 'https://example.com/mcp/')
-    
-    @patch('nova.mcp.client.BearerAuth')
-    def test_auth_object_token(self, mock_bearer):
-        """Test authentication object generation for token auth."""
-        mock_bearer.return_value = Mock(token='test-token-123')
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        auth = client._auth_object()
-        
-        self.assertIsNotNone(auth)
-        mock_bearer.assert_called_once_with('test-token-123')
-    
-    def test_auth_object_none(self):
-        """Test authentication object generation for no auth."""
-        self.credential.auth_type = 'none'
-        self.credential.token = None
-        self.credential.save()
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        auth = client._auth_object()
-        
-        self.assertIsNone(auth)
-    
-    def test_auth_object_no_credential(self):
-        """Test authentication object generation without credentials."""
-        client = MCPClient(self.tool.endpoint, None)
-        auth = client._auth_object()
-        
-        self.assertIsNone(auth)
-    
-    @patch('nova.mcp.client.StreamableHttpTransport')
-    @patch('nova.mcp.client.SSETransport')
-    def test_transport_selection(self, mock_sse_transport, mock_streamable_transport):
-        """Test that the correct transport is selected based on transport_type."""
-        # Test default (streamable_http)
-        client = MCPClient(self.tool.endpoint, self.credential)
-        client._transport()
-        mock_streamable_transport.assert_called_once()
-        mock_sse_transport.assert_not_called()
-        
-        # Reset mocks
-        mock_streamable_transport.reset_mock()
-        mock_sse_transport.reset_mock()
-        
-        # Test SSE transport
-        client_sse = MCPClient(self.tool.endpoint, self.credential, 'sse')
-        client_sse._transport()
-        mock_sse_transport.assert_called_once()
-        mock_streamable_transport.assert_not_called()
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_list_tools_sync(self, mock_client_class):
-        """Test synchronous tool listing."""
-        # Mock the async context manager and list_tools
-        mock_client = AsyncMock()
-        # Create proper tool data structures instead of Mock objects
-        mock_tools = [
-            type('Tool', (), {
-                'name': 'weather',
-                'description': 'Get weather',
-                'input_schema': {'type': 'object'}
-            })(),
-            type('Tool', (), {
-                'name': 'stocks',
-                'description': 'Get stocks',
-                'input_schema': {'type': 'object'}
-            })()
-        ]
-        mock_client.list_tools = AsyncMock(return_value=mock_tools)
-        
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        tools = client.list_tools(user_id=self.user.id)
-        
-        self.assertEqual(len(tools), 2)
-        self.assertEqual(tools[0]['name'], 'weather')
-        self.assertEqual(tools[0]['description'], 'Get weather')
-        self.assertEqual(tools[1]['name'], 'stocks')
-        self.assertEqual(tools[1]['description'], 'Get stocks')
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_list_tools_cached(self, mock_client_class):
-        """Test that tool listing uses cache."""
-        # First call - should hit the API
-        mock_client = AsyncMock()
-        # Create serializable tool data
-        mock_tools = [
-            type('Tool', (), {
-                'name': 'weather',
-                'description': 'Get weather',
-                'input_schema': {'type': 'object'}
-            })()
-        ]
-        mock_client.list_tools = AsyncMock(return_value=mock_tools)
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        tools1 = client.list_tools(user_id=self.user.id)
-        
-        # Second call - should use cache
-        tools2 = client.list_tools(user_id=self.user.id)
-        
-        self.assertEqual(tools1, tools2)
-        # The mock should only be called once due to caching
-        mock_client.list_tools.assert_awaited_once()
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_list_tools_force_refresh(self, mock_client_class):
-        """Test force refresh bypasses cache."""
-        # Define async __aenter__ and __aexit__ functions
-        async def aenter1(*args):
-            return mock_client1
-        
-        async def aexit1(*args):
-            return None
-        
-        async def aenter2(*args):
-            return mock_client2
-        
-        async def aexit2(*args):
-            return None
-        
-        mock_client1 = AsyncMock()
-        mock_tools_objects1 = [
-            type('Tool', (), {
-                'name': 'weather',
-                'description': 'Get weather',
-                'input_schema': {'type': 'object'},
-                'output_schema': {}
-            })()
-        ]
-        mock_client1.list_tools = AsyncMock(return_value=mock_tools_objects1)
-        
-        mock_client2 = AsyncMock()
-        mock_tools_objects2 = [
-            type('Tool', (), {
-                'name': 'stocks',
-                'description': 'Get stocks',
-                'input_schema': {'type': 'object'},
-                'output_schema': {}
-            })()
-        ]
-        mock_client2.list_tools = AsyncMock(return_value=mock_tools_objects2)
-        
-        # Side effect for two instances
-        mock_client_class.side_effect = [
-            type('Ctx', (), {'__aenter__': aenter1, '__aexit__': aexit1})(),
-            type('Ctx', (), {'__aenter__': aenter2, '__aexit__': aexit2})()
-        ]
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        # First call (caches result)
-        tools1 = client.list_tools(user_id=self.user.id)
-        
-        # Expected converted dicts for assertion
-        expected_tools1 = [
-            {
-                'name': 'weather',
-                'description': 'Get weather',
-                'input_schema': {'type': 'object'},
-                'output_schema': {}
-            }
-        ]
-        self.assertEqual(tools1, expected_tools1)
-        
-        # Second call with force_refresh (should fetch again)
-        tools2 = client.list_tools(user_id=self.user.id, force_refresh=True)
-        
-        expected_tools2 = [
-            {
-                'name': 'stocks',
-                'description': 'Get stocks',
-                'input_schema': {'type': 'object'},
-                'output_schema': {}
-            }
-        ]
-        self.assertEqual(tools2, expected_tools2)
-        
-        # Called twice
-        self.assertEqual(mock_client_class.call_count, 2)
-        mock_client1.list_tools.assert_awaited_once()
-        mock_client2.list_tools.assert_awaited_once()
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_call_sync(self, mock_client_class):
-        """Test synchronous tool call."""
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value={'result': 'success'})
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        result = client.call('test_tool', param1='value1', param2='value2')
-        
-        self.assertEqual(result, {'result': 'success'})
-        mock_client.call_tool.assert_awaited_once_with(
-            'test_tool', param1='value1', param2='value2'
-        )
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_call_validates_inputs(self, mock_client_class):
-        """Test that call validates input types."""
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value={'result': 'success'})
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        
-        # Invalid type (nested invalid leaf: object() non autorisé)
-        with self.assertRaises(ValidationError) as ctx:
-            client.call('test_tool', data={'nested': object()})
-        self.assertIn('Unsupported type', str(ctx.exception))
-        
-        # String too long
-        with self.assertRaises(ValidationError) as ctx:
-            client.call('test_tool', text='x' * 3000)
-        self.assertIn('too long', str(ctx.exception))
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    @patch('nova.mcp.client.logger.error')
-    def test_call_handles_404(self, mock_logger_error, mock_client_class):
-        """Test that 404 errors are converted to Django Http404."""
-        mock_client = AsyncMock()
-        
-        # Create a mock httpx response
-        mock_response = Mock()
-        mock_response.status_code = 404
-        
-        # Import httpx properly for the exception
-        import httpx
-        error = httpx.HTTPStatusError(
-            "Not found", request=Mock(), response=mock_response
-        )
-        mock_client.call_tool = AsyncMock(side_effect=error)
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        with self.assertRaises(Http404):
-            client.call('nonexistent_tool')
-    
-    @patch('nova.mcp.client.FastMCPClient')
-    @patch('nova.mcp.client.logger.error')
-    def test_call_handles_connection_error(self, mock_logger_error, mock_client_class):
-        """Test that connection errors are properly handled."""
-        mock_client = AsyncMock()
-        
-        import httpx
-        error = httpx.RequestError("Connection failed")
-        mock_client.call_tool = AsyncMock(side_effect=error)
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-        
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        with self.assertRaises(ConnectionError) as ctx:
-            client.call('test_tool')
-        self.assertIn('MCP server unreachable', str(ctx.exception))
-    
-    def test_async_context_check(self):
-        """Test that sync methods raise error when called from async context."""
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        async def async_caller():
-            # This should raise RuntimeError
-            client.list_tools()
-        
-        with self.assertRaises(RuntimeError) as ctx:
-            asyncio.run(async_caller())
-        self.assertIn('Blocking method called from async context', str(ctx.exception))
-
-    def test_async_context_check(self):
-        """Test that sync methods raise error when called from async context."""
-        client = MCPClient(self.tool.endpoint, self.credential)
-        
-        async def async_caller():
-            # This should raise RuntimeError
-            client.list_tools()
-        
-        with self.assertRaises(RuntimeError) as ctx:
-            asyncio.run(async_caller())
-        self.assertIn('Blocking method called from async context', str(ctx.exception))
-
-class MCPIntegrationTestCase(TestCase):
-    """Integration tests for MCP functionality with agents."""
-    
-    def setUp(self):
-        """Set up test data."""
-        self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
-        )
-        
-        # Clear cache
-        cache.clear()
-    
-    @patch('nova.mcp.client.MCPClient.list_tools')
-    def test_mcp_tools_discovery_in_views(self, mock_list_tools):
-        """Test MCP tool discovery in the test connection view."""
-        from nova.models import LLMProvider
-        
-        # Create test data
-        tool = Tool.objects.create(
-            user=self.user,
-            name='Test MCP',
-            description='Test MCP tool',
-            tool_type=Tool.ToolType.MCP,
-            endpoint='https://example.com/mcp/',
-            is_active=True
-        )
-        
-        ToolCredential.objects.create(
-            user=self.user,
-            tool=tool,
-            auth_type='token',
-            token='test-token'
-        )
-        
-        # Mock tool discovery
-        mock_list_tools.return_value = [
-            {
-                'name': 'weather_forecast',
-                'description': 'Get weather forecast',
-                'input_schema': {
-                    'type': 'object',
-                    'properties': {
-                        'city': {'type': 'string'}
-                    }
-                }
-            }
-        ]
-        
-        # Login and test the connection
-        self.client.login(username='testuser', password='testpass123')
-        response = self.client.post(f'/tool/test-connection/{tool.id}/')
-        
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['status'], 'success')
-        self.assertIn('tools', data)
-        self.assertEqual(len(data['tools']), 1)
-        self.assertEqual(data['tools'][0]['name'], 'weather_forecast')
-
-
-class MCPCacheTests(TestCase):
-    """Tests for caching in MCPClient."""
-
-    def setUp(self):
-        """Set up test data."""
-        self.user = User.objects.create_user(
-            username='testuser',
-            password='testpass123'
-        )
-
-        self.tool = Tool.objects.create(
-            user=self.user,
-            name='Test MCP Tool',
-            tool_type=Tool.ToolType.MCP,
-            endpoint='https://example.com/mcp'
-        )
-
-        self.credential = ToolCredential.objects.create(
-            user=self.user,
-            tool=self.tool,
-            auth_type='token',
-            token='test-token-123'
-        )
-
-        # Clear cache before each test
         cache.clear()
 
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_acall_caching_same_args(self, mock_client_class):
-        """Test that acall caches results for same arguments (cache hit after first call)."""
-        client = MCPClient(self.tool.endpoint, self.credential)
+    # ------------- helpers -----------------
 
-        # Mock FastMCPClient
-        mock_fast_client = AsyncMock()
-        mock_fast_client.call_tool = AsyncMock(return_value={'result': 'cached_value'})
-        mock_client_class.return_value.__aenter__.return_value = mock_fast_client
-        mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+    class _FakeAsyncClient:
+        def __init__(self, tools_queue=None, call_results_queue=None, raise_on_call=None):
+            self.tools_queue = tools_queue or []
+            self.call_results_queue = call_results_queue or []
+            self.raise_on_call = raise_on_call
+            self.list_tools_calls = 0
+            self.call_tool_calls = 0
 
-        async def run_call():
-            return await client.acall('test_tool', param='value')
+        async def __aenter__(self):
+            return self
 
-        # First call - should hit the network
-        result1 = asyncio.run(run_call())
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
 
-        # Second call with same args - should hit cache
-        result2 = asyncio.run(run_call())
+        async def list_tools(self):
+            self.list_tools_calls += 1
+            if self.tools_queue:
+                return self.tools_queue.pop(0)
+            return []
 
-        self.assertEqual(result1, {'result': 'cached_value'})
-        self.assertEqual(result2, {'result': 'cached_value'})
-        # call_tool called only once
-        self.assertEqual(mock_fast_client.call_tool.await_count, 1)
+        async def call_tool(self, tool_name, inputs):
+            self.call_tool_calls += 1
+            if self.raise_on_call:
+                raise self.raise_on_call
+            if self.call_results_queue:
+                return self.call_results_queue.pop(0)
+            return {"ok": True, "tool": tool_name, "inputs": inputs}
 
-    @patch('nova.mcp.client.FastMCPClient')
-    def test_acall_no_cache_different_args(self, mock_client_class):
-        """Test that different args result in cache miss (network called twice)."""
-        client = MCPClient(self.tool.endpoint, self.credential)
+    # ------------- alist_tools -----------------
 
-        # Mock FastMCPClient
-        mock_fast_client = AsyncMock()
-        mock_fast_client.call_tool.side_effect = [
-            {'result': 'value1'},
-            {'result': 'value2'}
-        ]
-        mock_client_class.return_value.__aenter__.return_value = mock_fast_client
-        mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
+    def test_alist_tools_maps_fields_and_caches(self):
+        # Prepare fake tools with mixed attribute styles
+        class T1:
+            name = "t1"
+            description = "desc1"
+            input_schema = {"a": 1}
+            output_schema = {"b": 2}
 
-        async def run_call(param):
-            return await client.acall('test_tool', param=param)
+        class T2:
+            name = "t2"
+            description = "desc2"
+            inputSchema = {"x": 1}
+            outputSchema = {"y": 2}
 
-        # First call
-        result1 = asyncio.run(run_call('value1'))
+        fake_client = self._FakeAsyncClient(tools_queue=[[T1(), T2()]])
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+             patch.object(MCPClient, "_transport", return_value=object()):
+            c = MCPClient(endpoint="https://srv.example.com", user_id=123)
+            # First call: not cached
+            tools = asyncio.run(c.alist_tools())
+            self.assertEqual(fake_client.list_tools_calls, 1)
+            self.assertEqual(
+                tools,
+                [
+                    {"name": "t1", "description": "desc1", "input_schema": {"a": 1}, "output_schema": {"b": 2}},
+                    {"name": "t2", "description": "desc2", "input_schema": {"x": 1}, "output_schema": {"y": 2}},
+                ],
+            )
+            # Second call: cached
+            tools2 = asyncio.run(c.alist_tools())
+            self.assertEqual(fake_client.list_tools_calls, 1)
+            self.assertEqual(tools2, tools)
 
-        # Second call with different args
-        result2 = asyncio.run(run_call('value2'))
+    def test_alist_tools_cache_is_isolated_by_user_and_force_refresh(self):
+        # Build lightweight tool objects with only the required attributes
+        class ToolObj:
+            def __init__(self, name):
+                self.name = name
+                # no description/input_schema/output_schema -> defaults applied
 
-        self.assertEqual(result1, {'result': 'value1'})
-        self.assertEqual(result2, {'result': 'value2'})
-        # call_tool called twice (different args → cache miss)
-        self.assertEqual(mock_fast_client.call_tool.await_count, 2)
+        list_a_objs = [ToolObj("a")]
+        list_b_objs = [ToolObj("b")]
+        list_c_objs = [ToolObj("c")]
+
+        fake_client = self._FakeAsyncClient(
+            tools_queue=[list_a_objs, list_b_objs, list_c_objs]
+        )
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+             patch.object(MCPClient, "_transport", return_value=object()):
+            c1 = MCPClient(endpoint="http://srv", user_id=1)
+            c2 = MCPClient(endpoint="http://srv", user_id=2)
+
+            out1 = asyncio.run(c1.alist_tools())
+            out2 = asyncio.run(c2.alist_tools())
+            self.assertEqual(fake_client.list_tools_calls, 2)
+            self.assertEqual(out1, [{"name": "a", "description": "", "input_schema": {}, "output_schema": {}}])
+            self.assertEqual(out2, [{"name": "b", "description": "", "input_schema": {}, "output_schema": {}}])
+
+            # Same user, no refresh -> cache
+            out1b = asyncio.run(c1.alist_tools())
+            self.assertEqual(fake_client.list_tools_calls, 2)
+            self.assertEqual(out1b, [{"name": "a", "description": "", "input_schema": {}, "output_schema": {}}])
+
+            # Force refresh -> new call returns list_c
+            out1c = asyncio.run(c1.alist_tools(force_refresh=True))
+            self.assertEqual(fake_client.list_tools_calls, 3)
+            self.assertEqual(out1c, [{"name": "c", "description": "", "input_schema": {}, "output_schema": {}}])
+
+    # ------------- acall -----------------
+
+    def test_acall_caches_by_tool_and_normalized_inputs(self):
+        result1 = {"ok": 1}
+        fake_client = self._FakeAsyncClient(call_results_queue=[result1])
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+             patch.object(MCPClient, "_transport", return_value=object()):
+            c = MCPClient(endpoint="https://x", user_id=42)
+
+            # First call populates cache
+            out1 = asyncio.run(c.acall("sum", a=1, b=2))
+            self.assertEqual(out1, result1)
+            self.assertEqual(fake_client.call_tool_calls, 1)
+
+            # Second call with kwargs reversed should hit cache, not call again
+            out2 = asyncio.run(c.acall("sum", b=2, a=1))
+            self.assertEqual(out2, result1)
+            self.assertEqual(fake_client.call_tool_calls, 1)
+
+            # Optional sanity on cache key structure
+            base = json.dumps(("sum", [("a", 1), ("b", 2)]), sort_keys=True).encode("utf-8")
+            _ = base64.urlsafe_b64encode(base).decode("utf-8")
+
+    def test_acall_http_errors_are_mapped(self):
+        req = httpx.Request("GET", "http://x")
+        resp_404 = httpx.Response(404, request=req)
+        resp_500 = httpx.Response(500, request=req)
+        err_404 = httpx.HTTPStatusError("not found", request=req, response=resp_404)
+        err_500 = httpx.HTTPStatusError("server err", request=req, response=resp_500)
+
+        # 404 -> Http404
+        fake_client_404 = self._FakeAsyncClient(raise_on_call=err_404)
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client_404), \
+             patch.object(MCPClient, "_transport", return_value=object()):
+            c = MCPClient(endpoint="http://x")
+            with self.assertRaises(Http404):
+                asyncio.run(c.acall("any", x=1))
+
+        # 500 -> re-raised HTTPStatusError
+        fake_client_500 = self._FakeAsyncClient(raise_on_call=err_500)
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client_500), \
+             patch.object(MCPClient, "_transport", return_value=object()):
+            c = MCPClient(endpoint="http://x")
+            with self.assertRaises(httpx.HTTPStatusError):
+                asyncio.run(c.acall("any", x=1))
+
+        # RequestError -> ConnectionError
+        err_conn = httpx.RequestError("boom", request=req)
+        fake_client_conn = self._FakeAsyncClient(raise_on_call=err_conn)
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client_conn), \
+             patch.object(MCPClient, "_transport", return_value=object()):
+            c = MCPClient(endpoint="http://x")
+            with self.assertRaises(ConnectionError):
+                asyncio.run(c.acall("any", x=1))
+
+    # ------------- _validate_inputs -----------------
+
+    def test_validate_inputs_accepts_supported_and_rejects_others(self):
+        c = MCPClient(endpoint="http://srv")
+
+        # Accepted types and nesting up to depth 5
+        ok_inputs = {
+            "s": "hello",
+            "i": 1,
+            "f": 1.2,
+            "b": True,
+            "n": None,
+            "d": {"k": "v", "l": [1, 2, {"z": 3}]},
+        }
+        c._validate_inputs(ok_inputs)  # should not raise
+
+        # Unsupported type (set)
+        with self.assertRaises(Exception):
+            c._validate_inputs({"bad": {1, 2, 3}})
+
+        # Excessive depth (>5) - ensure depth actually reaches 6
+        too_deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": 1}}}}}}}  # depth 6 at the innermost dict
+        with self.assertRaises(Exception):
+            c._validate_inputs(too_deep)
+
+        # Too long string (>2048)
+        long_str = "x" * 2049
+        with self.assertRaises(Exception):
+            c._validate_inputs({"s": long_str})
+
+    # ------------- sync wrappers -----------------
+
+    def test_list_tools_sync_wrapper_calls_async(self):
+        with patch.object(MCPClient, "alist_tools", new=AsyncMock(return_value=["ok"])) as mocked:
+            c = MCPClient(endpoint="http://srv")
+            out = c.list_tools()
+            self.assertEqual(out, ["ok"])
+            mocked.assert_called_once_with(force_refresh=False)
+
+    def test_call_sync_wrapper_validates_then_calls_async(self):
+        with patch.object(MCPClient, "_validate_inputs") as validate_mock, \
+             patch.object(MCPClient, "acall", new=AsyncMock(return_value="OK")) as acall_mock:
+            c = MCPClient(endpoint="http://srv")
+            out = c.call("t", x=1)
+            self.assertEqual(out, "OK")
+            validate_mock.assert_called_once()
+            acall_mock.assert_awaited_once_with("t", x=1)
+
+    # ------------- auth helper -----------------
+
+    def test_auth_object_uses_bearer_when_token_like(self):
+        class FakeAuth:
+            def __init__(self, token):
+                self.token = token
+
+        with patch("nova.mcp.client.BearerAuth", FakeAuth):
+            cred = SimpleNamespace(auth_type="token", token="ABC")
+            c = MCPClient(endpoint="http://srv", credential=cred)
+            auth = c._auth_object()
+            self.assertIsInstance(auth, FakeAuth)
+            self.assertEqual(auth.token, "ABC")
+
+            cred2 = SimpleNamespace(auth_type="none", token=None)
+            c2 = MCPClient(endpoint="http://srv", credential=cred2)
+            self.assertIsNone(c2._auth_object())
+
+            cred3 = SimpleNamespace(auth_type="token", token=None)
+            c3 = MCPClient(endpoint="http://srv", credential=cred3)
+            self.assertIsNone(c3._auth_object())

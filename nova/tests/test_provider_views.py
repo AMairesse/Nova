@@ -1,140 +1,162 @@
-from django.test import TestCase, Client
+# nova/tests/test_provider_views.py
+from django.test import TestCase
+from django.contrib.auth import get_user_model
 from django.urls import reverse
-from django.contrib.auth.models import User
-from ..models import LLMProvider
 
-class ProviderViewsTest(TestCase):
+from nova.models import LLMProvider, ProviderType, Agent
+
+
+class ProviderViewsTests(TestCase):
     def setUp(self):
-        self.client = Client()
+        User = get_user_model()
         self.user = User.objects.create_user(
-            username='testuser',
-            password='testpass123'
+            username="alice", email="alice@example.com", password="pass"
         )
-        self.client.force_login(self.user)
-        
-        # Create a test provider
-        self.provider = LLMProvider.objects.create(
-            user=self.user,
-            name="Test Provider",
-            provider_type="mistral",
-            model="mistral-large-latest",
-            api_key="test_key"
+        self.other = User.objects.create_user(
+            username="bob", email="bob@example.com", password="pass"
         )
 
-    def test_create_provider(self):
-        """Test creating a new provider"""
-        provider_data = {
-            'name': 'New Provider',
-            'provider_type': 'openai',
-            'model': 'gpt-4o',
-            'api_key': 'new_test_key',
-            'base_url': 'https://api.openai.com/v1'
+    # ------------------------- create_provider -------------------------
+
+    def test_create_provider_requires_login(self):
+        url = reverse("create_provider")
+        resp = self.client.post(
+            url,
+            data={
+                "name": "My Prov",
+                "provider_type": ProviderType.OPENAI,
+                "model": "gpt-4o-mini",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/accounts/login/", resp["Location"])
+
+    def test_create_provider_creates_record_and_redirects(self):
+        self.client.login(username="alice", password="pass")
+        url = reverse("create_provider")
+        resp = self.client.post(
+            url,
+            data={
+                "name": "My Prov",
+                "provider_type": ProviderType.OPENAI,
+                "model": "gpt-4o-mini",
+                "api_key": "",            # should become None
+                "base_url": "   ",        # should become None
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=providers")
+
+        qs = LLMProvider.objects.filter(user=self.user, name="My Prov")
+        self.assertTrue(qs.exists())
+        prov = qs.get()
+        self.assertEqual(prov.provider_type, ProviderType.OPENAI)
+        self.assertEqual(prov.model, "gpt-4o-mini")
+        self.assertIsNone(prov.api_key)
+        self.assertIsNone(prov.base_url)
+
+    # ------------------------- edit_provider -------------------------
+
+    def _create_provider(self, **overrides) -> LLMProvider:
+        defaults = {
+            "user": self.user,
+            "name": "Prov",
+            "provider_type": ProviderType.MISTRAL,
+            "model": "mistral-small-latest",
+            "api_key": "secret",
+            "base_url": "https://api.example.com",
         }
-        
-        response = self.client.post(reverse('create_provider'), provider_data)
-        
-        # Check redirect
-        self.assertRedirects(response, reverse('user_config') + '?tab=providers')
-        
-        # Check provider was created
-        self.assertTrue(LLMProvider.objects.filter(name='New Provider').exists())
-        
-        # Verify provider details
-        provider = LLMProvider.objects.get(name='New Provider')
-        self.assertEqual(provider.provider_type, 'openai')
-        self.assertEqual(provider.model, 'gpt-4o')
-        self.assertEqual(provider.api_key, 'new_test_key')
-        self.assertEqual(provider.base_url, 'https://api.openai.com/v1')
+        defaults.update(overrides)
+        return LLMProvider.objects.create(**defaults)
 
-    def test_edit_provider(self):
-        """Test editing an existing provider"""
-        edit_data = {
-            'name': 'Updated Provider',
-            'provider_type': 'ollama',
-            'model': 'llama3',
-            'base_url': 'http://localhost:11434'
-        }
-        
-        response = self.client.post(
-            reverse('edit_provider', args=[self.provider.id]), 
-            edit_data
+    def test_edit_provider_requires_login(self):
+        prov = self._create_provider()
+        url = reverse("edit_provider", args=[prov.id])
+        resp = self.client.post(url, data={"name": "New name", "provider_type": ProviderType.OLLAMA})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/accounts/login/", resp["Location"])
+
+    def test_edit_provider_404_for_non_owner(self):
+        prov = self._create_provider()
+        self.client.login(username="bob", password="pass")
+        url = reverse("edit_provider", args=[prov.id])
+        resp = self.client.post(url, data={"name": "Hacked", "provider_type": ProviderType.OLLAMA})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_edit_provider_partial_update_and_redirect(self):
+        prov = self._create_provider()
+        self.client.login(username="alice", password="pass")
+        url = reverse("edit_provider", args=[prov.id])
+
+        # Post empty model/api_key so they should be preserved; base_url present but empty => cleared
+        resp = self.client.post(
+            url,
+            data={
+                "name": "Renamed",
+                "provider_type": ProviderType.OLLAMA,
+                "model": "   ",      # keep original
+                "api_key": "",       # keep original
+                "base_url": "  ",    # clear to None
+            },
         )
-        
-        # Check redirect
-        self.assertRedirects(response, reverse('user_config') + '?tab=providers')
-        
-        # Refresh provider from database
-        self.provider.refresh_from_db()
-        
-        # Verify provider was updated
-        self.assertEqual(self.provider.name, 'Updated Provider')
-        self.assertEqual(self.provider.provider_type, 'ollama')
-        self.assertEqual(self.provider.model, 'llama3')
-        self.assertEqual(self.provider.base_url, 'http://localhost:11434')
-        
-        # API key should not have changed since we didn't provide a new one
-        self.assertEqual(self.provider.api_key, 'test_key')
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=providers")
 
-    def test_edit_provider_with_api_key(self):
-        """Test editing a provider and updating the API key"""
-        edit_data = {
-            'name': 'Updated Provider',
-            'provider_type': 'mistral',
-            'model': 'mistral-small-latest',
-            'api_key': 'new_api_key'
-        }
-        
-        response = self.client.post(
-            reverse('edit_provider', args=[self.provider.id]), 
-            edit_data
+        prov.refresh_from_db()
+        self.assertEqual(prov.name, "Renamed")
+        self.assertEqual(prov.provider_type, ProviderType.OLLAMA)
+        self.assertEqual(prov.model, "mistral-small-latest")  # unchanged
+        self.assertEqual(prov.api_key, "secret")              # unchanged
+        self.assertIsNone(prov.base_url)                      # cleared
+
+    def test_edit_provider_updates_base_url_when_provided(self):
+        prov = self._create_provider(base_url=None)
+        self.client.login(username="alice", password="pass")
+        url = reverse("edit_provider", args=[prov.id])
+
+        resp = self.client.post(
+            url,
+            data={
+                "name": "Prov",
+                "provider_type": ProviderType.OPENAI,
+                "model": "mistral-small-latest",  # unchanged by logic but acceptable
+                "base_url": "https://new.example.org",
+            },
         )
-        
-        # Refresh provider from database
-        self.provider.refresh_from_db()
-        
-        # Verify API key was updated
-        self.assertEqual(self.provider.api_key, 'new_api_key')
+        self.assertEqual(resp.status_code, 302)
+        prov.refresh_from_db()
+        self.assertEqual(prov.provider_type, ProviderType.OPENAI)
+        self.assertEqual(prov.base_url, "https://new.example.org")
 
-    def test_delete_provider(self):
-        """Test deleting a provider"""
-        response = self.client.post(reverse('delete_provider', args=[self.provider.id]))
-        
-        # Check redirect
-        self.assertRedirects(response, reverse('user_config') + '?tab=providers')
-        
-        # Verify provider was deleted
-        self.assertFalse(LLMProvider.objects.filter(id=self.provider.id).exists())
+    # ------------------------- delete_provider -------------------------
 
-    def test_delete_provider_with_agents(self):
-        """Test deleting a provider that has agents associated with it"""
-        # Create an agent that uses the provider
-        from ..models import Agent
-        agent = Agent.objects.create(
-            user=self.user,
-            name="Test Agent",
-            llm_provider=self.provider,
-            system_prompt="You are a test agent"
-        )
-        
-        response = self.client.post(reverse('delete_provider', args=[self.provider.id]))
-        
-        # Check redirect
-        self.assertRedirects(response, reverse('user_config') + '?tab=providers')
-        
-        # Verify provider was deleted
-        self.assertFalse(LLMProvider.objects.filter(id=self.provider.id).exists())
-        
-        # Verify agent was also deleted
-        self.assertFalse(Agent.objects.filter(id=agent.id).exists())
+    def test_delete_provider_requires_login(self):
+        prov = self._create_provider()
+        url = reverse("delete_provider", args=[prov.id])
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/accounts/login/", resp["Location"])
 
-    def test_user_config_view_includes_providers(self):
-        """Test that the user config view includes providers in the context"""
-        response = self.client.get(reverse('user_config'))
-        
-        # Check that providers are in the context
-        self.assertIn('llm_providers', response.context)
-        
-        # Check that our test provider is in the list
-        providers = response.context['llm_providers']
-        self.assertEqual(len(providers), 1)
-        self.assertEqual(providers[0].name, 'Test Provider')
+    def test_delete_provider_404_for_non_owner(self):
+        prov = self._create_provider()
+        self.client.login(username="bob", password="pass")
+        url = reverse("delete_provider", args=[prov.id])
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_delete_provider_deletes_agents_and_provider(self):
+        prov = self._create_provider()
+        # Create a couple of agents using this provider
+        a1 = Agent.objects.create(user=self.user, name="A1", llm_provider=prov, system_prompt="x")
+        a2 = Agent.objects.create(user=self.user, name="A2", llm_provider=prov, system_prompt="y")
+        self.assertEqual(Agent.objects.filter(llm_provider=prov).count(), 2)
+
+        self.client.login(username="alice", password="pass")
+        url = reverse("delete_provider", args=[prov.id])
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=providers")
+
+        # Agents removed first, then provider removed
+        self.assertFalse(Agent.objects.filter(pk__in=[a1.pk, a2.pk]).exists())
+        self.assertFalse(LLMProvider.objects.filter(pk=prov.pk).exists())
