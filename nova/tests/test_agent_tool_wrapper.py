@@ -7,6 +7,15 @@ from unittest.mock import patch, MagicMock
 
 
 class AgentToolWrapperTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.AgentToolWrapper = self._import_wrapper()
+
+    def tearDown(self):
+        super().tearDown()
+        sys.modules.pop("nova.tools.agent_tool_wrapper", None)
+        sys.modules.pop("langchain_core.tools", None)
+
     @staticmethod
     def _install_fake_langchain_tools():
         # Provide a minimal fake of langchain_core.tools.StructuredTool
@@ -36,15 +45,13 @@ class AgentToolWrapperTests(TestCase):
         return AgentToolWrapper
 
     def test_create_langchain_tool_shape_schema_and_name(self):
-        AgentToolWrapper = self._import_wrapper()
-
         # Agent stub with minimal fields used by wrapper
         agent_stub = SimpleNamespace(
             name="Sub Agent 1",
             tool_description="Can help with subtask 1",
         )
 
-        wrapper = AgentToolWrapper(
+        wrapper = self.AgentToolWrapper(
             agent=agent_stub,
             parent_user=SimpleNamespace(id=1),
             parent_config={"configurable": {"thread_id": "T-123"}, "callbacks": []},
@@ -69,8 +76,6 @@ class AgentToolWrapperTests(TestCase):
         self.assertTrue(callable(tool["coroutine"]))
 
     def test_execute_agent_success_invokes_and_cleans_up_and_tags(self):
-        AgentToolWrapper = self._import_wrapper()
-
         # Fake LLMAgent with async factory 'create', then async 'invoke' and 'cleanup'
         class FakeLLMAgent:
             def __init__(self, result="OK"):
@@ -117,7 +122,7 @@ class AgentToolWrapperTests(TestCase):
         parent_user = SimpleNamespace(id=42)
         parent_config = {"configurable": {"thread_id": "PARENT-T"}, "callbacks": [cb]}
 
-        wrapper = AgentToolWrapper(agent=agent_stub, parent_user=parent_user, parent_config=parent_config)
+        wrapper = self.AgentToolWrapper(agent=agent_stub, parent_user=parent_user, parent_config=parent_config)
 
         # Patch the LLMAgent symbol used in the module under test
         with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
@@ -135,8 +140,6 @@ class AgentToolWrapperTests(TestCase):
         # Simpler: ensure no exception was raised and behavior matched expected path.
 
     def test_execute_agent_failure_returns_formatted_error_and_cleans_up(self):
-        AgentToolWrapper = self._import_wrapper()
-
         class FailingLLMAgent:
             def __init__(self):
                 self.cleanup_called = False
@@ -152,7 +155,7 @@ class AgentToolWrapperTests(TestCase):
                 self.cleanup_called = True
 
         agent_stub = SimpleNamespace(name="SubTool X", tool_description="desc")
-        wrapper = AgentToolWrapper(
+        wrapper = self.AgentToolWrapper(
             agent=agent_stub,
             parent_user=SimpleNamespace(id=1),
             parent_config={"configurable": {"thread_id": "TID"}, "callbacks": []},

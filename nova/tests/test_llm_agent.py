@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 # We import Django models only for the ProviderType enum; no DB operations are needed.
 from nova.models import ProviderType
+import nova.llm_agent as llm_agent_mod
 
 
 class LLMAgentTests(IsolatedAsyncioTestCase):
@@ -159,23 +160,12 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             "nova.tools.agent_tool_wrapper": atw_mod,
         }
 
-    def _import_llm_agent(self):
-        # Import the module under test with a robust path resolution
-        try:
-            mod = importlib.import_module("nova.llm.agent")
-        except Exception:
-            mod = importlib.import_module("nova.llm_agent")
-        return mod
-
     # ---------------- build_system_prompt ----------------
 
     def test_build_system_prompt_default_and_template(self):
         fakes = self._get_fake_third_party_modules()
         with patch.dict(sys.modules, fakes):
-            llm_agent_mod = self._import_llm_agent()
-            LLMAgent = llm_agent_mod.LLMAgent
-
-            agent = LLMAgent(
+            agent = llm_agent_mod.LLMAgent(
                 user=SimpleNamespace(id=1),
                 thread_id="t1",
                 system_prompt=None,
@@ -184,7 +174,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             self.assertIn("You are a helpful assistant", default_prompt)
 
             # With a template using {today}
-            agent2 = LLMAgent(
+            agent2 = llm_agent_mod.LLMAgent(
                 user=SimpleNamespace(id=2),
                 thread_id="t2",
                 system_prompt="Today is {today}.",
@@ -198,12 +188,9 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
     def test_create_llm_agent_factory_and_errors(self):
         fakes = self._get_fake_third_party_modules()
         with patch.dict(sys.modules, fakes):
-            llm_agent_mod = self._import_llm_agent()
-            LLMAgent = llm_agent_mod.LLMAgent
-
             # Happy path: OPENAI provider -> returns instance of our fake ChatOpenAI
             provider = SimpleNamespace(provider_type=ProviderType.OPENAI, model="m", api_key="k", base_url=None)
-            agent = LLMAgent(
+            agent = llm_agent_mod.LLMAgent(
                 user=SimpleNamespace(id=1),
                 thread_id="t",
                 system_prompt=None,
@@ -214,7 +201,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             self.assertEqual(obj.__class__.__name__, "ChatOpenAI")
 
             # Error when provider not configured
-            agent2 = LLMAgent(
+            agent2 = llm_agent_mod.LLMAgent(
                 user=SimpleNamespace(id=1),
                 thread_id="t",
                 system_prompt=None,
@@ -225,7 +212,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 agent2.create_llm_agent()
 
             # Unsupported provider type
-            agent3 = LLMAgent(
+            agent3 = llm_agent_mod.LLMAgent(
                 user=SimpleNamespace(id=1),
                 thread_id="t",
                 system_prompt=None,
@@ -240,9 +227,6 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
     async def test_cleanup_calls_close_on_loaded_modules(self):
         fakes = self._get_fake_third_party_modules()
         with patch.dict(sys.modules, fakes):
-            llm_agent_mod = self._import_llm_agent()
-            LLMAgent = llm_agent_mod.LLMAgent
-
             class BuiltinModule:
                 def __init__(self):
                     self.closed = False
@@ -250,7 +234,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 async def close(self, agent):
                     self.closed = True
 
-            agent = LLMAgent(user=SimpleNamespace(id=1), thread_id="t")
+            agent = llm_agent_mod.LLMAgent(user=SimpleNamespace(id=1), thread_id="t")
             m1, m2 = BuiltinModule(), BuiltinModule()
             agent._loaded_builtin_modules = [m1, m2]
 
@@ -320,9 +304,6 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         })
 
         with patch.dict(sys.modules, fakes):
-            llm_agent_mod = self._import_llm_agent()
-            LLMAgent = llm_agent_mod.LLMAgent
-
             # Patch StructuredTool in the imported module to a fake that returns a dict
             class FakeStructuredTool:
                 @classmethod
@@ -336,7 +317,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             mcp_tools_data = [(mcp_tool_obj, SimpleNamespace(user=SimpleNamespace(id=1)), None, 1)]
             agent_tools = [SimpleNamespace(name="delegate_agent")]
 
-            agent = LLMAgent(
+            agent = llm_agent_mod.LLMAgent(
                 user=SimpleNamespace(id=99),
                 thread_id="T123",
                 builtin_tools=builtin_tools,
@@ -376,9 +357,6 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
     async def test_invoke_awaits_and_extracts_final_answer(self):
         fakes = self._get_fake_third_party_modules()
         with patch.dict(sys.modules, fakes):
-            llm_agent_mod = self._import_llm_agent()
-            LLMAgent = llm_agent_mod.LLMAgent
-
             # Fake agent with async ainvoke
             class FakeAgent:
                 def __init__(self):
@@ -390,7 +368,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
 
             # Patch extract_final_answer in module namespace
             with patch.object(llm_agent_mod, "extract_final_answer", lambda output: "FINAL"):
-                agent = LLMAgent(user=SimpleNamespace(id=1), thread_id="t", system_prompt=None, llm_provider=SimpleNamespace(provider_type=ProviderType.OPENAI))
+                agent = llm_agent_mod.LLMAgent(user=SimpleNamespace(id=1), thread_id="t", system_prompt=None, llm_provider=SimpleNamespace(provider_type=ProviderType.OPENAI))
                 agent.agent = FakeAgent()
 
                 out = await agent.invoke("Hello", silent_mode=True)

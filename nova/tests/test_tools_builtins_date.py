@@ -8,6 +8,16 @@ from django.test import SimpleTestCase
 
 
 class DateBuiltinTests(SimpleTestCase):
+    def setUp(self):
+        super().setUp()
+        self.mod = self._import_date_module_with_fakes()
+
+    def tearDown(self):
+        super().tearDown()
+        sys.modules.pop("nova.tools.builtins.date", None)
+        sys.modules.pop("langchain_core.tools", None)
+        sys.modules.pop("nova.llm_agent", None)
+
     def _import_date_module_with_fakes(self):
         # Fake langchain_core.tools.StructuredTool
         lc_core_tools = types.ModuleType("langchain_core.tools")
@@ -43,36 +53,32 @@ class DateBuiltinTests(SimpleTestCase):
         return mod
 
     def test_pure_functions(self):
-        mod = self._import_date_module_with_fakes()
-
         # current_date format YYYY-MM-DD
-        s = mod.current_date()
+        s = self.mod.current_date()
         self.assertRegex(s, r"^\d{4}-\d{2}-\d{2}$")
 
         # current_datetime format YYYY-MM-DD HH:MM:SS and parseable
-        dt = mod.current_datetime()
+        dt = self.mod.current_datetime()
         self.assertRegex(dt, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
         datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")  # should not raise
 
         # add_days
-        self.assertEqual(mod.add_days("2024-01-31", 1), "2024-02-01")
-        self.assertEqual(mod.add_days("2024-03-01", -1), "2024-02-29")  # leap year
+        self.assertEqual(self.mod.add_days("2024-01-31", 1), "2024-02-01")
+        self.assertEqual(self.mod.add_days("2024-03-01", -1), "2024-02-29")  # leap year
 
         # add_weeks
-        self.assertEqual(mod.add_weeks("2024-01-01", 1), "2024-01-08")
-        self.assertEqual(mod.add_weeks("2024-01-08", -1), "2024-01-01")
+        self.assertEqual(self.mod.add_weeks("2024-01-01", 1), "2024-01-08")
+        self.assertEqual(self.mod.add_weeks("2024-01-08", -1), "2024-01-01")
 
         # count_days
-        self.assertEqual(mod.count_days("2024-01-01", "2024-01-31"), 30)
-        self.assertEqual(mod.count_days("2024-01-31", "2024-01-01"), -30)
+        self.assertEqual(self.mod.count_days("2024-01-01", "2024-01-31"), 30)
+        self.assertEqual(self.mod.count_days("2024-01-31", "2024-01-01"), -30)
 
     def test_get_functions_returns_five_structured_tools_with_expected_schema(self):
-        mod = self._import_date_module_with_fakes()
-
         class DummyAgent:
             pass
 
-        tools = asyncio.run(mod.get_functions(tool=object(), agent=DummyAgent()))
+        tools = asyncio.run(self.mod.get_functions(tool=object(), agent=DummyAgent()))
         self.assertEqual(len(tools), 5)
 
         # Map by name for easier assertions
@@ -84,13 +90,13 @@ class DateBuiltinTests(SimpleTestCase):
         t = by_name["current_date"]
         self.assertEqual(t["description"], "Return the current date (format: YYYY-MM-DD)")
         self.assertEqual(t["args_schema"], {"type": "object", "properties": {}, "required": []})
-        self.assertIs(t["func"], mod.current_date)
+        self.assertIs(t["func"], self.mod.current_date)
 
         # current_datetime
         t = by_name["current_datetime"]
         self.assertEqual(t["description"], "Return the current date and time (format: YYYY-MM-DD HH:MM:SS)")
         self.assertEqual(t["args_schema"], {"type": "object", "properties": {}, "required": []})
-        self.assertIs(t["func"], mod.current_datetime)
+        self.assertIs(t["func"], self.mod.current_datetime)
 
         # add_days
         t = by_name["add_days"]
@@ -104,7 +110,7 @@ class DateBuiltinTests(SimpleTestCase):
         self.assertEqual(schema["properties"]["days"]["type"], "integer")
         self.assertEqual(schema["properties"]["date"]["type"], "string")
         self.assertTrue(re.match(r"^\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$$", schema["properties"]["date"]["pattern"]))
-        self.assertIs(t["func"], mod.add_days)
+        self.assertIs(t["func"], self.mod.add_days)
 
         # add_weeks
         t = by_name["add_weeks"]
@@ -114,7 +120,7 @@ class DateBuiltinTests(SimpleTestCase):
         self.assertIn("date", schema.get("required", []))
         self.assertIn("weeks", schema.get("required", []))
         self.assertEqual(schema["properties"]["weeks"]["type"], "integer")
-        self.assertIs(t["func"], mod.add_weeks)
+        self.assertIs(t["func"], self.mod.add_weeks)
 
         # count_days
         t = by_name["count_days"]
@@ -126,4 +132,4 @@ class DateBuiltinTests(SimpleTestCase):
         self.assertIn("end_date", schema.get("required", []))
         self.assertEqual(schema["properties"]["start_date"]["type"], "string")
         self.assertEqual(schema["properties"]["end_date"]["type"], "string")
-        self.assertIs(t["func"], mod.count_days)
+        self.assertIs(t["func"], self.mod.count_days)
