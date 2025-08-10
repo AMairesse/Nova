@@ -255,9 +255,9 @@ async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
         error_message = _("Error when searching events : {}")
         return error_message.format(e)
 
-def test_caldav_access(user, tool_id):  # Remains sync (test function, not called in async)
+async def test_caldav_access(user, tool_id):
     try:
-        result = list_calendars(user, tool_id)
+        result = await list_calendars(user, tool_id)
         
         if "error" in result.lower():
             return JsonResponse({"status": "error", "message": result})

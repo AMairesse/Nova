@@ -207,8 +207,7 @@ async def test_tool_connection(request, tool_id):
                 })
                 
         elif tool.tool_type == Tool.ToolType.BUILTIN:
-            # Sync function for builtin test (wrap potential sync ops)
-            def builtin_test_sync(tool, request):
+            async def builtin_test_sync(tool, request):
                 module = import_module(tool.python_path)
                 metadata = get_metadata(tool.python_path)
                 
@@ -227,10 +226,10 @@ async def test_tool_connection(request, tool_id):
                         args.append(None)
 
                 # Call the function
-                result = test_function(*args)
+                result = await test_function(*args)
                 return result
             
-            result = await sync_to_async(builtin_test_sync)(tool, request)
+            result = await builtin_test_sync(tool, request)
             return JsonResponse(result) if isinstance(result, dict) else JsonResponse({"status": "error", "message": str(result)})
 
         else:

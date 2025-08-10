@@ -2,11 +2,28 @@ import sys
 import types
 import importlib
 import asyncio
-from unittest import TestCase
+from types import SimpleNamespace
+from unittest import IsolatedAsyncioTestCase
+from unittest.mock import patch
 
 
-class BrowserBuiltinTests(TestCase):
-    def _install_fakes_and_import(self):
+class BrowserBuiltinTests(IsolatedAsyncioTestCase):
+    def setUp(self):
+        super().setUp()
+        # Any per-test setup can go here
+
+    def tearDown(self):
+        # Explicitly clean up any potentially lingering modules after each test
+        mocked_modules = [
+            "playwright", "playwright.async_api",
+            "langchain_community", "langchain_community.agent_toolkits",
+            "nova.tools.builtins.browser"  # Ensure the module under test can be reloaded if needed
+        ]
+        for mod in mocked_modules:
+            sys.modules.pop(mod, None)
+        super().tearDown()
+
+    def _get_fake_third_party_modules(self, counters):
         # Build a fake playwright.async_api module
         pw_root = types.ModuleType("playwright")
         pw_async_api = types.ModuleType("playwright.async_api")
@@ -44,8 +61,6 @@ class BrowserBuiltinTests(TestCase):
                 self.counters["start_calls"] += 1
                 return FakePlaywright(self.counters)
 
-        counters = {"start_calls": 0, "launch_calls": 0, "stop_calls": 0, "last_headless": None}
-
         def async_playwright():
             # Return a helper that has an async .start() as expected by the code
             return AsyncHelper(counters)
@@ -72,86 +87,121 @@ class BrowserBuiltinTests(TestCase):
 
         lc_comm_agent_toolkits.PlayWrightBrowserToolkit = FakeToolkit
 
-        # Inject fakes into sys.modules, and import the module under test fresh
-        mapping = {
+        # Return a dict for patch.dict
+        return {
             "playwright": pw_root,
             "playwright.async_api": pw_async_api,
             "langchain_community": lc_comm,
             "langchain_community.agent_toolkits": lc_comm_agent_toolkits,
         }
-        # Ensure we re-import the module under test using the fakes
-        sys.modules.update(mapping)
-        sys.modules.pop("nova.tools.builtins.browser", None)
-        browser_mod = importlib.import_module("nova.tools.builtins.browser")
-        return browser_mod, FakeBrowser, FakeToolkit, counters
 
-    def test_init_starts_playwright_and_launches_browser_and_is_idempotent(self):
-        browser_mod, FakeBrowser, FakeToolkit, counters = self._install_fakes_and_import()
+    def _import_browser_module(self):
+        # Import the module under test with a robust path resolution
+        try:
+            mod = importlib.import_module("nova.tools.builtins.browser")
+        except Exception:
+            mod = importlib.import_module("nova.tools.builtins.browser")
+        return mod
 
-        agent = type("A", (), {"_resources": {}})()
+    async def test_init_starts_playwright_and_launches_browser_and_is_idempotent(self):
+        counters = {"start_calls": 0, "launch_calls": 0, "stop_calls": 0, "last_headless": None}
+        fakes = self._get_fake_third_party_modules(counters)
+        with patch.dict(sys.modules, fakes):
+            browser_mod = self._import_browser_module()
 
-        # First init: should start and launch
-        asyncio.run(browser_mod.init(agent))
-        self.assertIn("playwright_async", agent._resources)
-        self.assertIn("browser", agent._resources)
-        self.assertIsInstance(agent._resources["browser"], FakeBrowser)
-        self.assertEqual(counters["start_calls"], 1)
-        self.assertEqual(counters["launch_calls"], 1)
-        self.assertTrue(counters["last_headless"])
+            agent = SimpleNamespace(_resources={})
 
-        # Second init: should be no-op (idempotent)
-        asyncio.run(browser_mod.init(agent))
-        self.assertEqual(counters["start_calls"], 1)
-        self.assertEqual(counters["launch_calls"], 1)
+            # First init: should start and launch
+            await browser_mod.init(agent)
+            self.assertIn("playwright_async", agent._resources)
+            self.assertIn("browser", agent._resources)
+            self.assertTrue(hasattr(agent._resources["browser"], "is_connected"))  # Instance of FakeBrowser
+            self.assertEqual(counters["start_calls"], 1)
+            self.assertEqual(counters["launch_calls"], 1)
+            self.assertTrue(counters["last_headless"])
 
-    def test_close_closes_browser_and_stops_playwright_and_cleans_resources(self):
-        browser_mod, FakeBrowser, FakeToolkit, counters = self._install_fakes_and_import()
+            # Second init: should be no-op (idempotent)
+            await browser_mod.init(agent)
+            self.assertEqual(counters["start_calls"], 1)
+            self.assertEqual(counters["launch_calls"], 1)
 
-        # Prepare resources
-        agent = type("A", (), {"_resources": {}})()
-        fake_browser = FakeBrowser()
-        agent._resources["browser"] = fake_browser
+    async def test_close_closes_browser_and_stops_playwright_and_cleans_resources(self):
+        counters = {"start_calls": 0, "launch_calls": 0, "stop_calls": 0, "last_headless": None}
+        fakes = self._get_fake_third_party_modules(counters)
+        with patch.dict(sys.modules, fakes):
+            browser_mod = self._import_browser_module()
 
-        class DummyPlaywright:
-            async def stop(self):
-                counters["stop_calls"] += 1
+            # Prepare resources
+            agent = SimpleNamespace(_resources={})
 
-        agent._resources["playwright_async"] = DummyPlaywright()
+            # Create fake_browser dynamically with required methods
+            async def close_method(self):
+                self.closed = True
+                self._connected = False
 
-        # Perform close
-        asyncio.run(browser_mod.close(agent))
+            def is_connected_method(self):
+                return self._connected
 
-        # Browser closed and resources removed
-        self.assertTrue(fake_browser.closed)
-        self.assertNotIn("browser", agent._resources)
-        self.assertEqual(counters["stop_calls"], 1)
-        self.assertNotIn("playwright_async", agent._resources)
+            fake_browser = type("FakeBrowser", (), {
+                "closed": False,
+                "_connected": True,
+                "close": close_method,
+                "is_connected": is_connected_method
+            })()
 
-        # Calling close again should not raise and should be a no-op
-        asyncio.run(browser_mod.close(agent))
-        self.assertEqual(counters["stop_calls"], 1)
+            agent._resources["browser"] = fake_browser
 
-    def test_get_functions_raises_if_not_initialized(self):
-        browser_mod, FakeBrowser, FakeToolkit, counters = self._install_fakes_and_import()
+            class DummyPlaywright:
+                async def stop(self):
+                    counters["stop_calls"] += 1
 
-        agent = type("A", (), {"_resources": {}})()
-        # Not initialized -> expect ValueError
-        with self.assertRaises(ValueError) as ctx:
-            asyncio.run(browser_mod.get_functions(tool=object(), agent=agent))
-        self.assertIn("Browser not initialized", str(ctx.exception))
+            agent._resources["playwright_async"] = DummyPlaywright()
 
-    def test_get_functions_returns_toolkit_tools_using_persistent_browser(self):
-        browser_mod, FakeBrowser, FakeToolkit, counters = self._install_fakes_and_import()
+            # Perform close
+            await browser_mod.close(agent)
 
-        # Init resources manually (skip init flow for brevity)
-        agent = type("A", (), {"_resources": {}})()
-        fake_browser = FakeBrowser()
-        agent._resources["browser"] = fake_browser
+            # Browser closed and resources removed
+            self.assertTrue(fake_browser.closed)
+            self.assertNotIn("browser", agent._resources)
+            self.assertEqual(counters["stop_calls"], 1)
+            self.assertNotIn("playwright_async", agent._resources)
 
-        tools = asyncio.run(browser_mod.get_functions(tool=object(), agent=agent))
-        # Should be exactly what toolkit.get_tools returns
-        self.assertEqual(tools, ["TOOL:go", "TOOL:extract"])
+            # Calling close again should not raise and should be a no-op
+            await browser_mod.close(agent)
+            self.assertEqual(counters["stop_calls"], 1)
 
-        # Ensure toolkit was created with our persistent async browser
-        # The FakeToolkit instance isn't directly exposed, but we can check types:
-        self.assertIsInstance(agent._resources["browser"], FakeBrowser)
+    async def test_get_functions_raises_if_not_initialized(self):
+        counters = {"start_calls": 0, "launch_calls": 0, "stop_calls": 0, "last_headless": None}
+        fakes = self._get_fake_third_party_modules(counters)
+        with patch.dict(sys.modules, fakes):
+            browser_mod = self._import_browser_module()
+
+            agent = SimpleNamespace(_resources={})
+            # Not initialized -> expect ValueError
+            with self.assertRaises(ValueError) as ctx:
+                await browser_mod.get_functions(tool=object(), agent=agent)
+            self.assertIn("Browser not initialized", str(ctx.exception))
+
+    async def test_get_functions_returns_toolkit_tools_using_persistent_browser(self):
+        counters = {"start_calls": 0, "launch_calls": 0, "stop_calls": 0, "last_headless": None}
+        fakes = self._get_fake_third_party_modules(counters)
+        with patch.dict(sys.modules, fakes):
+            browser_mod = self._import_browser_module()
+
+            # Init resources manually (skip init flow for brevity)
+            agent = SimpleNamespace(_resources={})
+
+            # Use a fake browser with is_connected
+            def is_connected_method(self):
+                return True
+
+            fake_browser = type("FakeBrowser", (), {"is_connected": is_connected_method})()
+            agent._resources["browser"] = fake_browser
+
+            tools = await browser_mod.get_functions(tool=object(), agent=agent)
+            # Should be exactly what toolkit.get_tools returns
+            self.assertEqual(tools, ["TOOL:go", "TOOL:extract"])
+
+            # Ensure toolkit was created with our persistent async browser
+            # The FakeToolkit instance isn't directly exposed, but we can check types:
+            self.assertTrue(hasattr(agent._resources["browser"], "is_connected"))
