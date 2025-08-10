@@ -2,6 +2,13 @@
 
 **Nova is a personal-AI workspace that puts privacy first.**
 
+![Your agent can use CalDav](./screenshots/Caldav%20use.png){: .mx-auto}
+
+| | | | |
+| --- | --- | --- | --- |
+| ![Providers' config](./screenshots/Providers%20config.png){: width="25%"} | ![MCP Servers support](./screenshots/MCP%20Servers%20support.png){: width="25%"} | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png){: width="25%"} | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png){: width="25%"} |
+| ![Simple question](./screenshots/Simple%20question.png){: width="25%"} | ![Tool being used](./screenshots/Tool%20being%20used.png){: width="25%"} | ![Webbrowsing by agent](./screenshots/Webbrowsing%20by%20agent.png){: width="25%"} | ![Agents and Agents as tools](./screenshots/Agents%20and%20Agents%20as%20tools.png){: width="25%"} |
+
 Instead of sending every prompt to a remote model, Nova lets you decide – transparently and at run-time – whether an agent should reason with a local LLM running on your own machine or delegate to a cloud model only when extra horsepower is really needed. The result is a flexible “best of both worlds” setup that keeps sensitive data on-prem while still giving you access to state-of-the-art capabilities when you want them.
 
 - **Agent-centric workflow** – Create smart assistants (agents) and equip them with “tools” that can be simple Python helpers, calendar utilities, HTTP/APIs or even other agents. Agents can chain or delegate work to one another, allowing complex reasoning paths.
