@@ -1,5 +1,7 @@
 # Nova
 
+[![Docker Image CI](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml)
+
 **Nova is a personal-AI workspace that puts privacy first.**
 
 ![Tool being used](./screenshots/Tool%20being%20used.png)
