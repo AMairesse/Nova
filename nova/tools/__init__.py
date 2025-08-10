@@ -60,16 +60,6 @@ def import_module(python_path: str) -> Optional[Any]:
         logger.error(_("Could not import module: %s"), e)
         return None
 
-def get_available_functions(python_path: str) -> Dict[str, Any]:
-    """
-    Returns available functions for the given python_path.
-    Validates path first.
-    """
-    module = import_module(python_path)
-    if module and hasattr(module, 'get_functions'):
-        return module.get_functions()
-    return {}
-
 def get_metadata(python_path: str) -> Dict[str, Any]:
     """
     Returns METADATA for the given python_path.

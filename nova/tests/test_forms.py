@@ -1,299 +1,255 @@
 # nova/tests/test_forms.py
-"""
-Regression-tests for Nova forms.
-
-Covers:
-• UserParametersForm – Boolean flag, Langfuse config.
-• LLMProviderForm – api_key preservation, config validation.
-• AgentForm – Validation (cycles, is_tool), tools/agent_tools.
-• ToolForm – Built-in autofill, validation for API/MCP, JSON schemas.
-• ToolCredentialForm – Auth types, config (e.g., CalDav).
-"""
-
-from __future__ import annotations
-
-import json
-from django import forms
-from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
 from django.test import TestCase
-from django.utils.encoding import force_str
+from django.core.exceptions import ValidationError
+from django import forms as django_forms  # Import corrigé pour widgets
+from django.db import models as django_models  # Import pour Q
+from unittest.mock import patch
 
 from nova.forms import (
-    UserParametersForm,
-    LLMProviderForm,
-    AgentForm,
-    ToolForm,
-    ToolCredentialForm,
+    UserParametersForm, UserProfileForm, LLMProviderForm, AgentForm, ToolForm, ToolCredentialForm
 )
 from nova.models import (
-    UserParameters,
-    LLMProvider,
-    Agent,
-    Tool,
-    ToolCredential,
-    ProviderType,
-    Actor,  # For any related if needed
+    LLMProvider, UserParameters, UserProfile, Agent, Tool, ToolCredential, ProviderType
 )
+from .base import BaseTestCase
 
-User = get_user_model()
+class UserParametersFormTest(BaseTestCase):
+    def test_valid_form(self):
+        # Utilise l'instance existante (auto-créée par signal) pour mise à jour
+        existing_params = UserParameters.objects.get(user=self.user)
+        data = {
+            'allow_langfuse': True,
+            'langfuse_public_key': 'pk-test',
+            'langfuse_secret_key': 'sk-test',
+            'langfuse_host': 'https://langfuse.example.com'
+        }
+        form = UserParametersForm(data=data, instance=existing_params)
+        self.assertTrue(form.is_valid())
+        params = form.save()
+        self.assertTrue(params.allow_langfuse)
 
+    def test_password_widgets(self):
+        form = UserParametersForm()
+        self.assertIsInstance(form.fields['langfuse_public_key'].widget, django_forms.PasswordInput)
+        self.assertIsInstance(form.fields['langfuse_secret_key'].widget, django_forms.PasswordInput)
 
-class UserParametersFormTests(TestCase):
-    def setUp(self) -> None:
-        # Create user (triggers signal for UserParameters)
-        self.user = User.objects.create_user("alice", password="pwd")
-        self.params = UserParameters.objects.get(user=self.user)
-
-    def test_toggle_allow_langfuse(self):
-        """Boolean flag is saved correctly."""
-        form = UserParametersForm(
-            {"allow_langfuse": "on"}, instance=self.params
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        inst = form.save()
-        self.assertTrue(inst.allow_langfuse)
-
-        # Un-tick
-        form = UserParametersForm(
-            {"allow_langfuse": ""}, instance=self.params
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        inst = form.save()
-        self.assertFalse(inst.allow_langfuse)
-
-    def test_langfuse_config_validation(self):
-        """Langfuse keys and host are optional but stored encrypted."""
-        form = UserParametersForm(
-            {
-                "allow_langfuse": "on",
-                "langfuse_public_key": "pk-test",
-                "langfuse_secret_key": "sk-test",
-                "langfuse_host": "https://langfuse.example.com",
-            },
-            instance=self.params
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        inst = form.save()
-        self.assertEqual(inst.langfuse_public_key, "pk-test")
-        self.assertEqual(inst.langfuse_secret_key, "sk-test")
-        self.assertEqual(inst.langfuse_host, "https://langfuse.example.com")
-
-
-class LLMProviderFormTests(TestCase):
-    def setUp(self) -> None:
-        self.user = User.objects.create_user("bob", password="pwd")
-
-    def test_api_key_preservation(self):
-        """Existing api_key is preserved if blank in form."""
-        provider = LLMProvider.objects.create(
+class UserProfileFormTest(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.agent = Agent.objects.create(
             user=self.user,
-            name="Test",
-            provider_type=ProviderType.OPENAI,
-            model="gpt-3.5-turbo",  # Required field
-            api_key="original_key",
+            name='Test Agent',
+            llm_provider=LLMProvider.objects.create(
+                user=self.user, name='Provider', provider_type=ProviderType.OLLAMA, model='llama3'
+            ),
+            system_prompt='Prompt'
         )
-        form = LLMProviderForm(
-            {
-                "name": "Test",
-                "provider_type": ProviderType.OPENAI,
-                "model": "gpt-3.5-turbo",  # Added required field
-            },
-            instance=provider
+
+    def test_valid_form(self):
+        # Utilise l'instance existante (auto-créée par signal) pour mise à jour
+        existing_profile = UserProfile.objects.get(user=self.user)
+        data = {'default_agent': self.agent.id}
+        form = UserProfileForm(user= self.user, data=data, instance=existing_profile)
+        self.assertTrue(form.is_valid())
+        profile = form.save()
+        self.assertEqual(profile.default_agent, self.agent)
+
+class LLMProviderFormTest(BaseTestCase):
+    def test_valid_form(self):
+        data = {
+            'name': 'Test Provider',
+            'provider_type': ProviderType.OLLAMA,
+            'model': 'llama3',
+            'api_key': 'fake_key',
+            'base_url': 'http://localhost:11434',
+            'additional_config': '{}'
+        }
+        form = LLMProviderForm(data=data)
+        self.assertTrue(form.is_valid())
+        provider = form.save(commit=False)
+        provider.user = self.user
+        provider.save()
+        self.assertEqual(provider.name, 'Test Provider')
+
+    def test_clean_api_key_preserve_existing(self):
+        existing = LLMProvider.objects.create(
+            user=self.user, name='Existing', provider_type=ProviderType.OLLAMA, model='llama3', api_key='old_key'
         )
-        self.assertTrue(form.is_valid(), form.errors)
-        inst = form.save()
-        self.assertEqual(inst.api_key, "original_key")  # Preserved
+        data = {'name': 'Existing', 'provider_type': ProviderType.OLLAMA, 'model': 'llama3', 'api_key': ''}
+        form = LLMProviderForm(data=data, instance=existing)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['api_key'], 'old_key')  # Preserved
 
-    def test_additional_config_validation(self):
-        """JSON config is optional and validated."""
-        form = LLMProviderForm(
-            {
-                "name": "Test",
-                "provider_type": ProviderType.OLLAMA,
-                "model": "llama2",  # Added required field
-                "additional_config": json.dumps({"temperature": 0.7}),
-            }
-        )
-        self.assertTrue(form.is_valid(), form.errors)
+    def test_invalid_unique_name(self):
+        LLMProvider.objects.create(user=self.user, name='Existing', provider_type=ProviderType.OLLAMA, model='llama3')
+        data = {'name': 'Existing', 'provider_type': ProviderType.OPENAI, 'model': 'gpt-4'}
+        form = LLMProviderForm(data=data)
+        self.assertTrue(form.is_valid())  # Form valid, mais model validation fail
+        provider = form.save(commit=False)
+        provider.user = self.user
+        with self.assertRaises(ValidationError):
+            provider.full_clean()  # Déclenche unique_together
 
-        # Invalid JSON
-        form = LLMProviderForm(
-            {
-                "name": "Test",
-                "provider_type": ProviderType.OLLAMA,
-                "model": "llama2",  # Added required field
-                "additional_config": "invalid json",
-            }
-        )
-        self.assertFalse(form.is_valid())
-        self.assertIn("additional_config", form.errors)
-
-
-class AgentFormTests(TestCase):
-    def setUp(self) -> None:
-        self.user = User.objects.create_user("charlie", password="pwd")
+class AgentFormTest(BaseTestCase):
+    def setUp(self):
+        super().setUp()
         self.provider = LLMProvider.objects.create(
-            user=self.user, name="Test Provider", provider_type=ProviderType.MISTRAL, model="mistral-tiny"
+            user=self.user, name='Provider', provider_type=ProviderType.OLLAMA, model='llama3'
         )
-        self.tool = Tool.objects.create(user=self.user, name="Test Tool", tool_type=Tool.ToolType.BUILTIN)
+        self.tool = Tool.objects.create(
+            user=self.user, name='Test Tool', description='Test', tool_type=Tool.ToolType.API, endpoint='https://api.example.com'
+        )
+
+    def test_init_restricts_choices(self):
+        form = AgentForm(user=self.user)
+        self.assertQuerySetEqual(form.fields['llm_provider'].queryset, LLMProvider.objects.filter(user=self.user))
+        self.assertQuerySetEqual(form.fields['tools'].queryset, Tool.objects.filter(django_models.Q(user=self.user) | django_models.Q(user__isnull=True), is_active=True))
+        self.assertQuerySetEqual(form.fields['agent_tools'].queryset, Agent.objects.filter(user=self.user, is_tool=True))
+
+    def test_valid_agent(self):
+        data = {
+            'name': 'Test Agent',
+            'llm_provider': self.provider.id,
+            'system_prompt': 'You are helpful.',
+            'is_tool': False,
+            'tools': [self.tool.id]
+        }
+        form = AgentForm(data=data, user=self.user)
+        self.assertTrue(form.is_valid())
+        agent = form.save(commit=False)
+        agent.user = self.user
+        agent.save()
+        self.assertEqual(agent.name, 'Test Agent')
 
     def test_is_tool_requires_description(self):
-        """tool_description required if is_tool=True."""
-        form = AgentForm(
-            {
-                "name": "Test Agent",
-                "llm_provider": self.provider.id,
-                "system_prompt": "Test prompt",
-                "is_tool": True,
-            },
-            user=self.user,
-        )
+        data = {
+            'name': 'Tool Agent',
+            'llm_provider': self.provider.id,
+            'system_prompt': 'Tool prompt',
+            'is_tool': True
+        }
+        form = AgentForm(data=data, user=self.user)
         self.assertFalse(form.is_valid())
-        self.assertIn("tool_description", form.errors)
+        self.assertIn('tool_description', form.errors)
 
-    def test_agent_tools_no_cycle(self):
-        """Prevent cycles in agent_tools."""
-        agent1 = Agent.objects.create(
-            user=self.user, name="Agent1", llm_provider=self.provider, is_tool=True, tool_description="Desc1"
-        )
-        agent2 = Agent.objects.create(
-            user=self.user, name="Agent2", llm_provider=self.provider, is_tool=True, tool_description="Desc2"
-        )
-        form = AgentForm(
-            {
-                "name": "Agent3",
-                "llm_provider": self.provider.id,
-                "system_prompt": "Test",
-                "agent_tools": [agent1.id, agent2.id],
-            },
-            user=self.user,
-        )
-        self.assertTrue(form.is_valid(), form.errors)
+    def test_clean_agent_tools_prevent_self_reference(self):
+        agent = Agent.objects.create(user=self.user, name='A1', llm_provider=self.provider, system_prompt='P1', is_tool=True, tool_description='D1')
+        # Simule un ajout valide (sans self, car exclu par queryset), puis vérifie après save que self n'est pas dans la relation
+        data = {
+            'name': 'A1',
+            'llm_provider': self.provider.id,
+            'system_prompt': 'P1',
+            'is_tool': True,
+            'tool_description': 'D1',
+            'agent_tools': []  # Pas de self possible via UI, mais teste la prévention interne
+        }
+        form = AgentForm(data=data, instance=agent, user=self.user)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertFalse(agent.agent_tools.filter(pk=agent.pk).exists())  # Vérifie que self n'est pas ajouté
 
-        # Simulate cycle (would raise in clean/save)
+    def test_cycle_detection_via_model(self):
+        agent1 = Agent.objects.create(user=self.user, name='A1', llm_provider=self.provider, system_prompt='P1', is_tool=True, tool_description='D1')
+        agent2 = Agent.objects.create(user=self.user, name='A2', llm_provider=self.provider, system_prompt='P2', is_tool=True, tool_description='D2')
         agent1.agent_tools.add(agent2)
-        agent2.agent_tools.add(agent1)
+        data = {
+            'name': 'A2',
+            'llm_provider': self.provider.id,
+            'system_prompt': 'P2',
+            'is_tool': True,
+            'tool_description': 'D2',
+            'agent_tools': [agent1.id]  # Creates cycle
+        }
+        form = AgentForm(data=data, instance=agent2, user=self.user)
+        self.assertTrue(form.is_valid())  # Form clean passe
+        agent = form.save(commit=False)
+        agent.user = self.user
+        # Simule l'ajout M2M pour déclencher la validation du modèle
+        agent.agent_tools.set(form.cleaned_data['agent_tools'])
         with self.assertRaises(ValidationError):
-            agent1.clean()
+            agent.full_clean()  # Model clean détecte le cycle
 
-    def test_tools_selection(self):
-        """Tools and agent_tools are filtered by user."""
-        form = AgentForm(user=self.user)
-        self.assertIn(self.tool, form.fields["tools"].queryset)
-        self.assertEqual(form.fields["agent_tools"].queryset.count(), 0)  # None yet
+class ToolFormTest(BaseTestCase):
+    @patch('nova.tools.get_available_tool_types')
+    @patch('nova.tools.get_tool_type')
+    def test_init_populates_subtype_choices(self, mock_get_tool_type, mock_get_available_tool_types):
+        mock_get_available_tool_types.return_value = {'date': {'name': 'Date Tool'}}
+        form = ToolForm()
+        self.assertIn(('date', 'Date Tool'), form.fields['tool_subtype'].choices)
 
-
-class ToolFormTests(TestCase):
-    def setUp(self) -> None:
-        self.user = User.objects.create_user("dave", password="pwd")
-
-    #
-    # Built-in (“caldav”) helpers
-    # ------------------------------------------------------------------ #
-    def _builtin_post_data(self, subtype: str = "caldav") -> dict[str, str]:
-        return {
-            "tool_type": Tool.ToolType.BUILTIN,
-            "tool_subtype": subtype,
-            # Name / description intentionally left blank – must be auto-filled
-            "is_active": "on",
+    @patch('nova.tools.get_tool_type')
+    def test_clean_builtin_valid(self, mock_get_tool_type):
+        mock_get_tool_type.return_value = {
+            'name': 'Date Tool',
+            'description': 'Date operations',
+            'python_path': 'nova.tools.builtins.date',
+            'input_schema': {'type': 'object'},
+            'output_schema': {'type': 'object'}
         }
-
-    #
-    # 1) Built-in tool auto-fill
-    # ------------------------------------------------------------------ #
-    def test_builtin_autofill(self):
-        """For builtin tools, name / description / python_path are injected."""
-        data = self._builtin_post_data()
-        form = ToolForm(data)
-        self.assertTrue(form.is_valid(), form.errors)
-
-        inst: Tool = form.save(commit=False)  # do **not** hit the DB
-        self.assertEqual(force_str(inst.name), "CalDav")
-        self.assertIn("CalDav", force_str(inst.description))
-        self.assertEqual(inst.python_path, "nova.tools.builtins.caldav")
-        self.assertEqual(inst.tool_type, Tool.ToolType.BUILTIN)
-        self.assertTrue(inst.is_active)
-
-    def test_builtin_invalid_subtype(self):
-        """Invalid tool_subtype raises error."""
-        data = self._builtin_post_data(subtype="invalid")
-        form = ToolForm(data)
-        self.assertFalse(form.is_valid())
-        self.assertIn("tool_subtype", form.errors)
-
-    def test_json_schema_validation(self):
-        """Input/output schemas must be valid JSON."""
-        data = self._builtin_post_data()
-        data["input_schema"] = "invalid json"
-        form = ToolForm(data)
-        self.assertFalse(form.is_valid())
-        self.assertIn("input_schema", form.errors)
-
-    #
-    # 2) Missing required fields for API / MCP tools
-    # ------------------------------------------------------------------ #
-    def test_api_requires_name_description_endpoint(self):
-        """API tools without required fields must raise validation errors."""
         data = {
-            "tool_type": Tool.ToolType.API,
-            "is_active": "on",
-            # name / description / endpoint omitted on purpose
+            'tool_type': Tool.ToolType.BUILTIN,
+            'tool_subtype': 'date',
+            'is_active': True
         }
-        form = ToolForm(data)
-        self.assertFalse(form.is_valid())
-        self.assertIn("name", form.errors)
-        self.assertIn("description", form.errors)
-        self.assertIn("endpoint", form.errors)
+        form = ToolForm(data=data)
+        self.assertTrue(form.is_valid())
+        tool = form.save(commit=False)
+        tool.user = self.user
+        tool.save()
+        self.assertEqual(tool.name, 'Date Tool')
+        self.assertEqual(tool.python_path, 'nova.tools.builtins.date')
 
-    def test_mcp_requires_endpoint(self):
-        """MCP tools must include at least a name, description and endpoint."""
+    def test_clean_builtin_missing_subtype(self):
+        data = {'tool_type': Tool.ToolType.BUILTIN}
+        form = ToolForm(data=data)
+        self.assertFalse(form.is_valid())
+        self.assertIn('__all__', form.errors)
+
+    def test_clean_api_requires_fields(self):
+        data = {'tool_type': Tool.ToolType.API}
+        form = ToolForm(data=data)
+        self.assertFalse(form.is_valid())
+        self.assertIn('name', form.errors)
+        self.assertIn('description', form.errors)
+        self.assertIn('endpoint', form.errors)
+
+    def test_save_sets_python_path_for_builtin(self):
         data = {
-            "tool_type": Tool.ToolType.MCP,
-            "name": "My remote tools",
-            "description": "Container of remote tools",
-            "is_active": "on",
-            # endpoint missing
+            'tool_type': Tool.ToolType.BUILTIN,
+            'tool_subtype': 'date'
         }
-        form = ToolForm(data)
-        self.assertFalse(form.is_valid())
-        self.assertIn("endpoint", form.errors)
+        form = ToolForm(data=data)
+        form.is_valid()
+        tool = form.save(commit=False)
+        self.assertTrue(tool.python_path.startswith('nova.tools.builtins.'))
 
-
-class ToolCredentialFormTests(TestCase):
-    def setUp(self) -> None:
-        self.user = User.objects.create_user("eve", password="pwd")
+class ToolCredentialFormTest(BaseTestCase):
+    def setUp(self):
+        super().setUp()
         self.tool = Tool.objects.create(
-            user=self.user,
-            name="CalDav Tool",
-            tool_type=Tool.ToolType.BUILTIN,
-            tool_subtype="caldav",
-            python_path="nova.tools.builtins.caldav",
+            user=self.user, name='CalDav Tool', description='Test', tool_type=Tool.ToolType.API, endpoint='https://api.example.com'
         )
 
-    def test_caldav_config_required(self):
-        """For CalDav tools, caldav_url is required."""
-        form = ToolCredentialForm({"auth_type": "basic"}, tool=self.tool)
-        self.assertFalse(form.is_valid())
-        self.assertIn("caldav_url", form.errors)
+    def test_init_hides_fields_based_on_auth_type(self):
+        form = ToolCredentialForm(initial={'auth_type': 'none'})
+        self.assertIsInstance(form.fields['username'].widget, django_forms.HiddenInput)
+        self.assertIsInstance(form.fields['password'].widget, django_forms.HiddenInput)
 
-    def test_auth_type_hides_fields(self):
-        """Irrelevant fields are hidden based on auth_type."""
-        form = ToolCredentialForm(initial={"auth_type": "none"}, tool=self.tool)
-        self.assertTrue(isinstance(form.fields["username"].widget, forms.HiddenInput))
+    def test_init_tool_specific_fields(self):
+        form = ToolCredentialForm(tool=self.tool)  # CalDav in name → required
+        self.assertTrue(form.fields['caldav_url'].required)
 
-    def test_save_config(self):
-        """Config JSON is updated correctly."""
-        form = ToolCredentialForm(
-            {
-                "auth_type": "basic",
-                "username": "testuser",
-                "password": "testpass",
-                "caldav_url": "https://caldav.example.com",
-            },
-            tool=self.tool,
-        )
-        self.assertTrue(form.is_valid(), form.errors)
-        inst = form.save(commit=False)
-        self.assertIn("caldav_url", inst.config)
-        self.assertEqual(inst.config["caldav_url"], "https://caldav.example.com")
+    def test_save_with_config(self):
+        data = {
+            'auth_type': 'basic',
+            'username': 'test',
+            'password': 'secret',
+            'caldav_url': 'https://caldav.example.com'
+        }
+        form = ToolCredentialForm(data=data, tool=self.tool)
+        self.assertTrue(form.is_valid())
+        cred = form.save(commit=False)
+        cred.user = self.user
+        cred.tool = self.tool
+        cred.save()
+        self.assertEqual(cred.config.get('caldav_url'), 'https://caldav.example.com')

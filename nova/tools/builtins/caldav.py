@@ -1,35 +1,57 @@
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
+from functools import partial
+import requests
 import caldav
 from caldav.elements import dav
 from icalendar import Calendar, Event as iCalEvent
 from django.http import JsonResponse
 from django.utils.translation import gettext_lazy as _, ngettext
-from nova.models import ToolCredential
+from nova.models import ToolCredential, Tool
+from langchain_core.tools import StructuredTool
+
+from nova.llm_agent import LLMAgent
+
+from asgiref.sync import sync_to_async  # For async-safe ORM accesses
+
+import logging
+logger = logging.getLogger(__name__)
 
 
-def get_caldav_client(user, tool_id):
+async def get_caldav_client(user, tool_id):
     try:
-        credential = ToolCredential.objects.get( user=user, tool_id=tool_id )
+        # Wrap ORM access in sync_to_async
+        credential = await sync_to_async(ToolCredential.objects.get)(user=user, tool_id=tool_id)
         caldav_url = credential.config.get('caldav_url')
         username = credential.config.get('username')
         password = credential.config.get('password')
         
         if not all([caldav_url, username, password]):
-            raise ValueError(_("Incomplete CalDav configuration"))
-            
+            raise ValueError(_("Incomplete CalDav configuration: missing URL, username, or password"))
+        
         client = caldav.DAVClient(
             url=caldav_url,
             username=username,
             password=password
         )
         
-        return client
+        # Test auth (caldav is sync, but safe in async context)
+        try:
+            client.principal()  # Early auth check
+        except caldav.lib.error.AuthorizationError as e:
+            raise ValueError(f"CalDav authorization failed: {str(e)}")
+        except Exception as e:
+            raise ConnectionError(f"CalDav connection failed: {str(e)}")
         
+        return client
+    
     except ToolCredential.DoesNotExist:
         raise ValueError(_("No CalDav credential found for tool {tool_id}").format(tool_id=tool_id))
+    except Exception as e:  # Catch-all
+        logger.error(f"CalDav client error: {str(e)}")
+        raise
 
-def list_calendars(user, tool_id) -> str:
+async def list_calendars(user, tool_id) -> str:
     """ Get a list of available calendars.
     Args:
         user: the Django user
@@ -39,24 +61,25 @@ def list_calendars(user, tool_id) -> str:
         Formatted list of calendars
     """
     try:
-        client = get_caldav_client(user, tool_id)
+        client = await get_caldav_client(user, tool_id)
         principal = client.principal()
         calendars = principal.calendars()
         
         if not calendars:
             return _("No calendars available.")
-            
+        
         result = _("Available calendars :\n")
         for cal in calendars:
             result += f"- {cal.name}\n"
-            
-        return result
         
+        return result
+    
+    except (ValueError, ConnectionError) as e:  # Specific handling
+        return _("CalDav error: {error}. Check credentials and server URL.").format(error=str(e))
     except Exception as e:
-        error_message = _("Error when retrieving calendars : {}")
-        return error_message.format(e)
-
-def describe_events(events: List[iCalEvent]) -> List[str]:
+        return _("Unexpected error when retrieving calendars: {error}").format(error=str(e))
+    
+def describe_events(events: List[iCalEvent]) -> List[str]:  # Remains sync (no ORM/async ops)
     # Generate a list of strings containing the events
     all_events = []
     for event in events:
@@ -84,7 +107,7 @@ def describe_events(events: List[iCalEvent]) -> List[str]:
 
     return all_events
 
-def list_events_to_come(user, tool_id, days_ahead: int = 7, calendar_name: Optional[str] = None) -> str:
+async def list_events_to_come(user, tool_id, days_ahead: int = 7, calendar_name: Optional[str] = None) -> str:
     """ List events for the next days_ahead.
     Args:
         user: the Django user
@@ -99,14 +122,14 @@ def list_events_to_come(user, tool_id, days_ahead: int = 7, calendar_name: Optio
         start_date = datetime.now(timezone.utc)
         end_date = start_date + timedelta(days=days_ahead)
         
-        return list_events(user, tool_id, start_date.strftime('%Y-%m-%d'),
-                           end_date.strftime('%Y-%m-%d'), calendar_name)
+        return await list_events(user, tool_id, start_date.strftime('%Y-%m-%d'),
+                                 end_date.strftime('%Y-%m-%d'), calendar_name)
     
     except Exception as e:
         error_message = _("Error when retrieving events : {}")
         return error_message.format(e)
     
-def list_events(user, tool_id, start_date: str, end_date: str, calendar_name: Optional[str] = None) -> str:
+async def list_events(user, tool_id, start_date: str, end_date: str, calendar_name: Optional[str] = None) -> str:
     """ List events between start_date and end_date.
     Args:
         user: the Django user
@@ -119,7 +142,7 @@ def list_events(user, tool_id, start_date: str, end_date: str, calendar_name: Op
         Formatted list of events between start_date and end_date
     """
     try:
-        client = get_caldav_client(user, tool_id)
+        client = await get_caldav_client(user, tool_id)
         principal = client.principal()
         
         if calendar_name:
@@ -156,7 +179,7 @@ def list_events(user, tool_id, start_date: str, end_date: str, calendar_name: Op
         error_message = _("Error when retrieving events : {}")
         return error_message.format(e)
     
-def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional[str] = None) -> str:
+async def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional[str] = None) -> str:
     """ Get an event's details.
     Args:
         user: the Django user
@@ -168,7 +191,7 @@ def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional[str] 
         A string containing the event's details
     """
     try:
-        client = get_caldav_client(user, tool_id)
+        client = await get_caldav_client(user, tool_id)
         principal = client.principal()
         
         if calendar_name:
@@ -191,7 +214,7 @@ def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional[str] 
         error_message = _("Error when retrieving event's details : {}")
         return error_message.format(e)
 
-def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
+async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
     """ Search for events containing the query.
     Args:
         user: the Django user
@@ -203,7 +226,7 @@ def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
         Formatted list of events
     """
     try:
-        client = get_caldav_client(user, tool_id)
+        client = await get_caldav_client(user, tool_id)
         principal = client.principal()
         calendars = principal.calendars()
         
@@ -232,9 +255,9 @@ def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
         error_message = _("Error when searching events : {}")
         return error_message.format(e)
 
-def test_caldav_access(user, tool_id):
+async def test_caldav_access(user, tool_id):
     try:
-        result = list_calendars(user, tool_id)
+        result = await list_calendars(user, tool_id)
         
         if "error" in result.lower():
             return JsonResponse({"status": "error", "message": result})
@@ -273,24 +296,36 @@ METADATA = {
 }
 
 
-def get_functions():
+async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     """
-    List available functions.
+    Return a list of StructuredTool instances for the available functions,
+    with user and id injected via partial.
     """
-    return {
-        "list_calendars": {
-            "callable": list_calendars,
-            "description": "List all available calendars",
-            "input_schema": {
+    # Wrap ORM check in sync_to_async
+    has_required_data = await sync_to_async(lambda: bool(tool and tool.user and tool.id))()
+    if not has_required_data:
+        raise ValueError("Tool instance missing required data (user or id).")
+
+    # Wrap ORM accesses for user/id
+    user = await sync_to_async(lambda: tool.user)()
+    tool_id = await sync_to_async(lambda: tool.id)()
+
+    return [
+        StructuredTool.from_function(
+            coroutine=partial(list_calendars, user, tool_id),
+            name="list_calendars",
+            description="List all available calendars",
+            args_schema={
                 "type": "object",
                 "properties": {},
                 "required": []
             }
-        },
-        "list_events_to_come": {
-            "callable": list_events_to_come,
-            "description": "List events for the next days_ahead.",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            coroutine=partial(list_events_to_come, user, tool_id),
+            name="list_events_to_come",
+            description="List events for the next days_ahead.",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "days_ahead": {
@@ -305,11 +340,12 @@ def get_functions():
                 },
                 "required": []
             }
-        },
-        "list_events": {
-            "callable": list_events,
-            "description": "List events between start_date and end_date.",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            coroutine=partial(list_events, user, tool_id),
+            name="list_events",
+            description="List events between start_date and end_date.",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "start_date": {
@@ -329,11 +365,12 @@ def get_functions():
                 },
                 "required": ["start_date", "end_date"]
             }
-        },
-        "get_event_detail": {
-            "callable": get_event_detail,
-            "description": "Get en event's details.",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            coroutine=partial(get_event_detail, user, tool_id),
+            name="get_event_detail",
+            description="Get en event's details.",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "event_id": {
@@ -347,11 +384,12 @@ def get_functions():
                 },
                 "required": ["event_id"]
             }
-        },
-        "search_events": {
-            "callable": search_events,
-            "description": "Search for events containing the query",
-            "input_schema": {
+        ),
+        StructuredTool.from_function(
+            coroutine=partial(search_events, user, tool_id),
+            name="search_events",
+            description="Search for events containing the query",
+            args_schema={
                 "type": "object",
                 "properties": {
                     "query": {
@@ -366,5 +404,5 @@ def get_functions():
                 },
                 "required": ["query"]
             }
-        }
-    }
+        )
+    ]

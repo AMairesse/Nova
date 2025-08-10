@@ -1,13 +1,24 @@
 # Nova
 
+[![Docker Image CI](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml)
+
 **Nova is a personal-AI workspace that puts privacy first.**
+
+![Tool being used](./screenshots/Tool%20being%20used.png)
+
+| | | | |
+| --- | --- | --- | --- |
+| ![Providers' config](./screenshots/Providers%20config.png) | ![MCP Servers support](./screenshots/MCP%20Servers%20support.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
+| ![Simple question](./screenshots/Simple%20question.png) | ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Webbrowsing by agent](./screenshots/Webbrowsing%20by%20agent.png) | ![Agents and Agents as tools](./screenshots/Agents%20and%20Agents%20as%20tools.png) |
+| | | | |
 
 Instead of sending every prompt to a remote model, Nova lets you decide – transparently and at run-time – whether an agent should reason with a local LLM running on your own machine or delegate to a cloud model only when extra horsepower is really needed. The result is a flexible “best of both worlds” setup that keeps sensitive data on-prem while still giving you access to state-of-the-art capabilities when you want them.
 
 - **Agent-centric workflow** – Create smart assistants (agents) and equip them with “tools” that can be simple Python helpers, calendar utilities, HTTP/APIs or even other agents. Agents can chain or delegate work to one another, allowing complex reasoning paths.
 - **Bring-your-own models** – Connect to OpenAI or Mistral if the task is public, but switch to local back-ends such as Ollama or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
 - **Privacy by design** – API keys and tokens are stored encrypted; only the minimal data required for a given call ever leaves your machine.
-- **Pluggable tools** – Besides built-in utilities (e.g., a CalDav calendar helper), Nova can talk to external micro-services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.
+- **Built-in tools** – Nova comes with a bunch of “builtin” tools for common tasks, like CalDav calendar queries, web surfing, date management and more to come !
+- **Pluggable tools** – Besides built-in utilities, Nova can talk to external micro-services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.
 - **Human-in-the-loop UI** – A lightweight web interface lets you chat with agents, watch their progress in real time, and manage providers / agents / tools without touching code.
 - **Asynchronous calls** – You can safely invoke agents from the UI, and they will run in the background so you can do other things at the same time.
 
@@ -15,7 +26,7 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 
 ## Key Features
 
-- ✅ Tool-aware agents: Agents can invoke classic Python helpers, CalDav calendar queries, remote REST/MCP services **or even other agents**.
+- ✅ Tool-aware agents: Agents can invoke builtin tools, remote REST/MCP services **or even other agents**.
 - ✅ Local-first LLM routing: Decide per-agent which provider to use: OpenAI, Mistral, Ollama, LM Studio or any future backend. Local models are preferred for sensitive data; the switch is transparent for you.
 - ✅ Live streaming: you will see tool calls and sub-agent calls in real time so you can follow what happens under the hood. Then the agent's response will be streamed.
 - ✅ Plug-and-play MCP client: Connect to any Model Context Protocol server, cache its tool catalogue and call remote tools with automatic input validation.
@@ -44,7 +55,7 @@ Nova uses a `.env` file for configuration. Copy `.env.example` to `.env` and edi
   - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` (PostgreSQL settings).
   - `DJANGO_SECRET_KEY`: Random secure key.
   - `FIELD_ENCRYPTION_KEY`: For encrypting sensitive data.
-  - `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` (auto-create admin user on first run).
+  - `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` (needed to auto-create admin user on first run).
 
 - **Note:**
   - `DB_ENGINE`: Set to `postgresql` for prod (default in Docker), or `sqlite` for dev.
@@ -86,6 +97,7 @@ This is the recommended way to run Nova for real use, using Docker with PostgreS
    ```
    docker compose up -d --build
    ```
+   Warning : first start may take a while because of the chromium install, you can check progress with `docker compose logs web -f`.
 
 4. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
 
@@ -171,7 +183,7 @@ nova/
 ├─ api/ # Minimal REST facade
 ├─ mcp/ # Thin wrapper around FastMCP
 ├─ migrations/ # Django model migration scripts
-├─ static/ # JS helpers (SSE streaming, tool modal manager…)
+├─ static/ # JS helpers (streaming, tool modal manager…)
 ├─ templates/ # Django + Bootstrap 5 UI
 ├─ tools/ # Built-in tool modules (CalDav, agent wrapper…)
 └─ views/ # Django views
@@ -179,21 +191,26 @@ nova/
 
 ## Roadmap
 
-1. Add a "internet search" tool and a "web browser" tool
-2. Management of "thinking models"
-3. File management : add a file, receive a file as a result, file support for MCP tools, ...
-4. Add a scratchpad tool (acting like a memory for long task)
-5. Add a canvas tool (acting like a UI component for the agent to interact with the user)
+1. File management : add a file, receive a file as a result, file support for MCP tools, ...
+
+2. Add a scratchpad tool (acting like a memory for long task)
+
+3. Add a canvas tool (acting like a UI component for the agent to interact with the user)
+
+4. Better display for "thinking models"
 
 ## Contributing
 
 Pull requests are welcome! To propose a tool:
 
 1. Create a new Python file under `nova/tools/your_tool.py`.
+
 2. Expose either
    - a single callable (for simple tools), or
    - a `get_functions()` dict for multi-function tools.
+
 3. Add metadata to `nova/tools/__init__.py` so it appears in the “Create Tool” modal.
+
 4. Write unit tests under `tests/`.
 
 Please run `pre-commit install` to apply linting and type checks before submitting.

@@ -80,6 +80,10 @@ class Tool(models.Model):
         BUILTIN = "builtin", _("Builtin")
         API     = "api",     _("API HTTP/REST")
         MCP     = "mcp",     _("MCP Server")
+    
+    class TransportType(models.TextChoices):
+        STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
+        SSE = "sse", _("SSE (Legacy)")
         
     user = models.ForeignKey(settings.AUTH_USER_MODEL, 
                              on_delete=models.CASCADE, 
@@ -98,6 +102,15 @@ class Tool(models.Model):
 
     python_path = models.CharField(max_length=255, blank=True)  # ex: "my_pkg.utils.search"
     endpoint    = models.URLField(blank=True)                   # ex: "https://weather.xyz/v1"
+
+    # Transport type for MCP servers
+    transport_type = models.CharField(
+        max_length=20,
+        choices=TransportType.choices,
+        default=TransportType.STREAMABLE_HTTP,
+        blank=True,
+        help_text=_("Transport method for MCP servers")
+    )
 
     # I/O JSON-Schema contract
     input_schema  = models.JSONField(default=get_default_schema, blank=True, null=True)
@@ -121,7 +134,7 @@ class Tool(models.Model):
             if not self.tool_subtype:
                 raise ValidationError(_("A BUILTIN tool must select a subtype."))
             
-            from nova.tools import get_tool_type, get_available_functions, get_metadata
+            from nova.tools import get_tool_type
             metadata = get_tool_type(self.tool_subtype)
             if not metadata:
                 raise ValidationError(_("Invalid builtin subtype: %s") % self.tool_subtype)
@@ -129,11 +142,7 @@ class Tool(models.Model):
             self.python_path = metadata.get("python_path", "")
             self.input_schema = metadata.get("input_schema", {})
             self.output_schema = metadata.get("output_schema", {})
-            
-            # Optional: Validate functions exist
-            if not get_available_functions(self.python_path):
-                logger.warning("No functions found for %s", self.python_path)
-        
+                    
         if self.tool_type in {self.ToolType.API, self.ToolType.MCP} and not self.endpoint:
             raise ValidationError(_("Endpoint is mandatory for API or MCP tools."))
 
@@ -240,6 +249,14 @@ class UserProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     default_agent = models.ForeignKey(Agent, null=True, blank=True, on_delete=models.SET_NULL)
 
+    # Default agent must be normal agent and belong to the user
+    def clean(self):
+        super().clean()
+        if self.default_agent and self.default_agent.is_tool:
+            raise ValidationError(_("Default agent must be a normal agent."))
+
+        if self.default_agent and self.default_agent.user != self.user:
+            raise ValidationError(_("Default agent must belong to the user."))
 
 class ToolCredential(models.Model):
     """Store credentials for tools."""

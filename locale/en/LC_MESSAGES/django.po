@@ -22,23 +22,23 @@ msgstr "JSON schema describing the tool inputs"
 msgid "JSON schema describing the tool outputs"
 msgstr "JSON schema describing the tool outputs"
 
-#: nova/forms.py:246
+#: nova/forms.py:247
 msgid "A BUILTIN tool must have a subtype defined."
 msgstr "A BUILTIN tool must have a subtype defined."
 
-#: nova/forms.py:266
+#: nova/forms.py:267
 msgid "Name is required for API/MCP tools."
 msgstr "Name is required for API/MCP tools."
 
-#: nova/forms.py:268
+#: nova/forms.py:269
 msgid "Description is required for API/MCP tools."
 msgstr "Description is required for API/MCP tools."
 
-#: nova/forms.py:270
+#: nova/forms.py:271
 msgid "Endpoint URL is required for API/MCP tools."
 msgstr "Endpoint URL is required for API/MCP tools."
 
-#: nova/forms.py:297
+#: nova/forms.py:298
 msgid "CalDav server URL"
 msgstr "CalDav server URL"
 
@@ -46,7 +46,7 @@ msgstr "CalDav server URL"
 msgid "User"
 msgstr "User"
 
-#: nova/models.py:16 nova/models.py:342
+#: nova/models.py:16 nova/models.py:351
 msgid "Agent"
 msgstr "Agent"
 
@@ -70,128 +70,142 @@ msgstr "API HTTP/REST"
 msgid "MCP Server"
 msgstr "MCP Server"
 
-#: nova/models.py:87 nova/templates/nova/user_config.html:22
+#: nova/models.py:85 nova/templates/nova/partials/_tool_form_fields.html:77
+msgid "Streamable HTTP (Default)"
+msgstr "Streamable HTTP (Default)"
+
+#: nova/models.py:86 nova/templates/nova/partials/_tool_form_fields.html:80
+msgid "SSE (Legacy)"
+msgstr "SSE (Legacy)"
+
+#: nova/models.py:91 nova/templates/nova/user_config.html:22
 msgid "Tools"
 msgstr "Tools"
 
-#: nova/models.py:109
+#: nova/models.py:112
+msgid "Transport method for MCP servers"
+msgstr "Transport method for MCP servers"
+
+#: nova/models.py:122
 msgid "Available functions for this tool, if any."
 msgstr "Available functions for this tool, if any."
 
-#: nova/models.py:122
+#: nova/models.py:135
 msgid "A BUILTIN tool must select a subtype."
 msgstr "A BUILTIN tool must select a subtype."
 
-#: nova/models.py:127
+#: nova/models.py:140
 #, python-format
 msgid "Invalid builtin subtype: %s"
 msgstr "Invalid builtin subtype: %s"
 
-#: nova/models.py:138
+#: nova/models.py:147
 msgid "Endpoint is mandatory for API or MCP tools."
 msgstr "Endpoint is mandatory for API or MCP tools."
 
-#: nova/models.py:147
+#: nova/models.py:156
 msgid "User agents"
 msgstr "User agents"
 
-#: nova/models.py:152 nova/models.py:156
+#: nova/models.py:161 nova/models.py:165
 #: nova/templates/nova/user_config.html:17
 msgid "Agents"
 msgstr "Agents"
 
-#: nova/models.py:159
+#: nova/models.py:168
 msgid "If true, this agent can be used as a tool by other agents."
 msgstr "If true, this agent can be used as a tool by other agents."
 
-#: nova/models.py:168
+#: nova/models.py:177
 msgid "Used by agents"
 msgstr "Used by agents"
 
-#: nova/models.py:176
+#: nova/models.py:185
 msgid ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 msgstr ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 
-#: nova/models.py:193
+#: nova/models.py:202
 msgid "Tool description is required when 'is_tool' is True."
 msgstr "Tool description is required when 'is_tool' is True."
 
-#: nova/models.py:202
+#: nova/models.py:211
 msgid "Found a cyclic dependency between agents."
 msgstr "Found a cyclic dependency between agents."
 
-#: nova/models.py:250
+#: nova/models.py:259
 msgid "Tool credentials"
 msgstr "Tool credentials"
 
-#: nova/models.py:254
+#: nova/models.py:263
 msgid "Credentials"
 msgstr "Credentials"
 
-#: nova/models.py:259 nova/templates/nova/partials/_tool_config_modal.html:54
+#: nova/models.py:268 nova/templates/nova/partials/_tool_config_modal.html:54
 msgid "No Authentication"
 msgstr "No Authentication"
 
-#: nova/models.py:260 nova/templates/nova/partials/_auth_fields.html:11
+#: nova/models.py:269 nova/templates/nova/partials/_auth_fields.html:11
 #: nova/templates/nova/partials/_tool_config_modal.html:55
 msgid "Basic Auth"
 msgstr "Basic Auth"
 
-#: nova/models.py:261 nova/templates/nova/partials/_auth_fields.html:12
+#: nova/models.py:270 nova/templates/nova/partials/_auth_fields.html:12
 #: nova/templates/nova/partials/_tool_config_modal.html:56
 msgid "Token Auth"
 msgstr "Token Auth"
 
-#: nova/models.py:262 nova/templates/nova/partials/_auth_fields.html:14
+#: nova/models.py:271 nova/templates/nova/partials/_auth_fields.html:14
 #: nova/templates/nova/partials/_tool_config_modal.html:58
 msgid "OAuth"
 msgstr "OAuth"
 
-#: nova/models.py:263 nova/templates/nova/partials/_auth_fields.html:13
+#: nova/models.py:272 nova/templates/nova/partials/_auth_fields.html:13
 #: nova/templates/nova/partials/_tool_config_modal.html:57
 msgid "API Key"
 msgstr "API Key"
 
-#: nova/models.py:264 nova/templates/nova/partials/_auth_fields.html:15
+#: nova/models.py:273 nova/templates/nova/partials/_auth_fields.html:15
 #: nova/templates/nova/partials/_tool_config_modal.html:59
 msgid "Custom"
 msgstr "Custom"
 
-#: nova/models.py:295
+#: nova/models.py:304
+#, python-brace-format
 msgid "{}'s credentials for {}"
 msgstr "{}'s credentials for {}"
 
-#: nova/models.py:302
+#: nova/models.py:311
 msgid "User threads"
 msgstr "User threads"
 
-#: nova/models.py:313
+#: nova/models.py:322
+#, python-brace-format
 msgid "Invalid actor: {}"
 msgstr "Invalid actor: {}"
 
-#: nova/models.py:323
+#: nova/models.py:332
 msgid "Pending"
 msgstr "Pending"
 
-#: nova/models.py:324
+#: nova/models.py:333
 msgid "Running"
 msgstr "Running"
 
-#: nova/models.py:325
+#: nova/models.py:334
 msgid "Completed"
 msgstr "Completed"
 
-#: nova/models.py:326
+#: nova/models.py:335
 msgid "Failed"
 msgstr "Failed"
 
-#: nova/models.py:332
+#: nova/models.py:341
 msgid "User tasks"
 msgstr "User tasks"
 
-#: nova/models.py:336
+#: nova/models.py:345
 msgid "Thread"
 msgstr "Thread"
 
@@ -413,12 +427,12 @@ msgid "Test MCP connection"
 msgstr "Test MCP connection"
 
 #: nova/templates/nova/partials/_tool_config_modal.html:75
-#: nova/tools/builtins/caldav.py:268
+#: nova/tools/builtins/caldav.py:291
 msgid "Username"
 msgstr "Username"
 
 #: nova/templates/nova/partials/_tool_config_modal.html:80
-#: nova/tools/builtins/caldav.py:269
+#: nova/tools/builtins/caldav.py:292
 msgid "Password"
 msgstr "Password"
 
@@ -500,7 +514,19 @@ msgstr "Description"
 msgid "Endpoint URL"
 msgstr "Endpoint URL"
 
-#: nova/templates/nova/partials/_tool_form_fields.html:79
+#: nova/templates/nova/partials/_tool_form_fields.html:71
+msgid "Transport Type"
+msgstr "Transport Type"
+
+#: nova/templates/nova/partials/_tool_form_fields.html:84
+msgid ""
+"Choose the transport method for this MCP server. Use SSE (Legacy) only if "
+"the server requires it."
+msgstr ""
+"Choose the transport method for this MCP server. Use SSE (Legacy) only if "
+"the server requires it."
+
+#: nova/templates/nova/partials/_tool_form_fields.html:101
 #: nova/templates/nova/tool_list.html:20
 msgid "Active"
 msgstr "Active"
@@ -656,87 +682,96 @@ msgstr "Invalid python_path: Must be under 'nova.tools.builtins.'."
 msgid "Could not import module: %s"
 msgstr "Could not import module: %s"
 
-#: nova/tools/agent_tool_wrapper.py:75
+#: nova/tools/agent_tool_wrapper.py:86
 #, python-format
 msgid "Question or instruction sent to the agent %(name)s"
 msgstr "Question or instruction sent to the agent %(name)s"
 
-#: nova/tools/builtins/caldav.py:19
-msgid "Incomplete CalDav configuration"
-msgstr "Incomplete CalDav configuration"
-
 #: nova/tools/builtins/caldav.py:30
+msgid "Incomplete CalDav configuration: missing URL, username, or password"
+msgstr "Incomplete CalDav configuration: missing URL, username, or password"
+
+#: nova/tools/builtins/caldav.py:49
 #, python-brace-format
 msgid "No CalDav credential found for tool {tool_id}"
 msgstr "No CalDav credential found for tool {tool_id}"
 
-#: nova/tools/builtins/caldav.py:47 nova/tools/builtins/caldav.py:133
-#: nova/tools/builtins/caldav.py:182 nova/tools/builtins/caldav.py:211
+#: nova/tools/builtins/caldav.py:69 nova/tools/builtins/caldav.py:156
+#: nova/tools/builtins/caldav.py:205 nova/tools/builtins/caldav.py:234
 msgid "No calendars available."
 msgstr "No calendars available."
 
-#: nova/tools/builtins/caldav.py:49
+#: nova/tools/builtins/caldav.py:71
 msgid "Available calendars :\n"
 msgstr "Available calendars :\n"
 
-#: nova/tools/builtins/caldav.py:56
-msgid "Error when retrieving calendars : {}"
-msgstr "Error when retrieving calendars : {}"
+#: nova/tools/builtins/caldav.py:78
+#, python-brace-format
+msgid "CalDav error: {error}. Check credentials and server URL."
+msgstr "CalDav error: {error}. Check credentials and server URL."
 
-#: nova/tools/builtins/caldav.py:106 nova/tools/builtins/caldav.py:156
+#: nova/tools/builtins/caldav.py:80
+#, python-brace-format
+msgid "Unexpected error when retrieving calendars: {error}"
+msgstr "Unexpected error when retrieving calendars: {error}"
+
+#: nova/tools/builtins/caldav.py:129 nova/tools/builtins/caldav.py:179
+#, python-brace-format
 msgid "Error when retrieving events : {}"
 msgstr "Error when retrieving events : {}"
 
-#: nova/tools/builtins/caldav.py:128 nova/tools/builtins/caldav.py:177
+#: nova/tools/builtins/caldav.py:151 nova/tools/builtins/caldav.py:200
 #, python-brace-format
 msgid "Calendar '{calendar_name}' not found."
 msgstr "Calendar '{calendar_name}' not found."
 
-#: nova/tools/builtins/caldav.py:152
+#: nova/tools/builtins/caldav.py:175
 msgid "No events found"
 msgstr "No events found"
 
-#: nova/tools/builtins/caldav.py:188
+#: nova/tools/builtins/caldav.py:211
 msgid "Event not found."
 msgstr "Event not found."
 
-#: nova/tools/builtins/caldav.py:191
+#: nova/tools/builtins/caldav.py:214
+#, python-brace-format
 msgid "Error when retrieving event's details : {}"
 msgstr "Error when retrieving event's details : {}"
 
-#: nova/tools/builtins/caldav.py:227 nova/tools/builtins/caldav.py:232
+#: nova/tools/builtins/caldav.py:250 nova/tools/builtins/caldav.py:255
+#, python-brace-format
 msgid "Error when searching events : {}"
 msgstr "Error when searching events : {}"
 
-#: nova/tools/builtins/caldav.py:245
+#: nova/tools/builtins/caldav.py:268
 msgid "No calendars found"
 msgstr "No calendars found"
 
-#: nova/tools/builtins/caldav.py:250
+#: nova/tools/builtins/caldav.py:273
 #, python-format
 msgid "%(count)d calendar found"
 msgid_plural "%(count)d calendars found"
 msgstr[0] "%(count)d calendar found"
 msgstr[1] "%(count)d calendars found"
 
-#: nova/tools/builtins/caldav.py:258
+#: nova/tools/builtins/caldav.py:281
 #, python-format
 msgid "Connection error: %(err)s"
 msgstr "Connection error: %(err)s"
 
-#: nova/tools/builtins/caldav.py:267
+#: nova/tools/builtins/caldav.py:290
 msgid "URL CalDav"
 msgstr "URL CalDav"
 
-#: nova/views/tools_views.py:112
-msgid "No credentials found for this tool."
-msgstr "No credentials found for this tool."
+#: nova/views/tools_views.py:160
+msgid "Failed to create credential"
+msgstr "Failed to create credential"
 
-#: nova/views/tools_views.py:168
+#: nova/views/tools_views.py:187
 msgid "Success connecting - No tools found"
 msgstr "Success connecting - No tools found"
 
-#: nova/views/tools_views.py:173
+#: nova/views/tools_views.py:192
 #, fuzzy, python-format
 #| msgid "Success connecting  %(count)d tool found"
 #| msgid_plural "Success connecting  %(count)d tools found"
@@ -745,16 +780,11 @@ msgid_plural "Success connecting - %(count)d tools found"
 msgstr[0] "Success connecting  %(count)d tool found"
 msgstr[1] "Success connecting  %(count)d tools found"
 
-#: nova/views/tools_views.py:186
+#: nova/views/tools_views.py:206
 #, python-format
 msgid "MCP connection error: %(err)s"
 msgstr "MCP connection error: %(err)s"
 
-#: nova/views/tools_views.py:216
-#, python-format
-msgid "Tool testing error: %(err)s"
-msgstr "Tool testing error: %(err)s"
-
-#: nova/views/tools_views.py:221
+#: nova/views/tools_views.py:238
 msgid "No test implemented for this tool type"
 msgstr "No test implemented for this tool type"

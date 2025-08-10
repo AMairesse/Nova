@@ -44,7 +44,7 @@
                         </div>
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-2 edit-provider-btn"
-                                    data-id="{{ provider.id }}" data-name="{{ provider.name|escapejs }}" data-provider-type="{{ provider.provider_type }}"
+                                    data-id="{{ provider.id }}" data-name="{{ provider.name }}" data-provider-type="{{ provider.provider_type }}"
                                     data-model="{{ provider.model }}" data-base-url="{{ provider.base_url|default:'' }}" data-config="{{ provider.additional_config|default:'{}' }}">
                                 {% trans "Edit" %}
                             </button>
@@ -96,8 +96,8 @@
                         </div>
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-2 edit-agent-btn"
-                                    data-id="{{ agent.id }}" data-name="{{ agent.name|escapejs }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
-                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-tool-description="{{ agent.tool_description|escapejs }}"
+                                    data-id="{{ agent.id }}" data-name="{{ agent.name }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
+                                    data-system-prompt="{{ agent.system_prompt }}" data-tool-description="{{ agent.tool_description }}"
                                     data-is-tool="{{ agent.is_tool }}" data-tools="{% for tool in agent.tools.all %}{{ tool.id }}{% if not forloop.last %},{% endif %}{% endfor %}"
                                     data-agent-tools="{% for atool in agent.agent_tools.all %}{{ atool.id }}{% if not forloop.last %},{% endif %}{% endfor %}">
                                 {% trans "Edit" %}
@@ -141,8 +141,8 @@
                         </div>
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-2 edit-agent-btn"
-                                    data-id="{{ agent.id }}" data-name="{{ agent.name|escapejs }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
-                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-tool-description="{{ agent.tool_description|escapejs }}"
+                                    data-id="{{ agent.id }}" data-name="{{ agent.name }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
+                                    data-system-prompt="{{ agent.system_prompt }}" data-tool-description="{{ agent.tool_description }}"
                                     data-is-tool="{{ agent.is_tool }}" data-tools="{% for tool in agent.tools.all %}{{ tool.id }}{% if not forloop.last %},{% endif %}{% endfor %}"
                                     data-agent-tools="{% for atool in agent.agent_tools.all %}{{ atool.id }}{% if not forloop.last %},{% endif %}{% endfor %}">
                                 {% trans "Edit" %}
