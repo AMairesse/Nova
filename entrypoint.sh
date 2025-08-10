@@ -12,6 +12,7 @@ fi
 # Install playwright
 echo "Installing Playwright..."
 playwright install chromium
+playwright install-deps
 
 # Wait for PostgreSQL using connection string (no PGPASSWORD export)
 if [ "$DB_ENGINE" = "postgresql" ]; then

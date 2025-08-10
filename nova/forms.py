@@ -49,6 +49,17 @@ class UserProfileForm(forms.ModelForm):
         model = UserProfile
         fields = ["default_agent"]
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+        if user:
+            # Restrict choices to objects owned by the current user
+            self.fields["default_agent"].queryset = Agent.objects.filter(
+                user=user
+            )
+        else:
+            self.fields["default_agent"].queryset = Agent.objects.none()
+
 
 # --------------------------------------------------------------------------- #
 #  LLM providers                                                              #

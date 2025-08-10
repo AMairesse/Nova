@@ -249,6 +249,14 @@ class UserProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     default_agent = models.ForeignKey(Agent, null=True, blank=True, on_delete=models.SET_NULL)
 
+    # Default agent must be normal agent and belong to the user
+    def clean(self):
+        super().clean()
+        if self.default_agent and self.default_agent.is_tool:
+            raise ValidationError(_("Default agent must be a normal agent."))
+
+        if self.default_agent and self.default_agent.user != self.user:
+            raise ValidationError(_("Default agent must belong to the user."))
 
 class ToolCredential(models.Model):
     """Store credentials for tools."""
