@@ -49,7 +49,7 @@ class UserProfileFormTest(BaseTestCase):
         # Utilise l'instance existante (auto-créée par signal) pour mise à jour
         existing_profile = UserProfile.objects.get(user=self.user)
         data = {'default_agent': self.agent.id}
-        form = UserProfileForm(data=data, instance=existing_profile)
+        form = UserProfileForm(user= self.user, data=data, instance=existing_profile)
         self.assertTrue(form.is_valid())
         profile = form.save()
         self.assertEqual(profile.default_agent, self.agent)
