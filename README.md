@@ -189,15 +189,13 @@ nova/
 
 ## Roadmap
 
-~~ 1. Add a "internet search" tool and a "web browser" tool ~~
+1. File management : add a file, receive a file as a result, file support for MCP tools, ...
 
-2. Management of "thinking models"
+2. Add a scratchpad tool (acting like a memory for long task)
 
-3. File management : add a file, receive a file as a result, file support for MCP tools, ...
+3. Add a canvas tool (acting like a UI component for the agent to interact with the user)
 
-4. Add a scratchpad tool (acting like a memory for long task)
-
-5. Add a canvas tool (acting like a UI component for the agent to interact with the user)
+4. Better display for "thinking models"
 
 ## Contributing
 
