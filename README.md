@@ -95,6 +95,7 @@ This is the recommended way to run Nova for real use, using Docker with PostgreS
    ```
    docker compose up -d --build
    ```
+   Warning : first start may take a while because of the chromium install, you can check progress with `docker compose logs web -f`.
 
 4. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
 
