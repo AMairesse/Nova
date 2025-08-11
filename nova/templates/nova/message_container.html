@@ -10,7 +10,7 @@
       {% if message.actor == Actor.USER %}
       <div class="card border-primary">
         <div class="card-body py-2">
-          <strong class="text-primary">{{ message.rendered_html }}</strong>
+          <strong class="text-primary">{{ message.content|escape|linebreaksbr }}</strong>
         </div>
       </div>
       {% elif message.actor == Actor.AGENT %}

@@ -16,7 +16,7 @@ class Actor(models.TextChoices):
     AGENT = "AGT", _("Agent")
 
 class ProviderType(models.TextChoices):
-    OPENAI     = "openai",     "OpenAI"
+    OPENAI     = "openai",     "OpenAI (or compatible)"
     MISTRAL    = "mistral",    "Mistral"
     OLLAMA     = "ollama",     "Ollama"
     LLMSTUDIO  = "lmstudio",   "LMStudio"

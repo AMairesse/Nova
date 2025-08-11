@@ -1,6 +1,7 @@
 # Nova
 
 [![Docker Image CI](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml)
+[![Django CI](https://github.com/AMairesse/Nova/actions/workflows/django.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/django.yml)
 
 **Nova is a personal-AI workspace that puts privacy first.**
 
@@ -15,7 +16,7 @@
 Instead of sending every prompt to a remote model, Nova lets you decide – transparently and at run-time – whether an agent should reason with a local LLM running on your own machine or delegate to a cloud model only when extra horsepower is really needed. The result is a flexible “best of both worlds” setup that keeps sensitive data on-prem while still giving you access to state-of-the-art capabilities when you want them.
 
 - **Agent-centric workflow** – Create smart assistants (agents) and equip them with “tools” that can be simple Python helpers, calendar utilities, HTTP/APIs or even other agents. Agents can chain or delegate work to one another, allowing complex reasoning paths.
-- **Bring-your-own models** – Connect to OpenAI or Mistral if the task is public, but switch to local back-ends such as Ollama or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
+- **Bring-your-own models** – Connect to OpenAI (or compatible providers like openrouter.ai) or Mistral if the task is public, but switch to local back-ends such as Ollama or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
 - **Privacy by design** – API keys and tokens are stored encrypted; only the minimal data required for a given call ever leaves your machine.
 - **Built-in tools** – Nova comes with a bunch of “builtin” tools for common tasks, like CalDav calendar queries, web surfing, date management and more to come !
 - **Pluggable tools** – Besides built-in utilities, Nova can talk to external micro-services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.
@@ -36,7 +37,6 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 ## Table of Contents
 
 - [Key Features](#key-features)
-- [Environment Variables](#environment-variables)
 - [Production Deployment (Docker)](#production-deployment-docker)
 - [Development Setup](#development-setup)
 - [Project Layout](#project-layout)
@@ -46,87 +46,12 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 - [Acknowledgements](#acknowledgements)
 - [Troubleshooting](#troubleshooting)
 
-## Environment Variables
-
-Nova uses a `.env` file for configuration. Copy `.env.example` to `.env` and edit as needed. Key variables include:
-
-- **Required for Production (Docker):**
-
-  - `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` (PostgreSQL settings).
-  - `DJANGO_SECRET_KEY`: Random secure key.
-  - `FIELD_ENCRYPTION_KEY`: For encrypting sensitive data.
-  - `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` (needed to auto-create admin user on first run).
-
-- **Note:**
-  - `DB_ENGINE`: Set to `postgresql` for prod (default in Docker), or `sqlite` for dev.
-  - `REDIS_HOST`: Set to `redis` for Docker, use 127.0.0.1 and start a local Redis server for dev.
-
-**Security Note:** Never commit `.env` to version control. Use strong, unique values.
 
 ## Production Deployment (Docker)
 
-This is the recommended way to run Nova for real use, using Docker with PostgreSQL for better concurrency and persistence.
+This is the recommended way to run Nova.
+See the [Docker README.md](docker/README.md) for details.
 
-### Prerequisites
-
-- Docker and Docker Compose installed.
-- A `.env` file (see [Environment Variables](#environment-variables)).
-
-### Steps
-
-1. Clone the repo:
-
-   ```
-   git clone https://github.com/AMairesse/nova.git
-   cd nova
-   ```
-
-2. Copy and configure `.env`:
-
-   ```
-   cp .env.example .env
-   ```
-
-   - Set DB vars (e.g., `DB_PASSWORD=secret`).
-   - Set `DB_ENGINE=postgresql` (default in `docker-compose.yml`).
-   - Add `DJANGO_SUPERUSER_*` vars for auto-admin creation.
-   - Ensure volumes are configured for persistence (see `docker-compose.yml`).
-
-3. Build and start containers:
-
-   ```
-   docker compose up -d --build
-   ```
-   Warning : first start may take a while because of the chromium install, you can check progress with `docker compose logs web -f`.
-
-4. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
-
-5. View logs:
-
-   ```
-   docker compose logs -f
-   ```
-
-6. Stop/restart:
-
-   ```
-   docker compose down
-   docker compose up -d
-   ```
-
-7. Updates:
-
-   ```
-   git pull
-   docker compose up -d --build
-   ```
-
-### Notes
-
-- **Persistence:** Docker volumes (`postgres_data`, `static_data`, `media_data`) ensure data survives container restarts. Back them up regularly.
-- **Dev vs Prod:** Prod uses PostgreSQL with a persistent volume. Dev uses SQLite (local file). Switch via `DB_ENGINE` in `.env`.
-- **Security:** Use strong secrets. Expose via a reverse-proxy (e.g., Nginx) with HTTPS. Don't commit `.env`.
-- **Tip:** For local inference, install [Ollama](https://ollama.com/) and load a model like `llama3`. Add it as a provider in the UI (Type: Ollama, Model: `llama3`, Base URL: `http://host.docker.internal:11434/` or your host IP).
 
 ## Development Setup
 
@@ -174,7 +99,6 @@ For development or testing only (uses SQLite, less scalable). Not recommended fo
 
 7. Open `http://localhost:8000`, log in, and configure via **Config › LLM Providers**.
 
-**Tip:** For local models, use Ollama as above.
 
 ## Project Layout
 
@@ -199,25 +123,16 @@ nova/
 
 4. Better display for "thinking models"
 
+
 ## Contributing
 
-Pull requests are welcome! To propose a tool:
+Pull requests are welcome!
 
-1. Create a new Python file under `nova/tools/your_tool.py`.
-
-2. Expose either
-   - a single callable (for simple tools), or
-   - a `get_functions()` dict for multi-function tools.
-
-3. Add metadata to `nova/tools/__init__.py` so it appears in the “Create Tool” modal.
-
-4. Write unit tests under `tests/`.
-
-Please run `pre-commit install` to apply linting and type checks before submitting.
 
 ## License
 
-Nova is released under the MIT License – see `LICENSE` for details.
+Nova is released under the MIT License – see [LICENSE](LICENSE) for details.
+
 
 ## Acknowledgements
 
@@ -227,6 +142,7 @@ Nova is released under the MIT License – see `LICENSE` for details.
 - [Bootstrap 5](https://getbootstrap.com/) – sleek, responsive UI components
 
 Made with ❤️ and a healthy concern for data privacy.
+
 
 ## Troubleshooting
 

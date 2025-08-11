@@ -27,7 +27,7 @@ services:
   web:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ./docker/from-source/Dockerfile
     restart: unless-stopped
     depends_on:
       db:
@@ -45,15 +45,14 @@ services:
       DB_HOST: db
 
   nginx:
-    build:
-      context: .
-      dockerfile: Dockerfile.nginx
-    restart: unless-stopped
-    volumes:
-      - static_data:/app/static
-      - media_data:/app/media
+    image: nginx:latest
     ports:
       - "${HOST_PORT}:80"
+    restart: unless-stopped
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_data:/app/static
+      - media_data:/app/media
     depends_on:
       - web
 
