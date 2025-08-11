@@ -50,10 +50,6 @@ python manage.py collectstatic --noinput --clear
 echo "Applying database migrations..."
 python manage.py migrate --noinput
 
-# i18n: Generate JS catalog
-echo "Generating i18n catalogs..."
-python manage.py compilemessages
-
 # Create superuser if env vars are set (idempotent: skip if exists)
 if [ ! -z "$DJANGO_SUPERUSER_USERNAME" ] && [ ! -z "$DJANGO_SUPERUSER_PASSWORD" ]; then
     echo "Checking/creating superuser..."
