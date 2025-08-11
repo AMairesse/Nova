@@ -67,7 +67,7 @@ This setup include :
    ```
    git clone https://github.com/amairesse/nova.git
    cd nova
-   cp .env.example .env
+   cp .env.example docker/from-source/.env
    ```
 
    Edit the `.env` file to match your environment (see [Environment Variables](#environment-variables)).
@@ -77,7 +77,7 @@ This setup include :
    The following commands are meant to be run from the `nova` directory.
 
    ```
-   docker compose --env-file .env -f docker/from-source/docker-compose.yml up -d
+   docker compose -f docker/from-source/docker-compose.yml up -d
    ```
    Warning : first start may take a while because of the chromium install, you can check progress with `docker compose -f docker/from-source/docker-compose.yml logs web -f`.
 
