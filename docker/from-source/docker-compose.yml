@@ -35,7 +35,6 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
       - static_data:/app/static
       - media_data:/app/media
     env_file:
