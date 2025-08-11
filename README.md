@@ -50,7 +50,7 @@ In short, Nova aims to make â€œagents with autonomy, privacy and extensibilityâ€
 ## Production Deployment (Docker)
 
 This is the recommended way to run Nova.
-See the [Docker README.md](docker/README.md) for details.
+See the [Docker README.md](docker/) for details.
 
 
 ## Development Setup
