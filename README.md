@@ -2,6 +2,7 @@
 
 [![Docker Image CI](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml)
 [![Django CI](https://github.com/AMairesse/Nova/actions/workflows/django.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/django.yml)
+[![Django CI](https://github.com/AMairesse/Nova/actions/workflows/django.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/django.yml)
 
 **Nova is a personal-AI workspace that puts privacy first.**
 
