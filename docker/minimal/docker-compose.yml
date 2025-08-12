@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${DB_NAME:-nova}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: redis-server
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    image: amairesse/nova:latest
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - static_data:/app/static
+      - media_data:/app/media
+    env_file:
+      - .env
+    environment:
+      DB_ENGINE: postgresql
+      DB_HOST: db
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "${HOST_PORT}:80"
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_data:/app/static
+      - media_data:/app/media
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  static_data:
+  media_data:
