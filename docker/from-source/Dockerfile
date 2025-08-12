@@ -1,7 +1,7 @@
 # Dockerfile
 
 # Official python image
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 # Define working directory
 WORKDIR /app
@@ -13,10 +13,14 @@ RUN apt-get update && apt-get install -y gcc libpq-dev postgresql-client gettext
 COPY requirements.txt /app/
 RUN pip install -r requirements.txt
 COPY nova/ /app/nova/
-COPY manage.py entrypoint.sh /app/
+COPY manage.py ./docker/from-source/entrypoint.sh /app/
 
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
+
+# Pre-install Playwright
+RUN playwright install chromium
+RUN playwright install-deps
 
 # Expose port
 EXPOSE 8000
