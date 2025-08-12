@@ -1,0 +1,34 @@
+services:
+  db:
+    extends:
+      file: docker-compose.base.yml
+      service: db
+
+  redis:
+    extends:
+      file: docker-compose.base.yml
+      service: redis
+
+  nginx:
+    extends:
+      file: docker-compose.base.yml
+      service: nginx
+  
+  minio:
+    extends:
+      file: docker-compose.base.yml
+      service: minio
+
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+
+volumes:
+  postgres_data:
+  static_data:
+  media_data:
+  minio_data:

@@ -1,0 +1,47 @@
+services:
+  db:
+    extends:
+      file: docker-compose.base.yml
+      service: db
+
+  redis:
+    extends:
+      file: docker-compose.base.yml
+      service: redis
+
+  nginx:
+    extends:
+      file: docker-compose.base.yml
+      service: nginx
+  
+  minio:
+    extends:
+      file: docker-compose.base.yml
+      service: minio
+
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    build: 
+      context: ../
+      dockerfile: docker/Dockerfile
+    command: entrypoint.sh
+    restart: "no"
+    stdin_open: true
+    tty: true
+    volumes:
+      - ../nova:/app/nova  # Hot-reload
+      - ../requirements.txt:/app/requirements.txt
+      - ../manage.py:/app/manage.py
+    ports:
+      - "5678:5678"  # Debug remote
+    environment:
+      DEBUG: "True"
+      PYTHONUNBUFFERED: 1
+
+volumes:  # Merge auto
+  postgres_data:
+  static_data:
+  media_data:
+  minio_data:
