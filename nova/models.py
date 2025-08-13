@@ -4,7 +4,7 @@ from importlib import import_module
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import URLField
+from django.db.models import URLField, JSONField
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 import json, logging
@@ -91,6 +91,7 @@ class Message(models.Model):
                              related_name='user_messages',
                              verbose_name=_("User messages"))
     text = models.TextField()
+    internal_data = JSONField(default=dict, blank=True)  # For technical info from tools to send to the agent
     actor = models.CharField(max_length=3, choices=Actor.choices)
     thread = models.ForeignKey('Thread', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -402,7 +403,7 @@ class UserFile(models.Model):
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=100)
     size = models.PositiveIntegerField()  # File size in bytes
-    expiration_date = models.DateTimeField()  # Auto-delete after this date
+    expiration_date = models.DateTimeField(null=True, blank=True)  # Auto-delete after this date
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -413,9 +414,13 @@ class UserFile(models.Model):
         return f"{self.original_filename} ({self.key})"
 
     def save(self, *args, **kwargs):
-        if not self.expiration_date:
-            self.expiration_date = self.created_at + timedelta(days=30)  # Default: expire after 30 days
+        # Save the object first to set auto_now_add fields
         super().save(*args, **kwargs)
+        
+        # Now calculate expiration_date if not already set
+        if not self.expiration_date:
+            self.expiration_date = self.created_at + timedelta(days=30)
+            super().save(update_fields=['expiration_date'])  # Save again with updated field
 
     def get_download_url(self, expires_in=3600):
         """Generate presigned URL for download (expires in seconds)."""

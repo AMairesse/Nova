@@ -3,12 +3,20 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from nova.models import UserParameters, UserProfile
 
-from .models import Agent, Tool, ToolCredential, Thread, Message, LLMProvider, Task
+from .models import Agent, Tool, ToolCredential, Thread, Message, LLMProvider, Task, UserFile
 admin.site.site_header = "Nova Admin"
 admin.site.register(Agent)
 admin.site.register(Tool)
 admin.site.register(ToolCredential)
-admin.site.register(Thread)
+
+class FilesInline(admin.TabularInline):
+    model = UserFile
+    verbose_name_plural = "files"
+
+class ThreadAdmin(admin.ModelAdmin):
+    inlines = [FilesInline]
+
+admin.site.register(Thread, ThreadAdmin)
 admin.site.register(Message)
 admin.site.register(LLMProvider)
 admin.site.register(Task)

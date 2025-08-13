@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import StructuredTool
 from langchain_core.callbacks import BaseCallbackHandler
-from .models import Actor, Tool, ProviderType, LLMProvider
+from .models import Actor, Tool, ProviderType, LLMProvider, Message  # Added Message
 from .utils import extract_final_answer
 
 import asyncio
@@ -355,6 +355,40 @@ class LLMAgent:
                 langchain_tool = wrapper.create_langchain_tool()
                 tools.append(langchain_tool)
 
+        # ----- Ajout statique des file tools (toujours inclus) -----
+        from nova.tools.files import list_files, read_file, create_file, delete_file  # Import statique
+
+        tools.extend([
+            StructuredTool.from_function(
+                coroutine=list_files,
+                name="list_files",
+                description="List all files in the current thread",
+                args_schema={"type": "object", "properties": {"thread_id": {"type": "string"}}, "required": ["thread_id"]}
+            ),
+            StructuredTool.from_function(
+                coroutine=read_file,
+                name="read_file",
+                description="Read the content of a file (text only)",
+                args_schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}
+            ),
+            StructuredTool.from_function(
+                coroutine=create_file,
+                name="create_file",
+                description="Create a new file in the thread with content",
+                args_schema={"type": "object", "properties": {
+                    "thread_id": {"type": "string"},
+                    "filename": {"type": "string"},
+                    "content": {"type": "string"}
+                }, "required": ["thread_id", "filename", "content"]}
+            ),
+            StructuredTool.from_function(
+                coroutine=delete_file,
+                name="delete_file",
+                description="Delete a file",
+                args_schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}
+            ),
+        ])
+
         return tools
 
     async def cleanup(self):
@@ -394,8 +428,18 @@ class LLMAgent:
 
     async def invoke(self, question: str, silent_mode=False):  # Now async
         config = self.silent_config if silent_mode else self.config
+
+        # ----- Append file info to prompt if last message has internal_data -----
+        last_message = await sync_to_async(Message.objects.filter(thread_id=self.thread_id).order_by('-created_at').first)()
+        additional_prompt = ""
+        if last_message and last_message.internal_data and 'file_ids' in last_message.internal_data:
+            file_ids = last_message.internal_data['file_ids']
+            additional_prompt = f"Attached files: {', '.join(map(str, file_ids))}. Use file tools if needed."
+
+        full_question = f"{question}\n{additional_prompt}"
+
         result = await self.agent.ainvoke(  # Switch to ainvoke and await it
-            {"messages": [HumanMessage(content=question)]},
+            {"messages": [HumanMessage(content=full_question)]},
             config=config
         )
         final_msg = extract_final_answer(result)

@@ -1,7 +1,6 @@
 <!-- nova/templates/nova/message_container.html -->
 {% load static %} {% load i18n %}
 
-
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
   <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
@@ -11,6 +10,17 @@
       <div class="card border-primary">
         <div class="card-body py-2">
           <strong class="text-primary">{{ message.rendered_html }}</strong>
+          <!-- Affichage fichiers attachés -->
+          {% if message.file_attachments %}
+          <div class="mt-2 small text-muted">
+            Attached files:
+            <ul>
+              {% for file in message.file_attachments %}
+              <li><a href="{{ file.url }}" target="_blank">{{ file.name }}</a></li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
         </div>
       </div>
       {% elif message.actor == Actor.AGENT %}
@@ -47,7 +57,7 @@
   </div>
   {% else %}
   <div class="message-input-area p-3">
-    <form id="message-form" method="post">
+    <form id="message-form" method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <input
         type="hidden"
@@ -99,14 +109,13 @@
       </div>
 
       <!-- Message input group -->
-      <div class="input-group">
-        <textarea
-          class="form-control auto-resize-textarea"
-          name="new_message"
-          placeholder="{% trans 'Type your message...' %}"
-          rows="1"
-          autofocus
-        ></textarea>
+      <div class="input-group mb-2">
+        <textarea class="form-control auto-resize-textarea"
+                  name="new_message"
+                  placeholder="{% trans 'Type your message...' %}"
+                  rows="1"
+                  maxlength="2000"
+                  autofocus></textarea>
         <button
           type="submit"
           id="send-btn"
@@ -116,6 +125,12 @@
           <i class="bi bi-send-fill"></i>
           <span class="visually-hidden">{% trans "Send" %}</span>
         </button>
+      </div>
+
+      <!-- File upload input -->
+      <div class="mb-2">
+        <label for="file-input" class="form-label small text-muted">{% trans "Attach files (optional)" %}</label>
+        <input type="file" class="form-control" id="file-input" name="files" multiple accept="image/*,text/*,.pdf,.docx" />
       </div>
     </form>
   </div>

@@ -12,12 +12,12 @@ from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 from ..models import Actor, Thread, Agent, UserProfile, Task, TaskStatus, UserFile
 from ..tasks import sync_run_ai_task  # Import from new tasks.py
-from ..file_utils import extract_file_content  # Import if needed; currently not used here
 from django.conf import settings
 import logging
 import boto3
 from botocore.exceptions import ClientError
 import io  # For in-memory file handling
+import uuid  # For unique keys
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,9 @@ ALLOWED_TAGS = [
 ALLOWED_ATTRS = {
     "a": ["href", "title", "rel"],
 }
+
+ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html', 'application/pdf', 'application/msword']  # Whitelist
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 @ensure_csrf_cookie
 @login_required(login_url='login')
@@ -75,6 +78,14 @@ def message_list(request):
                 strip=True,
             )
             m.rendered_html = mark_safe(clean_html)
+            
+            # ----- Ajout rendu fichiers -----
+            if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
+                file_urls = []
+                for fid in m.internal_data['file_ids']:
+                    file = get_object_or_404(UserFile, id=fid, user=request.user)
+                    file_urls.append({'name': file.original_filename, 'url': file.get_download_url()})
+                m.file_attachments = file_urls  # Passe au template
 
     return render(request, 'nova/message_container.html', {
         'messages': messages,
@@ -85,7 +96,7 @@ def message_list(request):
 
 def new_thread(request):
     count = Thread.objects.filter(user=request.user).count() + 1
-    thread_subject = f"thread n°{count}"
+    thread_subject = f"thread n°{count}"  # Fixed encoding
     thread = Thread.objects.create(subject=thread_subject, user=request.user)
 
     # Render the thread item template
@@ -126,10 +137,10 @@ def add_message(request):
         # New thread
         thread, thread_html = new_thread(request)
     else:
-        thread = Thread.objects.get(id=thread_id)
+        thread = get_object_or_404(Thread, id=thread_id, user=request.user)  # Fixed ownership check
         thread_html = None
 
-    # Handle file uploads natively
+    # Handle file uploads natively with validation
     uploaded_file_ids = []
     s3_client = boto3.client(
         's3',
@@ -138,9 +149,15 @@ def add_message(request):
         aws_secret_access_key=settings.MINIO_SECRET_KEY
     )
     for file in uploaded_files:
+        if file.size > MAX_FILE_SIZE:
+            return JsonResponse({"status": "ERROR", "message": "File too large (max 10MB)"}, status=400)
+        if file.content_type not in ALLOWED_MIME_TYPES:
+            return JsonResponse({"status": "ERROR", "message": "Unsupported file type"}, status=400)
+        
         try:
-            # Generate unique key (e.g., user_id/thread_id/uuid_filename)
-            key = f"{request.user.id}/{thread.id}/{file.name}"
+            # Generate unique key to avoid collisions
+            unique_id = uuid.uuid4().hex[:8]
+            key = f"{request.user.id}/{thread.id}/{unique_id}_{file.name}"
             s3_client.upload_fileobj(
                 io.BytesIO(file.read()),  # In-memory to avoid temp files
                 settings.MINIO_BUCKET_NAME,
@@ -161,10 +178,9 @@ def add_message(request):
             return JsonResponse({"status": "ERROR", "message": "File upload failed"}, status=500)
 
     # Add the user message to the thread (append file info if any)
-    message_text = new_message
-    if uploaded_file_ids:
-        message_text += f"\n[Attached files: {', '.join([str(fid) for fid in uploaded_file_ids])}]"
-    thread.add_message(message_text, actor=Actor.USER)
+    message = thread.add_message(new_message, actor=Actor.USER)
+    message.internal_data = {'file_ids': uploaded_file_ids}
+    message.save()
 
     # Get the agent object
     agent_obj = None
@@ -214,4 +230,3 @@ def running_tasks(request, thread_id):
         status=TaskStatus.RUNNING
     ).values_list('id', flat=True)
     return JsonResponse({'running_task_ids': list(running_ids)})
-

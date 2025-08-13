@@ -35,11 +35,14 @@
     
     e.preventDefault();
     const textarea = document.querySelector('textarea[name="new_message"]');
+    const fileInput = document.getElementById('file-input');
     const msg = textarea ? textarea.value.trim() : '';
-    if (!msg) return; // Prevent empty
+    const hasFiles = fileInput && fileInput.files.length > 0;
+    if (!msg && !hasFiles) return; // Prevent empty submit without files
     
     const sendBtn = document.getElementById('send-btn');
     if (sendBtn) sendBtn.disabled = true;
+    if (sendBtn) sendBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> <span class="visually-hidden">Uploading...</span>';  // Feedback
 
     try {
       const token = await window.getCSRFToken();
@@ -56,6 +59,10 @@
 
       const data = await response.json();
       
+      if (data.status !== "OK") {
+        throw new Error(data.message || "Upload failed");
+      }
+
       // 1) Memorize selected agent BEFORE updating the DOM
       const selectedAgentInput = document.getElementById('selectedAgentInput');
       const currentAgentId = selectedAgentInput ? selectedAgentInput.value : '';
@@ -109,9 +116,15 @@
         // Start WS for task progress
         startTaskWebSocket(data.thread_id, data.task_id);
       }
+
+      // Reset file input and button
+      if (fileInput) fileInput.value = '';
+      if (sendBtn) sendBtn.innerHTML = '<i class="bi bi-send-fill"></i> <span class="visually-hidden">Send</span>';
     } catch (error) {
       console.error("Error adding message:", error);
+      alert(error.message || "An error occurred during upload.");  // User feedback
       if (sendBtn) sendBtn.disabled = false;
+      if (sendBtn) sendBtn.innerHTML = '<i class="bi bi-send-fill"></i> <span class="visually-hidden">Send</span>';
     }
   });
 
