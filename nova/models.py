@@ -424,6 +424,10 @@ class UserFile(models.Model):
 
     def get_download_url(self, expires_in=3600):
         """Generate presigned URL for download (expires in seconds)."""
+        from django.utils import timezone
+        if self.expiration_date and self.expiration_date < timezone.now():
+            self.delete()
+            raise ValueError("File expired and deleted.")
         s3_client = boto3.client(
             's3',
             endpoint_url=settings.MINIO_ENDPOINT_URL,

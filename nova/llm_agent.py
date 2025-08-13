@@ -355,39 +355,10 @@ class LLMAgent:
                 langchain_tool = wrapper.create_langchain_tool()
                 tools.append(langchain_tool)
 
-        # ----- Ajout statique des file tools (toujours inclus) -----
-        from nova.tools.files import list_files, read_file, create_file, delete_file  # Import statique
-
-        tools.extend([
-            StructuredTool.from_function(
-                coroutine=list_files,
-                name="list_files",
-                description="List all files in the current thread",
-                args_schema={"type": "object", "properties": {"thread_id": {"type": "string"}}, "required": ["thread_id"]}
-            ),
-            StructuredTool.from_function(
-                coroutine=read_file,
-                name="read_file",
-                description="Read the content of a file (text only)",
-                args_schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}
-            ),
-            StructuredTool.from_function(
-                coroutine=create_file,
-                name="create_file",
-                description="Create a new file in the thread with content",
-                args_schema={"type": "object", "properties": {
-                    "thread_id": {"type": "string"},
-                    "filename": {"type": "string"},
-                    "content": {"type": "string"}
-                }, "required": ["thread_id", "filename", "content"]}
-            ),
-            StructuredTool.from_function(
-                coroutine=delete_file,
-                name="delete_file",
-                description="Delete a file",
-                args_schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}
-            ),
-        ])
+        # Load files support tools
+        from .tools import files
+        file_tools = await files.get_functions(self)
+        tools.extend(file_tools)
 
         return tools
 
