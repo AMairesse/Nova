@@ -26,19 +26,33 @@ services:
     build: 
       context: ../
       dockerfile: docker/Dockerfile
-    command: ./entrypoint.sh
-    restart: "no"
+    command: bash -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput --clear && uvicorn nova.asgi:application --host 0.0.0.0 --port 8000 --reload"  # Uvicorn with hot-reload
+    restart: "no"  # No auto-restart for dev
     stdin_open: true
     tty: true
     volumes:
-      - ../nova:/app/nova  # Hot-reload
-      - ../requirements.txt:/app/requirements.txt
+      - ../nova:/app/nova  # Hot-reload code app
+      - ../requirements.txt:/app/requirements.txt  # If deps change then rebuild manually
       - ../manage.py:/app/manage.py
+      - ../docker/entrypoint.sh:/app/entrypoint.sh  # In case entrypoint changes
     ports:
       - "5678:5678"  # Debug remote
+      - "8000:8000"  # Direct exposure for debug without nginx if needed
     environment:
       DEBUG: "True"
       PYTHONUNBUFFERED: 1
+    healthcheck:  # Checks container health
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:  # Attends les services
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
 
 volumes:  # Merge auto
   postgres_data:

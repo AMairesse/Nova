@@ -39,7 +39,7 @@ class UserParametersForm(forms.ModelForm):
             "langfuse_host"
         ]
         widgets = {
-            "langfuse_public_key": forms.PasswordInput(render_value=False),
+            "langfuse_public_key": forms.TextInput(),
             "langfuse_secret_key": forms.PasswordInput(render_value=False)
         }
 

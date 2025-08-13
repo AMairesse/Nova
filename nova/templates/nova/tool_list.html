@@ -1,59 +1,57 @@
 {% load i18n %}
 
-<div class="tab-pane fade" id="tools" role="tabpanel">
-    <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">{% trans "My tools" %}</h5>
-            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createToolModal">
-                {% trans "Create a tool" %}
-            </button>
-        </div>
-        <div class="card-body">
-            {% if tools %}
-                <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
-                            <tr>
-                                <th>{% trans "Name" %}</th>
-                                <th>{% trans "Type" %}</th>
-                                <th>{% trans "Description" %}</th>
-                                <th>{% trans "Active" %}</th>
-                                <th>{% trans "Actions" %}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for tool in tools %}
-                                <tr>
-                                    <td>{{ tool.name }}</td>
-                                    <td>{{ tool.get_tool_type_display }}</td>
-                                    <td>{{ tool.description|truncatechars:50 }}</td>
-                                    <td>{% if tool.is_active %} {% trans "Yes" %} {% else %} {% trans "No" %} {% endif %}</td>
-                                    <td>
-                                        <div class="btn-group" role="group">
-                                            <button type="button" class="btn btn-sm btn-outline-primary" 
-                                                    data-bs-toggle="modal" data-bs-target="#editToolModal{{ tool.id }}">
-                                                {% trans "Edit" %}
-                                            </button>
-                                            <button type="button" class="btn btn-sm btn-outline-danger" 
-                                                    data-bs-toggle="modal" data-bs-target="#deleteToolModal{{ tool.id }}">
-                                                {% trans "Delete" %}
-                                            </button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary" 
-                                                    data-bs-toggle="modal" data-bs-target="#configToolModal{{ tool.id }}">
-                                                {% trans "Configure" %}
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            {% else %}
-                <p class="text-center">{% trans "No tools available." %}</p>
-            {% endif %}
-        </div>
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">{% trans "My tools" %}</h5>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createToolModal">
+            {% trans "Create a tool" %}
+        </button>
     </div>
-    
-    {% include "nova/tool_modals.html" %}
+    <div class="card-body">
+        {% if tools %}
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Name" %}</th>
+                            <th>{% trans "Type" %}</th>
+                            <th>{% trans "Description" %}</th>
+                            <th>{% trans "Active" %}</th>
+                            <th>{% trans "Actions" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for tool in tools %}
+                            <tr>
+                                <td>{{ tool.name }}</td>
+                                <td>{{ tool.get_tool_type_display }}</td>
+                                <td>{{ tool.description|truncatechars:50 }}</td>
+                                <td>{% if tool.is_active %} {% trans "Yes" %} {% else %} {% trans "No" %} {% endif %}</td>
+                                <td>
+                                    <div class="btn-group" role="group">
+                                        <button type="button" class="btn btn-sm btn-outline-primary" 
+                                                data-bs-toggle="modal" data-bs-target="#editToolModal{{ tool.id }}">
+                                            {% trans "Edit" %}
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                data-bs-toggle="modal" data-bs-target="#deleteToolModal{{ tool.id }}">
+                                            {% trans "Delete" %}
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" 
+                                                data-bs-toggle="modal" data-bs-target="#configToolModal{{ tool.id }}">
+                                            {% trans "Configure" %}
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="text-center">{% trans "No tools available." %}</p>
+        {% endif %}
+    </div>
 </div>
+
+{% include "nova/tool_modals.html" %}

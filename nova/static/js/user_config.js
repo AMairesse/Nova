@@ -144,6 +144,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
+
+  /* Langfuse fields toggle (using Django's default ID for the checkbox) */
+  const allowCheckbox = document.getElementById('id_allow_langfuse');
+  if (allowCheckbox) {
+    allowCheckbox.addEventListener('change', function() {
+      document.getElementById('langfuse-fields').style.display = this.checked ? 'block' : 'none';
+    });
+  }
 });
 
 /* ------------------------------------------------------------------------

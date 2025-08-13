@@ -1,15 +1,35 @@
 # nova/models.py
+import re
 from importlib import import_module
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import URLField
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 import json, logging
 from datetime import datetime
 
-
 logger = logging.getLogger(__name__)
+
+
+def validate_relaxed_url(value):
+    """
+    Simple validator for relaxed URLs: allows single-label hosts like 'langfuse:3000'.
+    Checks for scheme (http/https), host, optional port/path.
+    """
+    if not value:
+        return  # Allow empty if blank=True
+
+    # Relaxed regex: scheme://host[:port][/path]
+    regex = re.compile(
+        r'^(https?://)'  # Scheme (http or https)
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host (single-label or with dots)
+        r'(?::\d{1,5})?'  # Optional port
+        r'(?:/[^\s]*)?$'  # Optional path
+    )
+    if not regex.match(value):
+        raise ValidationError(_("Enter a valid URL."))
 
 class Actor(models.TextChoices):
     USER  = "USR", _("User")
@@ -54,8 +74,12 @@ class UserParameters(models.Model):
     # Langfuse per-user config
     langfuse_public_key = EncryptedCharField(max_length=255, blank=True, null=True)
     langfuse_secret_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    langfuse_host = models.URLField(blank=True, null=True)
-
+    langfuse_host = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        validators=[validate_relaxed_url],
+    )
     def __str__(self):
         return f'Parameters for {self.user.username}'
 

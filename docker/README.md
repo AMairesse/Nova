@@ -74,7 +74,7 @@ This setup include :
 
    Edit the `docker/.env` file to match your environment (see [Environment Variables](#environment-variables)).
 
-2. Start containers:
+2. Build containers:
 
    The following commands are meant to be run from the `nova` directory.
 
@@ -95,24 +95,19 @@ This setup include :
 
    ```
    docker compose -f docker/docker-compose.from-source.yml down
-   docker compose -f docker/docker-compose.from-source.yml up -d --build
+   docker compose -f docker/docker-compose.from-source.yml up -d
    ```
 
 7. (optional) Updates:
 
    ```
    git pull
-   docker compose -f docker/docker-compose.from-source.yml up -d --build
+   docker compose -f docker/docker-compose.from-source.yml up -d
    ```
 
 ## Development setup
 
-This setup include :
-   - A PostgreSQL database
-   - A Redis server
-   - A web server (nginx)
-   - A Minio S3 server
-   - The Nova web app built from source with hot-reload and debug enabled
+### Start the development setup
 
 1. Download the development setup:
 
@@ -124,45 +119,45 @@ This setup include :
 
    Edit the `docker/.env` file to match your environment (see [Environment Variables](#environment-variables)).
 
-2. Start containers:
+2. First build of the containers:
 
    The following commands are meant to be run from the `nova` directory.
 
    ```
    docker compose -f docker/docker-compose.dev.yml up -d --build
    ```
-   Warning : first start may take a while because of the chromium install, you can check progress with `docker compose -f docker/docker-compose.dev.yml logs web -f`.
+   Warning : first start may take a while because of the chromium install, you can check progress with the logs (see below).
 
-3. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
+3. Access the app at `http://localhost:8080` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
 
-4. (optional) View logs:
+   Note : the app can also be accessed at `http://localhost:8000` without nginx.
+
+### Manage containers
+
+#### View logs
 
    ```
    docker compose -f docker/docker-compose.dev.yml logs -f
    ```
 
-5. (optional) Stop/restart:
+#### Stop/restart the containers
 
    ```
    docker compose -f docker/docker-compose.dev.yml down
-   docker compose -f docker/docker-compose.dev.yml up -d --build
+   docker compose -f docker/docker-compose.dev.yml up -d
    ```
 
-7. (optional) Updates:
+#### Update the application
 
    ```
    git pull
-   docker compose -f docker/docker-compose.dev.yml up -d --build
+   docker compose -f docker/docker-compose.dev.yml up -d
    ```
 
-8. (optional) Debug:
-
-   ```
-   docker compose -f docker/docker-compose.dev.yml up -d --build
-   ```
+### Launch a debug session
 
    Add a debug config in VSCode (or your IDE of choice) and run the debug session.
-   ````
+   ```
    {
    "version": "0.2.0",
    "configurations": [
@@ -176,6 +171,30 @@ This setup include :
    ]
    }
    ```
+
+### Add Langfuse
+
+You can add Langfuse to the setup so that you can see the agents messages in detail.
+
+1. Add Langfuse to the setup:
+
+   Remplace the lauch command by:
+   ```
+   docker compose -f docker/docker-compose.dev.yml -f docker/docker-compose.add-langfuse.yml up -d
+   ```
+
+2. Access Langfuse at `http://localhost:3000`
+
+   - Create a user and log in
+   - Create an org and a project
+   - Create API keys for the project
+
+3. Add Langfuse to the app:
+
+   Access Nova and configure Langfuse via the UI.
+
+4. Interact with and Agent and see the messages in Langfuse (refresh the page to see the messages in "Traces").
+
 
 ## Environment Variables
 

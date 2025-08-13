@@ -8,22 +8,22 @@
 <!-- Tabs navigation -->
 <ul class="nav nav-tabs mb-4" id="configTabs" role="tablist">
     <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="providers-tab" data-bs-toggle="tab" data-bs-target="#providers" type="button" role="tab">
+        <button class="nav-link {% if active_tab == 'providers' %}active{% endif %}" id="providers-tab" data-bs-toggle="tab" data-bs-target="#providers" type="button" role="tab">
             <i class="bi bi-cloud-arrow-up me-2"></i>{% trans "LLM Providers" %}
         </button>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="agents-tab" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">
+        <button class="nav-link {% if active_tab == 'agents' %}active{% endif %}" id="agents-tab" data-bs-toggle="tab" data-bs-target="#agents" type="button" role="tab">
             <i class="bi bi-robot me-2"></i>{% trans "Agents" %}
         </button>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="tools-tab" data-bs-toggle="tab" data-bs-target="#tools" type="button" role="tab">
+        <button class="nav-link {% if active_tab == 'tools' %}active{% endif %}" id="tools-tab" data-bs-toggle="tab" data-bs-target="#tools" type="button" role="tab">
             <i class="bi bi-tools me-2"></i>{% trans "Tools" %}
         </button>
     </li>
     <li class="nav-item" role="presentation">
-        <button class="nav-link" id="general-config-tab" data-bs-toggle="tab" data-bs-target="#general-config" type="button" role="tab">
+        <button class="nav-link {% if active_tab == 'general-config' %}active{% endif %}" id="general-config-tab" data-bs-toggle="tab" data-bs-target="#general-config" type="button" role="tab">
             <i class="bi bi-gear me-2"></i>{% trans "General Config" %}
         </button>
     </li>
@@ -32,7 +32,7 @@
 <!-- Tabs content -->
 <div class="tab-content mt-3" id="configTabsContent">
     <!-- LLM Providers tab -->
-    <div class="tab-pane fade show active" id="providers" role="tabpanel">
+    <div class="tab-pane fade {% if active_tab == 'providers' %}show active{% endif %}" id="providers" role="tabpanel">
         <h3>{% trans "My LLM providers" %}</h3>
         <div class="row">
             {% for provider in llm_providers %}
@@ -64,7 +64,7 @@
     </div>
 
     <!-- Agents tab -->
-    <div class="tab-pane fade" id="agents" role="tabpanel">
+    <div class="tab-pane fade {% if active_tab == 'agents' %}show active{% endif %}" id="agents" role="tabpanel">
         {% trans "Delete" as delete_trans %}
         <div class="row">
             <div class="col-md-6">
@@ -168,32 +168,53 @@
     </div>
 
     <!-- Tools tab -->
-    {% include "nova/tool_list.html" %}
+    <div class="tab-pane fade {% if active_tab == 'tools' %}show active{% endif %}" id="tools" role="tabpanel">
+        {% include "nova/tool_list.html" %}
+    </div>
 
     <!-- General Config tab -->
-    <div class="tab-pane fade" id="general-config" role="tabpanel">
+    <div class="tab-pane fade {% if active_tab == 'general-config' %}show active{% endif %}" id="general-config" role="tabpanel">
         <h3>{% trans "General Config" %}</h3>
         <form method="post" action="{% url 'user_config' %}">
             {% csrf_token %}
             <input type="hidden" name="action" value="save_settings">
+
+            <!-- Display non-field errors (e.g., form-wide issues) -->
+            {% if user_params_form.non_field_errors %}
+                <div class="alert alert-danger">
+                    {{ user_params_form.non_field_errors }}
+                </div>
+            {% endif %}
+
             <div class="mb-3 form-check">
-                <input class="form-check-input" type="checkbox" id="allow-trace" name="allow_langfuse" {% if user_params.allow_langfuse %}checked{% endif %}>
-                <label class="form-check-label" for="allow-trace">{% trans "Allow trace (langfuse)" %}</label>
+                {{ user_params_form.allow_langfuse }}
+                <label class="form-check-label" for="{{ user_params_form.allow_langfuse.id_for_label }}">{% trans "Allow trace (langfuse)" %}</label>
+                {{ user_params_form.allow_langfuse.errors }}
             </div>
-            <div id="langfuse-fields" {% if not user_params.allow_langfuse %}style="display: none;"{% endif %}>
+
+            <div id="langfuse-fields" {% if not user_params_form.allow_langfuse.value %}style="display: none;"{% endif %}>
                 <div class="mb-3">
-                    <label class="form-label" for="langfuse-public-key">{% trans "Langfuse Public Key" %}</label>
-                    <input type="text" class="form-control" id="langfuse-public-key" name="langfuse_public_key" value="{{ user_params.langfuse_public_key }}" required>
+                    {{ user_params_form.langfuse_public_key.label_tag }}
+                    {{ user_params_form.langfuse_public_key }}
+                    {{ user_params_form.langfuse_public_key.errors }}
                 </div>
                 <div class="mb-3">
-                    <label class="form-label" for="langfuse-secret-key">{% trans "Langfuse Secret Key" %}</label>
-                    <input type="password" class="form-control" id="langfuse-secret-key" name="langfuse_secret_key" value="{{ user_params.langfuse_secret_key }}" required>
+                    {{ user_params_form.langfuse_secret_key.label_tag }}
+                    {{ user_params_form.langfuse_secret_key }}
+                    {% if user_params_form.instance.langfuse_secret_key %}
+                        <small class="form-text text-muted keep-api-msg">
+                            {% trans "A secret key is already registered; leave empty to keep it." %}
+                        </small>
+                    {% endif %}
+                    {{ user_params_form.langfuse_secret_key.errors }}
                 </div>
                 <div class="mb-3">
-                    <label class="form-label" for="langfuse-host">{% trans "Langfuse Host" %}</label>
-                    <input type="url" class="form-control" id="langfuse-host" name="langfuse_host" value="{{ user_params.langfuse_host }}" placeholder="https://cloud.langfuse.com">
+                    {{ user_params_form.langfuse_host.label_tag }}
+                    {{ user_params_form.langfuse_host }}
+                    {{ user_params_form.langfuse_host.errors }}
                 </div>
             </div>
+            
             <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
         </form>
     </div>
@@ -207,9 +228,4 @@
 <script src="{% url 'javascript-catalog' %}"></script>
 <script src="{% static 'js/user_config.js' %}"></script>
 <script src="{% static 'js/tool_management.js' %}"></script>
-<script>
-    document.getElementById('allow-trace').addEventListener('change', function() {
-        document.getElementById('langfuse-fields').style.display = this.checked ? 'block' : 'none';
-    });
-</script>
 {% endblock %}

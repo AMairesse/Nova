@@ -8,6 +8,8 @@ from .views.provider_views import create_provider, edit_provider, delete_provide
 from .views.agent_views import create_agent, edit_agent, delete_agent, make_default_agent
 from .views.tools_views import create_tool, edit_tool, delete_tool, configure_tool, test_tool_connection
 from .views.security_views import csrf_token
+from .views.health import healthz
+from django.conf import settings
 
 urlpatterns = [
     # Main views
@@ -43,4 +45,10 @@ urlpatterns = [
     # i18n
     path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("api/csrf/", csrf_token, name="api-csrf"),
+    ]
+
+# Add healthcheck only in DEBUG mode
+if settings.DEBUG:
+    urlpatterns += [
+        path('healthz/', healthz, name='healthz'),
     ]
