@@ -26,7 +26,7 @@ services:
     build: 
       context: ../
       dockerfile: docker/Dockerfile
-    command: entrypoint.sh
+    command: ./entrypoint.sh
     restart: "no"
     stdin_open: true
     tty: true
