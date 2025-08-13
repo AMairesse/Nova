@@ -1,23 +1,43 @@
 services:
+  db:
+    extends:
+      file: docker-compose.base.yml
+      service: db
+
+  redis:
+    extends:
+      file: docker-compose.base.yml
+      service: redis
+
+  minio:
+    extends:
+      file: docker-compose.base.yml
+      service: minio
+
+  minio-nova-init:
+    extends:
+      file: docker-compose.base.yml
+      service: minio-nova-init
+
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     restart: always
     depends_on: &langfuse-depends-on
-      db:  # Hérité de dev.yml (était postgres)
+      db:
         condition: service_healthy
-      minio:  # Hérité
+      minio:
         condition: service_healthy
-      redis:  # Hérité
+      redis:
         condition: service_healthy
-      clickhouse:  # Nouveau, spécifique
+      clickhouse:
         condition: service_healthy
-      db-init-langfuse:  # Nouveau : attend init DB
+      db-init-langfuse:
         condition: service_completed_successfully
     ports:
       - "3030:3030"  # API worker
     environment: &langfuse-worker-env
       DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse_user}:${LANGFUSE_DB_PASSWORD:-langfuse_secret}@db:5432/langfuse
-      SALT: "mysalt"  # Change en prod
+      SALT: "mysalt"
       ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-true}
@@ -28,7 +48,7 @@ services:
       CLICKHOUSE_CLUSTER_ENABLED: ${CLICKHOUSE_CLUSTER_ENABLED:-false}
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
       LANGFUSE_S3_EVENT_UPLOAD_REGION: ${LANGFUSE_S3_EVENT_UPLOAD_REGION:-auto}
-      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}  # Hérite du base
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: ${LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT:-http://minio:9000}
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: ${LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE:-true}
@@ -42,20 +62,20 @@ services:
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: ${LANGFUSE_S3_MEDIA_UPLOAD_PREFIX:-media/}
       LANGFUSE_INGESTION_QUEUE_DELAY_MS: ${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}
       LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}
-      REDIS_HOST: ${REDIS_HOST:-redis}  # Pointe vers redis du dev/base
+      REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
-      REDIS_AUTH: ${REDIS_AUTH:-}  # Ajoute password si besoin via .env ; vide par défaut comme ton base
+      REDIS_AUTH: ${REDIS_AUTH:-}
 
-  langfuse:  # Renommé de langfuse-web pour référence facile (UI et API principale)
+  langfuse:
     image: langfuse/langfuse:3
     restart: always
     depends_on: *langfuse-depends-on
     ports:
-      - "3000:3000"  # Exposé sur host:3000 pour accès logs/UI (http://localhost:3000)
+      - "3000:3000"  # Langfuse access port
     environment:
       <<: *langfuse-worker-env
-      NEXTAUTH_URL: http://localhost:3000  # Ajuste si besoin pour dev
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret}  # Génère via .env
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret}
       LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
       LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
       LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}
@@ -81,7 +101,7 @@ services:
       - clickhouse_logs:/var/log/clickhouse-server
     ports:
       - "8123:8123"
-      - "9440:9000"  # Ajusté pour éviter conflit avec MinIO (9000 → 9440)
+      - "9440:9000"
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
       interval: 5s
@@ -89,30 +109,30 @@ services:
       retries: 10
       start_period: 1s
 
-  db-init-langfuse:  # Nouveau : Init DB/user pour Langfuse (one-shot)
-    image: postgres:16-alpine  # Même image que ton db
+  db-init-langfuse:
+    image: postgres:16-alpine
     depends_on:
       db:
         condition: service_healthy
     environment:
-      PGHOST: db  # Pointe vers db hérité
+      PGHOST: db
       PGUSER: ${DB_USER:-postgres}
       PGPASSWORD: ${DB_PASSWORD:-secret}
       LANGFUSE_DB_USER: ${LANGFUSE_DB_USER:-langfuse_user}
-      LANGFUSE_DB_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse_secret}  # Change via .env
+      LANGFUSE_DB_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse_secret}
     command: >
       sh -c "
       psql -c \"CREATE USER $$LANGFUSE_DB_USER WITH PASSWORD '$$LANGFUSE_DB_PASSWORD'\" || true;
       psql -c \"CREATE DATABASE langfuse OWNER $$LANGFUSE_DB_USER\" || true;
       psql -c \"GRANT ALL PRIVILEGES ON DATABASE langfuse TO $$LANGFUSE_DB_USER\";
       "
-    restart: "no"  # Exécute une fois
+    restart: "no"
 
-  minio-init:  # Langfuse's bucket creation (one-shot)
+  minio-langfuse-init:  # Langfuse's bucket creation (one-shot)
     image: minio/mc
     depends_on:
       minio:
-        condition: service_healthy  # Attend MinIO healthy
+        condition: service_healthy
     entrypoint: /bin/sh
     command: |
       -c '

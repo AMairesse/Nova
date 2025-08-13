@@ -210,3 +210,4 @@ Edit the `.env` file to match your environment :
    - Set `CSRF_TRUSTED_ORIGINS` to your domain and internet port if the app is exposed on the internet
       - For example: `CSRF_TRUSTED_ORIGINS=https://my-domain.com`
       - The port should be the one exposed on internet (e.g. if you use a proxy like HAProxy for SSL).  
+   - Change `MINIO_SECRET_KEY` for security (`MINIO_BUCKET_NAME` and `MINIO_ACCESS_KEY` can be left unchanged).

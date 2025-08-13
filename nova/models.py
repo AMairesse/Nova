@@ -8,7 +8,9 @@ from django.db.models import URLField
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 import json, logging
-from datetime import datetime
+from datetime import datetime, timedelta
+import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +359,7 @@ class Thread(models.Model):
         return message
     
     def get_messages(self):
-        return Message.objects.filter(thread=self, user=self.user)
+        return Message.objects.filter(thread=self)
 
 # ----- Task Model for Asynchronous AI Tasks -----
 class TaskStatus(models.TextChoices):
@@ -391,3 +393,58 @@ class Task(models.Model):
 
     def __str__(self):
         return f"Task {self.id} for Thread {self.thread.subject} ({self.status})"
+
+# New model for user-uploaded files stored in MinIO
+class UserFile(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='files')
+    thread = models.ForeignKey('Thread', on_delete=models.SET_NULL, null=True, blank=True, related_name='files')
+    key = models.CharField(max_length=255, unique=True)  # S3 object key (e.g., user_id/thread_id/filename)
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()  # File size in bytes
+    expiration_date = models.DateTimeField()  # Auto-delete after this date
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (('user', 'key'),)
+
+    def __str__(self):
+        return f"{self.original_filename} ({self.key})"
+
+    def save(self, *args, **kwargs):
+        if not self.expiration_date:
+            self.expiration_date = self.created_at + timedelta(days=30)  # Default: expire after 30 days
+        super().save(*args, **kwargs)
+
+    def get_download_url(self, expires_in=3600):
+        """Generate presigned URL for download (expires in seconds)."""
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=settings.MINIO_ENDPOINT_URL,
+            aws_access_key_id=settings.MINIO_ACCESS_KEY,
+            aws_secret_access_key=settings.MINIO_SECRET_KEY
+        )
+        try:
+            return s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': settings.MINIO_BUCKET_NAME, 'Key': self.key},
+                ExpiresIn=expires_in
+            )
+        except ClientError as e:
+            logger.error(f"Error generating presigned URL: {e}")
+            return None
+
+    def delete(self, *args, **kwargs):
+        """Delete from DB and MinIO."""
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=settings.MINIO_ENDPOINT_URL,
+            aws_access_key_id=settings.MINIO_ACCESS_KEY,
+            aws_secret_access_key=settings.MINIO_SECRET_KEY
+        )
+        try:
+            s3_client.delete_object(Bucket=settings.MINIO_BUCKET_NAME, Key=self.key)
+        except ClientError as e:
+            logger.error(f"Error deleting from MinIO: {e}")
+        super().delete(*args, **kwargs)

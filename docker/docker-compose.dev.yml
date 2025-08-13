@@ -19,6 +19,11 @@ services:
       file: docker-compose.base.yml
       service: minio
 
+  minio-nova-init:
+    extends:
+      file: docker-compose.base.yml
+      service: minio-nova-init
+
   web:
     extends:
       file: docker-compose.base.yml
@@ -46,13 +51,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-    depends_on:  # Attends les services
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
 
 volumes:  # Merge auto
   postgres_data:

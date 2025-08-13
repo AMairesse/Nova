@@ -157,6 +157,9 @@ LOGOUT_REDIRECT_URL = '/'
 
 # Encryption key
 FIELD_ENCRYPTION_KEY = os.environ.get('FIELD_ENCRYPTION_KEY', '')
+# Validate encryption key
+if not FIELD_ENCRYPTION_KEY or len(FIELD_ENCRYPTION_KEY) < 32:
+    raise ValueError("FIELD_ENCRYPTION_KEY must be set in .env and at least 32 characters long")
 
 # Security settings
 CSRF_COOKIE_HTTPONLY = True
@@ -165,3 +168,16 @@ CSRF_COOKIE_SAMESITE = 'Strict'
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+
+# MinIO (S3-compatible) settings
+MINIO_ENDPOINT_URL = os.getenv('MINIO_ENDPOINT_URL', 'http://minio:9000')
+MINIO_ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY')
+MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY')
+MINIO_BUCKET_NAME = os.getenv('MINIO_BUCKET_NAME', 'nova-files')
+MINIO_SECURE = os.getenv('MINIO_SECURE', 'False').lower() == 'true'
+
+# Validate (fail-fast)
+if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
+    raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in .env")
+
+
