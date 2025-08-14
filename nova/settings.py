@@ -168,6 +168,7 @@ CSRF_COOKIE_SAMESITE = 'Strict'
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0  # 1 year HSTS in prod only
 
 # MinIO (S3-compatible) settings
 MINIO_ENDPOINT_URL = os.getenv('MINIO_ENDPOINT_URL', 'http://minio:9000')
@@ -180,4 +181,15 @@ MINIO_SECURE = os.getenv('MINIO_SECURE', 'False').lower() == 'true'
 if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
     raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in .env")
 
+if not DEBUG and not MINIO_SECURE:
+    raise ValueError("MINIO_SECURE must be True in production (DEBUG=False) for HTTPS")
 
+if not CSRF_TRUSTED_ORIGINS or all(not o.strip() for o in CSRF_TRUSTED_ORIGINS):
+    raise ValueError("CSRF_TRUSTED_ORIGINS must be set in .env and non-empty")
+
+# Optional: Validate origins format (https in prod)
+for origin in CSRF_TRUSTED_ORIGINS:
+    if not origin.startswith(('http://', 'https://')):
+        raise ValueError(f"Invalid CSRF_TRUSTED_ORIGINS format: {origin} (must start with http:// or https://)")
+    if not DEBUG and not origin.startswith('https://'):
+        raise ValueError(f"CSRF_TRUSTED_ORIGINS must use https:// in production: {origin}")
