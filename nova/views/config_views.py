@@ -1,9 +1,11 @@
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, reverse, get_object_or_404
 from django.views.decorators.http import require_POST
+from django.views.decorators.csrf import csrf_protect
 from ..models import Agent, UserProfile, LLMProvider
 from ..forms import AgentForm
 
+@csrf_protect
 @login_required
 def create_agent(request):
     if request.method == "POST":
@@ -22,7 +24,7 @@ def create_agent(request):
     # Invalid request
     return redirect(reverse('user_config') + '?tab=agents')
 
-
+@csrf_protect
 @login_required
 def edit_agent(request, agent_id):
     agent = get_object_or_404(Agent, pk=agent_id, user=request.user)
@@ -39,6 +41,7 @@ def edit_agent(request, agent_id):
     return redirect(reverse('user_config') + '?tab=agents')
 
 
+@csrf_protect
 @login_required
 @require_POST
 def delete_agent(request, agent_id):
@@ -48,6 +51,7 @@ def delete_agent(request, agent_id):
         agent.delete()
     return redirect(reverse('user_config') + '?tab=agents')
 
+@csrf_protect
 @login_required
 def make_default_agent(request, agent_id):
     agent = get_object_or_404(Agent, id=agent_id, user=request.user)
@@ -57,6 +61,7 @@ def make_default_agent(request, agent_id):
         profile.save()
     return redirect(reverse('user_config') + '?tab=agents')
 
+@csrf_protect
 @login_required
 def create_provider(request):
     if request.method == 'POST':
@@ -71,6 +76,7 @@ def create_provider(request):
         )
     return redirect(reverse('user_config') + '?tab=providers')
 
+@csrf_protect
 @login_required
 def edit_provider(request, provider_id):
     provider = get_object_or_404(LLMProvider, id=provider_id, user=request.user)
@@ -102,6 +108,7 @@ def edit_provider(request, provider_id):
 
     return redirect(reverse('user_config') + '?tab=providers')
 
+@csrf_protect
 @login_required
 def delete_provider(request, provider_id):
     provider = get_object_or_404(LLMProvider, id=provider_id, user=request.user)
