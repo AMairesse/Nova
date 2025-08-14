@@ -35,10 +35,8 @@
     
     e.preventDefault();
     const textarea = document.querySelector('textarea[name="new_message"]');
-    const fileInput = document.getElementById('file-input');
     const msg = textarea ? textarea.value.trim() : '';
-    const hasFiles = fileInput && fileInput.files.length > 0;
-    if (!msg && !hasFiles) return; // Prevent empty submit without files
+    if (!msg) return; // Prevent empty submit
     
     const sendBtn = document.getElementById('send-btn');
     if (sendBtn) sendBtn.disabled = true;
@@ -117,8 +115,7 @@
         startTaskWebSocket(data.thread_id, data.task_id);
       }
 
-      // Reset file input and button
-      if (fileInput) fileInput.value = '';
+      // Reset send button
       if (sendBtn) sendBtn.innerHTML = '<i class="bi bi-send-fill"></i> <span class="visually-hidden">Send</span>';
     } catch (error) {
       console.error("Error adding message:", error);

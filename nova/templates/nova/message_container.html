@@ -96,6 +96,8 @@
             </li>
             {% endif %}
           </ul>
+          <!-- Static toggle button for files panel -->
+          <button id="file-toggle" class="btn btn-outline-secondary .btn-sm ms-1" onclick="window.FileManager.toggleSidebar()">Files</button>
         </div>
         
         <!-- Hidden input -->
@@ -124,14 +126,6 @@
           <i class="bi bi-send-fill"></i>
           <span class="visually-hidden">{% trans "Send" %}</span>
         </button>
-        <!-- Static toggle button for files panel -->
-        <button id="file-toggle" class="btn btn-outline-secondary ms-1" onclick="window.FileManager.toggleSidebar()">Files</button>
-      </div>
-
-      <!-- File upload input -->
-      <div class="mb-2">
-        <label for="file-input" class="form-label small text-muted">{% trans "Attach files (optional)" %}</label>
-        <input type="file" class="form-control" id="file-input" name="files" multiple accept="image/*,text/*,.pdf,.docx" />
       </div>
     </form>
   </div>
