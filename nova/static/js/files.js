@@ -5,7 +5,6 @@
   window.FileManager = {
     currentThreadId: null,
     selectedFiles: new Set(),
-    contextMenuFile: null,
     ws: null,
     
     init() {
@@ -46,9 +45,6 @@
           this.createFolder();
         });
       }
-      
-      // Bind context menu events
-      this.bindContextMenuEvents();
     },
     
     async toggleSidebar() {
@@ -172,8 +168,8 @@
               </span>
               <span class="file-item-name">${node.name}</span>
               <span class="file-item-actions">
-                <button class="btn btn-sm btn-ghost" onclick="FileManager.showContextMenu(event, '${nodeId}')">
-                  <i class="bi bi-three-dots-vertical"></i>
+                <button class="btn btn-sm btn-ghost file-delete-btn" onclick="FileManager.deleteFile('${nodeId}')" title="Delete file">
+                  <i class="bi bi-trash"></i>
                 </button>
               </span>
             </div>
@@ -217,14 +213,6 @@
       });
     },
 
-    bindContextMenuEvents() {
-      // Context menu events
-      document.addEventListener('click', (e) => {
-        if (!e.target.closest('.context-menu')) {
-          this.hideContextMenu();
-        }
-      });
-    },
 
     selectFile(fileId) {
       const item = document.querySelector(`[data-id="${fileId}"]`);
@@ -240,22 +228,48 @@
       }
     },
 
-    showContextMenu(event, fileId) {
-      event.preventDefault();
-      event.stopPropagation();
+    async deleteFile(fileId) {
+      const item = document.querySelector(`[data-id="${fileId}"]`);
+      if (!item) {
+        console.error('File item not found');
+        return;
+      }
       
-      this.contextMenuFile = fileId;
-      const menu = document.getElementById('file-context-menu');
-      if (!menu) return;
+      const fileName = item.querySelector('.file-item-name').textContent;
       
-      menu.style.display = 'block';
-      menu.style.left = event.pageX + 'px';
-      menu.style.top = event.pageY + 'px';
-    },
-
-    hideContextMenu() {
-      const menu = document.getElementById('file-context-menu');
-      if (menu) menu.style.display = 'none';
+      // Show confirmation dialog
+      if (!confirm(`Are you sure you want to delete "${fileName}"?`)) {
+        return;
+      }
+      
+      try {
+        const token = await window.getCSRFToken();
+        const response = await fetch(`/files/delete/${fileId}/`, {
+          method: 'DELETE',
+          headers: {
+            'X-CSRFToken': token,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          // Remove from selected files if it was selected
+          this.selectedFiles.delete(fileId);
+          
+          // Reload the file tree to reflect changes
+          await this.loadTree();
+          
+          console.log(`File "${fileName}" deleted successfully`);
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          const errorMessage = errorData.error || 'Failed to delete file';
+          alert(`Error deleting file: ${errorMessage}`);
+          console.error('Delete failed:', errorMessage);
+        }
+      } catch (error) {
+        console.error('Error deleting file:', error);
+        alert('Error deleting file. Please try again.');
+      }
     },
 
     async handleFileUpload(files) {
