@@ -54,13 +54,6 @@
           this.handleDirectoryUpload(e.target.files);
         });
       }
-      
-      const createFolderBtn = document.getElementById('create-folder-btn');
-      if (createFolderBtn) {
-        createFolderBtn.addEventListener('click', () => {
-          this.createFolder();
-        });
-      }
     },
     
     async toggleSidebar() {
@@ -572,14 +565,6 @@
         const directoryInput = document.getElementById('directory-input');
         if (directoryInput) directoryInput.value = '';
       }
-    },
-
-    async createFolder() {
-      const name = prompt('Folder name:');
-      if (!name) return;
-      
-      // Add the folder to the tree, under the current selection
-      // TODO: implement this
     },
 
     connectWebSocket() {
