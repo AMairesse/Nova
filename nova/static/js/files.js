@@ -556,17 +556,23 @@
       this.ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
+          console.log('WS received:', data);  // Debug: Trace incoming messages
           
           if (data.type === 'file_update') {
             // Refresh tree on file updates
             this.loadTree();
           } else if (data.type === 'progress') {
+            console.log(`Progress update: ${data.progress}%`);  // Debug: Confirm reception
             // Update progress bar
             const progressBar = document.querySelector('#upload-progress .progress-bar');
             if (progressBar && this.isUploading) {
               progressBar.style.width = `${data.progress}%`;
               progressBar.textContent = `${data.progress}%`;
               progressBar.setAttribute('aria-valuenow', data.progress);
+              if (data.progress === 100) {
+                // Optional: Add success class or message
+                progressBar.classList.add('bg-success');
+              }
             }
           }
         } catch (error) {
