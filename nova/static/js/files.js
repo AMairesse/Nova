@@ -33,10 +33,25 @@
         });
       }
       
+      const uploadDirectoryBtn = document.getElementById('upload-directory-btn');
+      if (uploadDirectoryBtn) {
+        uploadDirectoryBtn.addEventListener('click', () => {
+          const directoryInput = document.getElementById('directory-input');
+          if (directoryInput) directoryInput.click();
+        });
+      }
+      
       const fileInput = document.getElementById('file-input');
       if (fileInput) {
         fileInput.addEventListener('change', (e) => {
           this.handleFileUpload(e.target.files);
+        });
+      }
+      
+      const directoryInput = document.getElementById('directory-input');
+      if (directoryInput) {
+        directoryInput.addEventListener('change', (e) => {
+          this.handleDirectoryUpload(e.target.files);
         });
       }
       
@@ -157,12 +172,13 @@
       let html = `<ul class="file-tree-list ${level === 0 ? 'root' : ''}" style="padding-left: ${level * 20}px;">`;
       
       nodes.forEach(node => {
-        const isFolder = node.type === 'folder';
-        const icon = isFolder ? 'bi-folder' : this.getFileIcon(node.mime_type);
+        const isFolder = node.type === 'dir' || node.type === 'folder';
+        const icon = isFolder ? 'bi-folder' : this.getFileIcon(node.mime);
         const nodeId = node.id || `temp-${Date.now()}-${Math.random()}`;
+        const nodePath = node.full_path || node.path;
         
         html += `
-          <li class="file-tree-item" data-id="${nodeId}" data-path="${node.path}" data-type="${node.type}">
+          <li class="file-tree-item" data-id="${nodeId}" data-path="${nodePath}" data-type="${node.type}">
             <div class="file-item-content">
               <span class="file-item-icon">
                 <i class="bi ${icon}"></i>
@@ -174,7 +190,7 @@
                 </button>
               </span>
             </div>
-            ${isFolder && node.children ? this.renderTree(node.children, node.path, level + 1) : ''}
+            ${isFolder && node.children ? this.renderTree(node.children, nodePath, level + 1) : ''}
           </li>
         `;
       });
@@ -229,6 +245,30 @@
       }
     },
 
+    // Helper function to collect all file IDs within a directory path
+    collectFilesInDirectory(nodes, targetPath) {
+      const fileIds = [];
+      
+      const traverse = (nodeList, currentPath = '') => {
+        if (!nodeList) return;
+        
+        nodeList.forEach(node => {
+          const nodePath = node.full_path || node.path || '';
+          
+          if (node.type === 'file' && node.id && nodePath.startsWith(targetPath)) {
+            fileIds.push(node.id);
+          }
+          
+          if (node.children) {
+            traverse(node.children, nodePath);
+          }
+        });
+      };
+      
+      traverse(nodes);
+      return fileIds;
+    },
+
     async deleteFile(fileId) {
       const item = document.querySelector(`[data-id="${fileId}"]`);
       if (!item) {
@@ -237,7 +277,22 @@
       }
       
       const fileName = item.querySelector('.file-item-name').textContent;
+      const itemType = item.dataset.type;
+      const itemPath = item.dataset.path;
       
+      // Check if this is a directory
+      const isDirectory = itemType === 'dir' || itemType === 'folder';
+      
+      if (isDirectory) {
+        // Handle directory deletion
+        await this.deleteDirectory(fileName, itemPath);
+      } else {
+        // Handle single file deletion
+        await this.deleteSingleFile(fileId, fileName);
+      }
+    },
+
+    async deleteSingleFile(fileId, fileName) {
       // Show confirmation dialog
       if (!confirm(`Are you sure you want to delete "${fileName}"?`)) {
         return;
@@ -270,6 +325,79 @@
       } catch (error) {
         console.error('Error deleting file:', error);
         alert('Error deleting file. Please try again.');
+      }
+    },
+
+    async deleteDirectory(directoryName, directoryPath) {
+      // First, get the current file tree data to find all files in this directory
+      try {
+        const token = await window.getCSRFToken();
+        const response = await fetch(`/files/list/${this.currentThreadId}/`, {
+          headers: {
+            'X-CSRFToken': token
+          }
+        });
+        const data = await response.json();
+        
+        if (!data.files) {
+          alert('Error loading file list for directory deletion');
+          return;
+        }
+        
+        // Collect all file IDs within this directory
+        const fileIds = this.collectFilesInDirectory(data.files, directoryPath);
+        
+        if (fileIds.length === 0) {
+          alert(`Directory "${directoryName}" appears to be empty or contains no files to delete.`);
+          return;
+        }
+        
+        // Show confirmation dialog with file count
+        if (!confirm(`Are you sure you want to delete directory "${directoryName}" and all ${fileIds.length} files inside it?`)) {
+          return;
+        }
+        
+        // Delete all files in the directory
+        let deletedCount = 0;
+        let failedCount = 0;
+        
+        for (const fileId of fileIds) {
+          try {
+            const deleteResponse = await fetch(`/files/delete/${fileId}/`, {
+              method: 'DELETE',
+              headers: {
+                'X-CSRFToken': token,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (deleteResponse.ok) {
+              deletedCount++;
+              // Remove from selected files if it was selected
+              this.selectedFiles.delete(fileId);
+            } else {
+              failedCount++;
+              console.error(`Failed to delete file with ID: ${fileId}`);
+            }
+          } catch (error) {
+            failedCount++;
+            console.error(`Error deleting file with ID ${fileId}:`, error);
+          }
+        }
+        
+        // Reload the file tree to reflect changes
+        await this.loadTree();
+        
+        // Show result message
+        if (failedCount === 0) {
+          console.log(`Directory "${directoryName}" and all ${deletedCount} files deleted successfully`);
+        } else {
+          alert(`Directory deletion completed with issues: ${deletedCount} files deleted, ${failedCount} files failed to delete.`);
+        }
+        
+      } catch (error) {
+        console.error('Error during directory deletion:', error);
+        alert('Error deleting directory. Please try again.');
       }
     },
 
@@ -344,6 +472,105 @@
         alert('Error uploading files');
         this.isUploading = false;
         if (progressEl) progressEl.style.display = 'none';
+      }
+    },
+
+    async handleDirectoryUpload(files) {
+      if (!files || files.length === 0) return;
+      if (!this.currentThreadId) {
+        alert('Please select a thread first');
+        return;
+      }
+      
+      // Extract directory name from the first file's path
+      const firstFile = files[0];
+      const pathParts = firstFile.webkitRelativePath.split('/');
+      const directoryName = pathParts[0];
+      
+      // Show confirmation with directory info
+      const fileCount = files.length;
+      if (!confirm(`Upload directory "${directoryName}" with ${fileCount} files?`)) {
+        // Clear the directory input
+        const directoryInput = document.getElementById('directory-input');
+        if (directoryInput) directoryInput.value = '';
+        return;
+      }
+      
+      const formData = new FormData();
+      const fileData = [];
+      
+      // Process files with their relative paths
+      for (const file of files) {
+        formData.append('files', file);
+        // Use the webkitRelativePath to preserve directory structure
+        const relativePath = `/${file.webkitRelativePath}`;
+        formData.append('paths', relativePath);
+        fileData.push({
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          path: relativePath
+        });
+      }
+      
+      formData.append('file_data', JSON.stringify(fileData));
+      
+      // Initialize progress bar
+      const progressEl = document.getElementById('upload-progress');
+      const progressBar = document.querySelector('#upload-progress .progress-bar');
+      
+      if (progressEl && progressBar) {
+        progressEl.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressBar.textContent = `Uploading ${directoryName}... 0%`;
+        progressBar.setAttribute('aria-valuenow', '0');
+      }
+      
+      // Set upload state
+      this.isUploading = true;
+      
+      try {
+        const token = await window.getCSRFToken();
+        const response = await fetch(`/files/upload/${this.currentThreadId}/`, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'X-CSRFToken': token
+          }
+        });
+        
+        if (response.ok) {
+          // Clear the directory input
+          const directoryInput = document.getElementById('directory-input');
+          if (directoryInput) directoryInput.value = '';
+          
+          // Wait a bit for final progress updates via WebSocket
+          setTimeout(async () => {
+            await this.loadTree();
+            this.isUploading = false;
+            if (progressEl) {
+              // Show completion message briefly
+              if (progressBar) {
+                progressBar.textContent = `${directoryName} uploaded successfully!`;
+              }
+              // Keep progress bar visible for a moment to show completion
+              setTimeout(() => {
+                progressEl.style.display = 'none';
+              }, 2000);
+            }
+          }, 500);
+        } else {
+          throw new Error('Directory upload failed');
+        }
+      } catch (error) {
+        console.error('Directory upload error:', error);
+        alert(`Error uploading directory "${directoryName}"`);
+        this.isUploading = false;
+        if (progressEl) progressEl.style.display = 'none';
+        
+        // Clear the directory input on error
+        const directoryInput = document.getElementById('directory-input');
+        if (directoryInput) directoryInput.value = '';
       }
     },
 
