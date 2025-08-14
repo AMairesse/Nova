@@ -5,6 +5,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import URLField, JSONField
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 import json, logging
@@ -395,12 +396,12 @@ class Task(models.Model):
     def __str__(self):
         return f"Task {self.id} for Thread {self.thread.subject} ({self.status})"
 
-# New model for user-uploaded files stored in MinIO
+# Model for user-uploaded files stored in MinIO
 class UserFile(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='files')
     thread = models.ForeignKey('Thread', on_delete=models.SET_NULL, null=True, blank=True, related_name='files')
-    key = models.CharField(max_length=255, unique=True)  # S3 object key (e.g., user_id/thread_id/filename)
-    original_filename = models.CharField(max_length=255)
+    key = models.CharField(max_length=255, unique=True)  # S3 object key (e.g., users/user_id/threads/thread_id/dir/subdir/file.txt)
+    original_filename = models.CharField(max_length=255)  # Updated: Now holds full path, e.g., '/dir/subdir/file.txt' (was just filename)
     mime_type = models.CharField(max_length=100)
     size = models.PositiveIntegerField()  # File size in bytes
     expiration_date = models.DateTimeField(null=True, blank=True)  # Auto-delete after this date
@@ -411,9 +412,12 @@ class UserFile(models.Model):
         unique_together = (('user', 'key'),)
 
     def __str__(self):
-        return f"{self.original_filename} ({self.key})"
+        return f"{self.original_filename} ({self.key})"  # Updated: Reflects full path in string rep for debugging
 
     def save(self, *args, **kwargs):
+        if not self.key and self.user and self.thread:  # Generate key only if not set (allow overrides if needed)
+            self.key = f"users/{self.user.id}/threads/{self.thread.id}{self.original_filename}"
+        
         # Save the object first to set auto_now_add fields
         super().save(*args, **kwargs)
         
@@ -424,7 +428,6 @@ class UserFile(models.Model):
 
     def get_download_url(self, expires_in=3600):
         """Generate presigned URL for download (expires in seconds)."""
-        from django.utils import timezone
         if self.expiration_date and self.expiration_date < timezone.now():
             self.delete()
             raise ValueError("File expired and deleted.")

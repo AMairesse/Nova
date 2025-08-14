@@ -83,6 +83,7 @@ langgraph-prebuilt==0.6.4
 langgraph-sdk==0.2.0
 langsmith==0.4.13
 lazy-object-proxy==1.11.0
+libmagic==1.0
 lxml==6.0.0
 Markdown==3.8.2
 markdown-it-py==3.0.0
@@ -131,6 +132,7 @@ pyOpenSSL==25.1.0
 pyperclip==1.9.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
+python-magic==0.4.27
 python-multipart==0.0.20
 PyYAML==6.0.2
 recurring-ical-events==3.8.0

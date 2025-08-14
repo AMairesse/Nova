@@ -23,6 +23,47 @@
     <div id="message-container" class="flex-fill"></div>
   </div>
 </div>
+<div id="file-sidebar" class="file-sidebar-fixed" style="display: none;">
+  <div class="file-sidebar-header">
+    <h5>Files</h5>
+    <button type="button" class="btn-close" onclick="FileManager.closeSidebar()"></button>
+  </div>
+  <div id="file-sidebar-content" class="file-sidebar-content">
+    <!-- Content loaded dynamically -->
+  </div>
+</div>
+
+<style>
+.file-sidebar-fixed {
+  position: fixed;
+  right: 0;
+  top: 56px; /* Hauteur de la navbar */
+  width: 350px;
+  height: calc(100vh - 56px);
+  background: white;
+  border-left: 1px solid #dee2e6;
+  z-index: 1040;
+  overflow-y: auto;
+}
+
+.file-sidebar-header {
+  padding: 1rem;
+  border-bottom: 1px solid #dee2e6;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.file-sidebar-content {
+  padding: 1rem;
+}
+
+/* Ajuster le contenu principal quand la sidebar est ouverte */
+body.sidebar-open .container {
+  margin-right: 350px;
+  transition: margin-right 0.3s ease;
+}
+</style>
 
 <script>
   // Configure URLs for the JavaScript modules
@@ -32,9 +73,15 @@
     messageList: "{% url 'message_list' %}",
     runningTasksBase: "/running-tasks/",
     createThread: "{% url 'create_thread' %}",
-    deleteThread: "{% url 'delete_thread' 0 %}"
+    deleteThread: "{% url 'delete_thread' 0 %}",
+    // New: File URLs
+    fileList: "{% url 'file_list' 0 %}",  // Use with thread_id replacement
+    fileUpload: "{% url 'file_upload' 0 %}",
+    fileDelete: "{% url 'file_delete' 0 %}",
+    fileMove: "{% url 'file_move' 0 %}"
   };
 </script>
 <script src="{% static 'js/message_container.js' %}" defer></script>
 <script src="{% static 'js/index.js' %}" defer></script>
+<script src="{% static 'js/files.js' %}" defer></script>  <!-- New: Load files.js -->
 {% endblock %}

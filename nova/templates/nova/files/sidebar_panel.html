@@ -1,0 +1,39 @@
+<!-- templates/nova/files/sidebar_panel.html -->
+<div class="file-panel">
+  <div class="file-panel-header">
+    <div class="file-actions">
+      <button id="upload-files-btn" class="btn btn-sm btn-primary" title="Upload files">
+        <i class="bi bi-upload"></i>
+      </button>
+      <button id="create-folder-btn" class="btn btn-sm btn-secondary" title="Create folder">
+        <i class="bi bi-folder-plus"></i>
+      </button>
+    </div>
+  </div>
+  
+  <div class="file-panel-body">
+    <!-- Container for the file tree -->
+    <div id="file-tree-container">
+      <p class="text-muted">Loading files...</p>
+    </div>
+  </div>
+  
+  <!-- Hidden file input -->
+  <input type="file" id="file-input" multiple style="display: none;" accept="image/*,text/*,.pdf,.docx">
+  
+  <!-- Upload progress -->
+  <div id="upload-progress" style="display: none;">
+    <div class="progress">
+      <div class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+    </div>
+  </div>
+  
+  <!-- Context menu -->
+  <div id="file-context-menu" class="context-menu" style="display: none;">
+    <ul class="list-unstyled mb-0">
+      <li><a href="#" onclick="FileManager.downloadFile(); return false;">Download</a></li>
+      <li><a href="#" onclick="FileManager.renameFile(); return false;">Rename</a></li>
+      <li><a href="#" onclick="FileManager.deleteFile(); return false;">Delete</a></li>
+    </ul>
+  </div>
+</div>

@@ -50,3 +50,21 @@ class TaskProgressConsumer(AsyncWebsocketConsumer):
         # Send message to WebSocket
         await self.send(text_data=json.dumps(message))
 
+class FileProgressConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.thread_id = self.scope['url_route']['kwargs']['thread_id']
+        self.group_name = f"thread_{self.thread_id}_files"
+        
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive(self, text_data):
+        # Client can send upload start signals if needed; for now, server broadcasts progress
+        pass
+
+    async def file_progress(self, event):
+        progress = event['progress']
+        await self.send(text_data=json.dumps({'type': 'progress', 'progress': progress}))

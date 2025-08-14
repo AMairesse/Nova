@@ -6,6 +6,7 @@ from .views.main_views import index, message_list, create_thread, delete_thread,
 from .views.user_config_views import UserConfigView
 from .views.provider_views import create_provider, edit_provider, delete_provider
 from .views.agent_views import create_agent, edit_agent, delete_agent, make_default_agent
+from .views.files_views import sidebar_panel_view, file_list, file_upload, FileDeleteView, FileMoveView
 from .views.tools_views import create_tool, edit_tool, delete_tool, configure_tool, test_tool_connection
 from .views.security_views import csrf_token
 from .views.health import healthz
@@ -46,6 +47,15 @@ urlpatterns = [
     path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("api/csrf/", csrf_token, name="api-csrf"),
     ]
+
+# File management
+urlpatterns += [
+    path('files/sidebar-panel/', sidebar_panel_view, name='files_sidebar_panel'),
+    path('files/list/<int:thread_id>/', file_list, name='file_list'),
+    path('files/upload/<int:thread_id>/', file_upload, name='file_upload'),
+    path('files/delete/<int:file_id>/', FileDeleteView.as_view(), name='file_delete'),
+    path('files/move/<int:file_id>/', FileMoveView.as_view(), name='file_move'),
+]
 
 # Add healthcheck only in DEBUG mode
 if settings.DEBUG:
