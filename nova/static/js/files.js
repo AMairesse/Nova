@@ -117,12 +117,7 @@
       }
       
       try {
-        const token = await window.getCSRFToken();
-        const response = await fetch(`/files/list/${this.currentThreadId}/`, {
-          headers: {
-            'X-CSRFToken': token
-          }
-        });
+        const response = await window.DOMUtils.csrfFetch(`/files/list/${this.currentThreadId}/`);  // Fixed: Use csrfFetch (handles token internally)
         const data = await response.json();
         
         if (data.files) {
@@ -271,15 +266,7 @@
       }
       
       try {
-        const token = await window.getCSRFToken();
-        const response = await fetch(`/files/delete/${fileId}/`, {
-          method: 'DELETE',
-          headers: {
-            'X-CSRFToken': token,
-            'Content-Type': 'application/json'
-          }
-        });
-        
+        const response = await window.DOMUtils.csrfFetch(`/files/delete/${fileId}/`, { method: 'DELETE' });  // Fixed: Use csrfFetch
         if (response.ok) {
           // Remove from selected files if it was selected
           this.selectedFiles.delete(fileId);
@@ -302,12 +289,7 @@
     async deleteDirectory(directoryName, directoryPath) {
       // First, get the current file tree data to find all files in this directory
       try {
-        const token = await window.getCSRFToken();
-        const response = await fetch(`/files/list/${this.currentThreadId}/`, {
-          headers: {
-            'X-CSRFToken': token
-          }
-        });
+        const response = await window.DOMUtils.csrfFetch(`/files/list/${this.currentThreadId}/`);  // Fixed: Use csrfFetch
         const data = await response.json();
         
         if (!data.files) {
@@ -334,14 +316,7 @@
         
         for (const fileId of fileIds) {
           try {
-            const deleteResponse = await fetch(`/files/delete/${fileId}/`, {
-              method: 'DELETE',
-              headers: {
-                'X-CSRFToken': token,
-                'Content-Type': 'application/json'
-              }
-            });
-            
+            const deleteResponse = await window.DOMUtils.csrfFetch(`/files/delete/${fileId}/`, { method: 'DELETE' });  // Fixed: Use csrfFetch
             if (deleteResponse.ok) {
               deletedCount++;
               // Remove from selected files if it was selected
@@ -408,13 +383,9 @@
       this.isUploading = true;
       
       try {
-        const token = await window.getCSRFToken();
-        const response = await fetch(`/files/upload/${this.currentThreadId}/`, {
+        const response = await window.DOMUtils.csrfFetch(`/files/upload/${this.currentThreadId}/`, {  // Fixed: Use csrfFetch
           method: 'POST',
-          body: formData,
-          headers: {
-            'X-CSRFToken': token
-          }
+          body: formData
         });
         
         if (response.ok) {
@@ -499,13 +470,9 @@
       this.isUploading = true;
       
       try {
-        const token = await window.getCSRFToken();
-        const response = await fetch(`/files/upload/${this.currentThreadId}/`, {
+        const response = await window.DOMUtils.csrfFetch(`/files/upload/${this.currentThreadId}/`, {  // Fixed: Use csrfFetch
           method: 'POST',
-          body: formData,
-          headers: {
-            'X-CSRFToken': token
-          }
+          body: formData
         });
         
         if (response.ok) {
