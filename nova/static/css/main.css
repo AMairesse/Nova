@@ -141,3 +141,30 @@ body {
 .file-tree-item.selected .file-item-name {
     color: white;
 }
+
+/* Upload Progress Bar */
+#upload-progress {
+    margin: 10px 0;
+    padding: 0 10px;
+}
+
+#upload-progress .progress {
+    height: 20px;
+    background-color: var(--bs-gray-200);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+#upload-progress .progress-bar {
+    background-color: var(--bs-primary);
+    color: white;
+    font-size: 12px;
+    line-height: 20px;
+    text-align: center;
+    transition: width 0.3s ease;
+    border-radius: 10px;
+}
+
+#upload-progress .progress-bar:empty::after {
+    content: "0%";
+}

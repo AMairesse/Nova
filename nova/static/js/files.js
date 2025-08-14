@@ -6,6 +6,7 @@
     currentThreadId: null,
     selectedFiles: new Set(),
     ws: null,
+    isUploading: false,
     
     init() {
       // N'attacher que les événements pour les éléments présents au chargement
@@ -295,9 +296,19 @@
       
       formData.append('file_data', JSON.stringify(fileData));
       
-      // Show progress
+      // Initialize progress bar
       const progressEl = document.getElementById('upload-progress');
-      if (progressEl) progressEl.style.display = 'block';
+      const progressBar = document.querySelector('#upload-progress .progress-bar');
+      
+      if (progressEl && progressBar) {
+        progressEl.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+        progressBar.setAttribute('aria-valuenow', '0');
+      }
+      
+      // Set upload state
+      this.isUploading = true;
       
       try {
         const token = await window.getCSRFToken();
@@ -310,14 +321,28 @@
         });
         
         if (response.ok) {
-          await this.loadTree();
-          if (progressEl) progressEl.style.display = 'none';
+          // Clear the file input
+          const fileInput = document.getElementById('file-input');
+          if (fileInput) fileInput.value = '';
+          
+          // Wait a bit for final progress updates via WebSocket
+          setTimeout(async () => {
+            await this.loadTree();
+            this.isUploading = false;
+            if (progressEl) {
+              // Keep progress bar visible for a moment to show completion
+              setTimeout(() => {
+                progressEl.style.display = 'none';
+              }, 1000);
+            }
+          }, 500);
         } else {
           throw new Error('Upload failed');
         }
       } catch (error) {
         console.error('Upload error:', error);
         alert('Error uploading files');
+        this.isUploading = false;
         if (progressEl) progressEl.style.display = 'none';
       }
     },
@@ -338,25 +363,47 @@
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${location.host}/ws/files/${this.currentThreadId}/`;
       
+      console.log('Connecting to WebSocket:', wsUrl);
       this.ws = new WebSocket(wsUrl);
       
+      this.ws.onopen = () => {
+        console.log('WebSocket connected for file operations');
+      };
+      
       this.ws.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.type === 'file_update') {
-          // Refresh tree on file updates
-          this.loadTree();
-        } else if (data.type === 'progress') {
-          // Update progress bar
-          const progressBar = document.querySelector('#upload-progress .progress-bar');
-          if (progressBar) {
-            progressBar.style.width = `${data.progress}%`;
-            progressBar.textContent = `${data.progress}%`;
+        try {
+          const data = JSON.parse(e.data);
+          console.log('WebSocket message received:', data);
+          
+          if (data.type === 'file_update') {
+            // Refresh tree on file updates
+            this.loadTree();
+          } else if (data.type === 'progress') {
+            // Update progress bar
+            const progressBar = document.querySelector('#upload-progress .progress-bar');
+            if (progressBar && this.isUploading) {
+              console.log(`Updating progress: ${data.progress}%`);
+              progressBar.style.width = `${data.progress}%`;
+              progressBar.textContent = `${data.progress}%`;
+              progressBar.setAttribute('aria-valuenow', data.progress);
+              
+              // If progress reaches 100%, mark upload as complete
+              if (data.progress >= 100) {
+                console.log('Upload progress complete');
+              }
+            }
           }
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
         }
       };
       
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
+      };
+      
+      this.ws.onclose = (event) => {
+        console.log('WebSocket closed:', event.code, event.reason);
       };
     },
 
