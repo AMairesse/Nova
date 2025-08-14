@@ -21,16 +21,6 @@ body {
     display: flex;
 }
 
-/* Sidebar */
-.sidebar-sticky {
-    position: sticky;
-    top: 0;
-    height: calc(100vh - 56px);
-    /* Account for navbar height */
-    overflow-y: auto;
-    flex-shrink: 0;
-}
-
 /* Message Area */
 .message-area {
     flex: 1;

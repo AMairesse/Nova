@@ -8,22 +8,6 @@
     ws: null,
     isUploading: false,
     
-    init() {
-      // N'attacher que les événements pour les éléments présents au chargement
-      this.attachInitialEventHandlers();
-    },
-    
-    attachInitialEventHandlers() {
-      // Seulement le bouton Files dans la navbar qui existe dès le chargement
-      const filesBtn = document.getElementById('files-btn');
-      if (filesBtn) {
-        filesBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          this.toggleSidebar();
-        });
-      }
-    },
-    
     attachSidebarEventHandlers() {
       const uploadBtn = document.getElementById('upload-files-btn');
       if (uploadBtn) {
@@ -57,8 +41,6 @@
     },
     
     async toggleSidebar() {
-      console.log('Toggle sidebar called');
-      
       const sidebar = document.getElementById('file-sidebar');
       const isOpen = sidebar.style.display === 'block';
       
@@ -72,7 +54,6 @@
       document.body.classList.add('sidebar-open');
       
       this.currentThreadId = localStorage.getItem('lastThreadId');
-      console.log('Current thread ID:', this.currentThreadId);
       
       const contentEl = document.getElementById('file-sidebar-content');
       if (!contentEl) {
@@ -83,7 +64,6 @@
       // Vérifier si le contenu du panel est déjà chargé
       const treeContainer = document.getElementById('file-tree-container');
       if (!treeContainer) {
-        console.log('Loading sidebar content...');
         try {
           const response = await fetch('/files/sidebar-panel/');
           if (!response.ok) throw new Error('Failed to load sidebar content');
@@ -202,7 +182,6 @@
         'audio/': 'bi-file-music',
         'text/': 'bi-file-text',
         'application/zip': 'bi-file-zip',
-        'application/x-zip': 'bi-file-zip'
       };
       
       for (const [prefix, icon] of Object.entries(iconMap)) {
@@ -308,7 +287,6 @@
           // Reload the file tree to reflect changes
           await this.loadTree();
           
-          console.log(`File "${fileName}" deleted successfully`);
         } else {
           const errorData = await response.json().catch(() => ({}));
           const errorMessage = errorData.error || 'Failed to delete file';
@@ -382,9 +360,7 @@
         await this.loadTree();
         
         // Show result message
-        if (failedCount === 0) {
-          console.log(`Directory "${directoryName}" and all ${deletedCount} files deleted successfully`);
-        } else {
+        if (failedCount > 0) {
           alert(`Directory deletion completed with issues: ${deletedCount} files deleted, ${failedCount} files failed to delete.`);
         }
         
@@ -575,17 +551,11 @@
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${location.host}/ws/files/${this.currentThreadId}/`;
       
-      console.log('Connecting to WebSocket:', wsUrl);
       this.ws = new WebSocket(wsUrl);
-      
-      this.ws.onopen = () => {
-        console.log('WebSocket connected for file operations');
-      };
       
       this.ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          console.log('WebSocket message received:', data);
           
           if (data.type === 'file_update') {
             // Refresh tree on file updates
@@ -594,15 +564,9 @@
             // Update progress bar
             const progressBar = document.querySelector('#upload-progress .progress-bar');
             if (progressBar && this.isUploading) {
-              console.log(`Updating progress: ${data.progress}%`);
               progressBar.style.width = `${data.progress}%`;
               progressBar.textContent = `${data.progress}%`;
               progressBar.setAttribute('aria-valuenow', data.progress);
-              
-              // If progress reaches 100%, mark upload as complete
-              if (data.progress >= 100) {
-                console.log('Upload progress complete');
-              }
             }
           }
         } catch (error) {
@@ -613,17 +577,6 @@
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
       };
-      
-      this.ws.onclose = (event) => {
-        console.log('WebSocket closed:', event.code, event.reason);
-      };
     },
-
   };
-
-  // Initialize when DOM is ready
-  document.addEventListener('DOMContentLoaded', () => {
-    window.FileManager.init();
-  });
-
 })();

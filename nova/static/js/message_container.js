@@ -109,7 +109,7 @@
         }
 
         // Store task_id in localStorage for persistence
-        window.StorageUtils.addStoredTask(data.thread_id, data.task_id);
+        StorageUtils.addStoredTask(data.thread_id, data.task_id);
 
         // Start WS for task progress
         startTaskWebSocket(data.thread_id, data.task_id);
@@ -140,10 +140,6 @@
       if (dropdownButton) dropdownButton.textContent = label;
     }
   });
-
-  // Note: localStorage helpers are now in utils.js - keeping backward compatibility
-  window.addStoredTask = window.StorageUtils.addStoredTask.bind(window.StorageUtils);
-  window.removeStoredTask = window.StorageUtils.removeStoredTask.bind(window.StorageUtils);
 
   /* -------------------------- Task WebSocket for Real-Time Progress -------------------------- */
   function startTaskWebSocket(threadId, taskId) {
@@ -242,7 +238,7 @@
           .catch(error => console.error('Error refreshing thread list:', error));
         
         // Clean stored task
-        window.StorageUtils.removeStoredTask(threadId, taskId);
+        StorageUtils.removeStoredTask(threadId, taskId);
         return;
       }
     };

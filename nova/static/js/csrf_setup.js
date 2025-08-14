@@ -1,23 +1,36 @@
 // nova/static/js/csrf_setup.js
-// Global helper that works with HttpOnly cookies
-(async function () {
-  async function fetchToken() {
-    const r = await fetch("/api/csrf/", { credentials: "include" });
-    const { csrfToken } = await r.json();
-    return csrfToken;
+// Fetch-based helper for CSRF + HttpOnly cookies (vanilla, no jQuery)
+(() => {
+  /* Cache the promise so we ne­go­ti­ate the token only once per tab */
+  let tokenPromise = null;
+
+  async function getCSRFToken() {
+    if (!tokenPromise) {
+      tokenPromise = fetch("/api/csrf/", { credentials: "include" })
+        .then(r => r.json())
+        .then(({ csrfToken }) => csrfToken);
+    }
+    return tokenPromise;
   }
 
-  window.getCSRFToken = fetchToken;  // Expose async getter (for manual use)
+  /* Drop-in replacement for fetch() that auto-adds X-CSRFToken */
+  async function csrfFetch(input, init = {}) {
+    const method = (init.method || "GET").toUpperCase();
+    const headers = new Headers(init.headers || {});
 
-  /* jQuery integration: fetch per request (no global cache) */
-  if (typeof jQuery !== "undefined") {
-    jQuery.ajaxSetup({
-      beforeSend: async function (xhr, settings) {
-        if (!/^(GET|HEAD|OPTIONS|TRACE)$/i.test(settings.type)) {
-          const token = await fetchToken();  // Fresh token per request
-          xhr.setRequestHeader("X-CSRFToken", token);
-        }
-      },
+    if (!/^(GET|HEAD|OPTIONS|TRACE)$/.test(method)) {
+      headers.set("X-CSRFToken", await getCSRFToken());
+    }
+
+    return fetch(input, {
+      ...init,
+      method,
+      headers,
+      credentials: "include",   // keep cookies by default
     });
   }
+
+  // Expose helpers globally (adjust namespace if you prefer modules)
+  window.getCSRFToken = getCSRFToken;
+  window.csrfFetch    = csrfFetch;
 })();

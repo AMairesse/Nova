@@ -12,6 +12,18 @@
       this.loadInitialThread();
     },
 
+    markActiveThread(threadId) {
+      // Remove .active from the current thread
+      document.querySelectorAll('.thread-link.active')
+              .forEach(el => el.classList.remove('active'));
+
+      // Set active on the new selected one
+      if (threadId) {
+        document.querySelector(`.thread-link[data-thread-id="${threadId}"]`)
+                ?.classList.add('active');
+      }
+    },
+
     attachEventHandlers() {
       // Create thread button
       document.querySelector('.create-thread-btn')?.addEventListener('click', this.createThread.bind(this));
@@ -67,7 +79,8 @@
         
         const html = await response.text();
         document.getElementById('message-container').innerHTML = html;
-        
+        this.markActiveThread(threadId);
+
         // Initialize message container
         if (typeof window.initMessageContainer === 'function') {
           window.initMessageContainer();

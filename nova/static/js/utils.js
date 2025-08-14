@@ -151,8 +151,4 @@
   window.StorageUtils = StorageUtils;
   window.DOMUtils = DOMUtils;
 
-  // Backward compatibility
-  window.addStoredTask = StorageUtils.addStoredTask.bind(StorageUtils);
-  window.removeStoredTask = StorageUtils.removeStoredTask.bind(StorageUtils);
-
 })();
