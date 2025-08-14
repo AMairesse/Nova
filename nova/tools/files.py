@@ -4,7 +4,7 @@ from botocore.exceptions import ClientError
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from nova.models import UserFile, Thread
-from nova.llm_agent import LLMAgent
+from nova.llm.llm_agent import LLMAgent
 import logging
 import uuid
 from io import BytesIO

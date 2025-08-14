@@ -4,8 +4,7 @@ from django.urls import include, path
 from django.views.i18n import JavaScriptCatalog
 from .views.main_views import index, message_list, create_thread, delete_thread, add_message, running_tasks
 from .views.user_config_views import UserConfigView
-from .views.provider_views import create_provider, edit_provider, delete_provider
-from .views.agent_views import create_agent, edit_agent, delete_agent, make_default_agent
+from .views.config_views import create_agent, edit_agent, delete_agent, make_default_agent, create_provider, edit_provider, delete_provider
 from .views.files_views import sidebar_panel_view, file_list, file_upload, FileDeleteView, FileMoveView
 from .views.tools_views import create_tool, edit_tool, delete_tool, configure_tool, test_tool_connection
 from .views.security_views import csrf_token

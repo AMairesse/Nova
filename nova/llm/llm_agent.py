@@ -1,10 +1,8 @@
-# nova/llm_agent.py
+# nova/llm/llm_agent.py
 from datetime import date
 import re
 import logging
-import inspect
 from typing import Any, Callable, List, Optional, Dict
-from functools import wraps
 
 # Load the langchain tools
 from langchain_mistralai.chat_models import ChatMistralAI
@@ -15,8 +13,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import StructuredTool
 from langchain_core.callbacks import BaseCallbackHandler
-from .models import Actor, Tool, ProviderType, LLMProvider, Message  # Added Message
-from .utils import extract_final_answer
+from nova.models import Actor, Tool, ProviderType, LLMProvider, Message
+from nova.utils import extract_final_answer
+from .llm_tools import load_tools
 
 import asyncio
 import nest_asyncio
@@ -113,7 +112,7 @@ class LLMAgent:
 
         allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = await sync_to_async(fetch_user_params_sync)(user)
 
-        # Pre-fetch ORM data for _load_agent_tools
+        # Pre-fetch ORM data for load_tools
         def fetch_agent_data_sync(agent, user):
             if not agent:
                 return [], [], [], False, None, None
@@ -155,8 +154,8 @@ class LLMAgent:
             llm_provider=llm_provider
         )
 
-        # Load tools async after init
-        tools = await instance._load_agent_tools()
+        # Load tools async after init (extracted to llm_tools.py)
+        tools = await load_tools(instance)
 
         memory = MemorySaver()
 
@@ -262,105 +261,6 @@ class LLMAgent:
         # Initialize resources and loaded modules tracker
         self._resources = {}
         self._loaded_builtin_modules = []
-
-    async def _load_agent_tools(self):
-        """
-        Load and initialize tools associated with the agent.
-        Returns a list of Langchain-ready tools.
-        """
-        tools = []
-
-        # Load builtin tools (pre-fetched)
-        for tool_obj in self.builtin_tools:
-            try:
-                from nova.tools import import_module
-                module = import_module(tool_obj.python_path)
-                if not module:
-                    logger.warning(f"Failed to import module for builtin tool: {tool_obj.python_path}")
-                    continue
-
-                # Call init if available (async)
-                if hasattr(module, 'init'):
-                    await module.init(self)
-
-                # Get tools (new signature, await in case async)
-                loaded_tools = await module.get_functions(tool=tool_obj, agent=self)
-
-                # Add to list
-                tools.extend(loaded_tools)
-
-                # Track module for cleanup
-                self._loaded_builtin_modules.append(module)
-            except Exception as e:
-                logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
-        
-        # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
-        for tool_obj, cred, cached_func_metas, cred_user_id in self.mcp_tools_data:
-            try:
-                from nova.mcp.client import MCPClient
-                client = MCPClient(
-                    endpoint=tool_obj.endpoint, 
-                    thread_id=self.thread_id,
-                    credential=cred, 
-                    transport_type=tool_obj.transport_type,
-                    user_id=cred_user_id
-                )
-
-                # Use pre-fetched or fetch via client
-                if cached_func_metas is not None:
-                    func_metas = cached_func_metas
-                else:
-                    func_metas = client.list_tools(force_refresh=True)
-
-                for meta in func_metas:
-                    func_name = meta["name"]
-                    input_schema = meta.get("input_schema", {})
-                    description = meta.get("description", "")
-
-                    # ---------- safe factory captures current func_name & client -----------
-                    def _remote_call_factory(_name: str, _client: MCPClient):
-                        async def _remote_call_async(**kwargs):
-                            return await _client.acall(_name, **kwargs)
-
-                        def _remote_call_sync(**kwargs):
-                            return _client.call(_name, **kwargs)
-
-                        return _remote_call_sync, _remote_call_async
-                    # -----------------------------------------------------------------------
-
-                    sync_f, async_f = _remote_call_factory(func_name, client)
-
-                    wrapped = StructuredTool.from_function(
-                        func=sync_f,
-                        coroutine=async_f,
-                        name=re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name)[:64],
-                        description=description,
-                        args_schema=None if input_schema == {} else input_schema,
-                    )
-                    tools.append(wrapped)
-
-            except Exception as e:
-                logger.warning(f"Failed to load MCP tools from {tool_obj.endpoint}: {str(e)}")
-
-        # Load agents used as tools (pre-fetched)
-        if self.has_agent_tools:
-            from nova.tools.agent_tool_wrapper import AgentToolWrapper
-
-            for agent_tool in self.agent_tools:
-                wrapper = AgentToolWrapper(
-                    agent_tool, 
-                    self.user,
-                    parent_config=self._parent_config
-                )
-                langchain_tool = wrapper.create_langchain_tool()
-                tools.append(langchain_tool)
-
-        # Load files support tools
-        from .tools import files
-        file_tools = await files.get_functions(self)
-        tools.extend(file_tools)
-
-        return tools
 
     async def cleanup(self):
         """Async cleanup method to close resources for loaded builtin modules."""

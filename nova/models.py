@@ -361,7 +361,7 @@ class Thread(models.Model):
         return message
     
     def get_messages(self):
-        return Message.objects.filter(thread=self)
+        return Message.objects.filter(thread=self).order_by('created_at')
 
 # ----- Task Model for Asynchronous AI Tasks -----
 class TaskStatus(models.TextChoices):

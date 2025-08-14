@@ -2,7 +2,7 @@ from datetime import datetime, date, timedelta, timezone
 
 from langchain_core.tools import StructuredTool
 
-from nova.llm_agent import LLMAgent
+from nova.llm.llm_agent import LLMAgent
 
 METADATA = {
     'name': 'Date / Time',

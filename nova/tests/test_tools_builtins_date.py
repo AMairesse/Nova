@@ -16,7 +16,7 @@ class DateBuiltinTests(SimpleTestCase):
         super().tearDown()
         sys.modules.pop("nova.tools.builtins.date", None)
         sys.modules.pop("langchain_core.tools", None)
-        sys.modules.pop("nova.llm_agent", None)
+        sys.modules.pop("nova.llm.llm_agent", None)
 
     def _import_date_module_with_fakes(self):
         # Fake langchain_core.tools.StructuredTool
@@ -37,7 +37,7 @@ class DateBuiltinTests(SimpleTestCase):
         lc_core_tools.StructuredTool = StructuredTool
 
         # Fake nova.llm_agent (only needed for type annotation import)
-        fake_llm_agent = types.ModuleType("nova.llm_agent")
+        fake_llm_agent = types.ModuleType("nova.llm.llm_agent")
 
         class LLMAgent:
             pass
@@ -45,7 +45,7 @@ class DateBuiltinTests(SimpleTestCase):
         fake_llm_agent.LLMAgent = LLMAgent
 
         sys.modules["langchain_core.tools"] = lc_core_tools
-        sys.modules["nova.llm_agent"] = fake_llm_agent
+        sys.modules["nova.llm.llm_agent"] = fake_llm_agent
 
         # Ensure a fresh import of the module under test
         sys.modules.pop("nova.tools.builtins.date", None)

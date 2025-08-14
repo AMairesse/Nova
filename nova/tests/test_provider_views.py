@@ -1,4 +1,4 @@
-# nova/tests/test_provider_views.py
+# nova/tests/test_config_views.py
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse

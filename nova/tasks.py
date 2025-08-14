@@ -9,7 +9,7 @@ from channels.layers import get_channel_layer
 from langchain_core.callbacks import AsyncCallbackHandler
 from asgiref.sync import sync_to_async
 from .models import TaskStatus, Task, Actor, Thread, Agent
-from .llm_agent import LLMAgent
+from nova.llm.llm_agent import LLMAgent
 import logging
 
 logger = logging.getLogger(__name__)

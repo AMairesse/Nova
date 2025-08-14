@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from django.utils.translation import gettext as _
 from langchain_core.tools import StructuredTool
 
-from ..llm_agent import LLMAgent
+from nova.llm.llm_agent import LLMAgent
 from ..models import Agent
 
 import logging

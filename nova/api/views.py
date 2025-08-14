@@ -8,9 +8,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .serializers import QuestionSerializer, AnswerSerializer
-from ..llm_agent import LLMAgent
-
-TIMEOUT_S = 60  # reserved – not used for now (sync call)
+from nova.llm.llm_agent import LLMAgent
 
 
 class QuestionAnswerView(APIView):

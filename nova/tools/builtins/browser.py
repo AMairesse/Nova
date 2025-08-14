@@ -4,7 +4,7 @@ from typing import List
 from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
 from playwright.async_api import async_playwright
 
-from nova.llm_agent import LLMAgent
+from nova.llm.llm_agent import LLMAgent
 from nova.models import Tool
 
 METADATA = {

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 # We import Django models only for the ProviderType enum; no DB operations are needed.
 from nova.models import ProviderType
-import nova.llm_agent as llm_agent_mod
+import nova.llm.llm_agent as llm_agent_mod
 
 
 class LLMAgentTests(IsolatedAsyncioTestCase):

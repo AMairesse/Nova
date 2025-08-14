@@ -10,7 +10,7 @@ from django.utils.translation import gettext_lazy as _, ngettext
 from nova.models import ToolCredential, Tool
 from langchain_core.tools import StructuredTool
 
-from nova.llm_agent import LLMAgent
+from nova.llm.llm_agent import LLMAgent
 
 from asgiref.sync import sync_to_async  # For async-safe ORM accesses
 
