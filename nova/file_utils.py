@@ -16,7 +16,7 @@ from .models import UserFile, Thread, Message  # Assuming models are in same app
 logger = logging.getLogger(__name__)
 
 # Constants
-ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html', 'application/pdf', 'application/msword']
+ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html', 'text/x-script.python', 'application/pdf', 'application/msword']
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5MB threshold for multipart
 

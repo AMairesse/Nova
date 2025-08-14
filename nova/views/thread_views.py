@@ -12,6 +12,7 @@ from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 from ..models import Actor, Thread, Agent, UserProfile, Task, TaskStatus, UserFile
 from ..tasks import sync_run_ai_task  # Import from new tasks.py
+from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from django.conf import settings
 import logging
 import boto3
@@ -28,9 +29,6 @@ ALLOWED_TAGS = [
 ALLOWED_ATTRS = {
     "a": ["href", "title", "rel"],
 }
-
-ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html', 'application/pdf', 'application/msword']  # Whitelist
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 @ensure_csrf_cookie
 @login_required(login_url='login')
