@@ -11,15 +11,14 @@
         <div class="card-body py-2">
           <strong class="text-primary">{{ message.rendered_html }}</strong>
           <!-- Affichage fichiers attachés -->
-          {% if message.file_attachments %}
-          <div class="mt-2 small text-muted">
-            Attached files:
-            <ul>
-              {% for file in message.file_attachments %}
-              <li><a href="{{ file.url }}" target="_blank">{{ file.name }}</a></li>
-              {% endfor %}
-            </ul>
-          </div>
+          {% if message.file_count %}
+            <div class="mt-2 small text-muted">
+              {% blocktrans count file_count=message.file_count %}
+                {{ file_count }} file was shared with this message.
+              {% plural %}
+                {{ file_count }} files were shared with this message.
+              {% endblocktrans %}
+            </div>
           {% endif %}
         </div>
       </div>

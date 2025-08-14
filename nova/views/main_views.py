@@ -81,11 +81,7 @@ def message_list(request):
             
             # ----- Ajout rendu fichiers -----
             if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
-                file_urls = []
-                for fid in m.internal_data['file_ids']:
-                    file = get_object_or_404(UserFile, id=fid, user=request.user)
-                    file_urls.append({'name': file.original_filename, 'url': file.get_download_url()})
-                m.file_attachments = file_urls  # Passe au template
+                m.file_count = len(m.internal_data['file_ids'])
 
     return render(request, 'nova/message_container.html', {
         'messages': messages,
