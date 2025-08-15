@@ -7,7 +7,8 @@
     selectedFiles: new Set(),
     ws: null,
     isUploading: false,
-    
+    sidebarContentLoaded: false,  // Cache flag to avoid reloading content
+
     attachSidebarEventHandlers() {
       const uploadBtn = document.getElementById('upload-files-btn');
       if (uploadBtn) {
@@ -41,17 +42,23 @@
     },
     
     async toggleSidebar() {
-      const sidebar = document.getElementById('file-sidebar');
-      const isOpen = sidebar.style.display === 'block';
-      
-      if (isOpen) {
-        this.closeSidebar();
+      const sidebarEl = document.getElementById('file-sidebar');
+      if (!sidebarEl) {
+        console.error('Sidebar element not found');
         return;
       }
       
-      // Ouvrir la sidebar
-      sidebar.style.display = 'block';
-      document.body.classList.add('sidebar-open');
+      const offcanvas = new bootstrap.Offcanvas(sidebarEl);
+      const isOpen = sidebarEl.classList.contains('show');
+      
+      if (isOpen) {
+        offcanvas.hide();
+        this.closeSidebar();  // Clean up WS
+        return;
+      }
+      
+      // Open the offcanvas
+      offcanvas.show();
       
       this.currentThreadId = localStorage.getItem('lastThreadId');
       
@@ -61,9 +68,8 @@
         return;
       }
       
-      // Vérifier si le contenu du panel est déjà chargé
-      const treeContainer = document.getElementById('file-tree-container');
-      if (!treeContainer) {
+      // Load panel content only if not already loaded (cache)
+      if (!this.sidebarContentLoaded) {
         try {
           const response = await fetch('/files/sidebar-panel/');
           if (!response.ok) throw new Error('Failed to load sidebar content');
@@ -71,6 +77,7 @@
           contentEl.innerHTML = html;
           
           this.attachSidebarEventHandlers();
+          this.sidebarContentLoaded = true;
         } catch (error) {
           console.error('Error loading sidebar:', error);
           contentEl.innerHTML = '<p class="alert alert-danger">Error loading files panel.</p>';
@@ -87,17 +94,13 @@
         return;
       }
       
-      // Charger l'arbre et connecter WebSocket
+      // Load tree and connect WebSocket
       await this.loadTree();
       this.connectWebSocket();
     },
 
     closeSidebar() {
-      const sidebar = document.getElementById('file-sidebar');
-      sidebar.style.display = 'none';
-      document.body.classList.remove('sidebar-open');
-      
-      // Fermer WebSocket
+      // Close WebSocket
       if (this.ws) {
         this.ws.close();
         this.ws = null;
@@ -196,7 +199,6 @@
         });
       });
     },
-
 
     selectFile(fileId) {
       const item = document.querySelector(`[data-id="${fileId}"]`);
@@ -345,6 +347,30 @@
       }
     },
 
+    // Factorized function for upload completion handling
+    handleUploadCompletion(inputId, progressMessage = null, delay = 1000) {
+      // Clear the input
+      const input = document.getElementById(inputId);
+      if (input) input.value = '';
+      
+      // Wait for final updates and reload tree
+      setTimeout(async () => {
+        await this.loadTree();
+        this.isUploading = false;
+        const progressEl = document.getElementById('upload-progress');
+        if (progressEl) {
+          if (progressMessage) {
+            const progressBar = document.querySelector('#upload-progress .progress-bar');
+            if (progressBar) progressBar.textContent = progressMessage;
+          }
+          // Hide progress bar after delay
+          setTimeout(() => {
+            progressEl.style.display = 'none';
+          }, delay);
+        }
+      }, 500);
+    },
+
     async handleFileUpload(files) {
       if (!files || files.length === 0) return;
       if (!this.currentThreadId) {
@@ -389,21 +415,7 @@
         });
         
         if (response.ok) {
-          // Clear the file input
-          const fileInput = document.getElementById('file-input');
-          if (fileInput) fileInput.value = '';
-          
-          // Wait a bit for final progress updates via WebSocket
-          setTimeout(async () => {
-            await this.loadTree();
-            this.isUploading = false;
-            if (progressEl) {
-              // Keep progress bar visible for a moment to show completion
-              setTimeout(() => {
-                progressEl.style.display = 'none';
-              }, 1000);
-            }
-          }, 500);
+          this.handleUploadCompletion('file-input');
         } else {
           throw new Error('Upload failed');
         }
@@ -430,9 +442,7 @@
       // Show confirmation with directory info
       const fileCount = files.length;
       if (!confirm(`Upload directory "${directoryName}" with ${fileCount} files?`)) {
-        // Clear the directory input
-        const directoryInput = document.getElementById('directory-input');
-        if (directoryInput) directoryInput.value = '';
+        this.handleUploadCompletion('directory-input', null, 0);  // Just clear input
         return;
       }
       
@@ -470,31 +480,13 @@
       this.isUploading = true;
       
       try {
-        const response = await window.DOMUtils.csrfFetch(`/files/upload/${this.currentThreadId}/`, {  // Fixed: Use csrfFetch
+        const response = await window.DOMUtils.csrfFetch(`/files/upload/${this.currentThreadId}/`, {
           method: 'POST',
           body: formData
         });
         
         if (response.ok) {
-          // Clear the directory input
-          const directoryInput = document.getElementById('directory-input');
-          if (directoryInput) directoryInput.value = '';
-          
-          // Wait a bit for final progress updates via WebSocket
-          setTimeout(async () => {
-            await this.loadTree();
-            this.isUploading = false;
-            if (progressEl) {
-              // Show completion message briefly
-              if (progressBar) {
-                progressBar.textContent = `${directoryName} uploaded successfully!`;
-              }
-              // Keep progress bar visible for a moment to show completion
-              setTimeout(() => {
-                progressEl.style.display = 'none';
-              }, 2000);
-            }
-          }, 500);
+          this.handleUploadCompletion('directory-input', `${directoryName} uploaded successfully!`, 2000);
         } else {
           throw new Error('Directory upload failed');
         }
@@ -503,15 +495,12 @@
         alert(`Error uploading directory "${directoryName}"`);
         this.isUploading = false;
         if (progressEl) progressEl.style.display = 'none';
-        
-        // Clear the directory input on error
-        const directoryInput = document.getElementById('directory-input');
-        if (directoryInput) directoryInput.value = '';
+        this.handleUploadCompletion('directory-input', null, 0);  // Clear on error
       }
     },
 
     connectWebSocket() {
-      if (this.ws) this.ws.close();
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;  // Avoid multiple connections
       
       if (!this.currentThreadId) return;
       
