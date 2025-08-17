@@ -1,6 +1,7 @@
 import re
 from urllib.parse import urlparse, urlunparse
-from typing import Tuple
+from typing import Tuple, List
+from langchain_core.messages import BaseMessage
 
 def normalize_url(urlish) -> str:
     """
@@ -44,3 +45,28 @@ def extract_final_answer(output):
     if isinstance(output, dict) and "messages" in output:
         return extract_final_answer(output["messages"])
     return str(output)
+
+def estimate_tokens(text: str=None, input_size: int=None) -> int:
+    """Simple token estimation: approx 1 token per 4 chars."""
+    if input_size:
+        return input_size // 4 + 1
+    elif text is not None:
+        return len(text) // 4 + 1
+    else:
+        return 0
+
+def estimate_total_context(agent: 'LLMAgent') -> int:
+    """Estimate tokens for system_prompt + tools desc + history."""
+    total = 0
+    # System prompt
+    total += estimate_tokens(agent.build_system_prompt())
+    # Tools desc (approx: sum of descriptions from agent.tools - maintenant disponible)
+    tools_desc = " ".join([t.description for t in getattr(agent, 'tools', [])])  # Check safe
+    total += estimate_tokens(tools_desc)
+    # History (sum message contents from state via checkpointer)
+    state = agent.agent.get_state(agent.config)  # Accès à l'état courant
+    messages = state.values.get('messages', [])  # Liste des BaseMessage
+    for msg in messages:
+        if isinstance(msg, BaseMessage):
+            total += estimate_tokens(msg.content)
+    return total

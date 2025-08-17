@@ -167,6 +167,8 @@ class LLMAgent:
                                             prompt=system_prompt,
                                             checkpointer=memory)
 
+        instance.tools = tools
+
         # Load previous exchanges
         for actor, message in msg_history:
             if actor == Actor.USER:
