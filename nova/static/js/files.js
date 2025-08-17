@@ -556,5 +556,71 @@
         console.error('WebSocket error:', error);
       };
     },
+
+    // New method to handle thread changes
+    async updateForThread(threadId) {
+      // Update current thread ID
+      this.currentThreadId = threadId;
+      
+      // Check if files panel is visible
+      const filesColumn = document.getElementById('files-column');
+      if (!filesColumn || filesColumn.classList.contains('d-none')) {
+        // Files panel is not visible, no need to update
+        return;
+      }
+      
+      // Check if sidebar content is loaded
+      if (!this.sidebarContentLoaded) {
+        // Sidebar content not loaded yet, no need to update
+        return;
+      }
+      
+      // Close existing WebSocket connection
+      if (this.ws) {
+        this.ws.close();
+        this.ws = null;
+      }
+      
+      // Clear selected files
+      this.selectedFiles.clear();
+      
+      // Load new file tree and reconnect WebSocket
+      await this.loadTree();
+      this.connectWebSocket();
+    },
+
+    // New method to handle thread deletion
+    handleThreadDeletion() {
+      // Clear current thread ID
+      this.currentThreadId = null;
+      
+      // Check if files panel is visible
+      const filesColumn = document.getElementById('files-column');
+      if (!filesColumn || filesColumn.classList.contains('d-none')) {
+        // Files panel is not visible, no need to update
+        return;
+      }
+      
+      // Check if sidebar content is loaded
+      if (!this.sidebarContentLoaded) {
+        // Sidebar content not loaded yet, no need to update
+        return;
+      }
+      
+      // Close WebSocket connection
+      if (this.ws) {
+        this.ws.close();
+        this.ws = null;
+      }
+      
+      // Clear selected files
+      this.selectedFiles.clear();
+      
+      // Update tree container to show no thread selected
+      const treeContainer = document.getElementById('file-tree-container');
+      if (treeContainer) {
+        treeContainer.innerHTML = '<p class="text-muted p-3">No thread selected</p>';
+      }
+    },
   };
 })();

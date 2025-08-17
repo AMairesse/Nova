@@ -98,6 +98,11 @@
           await this.handleRunningTasks(threadId);
           localStorage.setItem('lastThreadId', threadId);
         }
+
+        // Update file panel for the new thread
+        if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
+          await window.FileManager.updateForThread(threadId);
+        }
       } catch (error) {
         console.error('Error loading messages:', error);
       }
@@ -126,6 +131,16 @@
         await window.DOMUtils.csrfFetch(window.NovaApp.urls.deleteThread.replace('0', threadId), { method: 'POST' });
         const threadElement = document.getElementById(`thread-item-${threadId}`);
         if (threadElement) threadElement.remove();
+        
+        // Handle file panel update for thread deletion
+        const currentThreadId = localStorage.getItem('lastThreadId');
+        if (currentThreadId === threadId.toString()) {
+          // If we're deleting the currently active thread, handle file panel appropriately
+          if (window.FileManager && typeof window.FileManager.handleThreadDeletion === 'function') {
+            window.FileManager.handleThreadDeletion();
+          }
+        }
+        
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;
         this.loadMessages(firstThreadId);
