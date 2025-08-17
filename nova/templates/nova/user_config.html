@@ -44,8 +44,12 @@
                         </div>
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-2 edit-provider-btn"
-                                    data-id="{{ provider.id }}" data-name="{{ provider.name }}" data-provider-type="{{ provider.provider_type }}"
-                                    data-model="{{ provider.model }}" data-base-url="{{ provider.base_url|default:'' }}" data-config="{{ provider.additional_config|default:'{}' }}">
+                                    data-id="{{ provider.id }}" data-name="{{ provider.name }}"
+                                    data-provider-type="{{ provider.provider_type }}"
+                                    data-model="{{ provider.model }}"
+                                    data-base-url="{{ provider.base_url|default:'' }}"
+                                    data-config="{{ provider.additional_config|default:'{}' }}"
+                                    data-max-tokens="{{ provider.max_context_tokens }}">
                                 {% trans "Edit" %}
                             </button>
                             <form method="post" action="{% url 'delete_provider' provider.id %}" class="d-inline"

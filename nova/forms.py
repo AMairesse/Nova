@@ -17,6 +17,7 @@ from django.utils.encoding import force_str
 from .models import (
     Agent,
     LLMProvider,
+    ProviderType,
     Tool,
     ToolCredential,
     UserParameters,
@@ -76,17 +77,38 @@ class LLMProviderForm(forms.ModelForm):
             "api_key",
             "base_url",
             "additional_config",
+            "max_context_tokens",
         ]
         widgets = {
             "api_key": forms.PasswordInput(render_value=False),
             "additional_config": forms.HiddenInput(),
+            "max_context_tokens": forms.NumberInput(attrs={'min': 512}),  # UI hint
         }
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Set initial default based on provider_type (for new instances)
+        if not self.instance.pk:
+            provider_type = self.data.get('provider_type') or self.initial.get('provider_type')
+            if provider_type in [ProviderType.OLLAMA, ProviderType.LLMSTUDIO]:
+                self.initial['max_context_tokens'] = 4096
+            elif provider_type in [ProviderType.OPENAI, ProviderType.MISTRAL]:
+                self.initial['max_context_tokens'] = 100000
 
     def clean_api_key(self) -> str:
         """Preserve the encrypted value if the field is left blank."""
         data = self.cleaned_data.get("api_key", "")
         if not data and self.instance.pk:
             return self.instance.api_key
+        return data
+    
+    def clean_max_context_tokens(self) -> int:
+        """Preserve existing value if not provided, with min validation."""
+        data = self.cleaned_data.get("max_context_tokens")
+        if data is None and self.instance.pk:
+            return self.instance.max_context_tokens
+        if data < 512:
+            raise forms.ValidationError(_("Max context tokens must be at least 512."))
         return data
 
 

@@ -13,12 +13,15 @@ class FilesInline(admin.TabularInline):
     model = UserFile
     verbose_name_plural = "files"
 
+@admin.register(Thread)
 class ThreadAdmin(admin.ModelAdmin):
     inlines = [FilesInline]
 
-admin.site.register(Thread, ThreadAdmin)
-admin.site.register(Message)
-admin.site.register(LLMProvider)
+@admin.register(LLMProvider)
+class LLMProviderAdmin(admin.ModelAdmin):
+    list_display = ('name', 'provider_type', 'model', 'user', 'max_context_tokens')  # Ajout de max_context_tokens
+    fields = ('name', 'provider_type', 'model', 'api_key', 'base_url', 'additional_config', 'max_context_tokens', 'user')  # Ajout au form admin
+
 admin.site.register(Task)
 
 class UserParametersInline(admin.StackedInline):
@@ -34,6 +37,7 @@ class UserProfileInline(admin.StackedInline):
 class UserAdmin(BaseUserAdmin):
     inlines = [UserParametersInline, UserProfileInline]
 
+admin.site.register(Message)
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
 admin.site.register(UserFile)

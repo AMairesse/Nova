@@ -55,6 +55,10 @@ class LLMProvider(models.Model):
     api_key = EncryptedCharField(max_length=255, blank=True, null=True)
     base_url = models.URLField(blank=True, null=True)  # For custom endpoints
     additional_config = models.JSONField(default=dict, blank=True)  # For other provider-specific settings
+    max_context_tokens = models.PositiveIntegerField(
+        default=4096,
+        help_text=_("Maximum tokens for this provider's context window (e.g., 4096 for small models, 100000 or more for large).")
+    )
     
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
@@ -68,6 +72,11 @@ class LLMProvider(models.Model):
     
     def __str__(self):
         return f"{self.name} ({self.provider_type})"
+    
+    def clean(self):
+        super().clean()
+        if self.max_context_tokens < 512:
+            raise ValidationError(_("Max context tokens must be at least 512."))
 
 
 class UserParameters(models.Model):
