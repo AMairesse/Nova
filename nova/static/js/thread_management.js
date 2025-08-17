@@ -22,8 +22,9 @@
     attachEventHandlers() {
       // Delegated event listeners for all interactions
       document.addEventListener('click', (e) => {
-        if (e.target.matches('.create-thread-btn')) {
+        if (e.target.matches('.create-thread-btn') || e.target.closest('.create-thread-btn')) {
           e.preventDefault();
+          const btn = e.target.closest('.create-thread-btn');
           this.createThread();
         } else if (e.target.matches('.thread-link') || e.target.closest('.thread-link')) {
           e.preventDefault();
