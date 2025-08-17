@@ -1,10 +1,13 @@
 # nova/signals.py
 
 from django.conf import settings
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
+import logging
 
-from .models import UserProfile, UserParameters
+from .models import UserProfile, UserParameters, Thread
+
+logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile_and_params(sender, instance, created, **kwargs):
@@ -14,3 +17,33 @@ def create_user_profile_and_params(sender, instance, created, **kwargs):
     if created:
         UserProfile.objects.create(user=instance)
         UserParameters.objects.create(user=instance)
+
+
+@receiver(pre_delete, sender=Thread)
+def cleanup_thread_files(sender, instance, **kwargs):
+    """
+    Delete all files associated with a thread before the thread is deleted.
+    This ensures MinIO files are properly cleaned up.
+    """
+    files_to_delete = instance.files.all()
+    
+    if files_to_delete.exists():
+        file_count = files_to_delete.count()
+        logger.info(f"Deleting {file_count} files for thread {instance.id} ('{instance.subject}')")
+        
+        deleted_count = 0
+        failed_count = 0
+        
+        for file_obj in files_to_delete:
+            try:
+                file_key = file_obj.key
+                file_obj.delete()  # This handles both DB and MinIO cleanup
+                logger.debug(f"Successfully deleted file {file_key}")
+                deleted_count += 1
+            except Exception as e:
+                logger.error(f"Failed to delete file {file_obj.key}: {e}")
+                failed_count += 1
+        
+        logger.info(f"Thread {instance.id} file cleanup completed: {deleted_count} deleted, {failed_count} failed")
+    else:
+        logger.debug(f"No files to delete for thread {instance.id}")

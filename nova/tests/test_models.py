@@ -8,7 +8,7 @@ import json
 
 from nova.models import (
     LLMProvider, UserParameters, Message, Tool, Agent, UserProfile,
-    ToolCredential, Thread, Task, Actor, ProviderType, TaskStatus
+    ToolCredential, Thread, Task, Actor, ProviderType, TaskStatus, UserFile
 )
 from .base import BaseTestCase  # Import the base test case
 
@@ -226,6 +226,79 @@ class ThreadModelTest(BaseTestCase):
         thread.add_message('Msg2', Actor.AGENT)
         messages = thread.get_messages()
         self.assertEqual(messages.count(), 2)
+    
+    @patch('nova.models.boto3.client')
+    def test_thread_deletion_cleans_up_files(self, mock_boto3_client):
+        """Test that deleting a thread also deletes associated files from MinIO."""
+        # Mock the S3 client
+        mock_s3_client = mock_boto3_client.return_value
+        
+        # Create a thread
+        thread = Thread.objects.create(user=self.user, subject='Test Thread')
+        
+        # Create some test files associated with the thread
+        file1 = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            key='users/1/threads/1/file1.txt',
+            original_filename='file1.txt',
+            mime_type='text/plain',
+            size=100
+        )
+        file2 = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            key='users/1/threads/1/file2.txt',
+            original_filename='file2.txt',
+            mime_type='text/plain',
+            size=200
+        )
+        
+        # Verify files exist before deletion
+        self.assertEqual(UserFile.objects.filter(thread=thread).count(), 2)
+        
+        # Delete the thread (this should trigger our signal)
+        thread.delete()
+        
+        # Verify files were deleted from database
+        self.assertEqual(UserFile.objects.filter(key__in=['users/1/threads/1/file1.txt', 'users/1/threads/1/file2.txt']).count(), 0)
+        
+        # Verify MinIO delete_object was called for each file
+        self.assertEqual(mock_s3_client.delete_object.call_count, 2)
+        
+        # Verify the correct keys were deleted from MinIO
+        expected_calls = [
+            patch.call(Bucket=patch.ANY, Key='users/1/threads/1/file1.txt'),
+            patch.call(Bucket=patch.ANY, Key='users/1/threads/1/file2.txt')
+        ]
+        mock_s3_client.delete_object.assert_has_calls(expected_calls, any_order=True)
+    
+    @patch('nova.models.boto3.client')
+    def test_thread_deletion_handles_minio_errors(self, mock_boto3_client):
+        """Test that thread deletion continues even if MinIO deletion fails."""
+        # Mock the S3 client to raise an error
+        mock_s3_client = mock_boto3_client.return_value
+        mock_s3_client.delete_object.side_effect = Exception("MinIO connection error")
+        
+        # Create a thread with a file
+        thread = Thread.objects.create(user=self.user, subject='Test Thread')
+        file1 = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            key='users/1/threads/1/file1.txt',
+            original_filename='file1.txt',
+            mime_type='text/plain',
+            size=100
+        )
+        
+        # Delete the thread - should not raise an exception despite MinIO error
+        thread.delete()
+        
+        # Verify thread was deleted despite MinIO error
+        self.assertFalse(Thread.objects.filter(id=thread.id).exists())
+        
+        # Verify file was still deleted from database
+        self.assertEqual(UserFile.objects.filter(key='users/1/threads/1/file1.txt').count(), 0)
 
 class TaskModelTest(BaseTestCase):
     def setUp(self):

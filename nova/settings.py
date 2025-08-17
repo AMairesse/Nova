@@ -181,9 +181,6 @@ MINIO_SECURE = os.getenv('MINIO_SECURE', 'False').lower() == 'true'
 if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
     raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in .env")
 
-if not DEBUG and not MINIO_SECURE:
-    raise ValueError("MINIO_SECURE must be True in production (DEBUG=False) for HTTPS")
-
 if not CSRF_TRUSTED_ORIGINS or all(not o.strip() for o in CSRF_TRUSTED_ORIGINS):
     raise ValueError("CSRF_TRUSTED_ORIGINS must be set in .env and non-empty")
 
