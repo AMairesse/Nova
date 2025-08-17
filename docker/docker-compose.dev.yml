@@ -47,6 +47,8 @@ services:
       - ../requirements.txt:/app/requirements.txt  # If deps change then rebuild manually
       - ../manage.py:/app/manage.py
       - ../docker/entrypoint.sh:/app/entrypoint.sh  # In case entrypoint changes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "5678:5678"  # Debug remote
       - "8000:8000"  # Direct exposure for debug without nginx if needed

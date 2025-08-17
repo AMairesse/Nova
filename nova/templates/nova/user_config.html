@@ -188,7 +188,7 @@
 
             <div class="mb-3 form-check">
                 {{ user_params_form.allow_langfuse }}
-                <label class="form-check-label" for="{{ user_params_form.allow_langfuse.id_for_label }}">{% trans "Allow trace (langfuse)" %}</label>
+                <label id="id_allow_langfuse" class="form-check-label" for="{{ user_params_form.allow_langfuse.id_for_label }}">{% trans "Allow trace (langfuse)" %}</label>
                 {{ user_params_form.allow_langfuse.errors }}
             </div>
 
