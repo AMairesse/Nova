@@ -31,7 +31,14 @@ services:
     build: 
       context: ../
       dockerfile: docker/Dockerfile
-    command: bash -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput --clear && uvicorn nova.asgi:application --host 0.0.0.0 --port 8000 --reload"  # Uvicorn with hot-reload
+    command: >
+      bash -c "
+      python manage.py createsuperuser --noinput \
+        --username '$DJANGO_SUPERUSER_USERNAME' \
+        --email '${DJANGO_SUPERUSER_EMAIL:-admin@example.com}'
+      python manage.py migrate --noinput &&
+      python manage.py collectstatic --noinput --clear &&
+      uvicorn nova.asgi:application --host 0.0.0.0 --port 8000 --reload"  # Uvicorn with hot-reload
     restart: "no"  # No auto-restart for dev
     stdin_open: true
     tty: true
