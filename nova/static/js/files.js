@@ -42,23 +42,39 @@
     },
     
     async toggleSidebar() {
-      const sidebarEl = document.getElementById('file-sidebar');
-      if (!sidebarEl) {
-        console.error('Sidebar element not found');
+      const filesColumn = document.getElementById('files-column');
+      const messageColumn = document.getElementById('message-column');
+      const toggleBtn = document.getElementById('files-toggle-btn');
+      
+      if (!filesColumn || !messageColumn || !toggleBtn) {
+        console.error('Column elements not found');
         return;
       }
       
-      const offcanvas = new bootstrap.Offcanvas(sidebarEl);
-      const isOpen = sidebarEl.classList.contains('show');
+      const isVisible = !filesColumn.classList.contains('d-none');
       
-      if (isOpen) {
-        offcanvas.hide();
+      if (isVisible) {
+        // Hide files column
+        filesColumn.classList.add('d-none');
+        messageColumn.classList.remove('col-8');
+        messageColumn.classList.add('col-10');
+        
+        // Update button icon
+        const icon = toggleBtn.querySelector('i');
+        if (icon) icon.className = 'bi bi-files';
+        
         this.closeSidebar();  // Clean up WS
         return;
       }
       
-      // Open the offcanvas
-      offcanvas.show();
+      // Show files column
+      filesColumn.classList.remove('d-none');
+      messageColumn.classList.remove('col-10');
+      messageColumn.classList.add('col-8');
+      
+      // Update button icon
+      const icon = toggleBtn.querySelector('i');
+      if (icon) icon.className = 'bi bi-x';
       
       this.currentThreadId = localStorage.getItem('lastThreadId');
       
@@ -137,7 +153,7 @@
 
     renderTree(nodes, parentPath = '', level = 0) {
       if (!nodes || nodes.length === 0) {
-        return level === 0 ? '<p class="text-muted p-3">No files yet</p>' : '';
+        return level === 0 ? '<p class="text-muted p-3">' + gettext('No files in this thread.') + '</p>' : '';
       }
       
       let html = `<ul class="file-tree-list ${level === 0 ? 'root' : ''}" style="padding-left: ${level * 20}px;">`;

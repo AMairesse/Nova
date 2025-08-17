@@ -323,4 +323,108 @@
   } else {
     ThreadManager.init();
   }
+
+  // Scroll to bottom functionality
+  const ScrollManager = {
+    init() {
+      this.attachScrollHandlers();
+      this.initScrollToBottomButton();
+    },
+
+    attachScrollHandlers() {
+      // Monitor scroll in conversation container to show/hide scroll button
+      document.addEventListener('scroll', this.handleScroll.bind(this), true);
+    },
+
+    handleScroll(e) {
+      if (e.target.id === 'conversation-container') {
+        const scrollButton = document.getElementById('scroll-to-bottom');
+        if (!scrollButton) return;
+
+        const container = e.target;
+        const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 100;
+        
+        if (isNearBottom) {
+          scrollButton.classList.add('d-none');
+        } else {
+          scrollButton.classList.remove('d-none');
+        }
+      }
+    },
+
+    initScrollToBottomButton() {
+      document.addEventListener('click', (e) => {
+        if (e.target.matches('#scroll-to-bottom') || e.target.closest('#scroll-to-bottom')) {
+          e.preventDefault();
+          this.scrollToBottom();
+        }
+      });
+    },
+
+    scrollToBottom() {
+      const conversationContainer = document.getElementById('conversation-container');
+      if (conversationContainer) {
+        conversationContainer.scrollTo({
+          top: conversationContainer.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+    }
+  };
+
+  // Files toggle functionality
+  const FilesToggleManager = {
+    init() {
+      this.attachToggleHandler();
+      // Initialize files panel on page load
+      this.initializeFilesPanel();
+    },
+
+    attachToggleHandler() {
+      document.addEventListener('click', (e) => {
+        if (e.target.matches('#files-toggle-btn') || e.target.closest('#files-toggle-btn')) {
+          e.preventDefault();
+          window.FileManager.toggleSidebar();
+        }
+      });
+    },
+
+    async initializeFilesPanel() {
+      // Auto-load files panel content when page loads
+      const filesColumn = document.getElementById('files-column');
+      if (filesColumn && !filesColumn.classList.contains('d-none')) {
+        // Panel is visible by default, initialize it
+        setTimeout(async () => {
+          if (window.FileManager && typeof window.FileManager.toggleSidebar === 'function') {
+            // Just load content without toggling visibility
+            const currentThreadId = localStorage.getItem('lastThreadId');
+            if (currentThreadId) {
+              window.FileManager.currentThreadId = currentThreadId;
+              
+              const contentEl = document.getElementById('file-sidebar-content');
+              if (contentEl && !window.FileManager.sidebarContentLoaded) {
+                try {
+                  const response = await fetch('/files/sidebar-panel/');
+                  if (response.ok) {
+                    const html = await response.text();
+                    contentEl.innerHTML = html;
+                    window.FileManager.attachSidebarEventHandlers();
+                    window.FileManager.sidebarContentLoaded = true;
+                    await window.FileManager.loadTree();
+                    window.FileManager.connectWebSocket();
+                  }
+                } catch (error) {
+                  console.error('Error initializing files panel:', error);
+                }
+              }
+            }
+          }
+        }, 500);
+      }
+    }
+  };
+
+  // Initialize all managers
+  ScrollManager.init();
+  FilesToggleManager.init();
 })();

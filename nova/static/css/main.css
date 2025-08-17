@@ -1,31 +1,17 @@
 /* Nova Application Main Styles */
 
-/* Layout Structure */
+/* Layout Structure - Using Bootstrap flex utilities where possible */
 body {
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
 }
 
 .main-container {
     flex: 1;
-    display: flex;
-    flex-direction: column;
     min-height: 0;
-    /* Important for flex children */
-}
-
-.chat-layout {
-    flex: 1;
-    min-height: 0;
-    display: flex;
 }
 
 /* Message Area */
 .message-area {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
     min-height: 0;
 }
 
@@ -42,12 +28,6 @@ body {
     transition: height 0.2s ease-in-out;
     min-height: 38px;
     height: 38px;
-}
-
-/* Thread List */
-.thread-list {
-    max-height: calc(100vh - 200px);
-    overflow-y: auto;
 }
 
 /* Progress Indicators */
