@@ -15,7 +15,7 @@ This setup include :
 
    You will need the `docker-compose.yml` file, the `nginx.conf` file and a `.env` file.
 
-   ```
+   ```bash
    mkdir nova
    cd nova
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.minimal.yml
@@ -28,7 +28,7 @@ This setup include :
 
 2. Start containers:
 
-   ```
+   ```bash
    docker compose up -d
    ```
    Warning : first start may take a while because of the chromium install, you can check progress with `docker compose logs web -f`.
@@ -37,20 +37,20 @@ This setup include :
 
 4. (optional) View logs:
 
-   ```
+   ```bash
    docker compose logs -f
    ```
 
 5. (optional) Stop/restart:
 
-   ```
+   ```bash
    docker compose down
    docker compose up -d
    ```
 
 7. Updates:
 
-   ```
+   ```bash
    git pull
    docker compose up -d
    ```
@@ -66,7 +66,7 @@ This setup include :
 
 1. Download the build from source setup:
 
-   ```
+   ```bash
    git clone https://github.com/amairesse/nova.git
    cd nova
    cp docker/.env.example docker/.env
@@ -78,7 +78,7 @@ This setup include :
 
    The following commands are meant to be run from the `nova` directory.
 
-   ```
+   ```bash
    docker compose -f docker/docker-compose.from-source.yml up -d --build
    ```
    Warning : first start may take a while because of the chromium install, you can check progress with `docker compose -f docker/docker-compose.from-source.yml logs web -f`.
@@ -87,20 +87,20 @@ This setup include :
 
 4. (optional) View logs:
 
-   ```
+   ```bash
    docker compose -f docker/docker-compose.from-source.yml logs -f
    ```
 
 5. (optional) Stop/restart:
 
-   ```
+   ```bash
    docker compose -f docker/docker-compose.from-source.yml down
    docker compose -f docker/docker-compose.from-source.yml up -d
    ```
 
 7. (optional) Updates:
 
-   ```
+   ```bash
    git pull
    docker compose -f docker/docker-compose.from-source.yml up -d
    ```
@@ -111,7 +111,7 @@ This setup include :
 
 1. Download the development setup:
 
-   ```
+   ```bash
    git clone https://github.com/amairesse/nova.git
    cd nova
    cp docker/.env.example docker/.env
@@ -123,9 +123,10 @@ This setup include :
 
    The following commands are meant to be run from the `nova` directory.
 
-   ```
+   ```bash
    docker compose -f docker/docker-compose.dev.yml up -d --build
    ```
+
    Warning : first start may take a while because of the chromium install, you can check progress with the logs (see below).
 
 3. Access the app at `http://localhost:8080` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
@@ -136,20 +137,20 @@ This setup include :
 
 #### View logs
 
-   ```
+   ```bash
    docker compose -f docker/docker-compose.dev.yml logs -f
    ```
 
 #### Stop/restart the containers
 
-   ```
+   ```bash
    docker compose -f docker/docker-compose.dev.yml down
    docker compose -f docker/docker-compose.dev.yml up -d
    ```
 
 #### Update the application
 
-   ```
+   ```bash
    git pull
    docker compose -f docker/docker-compose.dev.yml up -d
    ```
@@ -157,7 +158,7 @@ This setup include :
 ### Launch a debug session
 
    Add a debug config in VSCode (or your IDE of choice) and run the debug session.
-   ```
+   ```Python
    {
    "version": "0.2.0",
    "configurations": [
@@ -172,6 +173,17 @@ This setup include :
    }
    ```
 
+### Run tests
+
+You can run the tests locally with no external dependancies, using:
+- SQLite in-memory database
+- In-memory channel layer instead of Redis
+- Mocks for MinIO
+
+   ```bash
+   python manage.py test --settings=nova.settings_test
+   ```
+
 ### Add Langfuse
 
 You can add Langfuse to the setup so that you can see the agents messages in detail.
@@ -179,7 +191,7 @@ You can add Langfuse to the setup so that you can see the agents messages in det
 1. Add Langfuse to the setup:
 
    Remplace the lauch command by:
-   ```
+   ```bash
    docker compose -f docker/docker-compose.dev.yml -f docker/docker-compose.add-langfuse.yml up -d
    ```
 

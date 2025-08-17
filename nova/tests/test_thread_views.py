@@ -15,7 +15,7 @@ from nova.models import (
     LLMProvider,
     ProviderType,
 )
-from nova.views import main_views
+from nova.views import thread_views
 
 
 class MainViewsTests(TestCase):
@@ -34,7 +34,7 @@ class MainViewsTests(TestCase):
     def test_index_requires_login(self):
         request = self.factory.get("/app/")
         request.user = AnonymousUser()
-        response = main_views.index(request)
+        response = thread_views.index(request)
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
@@ -54,8 +54,8 @@ class MainViewsTests(TestCase):
 
         request = self.factory.get("/app/")
         request.user = self.user
-        with patch("nova.views.main_views.render", side_effect=fake_render):
-            response = main_views.index(request)
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.index(request)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["template"], "nova/index.html")
@@ -79,8 +79,8 @@ class MainViewsTests(TestCase):
         request = self.factory.get("/app/messages/", {"thread_id": str(thread.id)})
         request.user = self.user
 
-        with patch("nova.views.main_views.render", side_effect=fake_render):
-            response = main_views.message_list(request)
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["template"], "nova/message_container.html")
@@ -98,7 +98,7 @@ class MainViewsTests(TestCase):
         request = self.factory.get("/app/messages/", {"thread_id": str(foreign.id)})
         request.user = self.user
         with self.assertRaises(Exception):  # get_object_or_404 raises Http404
-            main_views.message_list(request)
+            thread_views.message_list(request)
 
     # ------------ create_thread -----------------------------------------
 
@@ -106,7 +106,7 @@ class MainViewsTests(TestCase):
         self.client.login(username="alice", password="pass")
 
         # Patch render_to_string used inside new_thread()
-        with patch("nova.views.main_views.render_to_string", return_value="<li>thread</li>"):
+        with patch("nova.views.thread_views.render_to_string", return_value="<li>thread</li>"):
             resp = self.client.post(reverse("create_thread"))
 
         self.assertEqual(resp.status_code, 200)
@@ -171,8 +171,8 @@ class MainViewsTests(TestCase):
                 # Do not execute the target; just mark as started
                 self.started = True
 
-        with patch("nova.views.main_views.render_to_string", return_value="<li>thread</li>"), \
-             patch("nova.views.main_views.threading.Thread", side_effect=lambda target, args: FakeThread(target, args)):
+        with patch("nova.views.thread_views.render_to_string", return_value="<li>thread</li>"), \
+             patch("nova.views.thread_views.threading.Thread", side_effect=lambda target, args: FakeThread(target, args)):
             resp = self.client.post(
                 reverse("add_message"),
                 data={
