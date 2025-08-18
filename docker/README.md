@@ -164,7 +164,7 @@ This setup include :
    "configurations": [
       {
          "name": "Python: Remote Attach",
-         "type": "python",
+         "type": "debugpy",
          "request": "attach",
          "connect": { "host": "localhost", "port": 5678 },
          "pathMappings": [{ "localRoot": "${workspaceFolder}", "remoteRoot": "/app" }]
