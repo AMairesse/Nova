@@ -6,15 +6,13 @@ All user-facing strings are wrapped in gettext_lazy for i18n.
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from django import forms
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from django.utils.encoding import force_str
 
-from .models import (
+from nova.models.models import (
     Agent,
     LLMProvider,
     ProviderType,
@@ -101,7 +99,7 @@ class LLMProviderForm(forms.ModelForm):
         if not data and self.instance.pk:
             return self.instance.api_key
         return data
-    
+
     def clean_max_context_tokens(self) -> int:
         """Preserve existing value if not provided, with min validation."""
         data = self.cleaned_data.get("max_context_tokens")

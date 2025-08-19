@@ -15,10 +15,12 @@ from django.utils.translation import gettext as _
 from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
-from ..models import Agent
+from nova.models.models import Agent
+from nova.models.Thread import Thread
 
 import logging
 logger = logging.getLogger(__name__)
+
 
 class AgentToolWrapper:
     """
@@ -29,10 +31,12 @@ class AgentToolWrapper:
     def __init__(
         self,
         agent: Agent,
+        thread: Thread,
         parent_user,
         parent_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.agent = agent
+        self.thread = thread
         self.parent_user = parent_user
         self.parent_config: Dict[str, Any] = parent_config or {}
 
@@ -59,19 +63,16 @@ class AgentToolWrapper:
                         pass
             # ----------------------------------------------------------- #
 
-            parent_thread_id = (
-                self.parent_config.get("configurable", {}).get("thread_id")
-            )
-
+            # 3) Build or load the sub-agent
             agent_llm = await LLMAgent.create(
-                user=self.parent_user,
-                thread_id=parent_thread_id,
+                self.parent_user,
+                self.thread,
                 agent=self.agent,
                 parent_config=self.parent_config,
             )
 
             try:
-                return await agent_llm.invoke(question)
+                return await agent_llm.ainvoke(question)
             except Exception as e:
                 logger.error(f"Sub-agent {self.agent.name} failed: {str(e)}")
                 return f"Error in sub-agent {self.agent.name}: {str(e)} (Check connections or config)"
@@ -110,5 +111,5 @@ class AgentToolWrapper:
             coroutine=execute_agent,  # Set as coroutine for async invocation
             name=safe_name,
             description=tool_description,
-            args_schema=input_schema,  # Use raw dict as schema (simpler than pydantic for now)
+            args_schema=input_schema,
         )

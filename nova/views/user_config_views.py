@@ -4,7 +4,7 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
 from django.views.generic import View
-from ..models import UserParameters, Agent, UserProfile, LLMProvider, Tool, ProviderType
+from nova.models.models import UserParameters, Agent, UserProfile, LLMProvider, Tool, ProviderType
 from ..forms import UserParametersForm, AgentForm
 from nova.tools import get_available_tool_types
 
@@ -13,7 +13,8 @@ from nova.tools import get_available_tool_types
 class UserConfigView(View):
     template_name = 'nova/user_config.html'
 
-    def _get_common_context(self, request, user_params_form=None, active_tab='providers'):
+    def _get_common_context(self, request, user_params_form=None,
+                            active_tab='providers'):
         """
         Prépare le contexte commun pour GET et invalid POST.
         Factorise la logique pour éviter la duplication.
@@ -25,17 +26,17 @@ class UserConfigView(View):
         # Bind forms (use provided form if available, else create new)
         if user_params_form is None:
             user_params_form = UserParametersForm(instance=user_params)
-        
+
         agent_form = AgentForm(user=request.user)
 
         # Get available tool types
         tool_types = get_available_tool_types()
-        
+
         # Get agents and tools agents
         agents = Agent.objects.filter(user=request.user)
         agents_normal = agents.filter(is_tool=False)
         agents_tools = agents.filter(is_tool=True)
-        
+
         return {
             'user_params_form': user_params_form,
             'active_tab': active_tab,

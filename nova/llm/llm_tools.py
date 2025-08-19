@@ -6,6 +6,7 @@ from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
 
+
 async def load_tools(instance) -> List[StructuredTool]:
     """
     Load and initialize tools associated with the agent instance.
@@ -37,7 +38,7 @@ async def load_tools(instance) -> List[StructuredTool]:
             loaded_builtin_modules.append(module)
         except Exception as e:
             logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
-    
+
     instance._loaded_builtin_modules = loaded_builtin_modules  # Update instance tracker
 
     # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
@@ -46,7 +47,6 @@ async def load_tools(instance) -> List[StructuredTool]:
             from nova.mcp.client import MCPClient
             client = MCPClient(
                 endpoint=tool_obj.endpoint, 
-                thread_id=instance.thread_id,
                 credential=cred, 
                 transport_type=tool_obj.transport_type,
                 user_id=cred_user_id
@@ -56,7 +56,7 @@ async def load_tools(instance) -> List[StructuredTool]:
             if cached_func_metas is not None:
                 func_metas = cached_func_metas
             else:
-                func_metas = client.list_tools(force_refresh=True)
+                func_metas = client.alist_tools(force_refresh=True)
 
             for meta in func_metas:
                 func_name = meta["name"]
@@ -68,16 +68,13 @@ async def load_tools(instance) -> List[StructuredTool]:
                     async def _remote_call_async(**kwargs):
                         return await _client.acall(_name, **kwargs)
 
-                    def _remote_call_sync(**kwargs):
-                        return _client.call(_name, **kwargs)
-
-                    return _remote_call_sync, _remote_call_async
+                    return _remote_call_async
                 # -----------------------------------------------------------------------
 
-                sync_f, async_f = _remote_call_factory(func_name, client)
+                async_f = _remote_call_factory(func_name, client)
 
                 wrapped = StructuredTool.from_function(
-                    func=sync_f,
+                    func=None,
                     coroutine=async_f,
                     name=re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name)[:64],
                     description=description,
@@ -95,6 +92,7 @@ async def load_tools(instance) -> List[StructuredTool]:
         for agent_tool in instance.agent_tools:
             wrapper = AgentToolWrapper(
                 agent_tool, 
+                instance.thread,
                 instance.user,
                 parent_config=instance._parent_config
             )

@@ -1,17 +1,18 @@
 # nova/tests/test_forms.py
-from django.test import TestCase
 from django.core.exceptions import ValidationError
 from django import forms as django_forms  # Import corrigé pour widgets
 from django.db import models as django_models  # Import pour Q
 from unittest.mock import patch
 
 from nova.forms import (
-    UserParametersForm, UserProfileForm, LLMProviderForm, AgentForm, ToolForm, ToolCredentialForm
+    UserParametersForm, UserProfileForm, LLMProviderForm,
+    AgentForm, ToolForm, ToolCredentialForm
 )
-from nova.models import (
-    LLMProvider, UserParameters, UserProfile, Agent, Tool, ToolCredential, ProviderType
+from nova.models.models import (
+    LLMProvider, UserParameters, UserProfile, Agent, Tool, ProviderType
 )
 from .base import BaseTestCase
+
 
 class UserParametersFormTest(BaseTestCase):
     def test_valid_form(self):
@@ -33,6 +34,7 @@ class UserParametersFormTest(BaseTestCase):
         self.assertIsInstance(form.fields['langfuse_public_key'].widget, django_forms.PasswordInput)
         self.assertIsInstance(form.fields['langfuse_secret_key'].widget, django_forms.PasswordInput)
 
+
 class UserProfileFormTest(BaseTestCase):
     def setUp(self):
         super().setUp()
@@ -53,6 +55,7 @@ class UserProfileFormTest(BaseTestCase):
         self.assertTrue(form.is_valid())
         profile = form.save()
         self.assertEqual(profile.default_agent, self.agent)
+
 
 class LLMProviderFormTest(BaseTestCase):
     def test_valid_form(self):
@@ -89,6 +92,7 @@ class LLMProviderFormTest(BaseTestCase):
         provider.user = self.user
         with self.assertRaises(ValidationError):
             provider.full_clean()  # Déclenche unique_together
+
 
 class AgentFormTest(BaseTestCase):
     def setUp(self):
@@ -169,6 +173,7 @@ class AgentFormTest(BaseTestCase):
         with self.assertRaises(ValidationError):
             agent.full_clean()  # Model clean détecte le cycle
 
+
 class ToolFormTest(BaseTestCase):
     @patch('nova.tools.get_available_tool_types')
     @patch('nova.tools.get_tool_type')
@@ -223,11 +228,13 @@ class ToolFormTest(BaseTestCase):
         tool = form.save(commit=False)
         self.assertTrue(tool.python_path.startswith('nova.tools.builtins.'))
 
+
 class ToolCredentialFormTest(BaseTestCase):
     def setUp(self):
         super().setUp()
         self.tool = Tool.objects.create(
-            user=self.user, name='CalDav Tool', description='Test', tool_type=Tool.ToolType.API, endpoint='https://api.example.com'
+            user=self.user, name='CalDav Tool', description='Test',
+            tool_type=Tool.ToolType.API, endpoint='https://api.example.com'
         )
 
     def test_init_hides_fields_based_on_auth_type(self):

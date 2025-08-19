@@ -46,7 +46,7 @@ class QuestionAnswerViewTests(TestCase):
                 self.user = user
                 self.thread_id = thread_id
 
-            def invoke(self, question):
+            def ainvoke(self, question):
                 return "This is the answer"
 
         from unittest.mock import patch
@@ -64,7 +64,7 @@ class QuestionAnswerViewTests(TestCase):
             def __init__(self, user, thread_id):
                 pass
 
-            def invoke(self, question):
+            def ainvoke(self, question):
                 raise RuntimeError("boom")
 
         from unittest.mock import patch

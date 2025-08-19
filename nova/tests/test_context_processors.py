@@ -3,7 +3,7 @@ from django.test import SimpleTestCase, RequestFactory, override_settings
 from django.template import engines
 
 from nova.context_processors import actor_enum
-from nova.models import Actor
+from nova.models.Message import Actor
 
 
 class ContextProcessorsTests(SimpleTestCase):

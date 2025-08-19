@@ -1,6 +1,8 @@
 # nova/mcp/client.py
 from __future__ import annotations
-import asyncio, logging, httpx
+import asyncio
+import logging
+import httpx
 import base64
 from typing import Any, Dict, List, Optional
 from django.core.cache import cache
@@ -10,7 +12,7 @@ from django.http import Http404
 from fastmcp.client import Client as FastMCPClient
 from fastmcp.client.transports import StreamableHttpTransport, SSETransport
 from fastmcp.client.auth import BearerAuth
-from nova.models import ToolCredential
+from nova.models.models import ToolCredential
 from nova.utils import normalize_url
 import json
 
@@ -24,12 +26,10 @@ class MCPClient:
     def __init__(
         self,
         endpoint: str,
-        thread_id: Optional[int] = None,  # Optionnel (pour tests non-thread ; -1 pour fictif)
         credential: Optional[ToolCredential] = None,
         transport_type: str = "streamable_http",
         user_id: Optional[int] = None,  # Provided by caller for cache keys
     ):
-        self.thread_id = thread_id or -1  # -1 pour non-thread (ex: tests)
         self.endpoint = normalize_url(endpoint)
         self.credential = credential
         self.transport_type = transport_type
@@ -50,15 +50,17 @@ class MCPClient:
     def _transport(self) -> StreamableHttpTransport | SSETransport:
         auth = self._auth_object()
         headers = {}
-        
+
         if self.transport_type == "sse":
             return SSETransport(url=self.endpoint, auth=auth, headers=headers) if auth else SSETransport(url=self.endpoint, headers=headers)
-        return StreamableHttpTransport(url=self.endpoint, auth=auth, headers=headers) if auth else StreamableHttpTransport(url=self.endpoint, headers=headers)
+        return StreamableHttpTransport(url=self.endpoint,
+                                       auth=auth,
+                                       headers=headers) if auth else StreamableHttpTransport(url=self.endpoint, headers=headers)
 
     # ---------- Async API -------------------------------------------------
     async def alist_tools(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         cache_key = f"mcp_tools::{self.safe_endpoint}::{self.user_id or 'anon'}"
-        
+
         if not force_refresh:
             cached = cache.get(cache_key)
             if cached is not None:
@@ -82,7 +84,7 @@ class MCPClient:
                 )
                 for t in tools
             ]
-        
+
         cache.set(cache_key, result, timeout=300)
         return result
 
@@ -93,7 +95,7 @@ class MCPClient:
         input_key = json.dumps((tool_name, sorted(inputs.items())), sort_keys=True)
         safe_input_key = base64.urlsafe_b64encode(input_key.encode('utf-8')).decode('utf-8')
         cache_key = f"mcp_call::{self.safe_endpoint}::{self.user_id or 'anon'}::{safe_input_key}"
-              
+
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
@@ -117,9 +119,6 @@ class MCPClient:
             raise
 
     # ---------- Sync helpers (legacy) --------------
-    def list_tools(self, force_refresh: bool = False):
-        return asyncio.run(self.alist_tools(force_refresh=force_refresh))
-
     def call(self, tool_name: str, **inputs):
         self._validate_inputs(inputs)
         return asyncio.run(self.acall(tool_name, **inputs))
@@ -135,4 +134,3 @@ class MCPClient:
                 raise ValidationError(f"Unsupported type for '{k}': {type(v)}")
             if isinstance(v, str) and len(v) > 2048:
                 raise ValidationError(f"Value for '{k}' is too long")
-

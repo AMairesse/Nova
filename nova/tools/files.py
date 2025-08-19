@@ -3,7 +3,8 @@ import aioboto3
 from botocore.exceptions import ClientError
 from django.conf import settings
 from django.shortcuts import get_object_or_404
-from nova.models import UserFile, Thread
+from nova.models.models import UserFile
+from nova.models.Thread import Thread
 from nova.llm.llm_agent import LLMAgent
 from nova.utils import estimate_tokens, estimate_total_context
 import logging
@@ -15,32 +16,36 @@ from functools import partial
 
 logger = logging.getLogger(__name__)
 
-@sync_to_async
-def async_get_object_or_404(model, **kwargs):
+
+async def async_get_object_or_404(model, **kwargs):
     """Wrapper async pour get_object_or_404."""
-    return get_object_or_404(model, **kwargs)
+    return await sync_to_async(get_object_or_404,
+                               thread_sensitive=False)(model, **kwargs)
 
-@sync_to_async
-def async_get_threadid_and_user(obj: LLMAgent | UserFile):
-    return obj.thread_id, obj.user
 
-@sync_to_async
-def async_get_user_id(user):
-    return user.id
+async def async_get_threadid_and_user(obj: LLMAgent | UserFile):
+    return obj.thread.id, obj.user
 
-@sync_to_async
-def async_filter_files(thread):
+
+async def async_get_user_id(user):
+    return await sync_to_async(user.id, thread_sensitive=False)
+
+
+async def async_filter_files(thread):
     """Wrapper async pour filter et exists."""
-    files = UserFile.objects.filter(thread=thread)
-    exists = files.exists()
+    files = await sync_to_async(UserFile.objects.filter,
+                                thread_sensitive=False)(thread=thread)
+    files_list = await sync_to_async(list, thread_sensitive=False)(files)
+    exists = await sync_to_async(files.exists, thread_sensitive=False)()
     if not exists:
         return None
-    return list(files)
+    return files_list
 
-@sync_to_async
-def async_create_userfile(user, thread, key, filename, mime_type, size):
+
+async def async_create_userfile(user, thread, key, filename, mime_type, size):
     """Wrapper async pour create."""
-    return UserFile.objects.create(
+    return await sync_to_async(UserFile.objects.create,
+                               thread_sensitive=False)(
         user=user,
         thread=thread,
         key=key,
@@ -49,10 +54,13 @@ def async_create_userfile(user, thread, key, filename, mime_type, size):
         size=size
     )
 
-@sync_to_async
-def async_delete_file(file):
+
+async def async_delete_file(file_id: int):
     """Wrapper async pour delete."""
-    file.delete()
+    file = await async_get_object_or_404(UserFile, id=file_id)
+    await sync_to_async(file.delete, thread_sensitive=False)()
+    return "File deleted."
+
 
 async def list_files(thread_id, user) -> str:
     """List all files in the current thread."""
@@ -62,6 +70,7 @@ async def list_files(thread_id, user) -> str:
         return "No files in this thread."
     return "\n".join([f"ID: {f.id}, Name: {f.original_filename}, Type : {f.mime_type}, Size: {f.size} bytes" for f in files])
 
+
 async def read_file(agent: LLMAgent, file_id: int) -> str:
     """Read the content of a file (text only). Reject if exceeds context limit."""
     file = await async_get_object_or_404(UserFile, id=file_id)
@@ -69,13 +78,14 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
     file_thread_id, file_user = await async_get_threadid_and_user(file)
     if file_thread_id != thread_id or file_user != user:
         return "Permission denied: File does not belong to current thread/user."
-    
+
     if not file.mime_type.startswith('text/'):
         return "File is not text; use read_file_chunk for binary or large files."
-    
-    approx_context = await sync_to_async(estimate_total_context)(agent)
-    max_tokens = await sync_to_async(lambda: agent.django_agent.llm_provider.max_context_tokens)()
-    
+
+    approx_context = await sync_to_async(estimate_total_context,
+                                         thread_sensitive=False)(agent)
+    max_tokens = await sync_to_async(lambda: agent.django_agent.llm_provider.max_context_tokens, thread_sensitive=False)()
+
     session = aioboto3.Session()
     async with session.client(
         's3',
@@ -89,7 +99,7 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
             estimated_file_tokens = estimate_tokens(input_size=file_size)
             if estimated_file_tokens + approx_context > max_tokens:
                 return f"File too large ({estimated_file_tokens} tokens + context > {max_tokens}). Use read_file_chunk."
-            
+
             response = await s3_client.get_object(Bucket=settings.MINIO_BUCKET_NAME, Key=file.key)
             content = await response['Body'].read()
             try:
@@ -100,6 +110,7 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
             logger.error(f"Failed to read file {file_id}: {e}")
             return f"Error reading file: {str(e)}"
 
+
 async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_size: int = 4096) -> str:
     """Read a chunk of the file (bytes range). Use for large files."""
     file = await async_get_object_or_404(UserFile, id=file_id)
@@ -107,12 +118,12 @@ async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_s
     file_thread_id, file_user = await async_get_threadid_and_user(file)
     if file_thread_id != thread_id or file_user != user:
         return "Permission denied."
-    
+
     estimated_chunk_tokens = chunk_size // 4 + 1
-    max_tokens = await sync_to_async(lambda: agent.django_agent.llm_provider.max_context_tokens)()
+    max_tokens = await sync_to_async(lambda: agent.django_agent.llm_provider.max_context_tokens, thread_sensitive=False)()
     if estimated_chunk_tokens > max_tokens * 0.5:
         return f"Chunk too large ({estimated_chunk_tokens} tokens > half of {max_tokens}). Reduce chunk_size."
-    
+
     session = aioboto3.Session()
     async with session.client(
         's3',
@@ -133,6 +144,7 @@ async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_s
         except ClientError as e:
             logger.error(f"Failed to read chunk {file_id}: {e}")
             return f"Error reading chunk: {str(e)}"
+
 
 async def create_file(thread_id, user, filename: str, content: str) -> str:
     """Create a new file in the current thread with given content."""
@@ -199,4 +211,10 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
                 "content": {"type": "string"}
             }, "required": ["filename", "content"]}
         ),
+        StructuredTool.from_function(
+            coroutine=async_delete_file,
+            name="delete_file",
+            description="Delete a file from the current thread",
+            args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
+        )
     ]

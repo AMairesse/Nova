@@ -6,10 +6,12 @@ from django.utils import timezone
 from unittest.mock import patch
 import json
 
-from nova.models import (
-    LLMProvider, UserParameters, Message, Tool, Agent, UserProfile,
-    ToolCredential, Thread, Task, Actor, ProviderType, TaskStatus, UserFile
+from nova.models.models import (
+    LLMProvider, UserParameters, Tool, Agent, UserProfile,
+    ToolCredential, Task, ProviderType, TaskStatus, UserFile
 )
+from nova.models.Message import Message, Actor
+from nova.models.Thread import Thread
 from .base import BaseTestCase  # Import the base test case
 
 class LLMProviderModelTest(BaseTestCase):

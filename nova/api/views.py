@@ -46,7 +46,8 @@ class QuestionAnswerView(APIView):
     def post(self, request, *args, **kwargs):
         serializer = QuestionSerializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors,
+                            status=status.HTTP_400_BAD_REQUEST)
 
         question: str = serializer.validated_data["question"]
 
@@ -56,7 +57,7 @@ class QuestionAnswerView(APIView):
 
         # Run the LLM *synchronously*; unit-tests stub the call anyway.
         try:
-            answer = llm.invoke(question)
+            answer = llm.ainvoke(question)
         except Exception as exc:
             return Response(
                 {"detail": f"LLM error: {exc}"},
@@ -64,4 +65,5 @@ class QuestionAnswerView(APIView):
             )
 
         response_data = {"question": question, "answer": answer}
-        return Response(AnswerSerializer(response_data).data, status=status.HTTP_200_OK)
+        return Response(AnswerSerializer(response_data).data,
+                        status=status.HTTP_200_OK)

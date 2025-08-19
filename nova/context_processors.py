@@ -1,4 +1,5 @@
-from nova.models import Actor
+from nova.models.Message import Actor
+
 
 def actor_enum(request):
     """

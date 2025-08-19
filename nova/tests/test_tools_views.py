@@ -1,10 +1,9 @@
 from django.test import AsyncClient, TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
-from unittest.mock import patch, MagicMock
-from asgiref.sync import sync_to_async
+from unittest.mock import patch
 
-from nova.models import (
+from nova.models.models import (
     Tool,
     ToolCredential,
     Agent,

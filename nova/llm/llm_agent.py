@@ -1,26 +1,23 @@
 # nova/llm/llm_agent.py
 from datetime import date
-import re
 import logging
-from typing import Any, Callable, List, Optional, Dict
+from typing import Any, Callable, List
+from django.conf import settings
 
 # Load the langchain tools
 from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_ollama.chat_models import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
-from langchain_core.tools import StructuredTool
 from langchain_core.callbacks import BaseCallbackHandler
-from nova.models import Actor, Tool, ProviderType, LLMProvider, Message
+from nova.models.models import Tool, ProviderType, LLMProvider
+from nova.models.models import CheckpointLink, UserFile
+from nova.models.Thread import Thread
+from nova.llm.checkpoints import get_checkpointer
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
-
-import asyncio
-import nest_asyncio
-nest_asyncio.apply()  # Enable nested loops for mixed sync/async compatibility
-from asgiref.sync import sync_to_async  # For async-safe ORM in factory
+from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +85,8 @@ register_provider(
 # --------------------------------------------------------------------- #
 class LLMAgent:
     @classmethod
-    async def create(cls, user, thread_id, msg_history=[], agent=None,
-                     parent_config=None,
+    async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
+                     agent=None, parent_config=None,
                      callbacks: List[BaseCallbackHandler] = None):
         """
         Async factory to create an LLMAgent instance with async-safe ORM accesses.
@@ -110,15 +107,17 @@ class LLMAgent:
                 langfuse_host = None
             return allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host
 
-        allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = await sync_to_async(fetch_user_params_sync)(user)
+        allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = await sync_to_async(fetch_user_params_sync, thread_sensitive=False)(user)
 
         # Pre-fetch ORM data for load_tools
         def fetch_agent_data_sync(agent, user):
             if not agent:
                 return [], [], [], False, None, None
-            builtin_tools = list(agent.tools.filter(is_active=True, tool_type=Tool.ToolType.BUILTIN))
+            builtin_tools = list(agent.tools.filter(is_active=True,
+                                                    tool_type=Tool.ToolType.BUILTIN))
             mcp_tools_data = []
-            mcp_tools = list(agent.tools.filter(tool_type=Tool.ToolType.MCP, is_active=True))
+            mcp_tools = list(agent.tools.filter(tool_type=Tool.ToolType.MCP,
+                                                is_active=True))
             for tool in mcp_tools:
                 cred = tool.credentials.filter(user=user).first()
                 cred_user_id = cred.user.id if cred and cred.user else None
@@ -133,12 +132,19 @@ class LLMAgent:
             llm_provider = agent.llm_provider
             return builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider
 
-        builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider = await sync_to_async(fetch_agent_data_sync)(agent, user)
+        builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider = await sync_to_async(fetch_agent_data_sync, thread_sensitive=False)(agent, user)
+
+        # Get or create the CheckpointLink
+        checkpointLink, _ = await sync_to_async(CheckpointLink.objects.get_or_create, thread_sensitive=False)(
+            thread=thread,
+            agent=agent
+        )
+        checkpointer = await get_checkpointer()
 
         instance = cls(
             user=user,
-            thread_id=thread_id,
-            msg_history=msg_history,
+            thread=thread,
+            langgraph_thread_id=checkpointLink.checkpoint_id,
             agent=agent,
             parent_config=parent_config,
             callbacks=callbacks,
@@ -157,34 +163,22 @@ class LLMAgent:
         # Load tools async after init (extracted to llm_tools.py)
         tools = await load_tools(instance)
 
-        memory = MemorySaver()
-
         llm = instance.create_llm_agent()
         system_prompt = instance.build_system_prompt()
 
         # Create the agent
         instance.agent = create_react_agent(llm, tools=tools,
                                             prompt=system_prompt,
-                                            checkpointer=memory)
+                                            checkpointer=checkpointer)
 
         instance.tools = tools
 
-        # Load previous exchanges
-        for actor, message in msg_history:
-            if actor == Actor.USER:
-                instance.agent.update_state(
-                    instance.config,
-                    {"messages": [HumanMessage(content=message)]}
-                )
-            else:
-                instance.agent.update_state(
-                    instance.config,
-                    {"messages": [AIMessage(content=message)]}
-                )
-
         return instance
 
-    def __init__(self, user, thread_id, msg_history=[], agent=None,
+    def __init__(self, user: settings.AUTH_USER_MODEL,
+                 thread: Thread,
+                 langgraph_thread_id,
+                 agent=None,
                  parent_config=None,
                  callbacks: List[BaseCallbackHandler] = None,
                  allow_langfuse=False,
@@ -197,19 +191,18 @@ class LLMAgent:
                  has_agent_tools=False,
                  system_prompt=None,
                  llm_provider=None):
-        if msg_history is None:
-            msg_history = []
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
         self.django_agent = agent
-        self.thread_id = thread_id
+        self.thread = thread
+        self.langgraph_thread_id = langgraph_thread_id
 
         # Inherit from parent config
         if parent_config and 'callbacks' in parent_config:
             self.config = parent_config.copy()
             # Only update thread_id
-            self.config.update({"configurable": {"thread_id": thread_id}})
+            self.config.update({"configurable": {"thread_id": langgraph_thread_id}})
         else:
             # Build a new config if needed
             self.config = {}
@@ -231,7 +224,7 @@ class LLMAgent:
                 except Exception as e:
                     logger.error(f"Failed to create Langfuse client: {e}", exc_info=e)  # Log error but continue without Langfuse
                     self.config = {}
-            self.config.update({"configurable": {"thread_id": thread_id}})
+            self.config.update({"configurable": {"thread_id": langgraph_thread_id}})
 
         # Ensure the 'callbacks' key exists and keep copies decoupled
         existing_callbacks = list(self.config.get('callbacks', []))
@@ -246,7 +239,6 @@ class LLMAgent:
 
         # Merge custom callbacks into the main config
         self.config['callbacks'] = existing_callbacks + (callbacks or [])
-
 
         # Store the parent config in order to be
         # able to propagate it to child agents
@@ -287,31 +279,34 @@ class LLMAgent:
             "Be concise and direct. If you need to display "
             "structured information, use markdown."
         )
-    
+
     def create_llm_agent(self):
         if not self.django_agent or not self._llm_provider:
             raise Exception("No LLM provider configured")
-            
+
         provider = self._llm_provider
-        
+
         factory = _provider_factories.get(provider.provider_type)
         if not factory:
             raise ValueError(f"Unsupported provider type: {provider.provider_type}")
         return factory(provider)
 
-    async def invoke(self, question: str, silent_mode=False):  # Now async
+    async def ainvoke(self, question: str, silent_mode=False):
         config = self.silent_config if silent_mode else self.config
 
-        # ----- Append file info to prompt if last message has internal_data -----
-        last_message = await sync_to_async(Message.objects.filter(thread_id=self.thread_id).order_by('-created_at').first)()
-        additional_prompt = ""
-        if last_message and last_message.internal_data and 'file_ids' in last_message.internal_data:
-            file_ids = last_message.internal_data['file_ids']
-            additional_prompt = f"Attached files: {', '.join(map(str, file_ids))}. Use file tools if needed."
+        # If the current thread as some files, alert the
+        # agent by adding a message to the prompt
+        list_files = await sync_to_async(UserFile.objects.filter,
+                                         thread_sensitive=False)(thread=self.thread)
+        num_files = await sync_to_async(list_files.count, thread_sensitive=False)()
+        if num_files > 0:
+            technical_context = f"Technical context: {num_files} attached files. Use file tools if needed."
+        else:
+            technical_context = "Technical context: no attached files."
 
-        full_question = f"{question}\n{additional_prompt}"
+        full_question = f"{question}\n{technical_context}"
 
-        result = await self.agent.ainvoke(  # Switch to ainvoke and await it
+        result = await self.agent.ainvoke(
             {"messages": [HumanMessage(content=full_question)]},
             config=config
         )

@@ -8,7 +8,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import MagicMock, patch
 
 # We import Django models only for the ProviderType enum; no DB operations are needed.
-from nova.models import ProviderType
+from nova.models.models import ProviderType
 import nova.llm.llm_agent as llm_agent_mod
 
 
@@ -371,7 +371,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 agent = llm_agent_mod.LLMAgent(user=SimpleNamespace(id=1), thread_id="t", system_prompt=None, llm_provider=SimpleNamespace(provider_type=ProviderType.OPENAI))
                 agent.agent = FakeAgent()
 
-                out = await agent.invoke("Hello", silent_mode=True)
+                out = await agent.ainvoke("Hello", silent_mode=True)
                 self.assertEqual(out, "FINAL")
                 # Should have used silent_config when silent_mode=True
                 self.assertEqual(len(agent.agent.invocations), 1)

@@ -6,15 +6,15 @@ from django.http import HttpResponse
 from django.urls import reverse
 from unittest.mock import patch
 
-from nova.models import (
-    Thread,
+from nova.models.models import (
     Agent,
     Task,
     TaskStatus,
-    Actor,
     LLMProvider,
     ProviderType,
 )
+from nova.models.Thread import Thread
+from nova.models.Message import Actor
 from nova.views import thread_views
 
 

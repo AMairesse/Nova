@@ -3,7 +3,7 @@ import types
 import asyncio
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class AgentToolWrapperTests(TestCase):
@@ -97,7 +97,7 @@ class AgentToolWrapperTests(TestCase):
                 inst._parent_config = parent_config
                 return inst
 
-            async def invoke(self, question):
+            async def ainvoke(self, question):
                 self.invoke_calls.append(question)
                 return self.result
 
@@ -148,7 +148,7 @@ class AgentToolWrapperTests(TestCase):
             async def create(cls, user, thread_id, agent, parent_config=None):
                 return cls()
 
-            async def invoke(self, question):
+            async def ainvoke(self, question):
                 raise RuntimeError("boom")
 
             async def cleanup(self):
