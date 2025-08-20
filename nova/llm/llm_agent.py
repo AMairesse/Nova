@@ -221,12 +221,16 @@ class LLMAgent:
                 langfuse_handler = CallbackHandler()
 
                 langfuse.auth_check()
-                self.config = {"callbacks": [langfuse_handler]}
+                self.config = {"callbacks": [langfuse_handler],
+                               "metadata": {
+                                   "langfuse_session_id": str(langgraph_thread_id),
+                               },
+                               }
             except Exception as e:
                 logger.error(f"Failed to create Langfuse client: {e}",
                              exc_info=e)  # Log error but continue without
                 self.config = {}
-        self.config.update({"configurable": {"thread_id": langgraph_thread_id}})
+        self.config.update({"configurable": {"thread_id": str(langgraph_thread_id)}})
 
         # Ensure the 'callbacks' key exists and keep copies decoupled
         existing_callbacks = list(self.config.get('callbacks', []))

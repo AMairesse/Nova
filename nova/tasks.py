@@ -6,10 +6,11 @@ from markdown import markdown
 import bleach
 from channels.layers import get_channel_layer
 from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
-from nova.models.models import TaskStatus, Task, Agent
+from nova.models.models import TaskStatus
 from nova.models.Message import Actor
-from nova.models.Thread import Thread
+from nova.llm.checkpoints import get_checkpointer
 from nova.llm.llm_agent import LLMAgent
 import logging
 
@@ -169,6 +170,30 @@ class TaskProgressHandler(AsyncCallbackHandler):
             logger.error(f"Error in on_chat_model_start: {e}")
 
 
+async def retrieve_context_consumption(agent_config, agent):
+    # NEW: Compute context size after response (use async getter)
+    config = agent.config
+    checkpointer = await get_checkpointer()
+    checkpoint_tuple = await checkpointer.aget_tuple(config)
+
+    if checkpoint_tuple:
+        # Extract the state dict from the checkpoint;
+        # memory is often in channels like 'messages'
+        state = checkpoint_tuple.checkpoint
+        memory = state.get('channel_values', {}).get('messages', [])
+
+    byte_size = 0
+    for m in memory:
+        if isinstance(m, BaseMessage):
+            byte_size += len(m.content.encode("utf-8", "ignore"))
+
+    approx_tokens = byte_size // 4 + 1
+    # Get max from provider
+    max_ctx = await sync_to_async(lambda: agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
+
+    return approx_tokens, max_ctx
+
+
 async def run_ai_task(task, user, thread, agent_config, new_message):
     """
     Async version of the AI task function to run
@@ -205,9 +230,19 @@ async def run_ai_task(task, user, thread, agent_config, new_message):
             task.result = final_output
 
             # Add final message to thread
-            await sync_to_async(thread.add_message,
-                                thread_sensitive=False)(final_output,
-                                                        actor=Actor.AGENT)
+            message = await sync_to_async(thread.add_message,
+                                          thread_sensitive=False)(final_output,
+                                                                  actor=Actor.AGENT)
+
+            # Approximate token consumption relative to max context for this agent
+            approx_tokens, max_ctx = await retrieve_context_consumption(agent_config, llm)
+
+            # Store in message internal_data
+            message.internal_data.update({
+                'context_tokens': approx_tokens,
+                'max_context': max_ctx
+            })
+            await sync_to_async(message.save, thread_sensitive=False)()
 
             # Update thread subject if needed - wrap field access
             def check_and_update_subject_sync(thread):

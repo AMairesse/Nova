@@ -27,6 +27,12 @@
         <div class="card-body py-2">
           {{ message.rendered_html }}
         </div>
+        <!-- Context indication -->
+        {% if message.internal_data.context_tokens and message.internal_data.max_context %}
+        <div class="card-footer py-1 text-muted small text-end">
+          {% trans "Context" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }}
+        </div>
+        {% endif %}
       </div>
       {% endif %}
     </div>
