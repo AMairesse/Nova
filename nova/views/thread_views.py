@@ -137,19 +137,19 @@ def add_message(request):
     message.internal_data = {'file_ids': uploaded_file_ids}
     message.save()
 
-    agent_obj = None
+    agent_config = None
     if selected_agent:
-        agent_obj = get_object_or_404(Agent, id=selected_agent,
-                                      user=request.user)
+        agent_config = get_object_or_404(Agent, id=selected_agent,
+                                         user=request.user)
     else:
         try:
-            agent_obj = request.user.userprofile.default_agent
+            agent_config = request.user.userprofile.default_agent
         except UserProfile.DoesNotExist:
             pass
 
     task = Task.objects.create(
         user=request.user, thread=thread,
-        agent=agent_obj, status=TaskStatus.PENDING
+        agent=agent_config, status=TaskStatus.PENDING
     )
 
     schedule_in_event_loop(
@@ -157,7 +157,7 @@ def add_message(request):
             task,
             request.user,
             thread,
-            agent_obj if agent_obj else None,
+            agent_config if agent_config else None,
             new_message
         )
     )

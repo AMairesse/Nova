@@ -68,7 +68,7 @@ def estimate_total_context(agent: 'LLMAgent') -> int:
     tools_desc = " ".join([t.description for t in getattr(agent, 'tools', [])])
     total += estimate_tokens(tools_desc)
     # History (sum message contents from state via checkpointer)
-    state = agent.agent.get_state(agent.config)  # Accès à l'état courant
+    state = agent.langchain_agent.get_state(agent.config)
     messages = state.values.get('messages', [])  # Liste des BaseMessage
     for msg in messages:
         if isinstance(msg, BaseMessage):

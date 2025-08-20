@@ -85,74 +85,83 @@ register_provider(
 # --------------------------------------------------------------------- #
 class LLMAgent:
     @classmethod
+    def fetch_user_params_sync(cls, user):
+        # Sync function to fetch user parameters safely
+        try:
+            user_params = user.userparameters
+            allow_langfuse = user_params.allow_langfuse
+            langfuse_public_key = user_params.langfuse_public_key
+            langfuse_secret_key = user_params.langfuse_secret_key
+            langfuse_host = user_params.langfuse_host or None
+        except AttributeError:
+            allow_langfuse = False
+            langfuse_public_key = None
+            langfuse_secret_key = None
+            langfuse_host = None
+        return allow_langfuse, langfuse_public_key, \
+            langfuse_secret_key, langfuse_host
+
+    @classmethod
+    def fetch_agent_data_sync(cls, agent, user):
+        # Pre-fetch ORM data for load_tools
+        if not agent:
+            return [], [], [], False, None, None
+        builtin_tools = list(agent.tools.filter(is_active=True,
+                                                tool_type=Tool.ToolType.BUILTIN))
+        mcp_tools_data = []
+        mcp_tools = list(agent.tools.filter(tool_type=Tool.ToolType.MCP,
+                                            is_active=True))
+        for tool in mcp_tools:
+            cred = tool.credentials.filter(user=user).first()
+            cred_user_id = cred.user.id if cred and cred.user else None
+            if tool.available_functions:
+                func_metas = list(tool.available_functions.values())
+            else:
+                func_metas = None
+            mcp_tools_data.append((tool, cred, func_metas, cred_user_id))
+        agent_tools = list(agent.agent_tools.filter(is_tool=True))
+        has_agent_tools = agent.agent_tools.exists()
+        system_prompt = agent.system_prompt
+        llm_provider = agent.llm_provider
+        return builtin_tools, mcp_tools_data, agent_tools, \
+            has_agent_tools, system_prompt, llm_provider
+
+    @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
-                     agent=None, parent_config=None,
+                     agent_config=None, parent_config=None,
                      callbacks: List[BaseCallbackHandler] = None):
         """
-        Async factory to create an LLMAgent instance with async-safe ORM accesses.
+        Async factory to create an LLMAgent instance (an agent) with
+        async-safe ORM accesses.
         Wraps sync field/related model fetches.
         """
-        # Sync function to fetch user parameters safely
-        def fetch_user_params_sync(user):
-            try:
-                user_params = user.userparameters
-                allow_langfuse = user_params.allow_langfuse
-                langfuse_public_key = user_params.langfuse_public_key
-                langfuse_secret_key = user_params.langfuse_secret_key
-                langfuse_host = user_params.langfuse_host or None
-            except AttributeError:
-                allow_langfuse = False
-                langfuse_public_key = None
-                langfuse_secret_key = None
-                langfuse_host = None
-            return allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host
+        allow_langfuse,  langfuse_public_key, langfuse_secret_key, \
+            langfuse_host = await sync_to_async(cls.fetch_user_params_sync,
+                                                thread_sensitive=False)(user)
 
-        allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = await sync_to_async(fetch_user_params_sync, thread_sensitive=False)(user)
-
-        # Pre-fetch ORM data for load_tools
-        def fetch_agent_data_sync(agent, user):
-            if not agent:
-                return [], [], [], False, None, None
-            builtin_tools = list(agent.tools.filter(is_active=True,
-                                                    tool_type=Tool.ToolType.BUILTIN))
-            mcp_tools_data = []
-            mcp_tools = list(agent.tools.filter(tool_type=Tool.ToolType.MCP,
-                                                is_active=True))
-            for tool in mcp_tools:
-                cred = tool.credentials.filter(user=user).first()
-                cred_user_id = cred.user.id if cred and cred.user else None
-                if tool.available_functions:
-                    func_metas = list(tool.available_functions.values())
-                else:
-                    func_metas = None
-                mcp_tools_data.append((tool, cred, func_metas, cred_user_id))
-            agent_tools = list(agent.agent_tools.filter(is_tool=True))
-            has_agent_tools = agent.agent_tools.exists()
-            system_prompt = agent.system_prompt
-            llm_provider = agent.llm_provider
-            return builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider
-
-        builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, system_prompt, llm_provider = await sync_to_async(fetch_agent_data_sync, thread_sensitive=False)(agent, user)
+        builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, \
+            system_prompt, \
+            llm_provider = await sync_to_async(cls.fetch_agent_data_sync,
+                                               thread_sensitive=False)(agent_config, user)
 
         # Get or create the CheckpointLink
         checkpointLink, _ = await sync_to_async(CheckpointLink.objects.get_or_create, thread_sensitive=False)(
             thread=thread,
-            agent=agent
+            agent=agent_config
         )
         checkpointer = await get_checkpointer()
 
-        instance = cls(
+        agent = cls(
             user=user,
             thread=thread,
             langgraph_thread_id=checkpointLink.checkpoint_id,
-            agent=agent,
-            parent_config=parent_config,
+            agent_config=agent_config,
             callbacks=callbacks,
             allow_langfuse=allow_langfuse,
             langfuse_public_key=langfuse_public_key,
             langfuse_secret_key=langfuse_secret_key,
             langfuse_host=langfuse_host,
-            builtin_tools=builtin_tools,  # Pass pre-fetched
+            builtin_tools=builtin_tools,
             mcp_tools_data=mcp_tools_data,
             agent_tools=agent_tools,
             has_agent_tools=has_agent_tools,
@@ -161,25 +170,24 @@ class LLMAgent:
         )
 
         # Load tools async after init (extracted to llm_tools.py)
-        tools = await load_tools(instance)
+        tools = await load_tools(agent)
 
-        llm = instance.create_llm_agent()
-        system_prompt = instance.build_system_prompt()
+        llm = agent.create_llm_agent()
+        system_prompt = agent.build_system_prompt()
 
-        # Create the agent
-        instance.agent = create_react_agent(llm, tools=tools,
-                                            prompt=system_prompt,
-                                            checkpointer=checkpointer)
+        # Create the ReAct agent
+        agent.langchain_agent = create_react_agent(llm, tools=tools,
+                                                   prompt=system_prompt,
+                                                   checkpointer=checkpointer)
 
-        instance.tools = tools
+        agent.tools = tools
 
-        return instance
+        return agent
 
     def __init__(self, user: settings.AUTH_USER_MODEL,
                  thread: Thread,
                  langgraph_thread_id,
-                 agent=None,
-                 parent_config=None,
+                 agent_config=None,
                  callbacks: List[BaseCallbackHandler] = None,
                  allow_langfuse=False,
                  langfuse_public_key=None,
@@ -194,37 +202,31 @@ class LLMAgent:
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
-        self.django_agent = agent
         self.thread = thread
-        self.langgraph_thread_id = langgraph_thread_id
+        self.agent_config = agent_config
 
-        # Inherit from parent config
-        if parent_config and 'callbacks' in parent_config:
-            self.config = parent_config.copy()
-            # Only update thread_id
-            self.config.update({"configurable": {"thread_id": langgraph_thread_id}})
-        else:
-            # Build a new config if needed
-            self.config = {}
-            if allow_langfuse and langfuse_public_key and langfuse_secret_key:
-                try:
-                    from langfuse import Langfuse
-                    from langfuse.langchain import CallbackHandler
+        # Build a new config if needed
+        self.config = {}
+        if allow_langfuse and langfuse_public_key and langfuse_secret_key:
+            try:
+                from langfuse import Langfuse
+                from langfuse.langchain import CallbackHandler
 
-                    # Create/Configure Langfuse client (once at startup)
-                    langfuse = Langfuse(
-                        public_key=langfuse_public_key,
-                        secret_key=langfuse_secret_key,
-                        host=langfuse_host,
-                    )
-                    langfuse_handler = CallbackHandler()
+                # Create/Configure Langfuse client (once at startup)
+                langfuse = Langfuse(
+                    public_key=langfuse_public_key,
+                    secret_key=langfuse_secret_key,
+                    host=langfuse_host,
+                )
+                langfuse_handler = CallbackHandler()
 
-                    langfuse.auth_check()
-                    self.config = {"callbacks": [langfuse_handler]}
-                except Exception as e:
-                    logger.error(f"Failed to create Langfuse client: {e}", exc_info=e)  # Log error but continue without Langfuse
-                    self.config = {}
-            self.config.update({"configurable": {"thread_id": langgraph_thread_id}})
+                langfuse.auth_check()
+                self.config = {"callbacks": [langfuse_handler]}
+            except Exception as e:
+                logger.error(f"Failed to create Langfuse client: {e}",
+                             exc_info=e)  # Log error but continue without
+                self.config = {}
+        self.config.update({"configurable": {"thread_id": langgraph_thread_id}})
 
         # Ensure the 'callbacks' key exists and keep copies decoupled
         existing_callbacks = list(self.config.get('callbacks', []))
@@ -281,7 +283,7 @@ class LLMAgent:
         )
 
     def create_llm_agent(self):
-        if not self.django_agent or not self._llm_provider:
+        if not self._llm_provider:
             raise Exception("No LLM provider configured")
 
         provider = self._llm_provider
@@ -298,7 +300,8 @@ class LLMAgent:
         # agent by adding a message to the prompt
         list_files = await sync_to_async(UserFile.objects.filter,
                                          thread_sensitive=False)(thread=self.thread)
-        num_files = await sync_to_async(list_files.count, thread_sensitive=False)()
+        num_files = await sync_to_async(list_files.count,
+                                        thread_sensitive=False)()
         if num_files > 0:
             technical_context = f"Technical context: {num_files} attached files. Use file tools if needed."
         else:
@@ -306,7 +309,7 @@ class LLMAgent:
 
         full_question = f"{question}\n{technical_context}"
 
-        result = await self.agent.ainvoke(
+        result = await self.langchain_agent.ainvoke(
             {"messages": [HumanMessage(content=full_question)]},
             config=config
         )

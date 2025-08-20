@@ -53,8 +53,7 @@ class AgentToolWrapperTests(TestCase):
 
         wrapper = self.AgentToolWrapper(
             agent=agent_stub,
-            parent_user=SimpleNamespace(id=1),
-            parent_config={"configurable": {"thread_id": "T-123"}, "callbacks": []},
+            user=SimpleNamespace(id=1),
         )
         tool = wrapper.create_langchain_tool()
 
@@ -122,7 +121,7 @@ class AgentToolWrapperTests(TestCase):
         parent_user = SimpleNamespace(id=42)
         parent_config = {"configurable": {"thread_id": "PARENT-T"}, "callbacks": [cb]}
 
-        wrapper = self.AgentToolWrapper(agent=agent_stub, parent_user=parent_user, parent_config=parent_config)
+        wrapper = self.AgentToolWrapper(agent=agent_stub, user=parent_user)
 
         # Patch the LLMAgent symbol used in the module under test
         with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):

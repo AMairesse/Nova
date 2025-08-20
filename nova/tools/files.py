@@ -84,7 +84,7 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
 
     approx_context = await sync_to_async(estimate_total_context,
                                          thread_sensitive=False)(agent)
-    max_tokens = await sync_to_async(lambda: agent.django_agent.llm_provider.max_context_tokens, thread_sensitive=False)()
+    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
 
     session = aioboto3.Session()
     async with session.client(
@@ -120,7 +120,7 @@ async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_s
         return "Permission denied."
 
     estimated_chunk_tokens = chunk_size // 4 + 1
-    max_tokens = await sync_to_async(lambda: agent.django_agent.llm_provider.max_context_tokens, thread_sensitive=False)()
+    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
     if estimated_chunk_tokens > max_tokens * 0.5:
         return f"Chunk too large ({estimated_chunk_tokens} tokens > half of {max_tokens}). Reduce chunk_size."
 

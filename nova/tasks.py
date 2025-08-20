@@ -169,7 +169,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             logger.error(f"Error in on_chat_model_start: {e}")
 
 
-async def run_ai_task(task, user, thread, agent, new_message):
+async def run_ai_task(task, user, thread, agent_config, new_message):
     """
     Async version of the AI task function to run
     in background thread via asyncio.run.
@@ -191,7 +191,7 @@ async def run_ai_task(task, user, thread, agent, new_message):
         # Create custom handler and LLMAgent with callbacks
         handler = TaskProgressHandler(task.id, channel_layer)
         llm = await LLMAgent.create(user, thread,
-                                    agent=agent,
+                                    agent_config=agent_config,
                                     callbacks=[handler])
 
         try:

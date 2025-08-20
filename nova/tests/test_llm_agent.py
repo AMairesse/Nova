@@ -131,10 +131,9 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         atw_mod = types.ModuleType("nova.tools.agent_tool_wrapper")
 
         class AgentToolWrapper:
-            def __init__(self, agent_tool, user, parent_config=None):
+            def __init__(self, agent_tool, user):
                 self.agent_tool = agent_tool
                 self.user = user
-                self.parent_config = parent_config
 
             def create_langchain_tool(self):
                 return {"wrapped_agent_tool": getattr(self.agent_tool, "name", "unknown")}
@@ -196,7 +195,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 system_prompt=None,
                 llm_provider=provider,
             )
-            agent.django_agent = object()  # truthy so the method does not raise
+            agent.agent_config = object()  # truthy so the method does not raise
             obj = agent.create_llm_agent()
             self.assertEqual(obj.__class__.__name__, "ChatOpenAI")
 
@@ -207,7 +206,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 system_prompt=None,
                 llm_provider=None,
             )
-            agent2.django_agent = object()
+            agent2.agent_config = object()
             with self.assertRaises(Exception):
                 agent2.create_llm_agent()
 
@@ -218,7 +217,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 system_prompt=None,
                 llm_provider=SimpleNamespace(provider_type="UNKNOWN"),
             )
-            agent3.django_agent = object()
+            agent3.agent_config = object()
             with self.assertRaises(ValueError):
                 agent3.create_llm_agent()
 

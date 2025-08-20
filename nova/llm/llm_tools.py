@@ -7,16 +7,16 @@ from langchain_core.tools import StructuredTool
 logger = logging.getLogger(__name__)
 
 
-async def load_tools(instance) -> List[StructuredTool]:
+async def load_tools(agent) -> List[StructuredTool]:
     """
-    Load and initialize tools associated with the agent instance.
+    Load and initialize tools associated with the agent.
     Returns a list of Langchain-ready tools.
     """
     tools = []
     loaded_builtin_modules = []
 
     # Load builtin tools (pre-fetched)
-    for tool_obj in instance.builtin_tools:
+    for tool_obj in agent.builtin_tools:
         try:
             from nova.tools import import_module
             module = import_module(tool_obj.python_path)
@@ -26,10 +26,10 @@ async def load_tools(instance) -> List[StructuredTool]:
 
             # Call init if available (async)
             if hasattr(module, 'init'):
-                await module.init(instance)
+                await module.init(agent)
 
             # Get tools (new signature, await in case async)
-            loaded_tools = await module.get_functions(tool=tool_obj, agent=instance)
+            loaded_tools = await module.get_functions(tool=tool_obj, agent=agent)
 
             # Add to list
             tools.extend(loaded_tools)
@@ -39,10 +39,10 @@ async def load_tools(instance) -> List[StructuredTool]:
         except Exception as e:
             logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
 
-    instance._loaded_builtin_modules = loaded_builtin_modules  # Update instance tracker
+    agent._loaded_builtin_modules = loaded_builtin_modules
 
     # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
-    for tool_obj, cred, cached_func_metas, cred_user_id in instance.mcp_tools_data:
+    for tool_obj, cred, cached_func_metas, cred_user_id in agent.mcp_tools_data:
         try:
             from nova.mcp.client import MCPClient
             client = MCPClient(
@@ -86,22 +86,21 @@ async def load_tools(instance) -> List[StructuredTool]:
             logger.warning(f"Failed to load MCP tools from {tool_obj.endpoint}: {str(e)}")
 
     # Load agents used as tools (pre-fetched)
-    if instance.has_agent_tools:
+    if agent.has_agent_tools:
         from nova.tools.agent_tool_wrapper import AgentToolWrapper
 
-        for agent_tool in instance.agent_tools:
+        for agent_config in agent.agent_tools:
             wrapper = AgentToolWrapper(
-                agent_tool, 
-                instance.thread,
-                instance.user,
-                parent_config=instance._parent_config
+                agent_config,
+                agent.thread,
+                agent.user,
             )
             langchain_tool = wrapper.create_langchain_tool()
             tools.append(langchain_tool)
 
     # Load files support tools
     from nova.tools import files
-    file_tools = await files.get_functions(instance)
+    file_tools = await files.get_functions(agent)
     tools.extend(file_tools)
 
     return tools
