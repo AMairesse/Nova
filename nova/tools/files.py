@@ -24,11 +24,14 @@ async def async_get_object_or_404(model, **kwargs):
 
 
 async def async_get_threadid_and_user(obj: LLMAgent | UserFile):
-    return obj.thread.id, obj.user
+    thread_id = await sync_to_async(lambda: obj.thread.id,
+                                    thread_sensitive=False)()
+    user = await sync_to_async(lambda: obj.user, thread_sensitive=False)()
+    return thread_id, user
 
 
 async def async_get_user_id(user):
-    return await sync_to_async(user.id, thread_sensitive=False)
+    return await sync_to_async(lambda: user.id, thread_sensitive=False)()
 
 
 async def async_filter_files(thread):
@@ -72,7 +75,8 @@ async def list_files(thread_id, user) -> str:
 
 
 async def read_file(agent: LLMAgent, file_id: int) -> str:
-    """Read the content of a file (text only). Reject if exceeds context limit."""
+    """Read the content of a file (text only).
+       Reject if exceeds context limit."""
     file = await async_get_object_or_404(UserFile, id=file_id)
     thread_id, user = await async_get_threadid_and_user(agent)
     file_thread_id, file_user = await async_get_threadid_and_user(file)
