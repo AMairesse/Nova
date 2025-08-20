@@ -3,10 +3,8 @@ Test-specific Django settings for Nova project.
 This file inherits from the main settings and overrides configurations
 to enable local testing without external Docker services.
 """
-
 from .settings import *
 import tempfile
-import os
 
 # Override database to use SQLite in-memory for fast testing
 DATABASES = {
@@ -53,16 +51,15 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.MD5PasswordHasher',
 ]
 
+
 # Disable migrations for faster test database creation
 class DisableMigrations:
     def __contains__(self, item):
         return True
-    
+
     def __getitem__(self, item):
         return None
 
-# Uncomment the line below if you want to disable migrations for even faster tests
-# MIGRATION_MODULES = DisableMigrations()
 
 # Logging configuration for tests (optional - reduces noise)
 LOGGING = {

@@ -154,10 +154,11 @@ def add_message(request):
 
     schedule_in_event_loop(
         run_ai_task(
-            task.id,
-            request.user.id,
-            thread.id,
-            agent_obj.id if agent_obj else None
+            task,
+            request.user,
+            thread,
+            agent_obj if agent_obj else None,
+            new_message
         )
     )
 

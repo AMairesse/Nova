@@ -169,32 +169,18 @@ class TaskProgressHandler(AsyncCallbackHandler):
             logger.error(f"Error in on_chat_model_start: {e}")
 
 
-async def run_ai_task(task_id, user_id, thread_id, agent_id):
+async def run_ai_task(task, user, thread, agent, new_message):
     """
     Async version of the AI task function to run
     in background thread via asyncio.run.
     Uses custom callbacks for progress synthesis and streaming.
     """
-    # Import inside to avoid circular issues
-    from django.contrib.auth.models import User
-
     # Initialize variables to avoid UnboundLocalError in exception handler
-    task = None
     handler = None
     channel_layer = get_channel_layer()  # Get layer for publishing
     llm = None
 
     try:
-        # Get all required objects with proper error handling (async-safe)
-        task = await sync_to_async(Task.objects.get,
-                                   thread_sensitive=False)(id=task_id)
-        user = await sync_to_async(User.objects.get,
-                                   thread_sensitive=False)(id=user_id)
-        thread = await sync_to_async(Thread.objects.get,
-                                     thread_sensitive=False)(id=thread_id)
-        agent_obj = await sync_to_async(Agent.objects.get,
-                                        thread_sensitive=False)(id=agent_id) if agent_id else None
-
         # Set task to running and log start
         task.status = TaskStatus.RUNNING
         task.progress_logs = [{"step": "Starting AI processing",
@@ -202,30 +188,15 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
                                str(dt.datetime.now(dt.timezone.utc))}]
         await sync_to_async(task.save, thread_sensitive=False)()
 
-        # Get message history (wrap sync field accesses)
-        messages = await sync_to_async(thread.get_messages,
-                                       thread_sensitive=False)()
-
-        # Sync function to build history and extract last_message
-        def build_msg_history_sync(messages):
-            msg_history = [[m.actor, m.text] for m in messages]
-            if msg_history:
-                msg_history.pop()  # Exclude last user message for consistency
-            last_message = messages.last().text if messages else ''
-            return msg_history, last_message
-
-        msg_history, last_message = await sync_to_async(build_msg_history_sync,
-                                                        thread_sensitive=False)(messages)
-
         # Create custom handler and LLMAgent with callbacks
-        handler = TaskProgressHandler(task_id, channel_layer)
+        handler = TaskProgressHandler(task.id, channel_layer)
         llm = await LLMAgent.create(user, thread,
-                                    agent=agent_obj,
+                                    agent=agent,
                                     callbacks=[handler])
 
         try:
-            # Run LLMAgent (now async)
-            final_output = await llm.ainvoke(last_message)
+            # Run LLMAgent
+            final_output = await llm.ainvoke(new_message)
 
             # Log completion and save result
             task.progress_logs.append({"step": "AI processing completed",
@@ -238,7 +209,7 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
                                 thread_sensitive=False)(final_output,
                                                         actor=Actor.AGENT)
 
-            # Update thread subject if needed (now async) - wrap field access
+            # Update thread subject if needed - wrap field access
             def check_and_update_subject_sync(thread):
                 if thread.subject.startswith("thread n°"):
                     return True
@@ -247,7 +218,7 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
             needs_title_update = await sync_to_async(check_and_update_subject_sync, thread_sensitive=False)(thread)
             if needs_title_update:
                 short_title = await llm.ainvoke(
-                    "Give a short title for this conversation (1–3 words maximum).\
+                    "Give a short title for this conversation (1–3 words).\
                      Use the same language as the conversation.\
                      Answer by giving only the title, nothing else.",
                     silent_mode=True
@@ -269,7 +240,7 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
 
     except Exception as e:
         # Handle failure - safely handle case where task might be None
-        logger.error(f"Task {task_id} failed: {e}")
+        logger.error(f"Task {task.id} failed: {e}")
 
         if task is not None:
             try:
@@ -285,18 +256,18 @@ async def run_ai_task(task_id, user_id, thread_id, agent_id):
                                            str(dt.datetime.now(dt.timezone.utc))}]
                 await sync_to_async(task.save, thread_sensitive=False)()
             except Exception as save_error:
-                logger.error(f"Failed to save task {task_id} error state: {save_error}")
+                logger.error(f"Failed to save task {task.id} error state: {save_error}")
 
         # Only try to publish update if handler was created
         if handler is not None:
             try:
                 await handler.publish_update('task_complete', {'error': str(e)})
             except Exception as publish_error:
-                logger.error(f"Failed to publish task {task_id} error update: {publish_error}")
+                logger.error(f"Failed to publish task {task.id} error update: {publish_error}")
 
         # Cleanup if llm was created
         if llm is not None:
             try:
                 await llm.cleanup()
             except Exception as cleanup_error:
-                logger.error(f"Failed to cleanup after error in task {task_id}: {cleanup_error}")
+                logger.error(f"Failed to cleanup after error in task {task.id}: {cleanup_error}")

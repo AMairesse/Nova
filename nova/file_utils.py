@@ -24,22 +24,6 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5MB threshold for multipart
 
 
-@sync_to_async
-def extract_file_content(message: Message) -> str:
-    """Extract file content from the message and return markdown
-       text with links (async-safe)."""
-    markdown_text = ""
-    for file in message.files.all():
-        if file.expiration_date and file.expiration_date < timezone.now():
-            file.delete()
-            continue
-
-        download_url = file.get_download_url()
-        markdown_text += f"[{file.original_filename} ({file.mime_type}, {file.size} bytes)]({download_url})\n"
-
-    return markdown_text
-
-
 def detect_mime(content: bytes) -> str:
     """Detect MIME type from file content."""
     try:
@@ -144,7 +128,7 @@ async def check_thread_access(thread: Thread, user) -> bool:
     """Async-safe check if user owns the thread."""
     @sync_to_async
     def inner_check():
-        return thread.user == user  # Accès ORM isolé ici
+        return thread.user == user
     return await inner_check()
 
 
@@ -156,7 +140,6 @@ async def batch_upload_files(thread: Thread, user,
     errors = []
     for item in file_data:
         try:
-            # Vérifier que l'utilisateur a accès au thread (wrappé async-safe)
             if not await check_thread_access(thread, user):
                 raise PermissionDenied(f"Access denied: User {user.id} trying to upload to thread {thread.id}")
 
