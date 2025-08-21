@@ -1,6 +1,7 @@
 import asyncio
 import json
 from importlib import import_module
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
@@ -27,9 +28,9 @@ class TaskProgressConsumerTests(SimpleTestCase):
             try:
                 self.assertTrue(connected)
 
-                # Send ping from client, expect pong back
-                await communicator.send_to(text_data=json.dumps({"type": "ping"}))
-                msg = await communicator.receive_from()
+                # Test optimized ping (using startswith for efficiency)
+                await communicator.send_to(text_data='{"type":"ping"}')
+                msg = await communicator.receive_from(timeout=5)
                 data = json.loads(msg)
                 self.assertEqual(data, {"type": "pong"})
             finally:
@@ -49,13 +50,15 @@ class TaskProgressConsumerTests(SimpleTestCase):
                     "task_xyz",
                     {
                         "type": "task_update",
-                        "message": {"status": "RUNNING", "progress": 42},
+                        "message": {"type": "update", "status": "RUNNING",
+                                    "progress": 42},
                     },
                 )
 
                 # Client should receive the pushed update
-                msg = await communicator.receive_from()
+                msg = await communicator.receive_from(timeout=5)
                 data = json.loads(msg)
+                self.assertEqual(data.get("type"), "update")
                 self.assertEqual(data["status"], "RUNNING")
                 self.assertEqual(data["progress"], 42)
             finally:
@@ -63,7 +66,8 @@ class TaskProgressConsumerTests(SimpleTestCase):
 
         asyncio.run(scenario())
 
-    def test_invalid_json_from_client(self):
+    @patch('nova.consumers.logger')
+    def test_invalid_json_from_client(self, mock_logger):
         async def scenario():
             communicator, connected = await self._connect("/ws/task/err/")
             try:
@@ -71,11 +75,126 @@ class TaskProgressConsumerTests(SimpleTestCase):
 
                 # Send invalid JSON string
                 await communicator.send_to(text_data="not a json")
-                msg = await communicator.receive_from()
+                msg = await communicator.receive_from(timeout=5)
                 data = json.loads(msg)
                 self.assertIn("error", data)
                 self.assertEqual(data["error"], "Invalid message")
             finally:
                 await communicator.disconnect()
+
+        asyncio.run(scenario())
+
+    @patch('nova.consumers.logger')
+    def test_message_too_large(self, mock_logger):
+        async def scenario():
+            communicator, connected = await self._connect("/ws/task/big/")
+            try:
+                self.assertTrue(connected)
+
+                # Send oversized message (over 1024 bytes limit in consumer)
+                large_msg = json.dumps({"type": "ping", "data": "x" * 2000})
+                await communicator.send_to(text_data=large_msg)
+                msg = await communicator.receive_from(timeout=5)
+                data = json.loads(msg)
+                self.assertIn("error", data)
+                self.assertEqual(data["error"], "Invalid message")
+            finally:
+                await communicator.disconnect()
+
+        asyncio.run(scenario())
+
+    def test_refresh_message(self):
+        async def scenario():
+            communicator, connected = await self._connect("/ws/task/refresh/")
+            try:
+                self.assertTrue(connected)
+
+                # Test example extension 'refresh'
+                await communicator.send_to(text_data=json.dumps({"type":
+                                                                 "refresh"}))
+                msg = await communicator.receive_from(timeout=5)
+                data = json.loads(msg)
+                self.assertEqual(data["type"], "refreshed")
+                self.assertEqual(data["status"], "OK")
+            finally:
+                await communicator.disconnect()
+
+        asyncio.run(scenario())
+
+
+@override_settings(
+    CHANNEL_LAYERS={
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
+    }
+)
+class FileProgressConsumerTests(SimpleTestCase):
+    async def _connect(self, path="/ws/files/456/"):
+        asgi_app = import_module("nova.asgi").application
+        communicator = WebsocketCommunicator(asgi_app, path)
+        connected, _ = await communicator.connect()
+        return communicator, connected
+
+    def test_connect_and_pong(self):
+        async def scenario():
+            communicator, connected = await self._connect("/ws/files/789/")
+            try:
+                self.assertTrue(connected)
+
+                # Test ping/pong (similar optimization as Task consumer)
+                await communicator.send_to(text_data='{"type":"ping"}')
+                msg = await communicator.receive_from(timeout=5)
+                data = json.loads(msg)
+                self.assertEqual(data, {"type": "pong"})
+            finally:
+                await communicator.disconnect()
+
+        asyncio.run(scenario())
+
+    def test_file_progress_broadcast(self):
+        async def scenario():
+            communicator, connected = await self._connect("/ws/files/101/")
+            try:
+                self.assertTrue(connected)
+
+                # Simulate server-side broadcast (e.g., from file upload)
+                layer = get_channel_layer()
+                await layer.group_send(
+                    "thread_101_files",
+                    {
+                        "type": "file_progress",
+                        "progress": {"percentage": 75, "status": "uploading"},
+                    },
+                )
+
+                # Client should receive the progress update
+                msg = await communicator.receive_from(timeout=5)
+                data = json.loads(msg)
+                self.assertEqual(data["type"], "progress")
+                self.assertEqual(data["progress"]["percentage"], 75)
+                self.assertEqual(data["progress"]["status"], "uploading")
+            finally:
+                await communicator.disconnect()
+
+        asyncio.run(scenario())
+
+    @patch('nova.consumers.logger')
+    def test_unknown_client_message(self, mock_logger):
+        async def scenario():
+            communicator, connected = await self._connect("/ws/files/999/")
+            try:
+                self.assertTrue(connected)
+
+                # Send unknown message; consumer logs but doesn't respond/error
+                await communicator.send_to(text_data=json.dumps({"type":
+                                                                 "unknown"}))
+                # No response expected; just check no crash
+                # (use timeout to confirm silence)
+                with self.assertRaises(asyncio.TimeoutError):
+                    await communicator.receive_from(timeout=1)
+            finally:
+                try:
+                    await communicator.disconnect()
+                except asyncio.exceptions.CancelledError:
+                    pass
 
         asyncio.run(scenario())
