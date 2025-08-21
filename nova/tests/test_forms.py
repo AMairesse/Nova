@@ -1,7 +1,7 @@
 # nova/tests/test_forms.py
 from django.core.exceptions import ValidationError
-from django import forms as django_forms  # Import corrigé pour widgets
-from django.db import models as django_models  # Import pour Q
+from django import forms as django_forms
+from django.db import models as django_models
 from unittest.mock import patch
 
 from nova.forms import (
@@ -16,7 +16,6 @@ from .base import BaseTestCase
 
 class UserParametersFormTest(BaseTestCase):
     def test_valid_form(self):
-        # Utilise l'instance existante (auto-créée par signal) pour mise à jour
         existing_params = UserParameters.objects.get(user=self.user)
         data = {
             'allow_langfuse': True,
@@ -31,8 +30,10 @@ class UserParametersFormTest(BaseTestCase):
 
     def test_password_widgets(self):
         form = UserParametersForm()
-        self.assertIsInstance(form.fields['langfuse_public_key'].widget, django_forms.PasswordInput)
-        self.assertIsInstance(form.fields['langfuse_secret_key'].widget, django_forms.PasswordInput)
+        self.assertIsInstance(form.fields['langfuse_public_key'].widget,
+                              django_forms.TextInput)
+        self.assertIsInstance(form.fields['langfuse_secret_key'].widget,
+                              django_forms.PasswordInput)
 
 
 class UserProfileFormTest(BaseTestCase):
@@ -42,7 +43,8 @@ class UserProfileFormTest(BaseTestCase):
             user=self.user,
             name='Test Agent',
             llm_provider=LLMProvider.objects.create(
-                user=self.user, name='Provider', provider_type=ProviderType.OLLAMA, model='llama3'
+                user=self.user, name='Provider',
+                provider_type=ProviderType.OLLAMA, model='llama3'
             ),
             system_prompt='Prompt'
         )
@@ -51,7 +53,8 @@ class UserProfileFormTest(BaseTestCase):
         # Utilise l'instance existante (auto-créée par signal) pour mise à jour
         existing_profile = UserProfile.objects.get(user=self.user)
         data = {'default_agent': self.agent.id}
-        form = UserProfileForm(user= self.user, data=data, instance=existing_profile)
+        form = UserProfileForm(user=self.user, data=data,
+                               instance=existing_profile)
         self.assertTrue(form.is_valid())
         profile = form.save()
         self.assertEqual(profile.default_agent, self.agent)
@@ -64,6 +67,7 @@ class LLMProviderFormTest(BaseTestCase):
             'provider_type': ProviderType.OLLAMA,
             'model': 'llama3',
             'api_key': 'fake_key',
+            'max_context_tokens': 4096,
             'base_url': 'http://localhost:11434',
             'additional_config': '{}'
         }
@@ -76,39 +80,56 @@ class LLMProviderFormTest(BaseTestCase):
 
     def test_clean_api_key_preserve_existing(self):
         existing = LLMProvider.objects.create(
-            user=self.user, name='Existing', provider_type=ProviderType.OLLAMA, model='llama3', api_key='old_key'
+            user=self.user, name='Existing', provider_type=ProviderType.OLLAMA,
+            model='llama3', api_key='old_key', max_context_tokens=4096
         )
-        data = {'name': 'Existing', 'provider_type': ProviderType.OLLAMA, 'model': 'llama3', 'api_key': ''}
+        data = {'name': 'Existing', 'provider_type': ProviderType.OLLAMA,
+                'model': 'llama3', 'api_key': '', 'max_context_tokens': 4096}
         form = LLMProviderForm(data=data, instance=existing)
         self.assertTrue(form.is_valid())
-        self.assertEqual(form.cleaned_data['api_key'], 'old_key')  # Preserved
+        self.assertEqual(form.cleaned_data['api_key'], 'old_key')
 
     def test_invalid_unique_name(self):
-        LLMProvider.objects.create(user=self.user, name='Existing', provider_type=ProviderType.OLLAMA, model='llama3')
-        data = {'name': 'Existing', 'provider_type': ProviderType.OPENAI, 'model': 'gpt-4'}
+        LLMProvider.objects.create(user=self.user, name='Existing',
+                                   provider_type=ProviderType.OLLAMA,
+                                   model='llama3')
+        data = {'name': 'Existing', 'provider_type': ProviderType.OPENAI,
+                'model': 'gpt-4', 'max_context_tokens': 4096}
         form = LLMProviderForm(data=data)
-        self.assertTrue(form.is_valid())  # Form valid, mais model validation fail
+        self.assertTrue(form.is_valid())
         provider = form.save(commit=False)
         provider.user = self.user
         with self.assertRaises(ValidationError):
-            provider.full_clean()  # Déclenche unique_together
+            provider.full_clean()
 
 
 class AgentFormTest(BaseTestCase):
     def setUp(self):
         super().setUp()
         self.provider = LLMProvider.objects.create(
-            user=self.user, name='Provider', provider_type=ProviderType.OLLAMA, model='llama3'
+            user=self.user, name='Provider', provider_type=ProviderType.OLLAMA,
+            model='llama3'
         )
         self.tool = Tool.objects.create(
-            user=self.user, name='Test Tool', description='Test', tool_type=Tool.ToolType.API, endpoint='https://api.example.com'
+            user=self.user, name='Test Tool', description='Test',
+            tool_type=Tool.ToolType.API, endpoint='https://api.example.com'
         )
 
     def test_init_restricts_choices(self):
         form = AgentForm(user=self.user)
-        self.assertQuerySetEqual(form.fields['llm_provider'].queryset, LLMProvider.objects.filter(user=self.user))
-        self.assertQuerySetEqual(form.fields['tools'].queryset, Tool.objects.filter(django_models.Q(user=self.user) | django_models.Q(user__isnull=True), is_active=True))
-        self.assertQuerySetEqual(form.fields['agent_tools'].queryset, Agent.objects.filter(user=self.user, is_tool=True))
+        self.assertQuerySetEqual(form.fields['llm_provider'].queryset,
+                                 LLMProvider.objects.filter(user=self.user))
+        self.assertQuerySetEqual(
+            form.fields['tools'].queryset,
+            Tool.objects.filter(
+                django_models.Q(user=self.user) |
+                django_models.Q(user__isnull=True),
+                is_active=True
+            )
+        )
+        self.assertQuerySetEqual(form.fields['agent_tools'].queryset,
+                                 Agent.objects.filter(user=self.user,
+                                 is_tool=True))
 
     def test_valid_agent(self):
         data = {
@@ -137,24 +158,32 @@ class AgentFormTest(BaseTestCase):
         self.assertIn('tool_description', form.errors)
 
     def test_clean_agent_tools_prevent_self_reference(self):
-        agent = Agent.objects.create(user=self.user, name='A1', llm_provider=self.provider, system_prompt='P1', is_tool=True, tool_description='D1')
-        # Simule un ajout valide (sans self, car exclu par queryset), puis vérifie après save que self n'est pas dans la relation
+        agent = Agent.objects.create(user=self.user, name='A1',
+                                     llm_provider=self.provider,
+                                     system_prompt='P1', is_tool=True,
+                                     tool_description='D1')
         data = {
             'name': 'A1',
             'llm_provider': self.provider.id,
             'system_prompt': 'P1',
             'is_tool': True,
             'tool_description': 'D1',
-            'agent_tools': []  # Pas de self possible via UI, mais teste la prévention interne
+            'agent_tools': []
         }
         form = AgentForm(data=data, instance=agent, user=self.user)
         self.assertTrue(form.is_valid())
         form.save()
-        self.assertFalse(agent.agent_tools.filter(pk=agent.pk).exists())  # Vérifie que self n'est pas ajouté
+        self.assertFalse(agent.agent_tools.filter(pk=agent.pk).exists())
 
     def test_cycle_detection_via_model(self):
-        agent1 = Agent.objects.create(user=self.user, name='A1', llm_provider=self.provider, system_prompt='P1', is_tool=True, tool_description='D1')
-        agent2 = Agent.objects.create(user=self.user, name='A2', llm_provider=self.provider, system_prompt='P2', is_tool=True, tool_description='D2')
+        agent1 = Agent.objects.create(user=self.user, name='A1',
+                                      llm_provider=self.provider,
+                                      system_prompt='P1', is_tool=True,
+                                      tool_description='D1')
+        agent2 = Agent.objects.create(user=self.user, name='A2',
+                                      llm_provider=self.provider,
+                                      system_prompt='P2', is_tool=True,
+                                      tool_description='D2')
         agent1.agent_tools.add(agent2)
         data = {
             'name': 'A2',
@@ -162,25 +191,27 @@ class AgentFormTest(BaseTestCase):
             'system_prompt': 'P2',
             'is_tool': True,
             'tool_description': 'D2',
-            'agent_tools': [agent1.id]  # Creates cycle
+            'agent_tools': [agent1.id]
         }
         form = AgentForm(data=data, instance=agent2, user=self.user)
-        self.assertTrue(form.is_valid())  # Form clean passe
+        self.assertTrue(form.is_valid())
         agent = form.save(commit=False)
         agent.user = self.user
-        # Simule l'ajout M2M pour déclencher la validation du modèle
         agent.agent_tools.set(form.cleaned_data['agent_tools'])
         with self.assertRaises(ValidationError):
-            agent.full_clean()  # Model clean détecte le cycle
+            agent.full_clean()
 
 
 class ToolFormTest(BaseTestCase):
     @patch('nova.tools.get_available_tool_types')
     @patch('nova.tools.get_tool_type')
-    def test_init_populates_subtype_choices(self, mock_get_tool_type, mock_get_available_tool_types):
-        mock_get_available_tool_types.return_value = {'date': {'name': 'Date Tool'}}
+    def test_init_populates_subtype_choices(self, mock_get_tool_type,
+                                            mock_get_available_tool_types):
+        mock_get_available_tool_types.return_value = {'date': {'name':
+                                                               'Date Tool'}}
         form = ToolForm()
-        self.assertIn(('date', 'Date Tool'), form.fields['tool_subtype'].choices)
+        self.assertIn(('date', 'Date Tool'),
+                      form.fields['tool_subtype'].choices)
 
     @patch('nova.tools.get_tool_type')
     def test_clean_builtin_valid(self, mock_get_tool_type):
@@ -239,11 +270,13 @@ class ToolCredentialFormTest(BaseTestCase):
 
     def test_init_hides_fields_based_on_auth_type(self):
         form = ToolCredentialForm(initial={'auth_type': 'none'})
-        self.assertIsInstance(form.fields['username'].widget, django_forms.HiddenInput)
-        self.assertIsInstance(form.fields['password'].widget, django_forms.HiddenInput)
+        self.assertIsInstance(form.fields['username'].widget,
+                              django_forms.HiddenInput)
+        self.assertIsInstance(form.fields['password'].widget,
+                              django_forms.HiddenInput)
 
     def test_init_tool_specific_fields(self):
-        form = ToolCredentialForm(tool=self.tool)  # CalDav in name → required
+        form = ToolCredentialForm(tool=self.tool)
         self.assertTrue(form.fields['caldav_url'].required)
 
     def test_save_with_config(self):
@@ -259,4 +292,5 @@ class ToolCredentialFormTest(BaseTestCase):
         cred.user = self.user
         cred.tool = self.tool
         cred.save()
-        self.assertEqual(cred.config.get('caldav_url'), 'https://caldav.example.com')
+        self.assertEqual(cred.config.get('caldav_url'),
+                         'https://caldav.example.com')
