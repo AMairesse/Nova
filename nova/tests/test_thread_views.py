@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.http import HttpResponse
 from django.urls import reverse
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from nova.models.models import (
     Agent,
@@ -66,8 +66,10 @@ class MainViewsTests(TestCase):
 
     def test_message_list_sanitizes_html_and_requires_ownership(self):
         thread = Thread.objects.create(user=self.user, subject="T")
-        # Add a message with risky HTML. It will be converted via markdown then bleached.
-        thread.add_message("<script>alert(1)</script><b>bold</b>", actor=Actor.USER)
+        # Add a message with risky HTML. It will be
+        # converted via markdown then bleached.
+        thread.add_message("<script>alert(1)</script><b>bold</b>",
+                           actor=Actor.USER)
 
         captured = {}
 
@@ -76,7 +78,8 @@ class MainViewsTests(TestCase):
             captured["context"] = context
             return HttpResponse("OK")
 
-        request = self.factory.get("/app/messages/", {"thread_id": str(thread.id)})
+        request = self.factory.get("/app/messages/",
+                                   {"thread_id": str(thread.id)})
         request.user = self.user
 
         with patch("nova.views.thread_views.render", side_effect=fake_render):
@@ -95,7 +98,8 @@ class MainViewsTests(TestCase):
         # Ownership check: accessing another user's thread should 404
         foreign = Thread.objects.create(user=self.other, subject="Z")
         foreign.add_message("x", actor=Actor.USER)
-        request = self.factory.get("/app/messages/", {"thread_id": str(foreign.id)})
+        request = self.factory.get("/app/messages/",
+                                   {"thread_id": str(foreign.id)})
         request.user = self.user
         with self.assertRaises(Exception):  # get_object_or_404 raises Http404
             thread_views.message_list(request)
@@ -106,18 +110,26 @@ class MainViewsTests(TestCase):
         self.client.login(username="alice", password="pass")
 
         # Patch render_to_string used inside new_thread()
-        with patch("nova.views.thread_views.render_to_string", return_value="<li>thread</li>"):
+        with patch("nova.views.thread_views.render_to_string",
+                   return_value="<li>thread</li>"):
             resp = self.client.post(reverse("create_thread"))
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["status"], "OK")
-        self.assertTrue(Thread.objects.filter(id=data["thread_id"], user=self.user).exists())
+        self.assertTrue(Thread.objects.filter(id=data["thread_id"],
+                                              user=self.user).exists())
         self.assertEqual(data["threadHtml"], "<li>thread</li>")
 
     # ------------ delete_thread -----------------------------------------
 
-    def test_delete_thread_owner_only(self):
+    @patch('nova.signals.get_checkpointer_sync')
+    def test_delete_thread_owner_only(self, mock_get_checkpointer):
+        # Mock the checkpointer
+        mock_checkpointer = mock_get_checkpointer.return_value
+        mock_checkpointer.delete_thread = MagicMock()
+
+        # Create a thread
         thread = Thread.objects.create(user=self.user, subject="Del")
 
         # Non-authenticated -> redirect to login
@@ -160,19 +172,8 @@ class MainViewsTests(TestCase):
             llm_provider=provider,
         )
 
-        # Patch render_to_string and threading.Thread in the view module to avoid real threads/templates
-        class FakeThread:
-            def __init__(self, target, args):
-                self.target = target
-                self.args = args
-                self.started = False
-
-            def start(self):
-                # Do not execute the target; just mark as started
-                self.started = True
-
-        with patch("nova.views.thread_views.render_to_string", return_value="<li>thread</li>"), \
-             patch("nova.views.thread_views.threading.Thread", side_effect=lambda target, args: FakeThread(target, args)):
+        with patch("nova.views.thread_views.render_to_string",
+                   return_value="<li>thread</li>"):
             resp = self.client.post(
                 reverse("add_message"),
                 data={
@@ -192,7 +193,8 @@ class MainViewsTests(TestCase):
         # Check DB side effects
         thread_id = data["thread_id"]
         task_id = data["task_id"]
-        self.assertTrue(Thread.objects.filter(id=thread_id, user=self.user).exists())
+        self.assertTrue(Thread.objects.filter(id=thread_id,
+                                              user=self.user).exists())
 
         task = Task.objects.get(id=task_id)
         self.assertEqual(task.user, self.user)
@@ -207,11 +209,16 @@ class MainViewsTests(TestCase):
         other_thread = Thread.objects.create(user=self.user, subject="U")
         foreign_thread = Thread.objects.create(user=self.other, subject="V")
 
-        t_run1 = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
-        t_run2 = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
-        Task.objects.create(user=self.user, thread=thread, status=TaskStatus.PENDING)
-        Task.objects.create(user=self.user, thread=other_thread, status=TaskStatus.RUNNING)
-        Task.objects.create(user=self.other, thread=foreign_thread, status=TaskStatus.RUNNING)
+        t_run1 = Task.objects.create(user=self.user, thread=thread,
+                                     status=TaskStatus.RUNNING)
+        t_run2 = Task.objects.create(user=self.user, thread=thread,
+                                     status=TaskStatus.RUNNING)
+        Task.objects.create(user=self.user, thread=thread,
+                            status=TaskStatus.PENDING)
+        Task.objects.create(user=self.user, thread=other_thread,
+                            status=TaskStatus.RUNNING)
+        Task.objects.create(user=self.other, thread=foreign_thread,
+                            status=TaskStatus.RUNNING)
 
         # Owner requests running tasks for 'thread'
         self.client.login(username="alice", password="pass")
@@ -221,5 +228,6 @@ class MainViewsTests(TestCase):
         self.assertEqual(ids, {t_run1.id, t_run2.id})
 
         # Non-owner should get 404 when querying someone else's thread
-        resp = self.client.get(reverse("running_tasks", args=[foreign_thread.id]))
+        resp = self.client.get(reverse("running_tasks",
+                                       args=[foreign_thread.id]))
         self.assertEqual(resp.status_code, 404)
