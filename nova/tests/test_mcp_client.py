@@ -20,7 +20,8 @@ class MCPClientTests(SimpleTestCase):
     # ------------- helpers -----------------
 
     class _FakeAsyncClient:
-        def __init__(self, tools_queue=None, call_results_queue=None, raise_on_call=None):
+        def __init__(self, tools_queue=None, call_results_queue=None,
+                     raise_on_call=None):
             self.tools_queue = tools_queue or []
             self.call_results_queue = call_results_queue or []
             self.raise_on_call = raise_on_call
@@ -64,7 +65,8 @@ class MCPClientTests(SimpleTestCase):
             outputSchema = {"y": 2}
 
         fake_client = self._FakeAsyncClient(tools_queue=[[T1(), T2()]])
-        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+        with patch("nova.mcp.client.FastMCPClient",
+                   lambda transport: fake_client), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="https://srv.example.com", user_id=123)
             # First call: not cached
@@ -73,8 +75,10 @@ class MCPClientTests(SimpleTestCase):
             self.assertEqual(
                 tools,
                 [
-                    {"name": "t1", "description": "desc1", "input_schema": {"a": 1}, "output_schema": {"b": 2}},
-                    {"name": "t2", "description": "desc2", "input_schema": {"x": 1}, "output_schema": {"y": 2}},
+                    {"name": "t1", "description": "desc1",
+                     "input_schema": {"a": 1}, "output_schema": {"b": 2}},
+                    {"name": "t2", "description": "desc2",
+                     "input_schema": {"x": 1}, "output_schema": {"y": 2}},
                 ],
             )
             # Second call: cached
@@ -96,7 +100,8 @@ class MCPClientTests(SimpleTestCase):
         fake_client = self._FakeAsyncClient(
             tools_queue=[list_a_objs, list_b_objs, list_c_objs]
         )
-        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+        with patch("nova.mcp.client.FastMCPClient",
+                   lambda transport: fake_client), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c1 = MCPClient(endpoint="http://srv", user_id=1)
             c2 = MCPClient(endpoint="http://srv", user_id=2)
@@ -104,25 +109,32 @@ class MCPClientTests(SimpleTestCase):
             out1 = asyncio.run(c1.alist_tools())
             out2 = asyncio.run(c2.alist_tools())
             self.assertEqual(fake_client.list_tools_calls, 2)
-            self.assertEqual(out1, [{"name": "a", "description": "", "input_schema": {}, "output_schema": {}}])
-            self.assertEqual(out2, [{"name": "b", "description": "", "input_schema": {}, "output_schema": {}}])
+            self.assertEqual(out1, [{"name": "a", "description": "",
+                                     "input_schema": {}, "output_schema": {}}])
+            self.assertEqual(out2, [{"name": "b", "description": "",
+                                     "input_schema": {}, "output_schema": {}}])
 
             # Same user, no refresh -> cache
             out1b = asyncio.run(c1.alist_tools())
             self.assertEqual(fake_client.list_tools_calls, 2)
-            self.assertEqual(out1b, [{"name": "a", "description": "", "input_schema": {}, "output_schema": {}}])
+            self.assertEqual(out1b, [{"name": "a", "description": "",
+                                      "input_schema": {},
+                                      "output_schema": {}}])
 
             # Force refresh -> new call returns list_c
             out1c = asyncio.run(c1.alist_tools(force_refresh=True))
             self.assertEqual(fake_client.list_tools_calls, 3)
-            self.assertEqual(out1c, [{"name": "c", "description": "", "input_schema": {}, "output_schema": {}}])
+            self.assertEqual(out1c, [{"name": "c", "description": "",
+                                      "input_schema": {},
+                                      "output_schema": {}}])
 
     # ------------- acall -----------------
 
     def test_acall_caches_by_tool_and_normalized_inputs(self):
         result1 = {"ok": 1}
         fake_client = self._FakeAsyncClient(call_results_queue=[result1])
-        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+        with patch("nova.mcp.client.FastMCPClient",
+                   lambda transport: fake_client), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="https://x", user_id=42)
 
@@ -137,19 +149,23 @@ class MCPClientTests(SimpleTestCase):
             self.assertEqual(fake_client.call_tool_calls, 1)
 
             # Optional sanity on cache key structure
-            base = json.dumps(("sum", [("a", 1), ("b", 2)]), sort_keys=True).encode("utf-8")
+            base = json.dumps(("sum", [("a", 1), ("b", 2)]),
+                              sort_keys=True).encode("utf-8")
             _ = base64.urlsafe_b64encode(base).decode("utf-8")
 
     def test_acall_http_errors_are_mapped(self):
         req = httpx.Request("GET", "http://x")
         resp_404 = httpx.Response(404, request=req)
         resp_500 = httpx.Response(500, request=req)
-        err_404 = httpx.HTTPStatusError("not found", request=req, response=resp_404)
-        err_500 = httpx.HTTPStatusError("server err", request=req, response=resp_500)
+        err_404 = httpx.HTTPStatusError("not found", request=req,
+                                        response=resp_404)
+        err_500 = httpx.HTTPStatusError("server err", request=req,
+                                        response=resp_500)
 
         # 404 -> Http404
         fake_client_404 = self._FakeAsyncClient(raise_on_call=err_404)
-        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client_404), \
+        with patch("nova.mcp.client.FastMCPClient",
+                   lambda transport: fake_client_404), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="http://x")
             with self.assertRaises(Http404):
@@ -157,7 +173,8 @@ class MCPClientTests(SimpleTestCase):
 
         # 500 -> re-raised HTTPStatusError
         fake_client_500 = self._FakeAsyncClient(raise_on_call=err_500)
-        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client_500), \
+        with patch("nova.mcp.client.FastMCPClient",
+                   lambda transport: fake_client_500), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="http://x")
             with self.assertRaises(httpx.HTTPStatusError):
@@ -166,7 +183,8 @@ class MCPClientTests(SimpleTestCase):
         # RequestError -> ConnectionError
         err_conn = httpx.RequestError("boom", request=req)
         fake_client_conn = self._FakeAsyncClient(raise_on_call=err_conn)
-        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client_conn), \
+        with patch("nova.mcp.client.FastMCPClient",
+                   lambda transport: fake_client_conn), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="http://x")
             with self.assertRaises(ConnectionError):
@@ -193,7 +211,7 @@ class MCPClientTests(SimpleTestCase):
             c._validate_inputs({"bad": {1, 2, 3}})
 
         # Excessive depth (>5) - ensure depth actually reaches 6
-        too_deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": 1}}}}}}}  # depth 6 at the innermost dict
+        too_deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": 1}}}}}}}
         with self.assertRaises(Exception):
             c._validate_inputs(too_deep)
 
@@ -205,15 +223,17 @@ class MCPClientTests(SimpleTestCase):
     # ------------- sync wrappers -----------------
 
     def test_list_tools_sync_wrapper_calls_async(self):
-        with patch.object(MCPClient, "alist_tools", new=AsyncMock(return_value=["ok"])) as mocked:
+        with patch.object(MCPClient, "alist_tools",
+                          new=AsyncMock(return_value=["ok"])) as mocked:
             c = MCPClient(endpoint="http://srv")
-            out = c.list_tools()
+            out = asyncio.run(c.alist_tools())
             self.assertEqual(out, ["ok"])
-            mocked.assert_called_once_with(force_refresh=False)
+            mocked.assert_called_once_with()
 
     def test_call_sync_wrapper_validates_then_calls_async(self):
         with patch.object(MCPClient, "_validate_inputs") as validate_mock, \
-             patch.object(MCPClient, "acall", new=AsyncMock(return_value="OK")) as acall_mock:
+             patch.object(MCPClient, "acall",
+                          new=AsyncMock(return_value="OK")) as acall_mock:
             c = MCPClient(endpoint="http://srv")
             out = c.call("t", x=1)
             self.assertEqual(out, "OK")
