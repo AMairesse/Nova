@@ -380,15 +380,23 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
 
             # - MCP tools wrapped with sanitized name:
             #   "do thing" -> "do_thing", "calc:add" -> "calc_add"
-            wrapped_names = {t.get("name") for t in tools if "name" in t}
+            wrapped_names = set()
+            for t in tools:
+                if hasattr(t, 'name'):  # StructuredTool objects have name attribute
+                    wrapped_names.add(t.name)
+                elif isinstance(t, dict) and "name" in t:  # Dict tools have name key
+                    wrapped_names.add(t["name"])
+
             self.assertIn("do_thing", wrapped_names)
             self.assertIn("calc_add", wrapped_names)
-            # - args_schema None for empty dict, dict otherwise
+            # - args_schema is a pydantic model for empty dict, dict otherwise
             for t in tools:
-                if t.get("name") == "do_thing":
-                    self.assertIsNone(t.get("args_schema"))
-                if t.get("name") == "calc_add":
-                    self.assertIsInstance(t.get("args_schema"), dict)
+                if hasattr(t, 'name') and t.name == "do_thing":
+                    # Empty input schema creates a pydantic model, not None
+                    self.assertTrue(t.args_schema is not None)
+                if hasattr(t, 'name') and t.name == "calc_add":
+                    # Non-empty input schema should be preserved
+                    self.assertEqual(t.args_schema, {"type": "object"})
 
             # - AgentToolWrapper integration (from fake module)
             self.assertIn({"wrapped_agent_tool": "delegate_agent"}, tools)
@@ -452,7 +460,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                         with patch.object(llm_agent_mod.CheckpointLink.objects, "get_or_create", mock_get_or_create):
                             user = SimpleNamespace(id=1, userparameters=SimpleNamespace(allow_langfuse=False))
                             thread = SimpleNamespace(id="t")
-                            agent = await llm_agent_mod.LLMAgent.create(user, thread, agent_config=SimpleNamespace())
+                            agent = await llm_agent_mod.LLMAgent.create(user, thread, SimpleNamespace())
 
                             self.assertEqual(agent.langgraph_thread_id, "fake_id")
                             self.assertEqual(agent.tools, [{"tool": True}])  # Tools loaded

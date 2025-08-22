@@ -216,7 +216,7 @@ async def run_ai_task(task, user, thread, agent_config, new_message):
         # Create custom handler and LLMAgent with callbacks
         handler = TaskProgressHandler(task.id, channel_layer)
         llm = await LLMAgent.create(user, thread,
-                                    agent_config=agent_config,
+                                    agent_config,
                                     callbacks=[handler])
 
         try:

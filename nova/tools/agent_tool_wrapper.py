@@ -51,7 +51,7 @@ class AgentToolWrapper:
             agent_llm = await LLMAgent.create(
                 self.user,
                 self.thread,
-                agent_config=self.agent_config,
+                self.agent_config,
             )
 
             try:
@@ -61,7 +61,8 @@ class AgentToolWrapper:
                 return f"Error in sub-agent {self.agent_config.name}: {str(e)} (Check connections or config)"
             finally:
                 try:
-                    await agent_llm.cleanup()  # Generic cleanup (handles browser if assigned as builtin)
+                    # Generic cleanup (handles browser if assigned as builtin)
+                    await agent_llm.cleanup()
                 except Exception as cleanup_error:
                     logger.error(f"Failed to cleanup sub-agent {self.agent_config.name}: {str(cleanup_error)}")
             

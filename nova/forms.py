@@ -106,7 +106,7 @@ class LLMProviderForm(forms.ModelForm):
         data = self.cleaned_data.get("max_context_tokens")
         if data is None and self.instance.pk:
             return self.instance.max_context_tokens
-        if data < 512:
+        if data is not None and data < 512:
             raise forms.ValidationError(
                 _("Max context tokens must be at least 512."))
         return data

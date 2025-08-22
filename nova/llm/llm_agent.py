@@ -11,7 +11,7 @@ from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
-from nova.models.models import Tool, ProviderType, LLMProvider
+from nova.models.models import Agent, Tool, ProviderType, LLMProvider
 from nova.models.models import CheckpointLink, UserFile
 from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
@@ -128,7 +128,7 @@ class LLMAgent:
 
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
-                     agent_config=None, parent_config=None,
+                     agent_config: Agent, parent_config=None,
                      callbacks: List[BaseCallbackHandler] = None):
         """
         Async factory to create an LLMAgent instance (an agent) with

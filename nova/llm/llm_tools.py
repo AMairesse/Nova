@@ -56,7 +56,7 @@ async def load_tools(agent) -> List[StructuredTool]:
             if cached_func_metas is not None:
                 func_metas = cached_func_metas
             else:
-                func_metas = client.alist_tools(force_refresh=True)
+                func_metas = await client.alist_tools(force_refresh=True)
 
             for meta in func_metas:
                 func_name = meta["name"]
@@ -73,10 +73,16 @@ async def load_tools(agent) -> List[StructuredTool]:
 
                 async_f = _remote_call_factory(func_name, client)
 
+                # Sanitize tool name: replace invalid characters with underscores
+                sanitized_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name).strip("_")[:64]
+                # Ensure name is not empty and starts with a letter
+                if not sanitized_name or not sanitized_name[0].isalpha():
+                    sanitized_name = f"tool_{hash(func_name) % 10000}"
+
                 wrapped = StructuredTool.from_function(
                     func=None,
                     coroutine=async_f,
-                    name=re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name)[:64],
+                    name=sanitized_name,
                     description=description,
                     args_schema=None if input_schema == {} else input_schema,
                 )
