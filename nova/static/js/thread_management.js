@@ -210,6 +210,8 @@
                 <div class="card-body py-2">
                   <div class="streaming-content"></div>
                 </div>
+                <div class="card-footer py-1 text-muted small text-end d-none">
+                </div>
               </div>
             `;
             conversationContainer.appendChild(streamingDiv);
@@ -292,6 +294,15 @@
           }
           const streamingContent = document.querySelector(".message.streaming .streaming-content");
           if (streamingContent) streamingContent.innerHTML = data.chunk;
+          return;
+        }
+
+        if (data.type === 'context_consumption') {
+          const streamingFooter = document.querySelector(".message.streaming .card-footer");
+          if (streamingFooter && data.approx_tokens && data.max_ctx) {
+            streamingFooter.classList.remove('d-none');
+            streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_ctx} (approximated)`;
+          }
           return;
         }
 

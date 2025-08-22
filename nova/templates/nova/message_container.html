@@ -30,7 +30,7 @@
         <!-- Context indication -->
         {% if message.internal_data.context_tokens and message.internal_data.max_context %}
         <div class="card-footer py-1 text-muted small text-end">
-          {% trans "Context" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }}
+          {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
         </div>
         {% endif %}
       </div>

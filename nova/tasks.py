@@ -237,6 +237,11 @@ async def run_ai_task(task, user, thread, agent_config, new_message):
             # Approximate token consumption relative to max context for this agent
             approx_tokens, max_ctx = await retrieve_context_consumption(agent_config, llm)
 
+            # Publish context consumption
+            await handler.publish_update('context_consumption',
+                                         {'approx_tokens': approx_tokens,
+                                          'max_ctx': max_ctx})
+
             # Store in message internal_data
             message.internal_data.update({
                 'context_tokens': approx_tokens,
@@ -250,7 +255,8 @@ async def run_ai_task(task, user, thread, agent_config, new_message):
                     return True
                 return False
 
-            needs_title_update = await sync_to_async(check_and_update_subject_sync, thread_sensitive=False)(thread)
+            needs_title_update = await sync_to_async(check_and_update_subject_sync,
+                                                     thread_sensitive=False)(thread)
             if needs_title_update:
                 short_title = await llm.ainvoke(
                     "Give a short title for this conversation (1–3 words).\
