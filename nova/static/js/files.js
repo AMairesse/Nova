@@ -4,7 +4,6 @@
 
   window.FileManager = {
     currentThreadId: null,
-    selectedFiles: new Set(),
     ws: null,
     isUploading: false,
     sidebarContentLoaded: false,  // Cache flag to avoid reloading content
@@ -163,6 +162,9 @@
         const icon = isFolder ? 'bi-folder' : this.getFileIcon(node.mime);
         const nodeId = node.id || `temp-${Date.now()}-${Math.random()}`;
         const nodePath = node.full_path || node.path;
+        const nameElement = isFolder 
+          ? `<span class="file-item-name">${node.name}</span>`
+          : `<a href="#" class="file-download-link" data-file-id="${nodeId}">${node.name}</a>`;
         
         html += `
           <li class="file-tree-item" data-id="${nodeId}" data-path="${nodePath}" data-type="${node.type}">
@@ -170,9 +172,9 @@
               <span class="file-item-icon">
                 <i class="bi ${icon}"></i>
               </span>
-              <span class="file-item-name">${node.name}</span>
+              ${nameElement}
               <span class="file-item-actions">
-                <button class="btn btn-sm btn-ghost file-delete-btn" onclick="FileManager.deleteFile('${nodeId}')" title="Delete file">
+                <button class="btn btn-sm btn-ghost file-delete-btn" onclick="FileManager.deleteFile('${nodeId}')" title="Delete ${isFolder ? 'directory' : 'file'}">
                   <i class="bi bi-trash"></i>
                 </button>
               </span>
@@ -206,27 +208,43 @@
     },
 
     bindTreeEvents() {
-      // Bind click events for file items
-      document.querySelectorAll('.file-tree-item').forEach(item => {
-        item.addEventListener('click', (e) => {
-          if (!e.target.closest('.file-item-actions')) {
-            this.selectFile(item.dataset.id);
+      // Bind file download links
+      document.querySelectorAll('.file-download-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const item = link.closest('.file-tree-item');
+          if (item) {
+            const fileId = item.dataset.id;
+            const fileName = link.textContent;
+            this.downloadFile(fileId, fileName);
           }
         });
       });
     },
 
-    selectFile(fileId) {
-      const item = document.querySelector(`[data-id="${fileId}"]`);
-      if (!item) return;
-      
-      // Toggle selection
-      if (this.selectedFiles.has(fileId)) {
-        this.selectedFiles.delete(fileId);
-        item.classList.remove('selected');
-      } else {
-        this.selectedFiles.add(fileId);
-        item.classList.add('selected');
+    async downloadFile(fileId, fileName) {
+      try {
+        const response = await window.DOMUtils.csrfFetch(`/files/download-url/${fileId}/`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Failed to get download URL');
+        }
+        const data = await response.json();
+        
+        if (data.url) {
+          const link = document.createElement('a');
+          link.href = data.url;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } else {
+          throw new Error('No URL received');
+        }
+      } catch (error) {
+        console.error('Download error:', error);
+        alert(`Error downloading "${fileName}": ${error.message}`);
       }
     },
 
@@ -261,7 +279,7 @@
         return;
       }
       
-      const fileName = item.querySelector('.file-item-name').textContent;
+      const fileName = item.querySelector('.file-item-name')?.textContent || item.querySelector('.file-download-link')?.textContent;
       const itemType = item.dataset.type;
       const itemPath = item.dataset.path;
       
@@ -285,10 +303,7 @@
       
       try {
         const response = await window.DOMUtils.csrfFetch(`/files/delete/${fileId}/`, { method: 'DELETE' });  // Fixed: Use csrfFetch
-        if (response.ok) {
-          // Remove from selected files if it was selected
-          this.selectedFiles.delete(fileId);
-          
+        if (response.ok) {          
           // Reload the file tree to reflect changes
           await this.loadTree();
           
@@ -337,8 +352,6 @@
             const deleteResponse = await window.DOMUtils.csrfFetch(`/files/delete/${fileId}/`, { method: 'DELETE' });  // Fixed: Use csrfFetch
             if (deleteResponse.ok) {
               deletedCount++;
-              // Remove from selected files if it was selected
-              this.selectedFiles.delete(fileId);
             } else {
               failedCount++;
               console.error(`Failed to delete file with ID: ${fileId}`);
@@ -580,10 +593,7 @@
         this.ws.close();
         this.ws = null;
       }
-      
-      // Clear selected files
-      this.selectedFiles.clear();
-      
+            
       // Load new file tree and reconnect WebSocket
       await this.loadTree();
       this.connectWebSocket();
@@ -612,10 +622,7 @@
         this.ws.close();
         this.ws = null;
       }
-      
-      // Clear selected files
-      this.selectedFiles.clear();
-      
+            
       // Update tree container to show no thread selected
       const treeContainer = document.getElementById('file-tree-container');
       if (treeContainer) {

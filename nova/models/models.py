@@ -9,6 +9,7 @@ from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 import logging
 from datetime import timedelta
+import botocore.config
 import boto3
 from botocore.exceptions import ClientError
 
@@ -17,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 def validate_relaxed_url(value):
     """
-    Simple validator for relaxed URLs: allows single-label hosts like 'langfuse:3000'.
+    Simple validator for relaxed URLs:
+    This allows single-label hosts like 'langfuse:3000'.
     Checks for scheme (http/https), host, optional port/path.
     """
     if not value:
@@ -26,7 +28,7 @@ def validate_relaxed_url(value):
     # Relaxed regex: scheme://host[:port][/path]
     regex = re.compile(
         r'^(https?://)'  # Scheme (http or https)
-        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host (single-label or with dots)
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host
         r'(?::\d{1,5})?'  # Optional port
         r'(?:/[^\s]*)?$'  # Optional path
     )
@@ -48,10 +50,11 @@ class LLMProvider(models.Model):
         choices=ProviderType.choices,
         default=ProviderType.OLLAMA,
     )
-    model = models.CharField(max_length=120)  # mistral-small-latest, gpt-4o-mini, llama3, etc.
+    model = models.CharField(max_length=120)
     api_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    base_url = models.URLField(blank=True, null=True)  # For custom endpoints
-    additional_config = models.JSONField(default=dict, blank=True)  # For other provider-specific settings
+    base_url = models.URLField(blank=True, null=True)
+    # For other provider-specific settings
+    additional_config = models.JSONField(default=dict, blank=True)
     max_context_tokens = models.PositiveIntegerField(
         default=4096,
         help_text=_("Maximum tokens for this provider's context window (e.g., 4096 for small models, 100000 or more for large).")
@@ -77,12 +80,15 @@ class LLMProvider(models.Model):
 
 
 class UserParameters(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL,
+                                on_delete=models.CASCADE)
     allow_langfuse = models.BooleanField(default=False)
 
     # Langfuse per-user config
-    langfuse_public_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    langfuse_secret_key = EncryptedCharField(max_length=255, blank=True, null=True)
+    langfuse_public_key = EncryptedCharField(max_length=255, blank=True,
+                                             null=True)
+    langfuse_secret_key = EncryptedCharField(max_length=255, blank=True,
+                                             null=True)
     langfuse_host = models.CharField(
         max_length=200,
         blank=True,
@@ -340,7 +346,8 @@ class ToolCredential(models.Model):
         unique_together = ('user', 'tool')
 
     def __str__(self):
-        return _("{}'s credentials for {}").format(self.user.username, self.tool.name)
+        return _("{}'s credentials for {}").format(self.user.username,
+                                                   self.tool.name)
 
 
 # ----- Task Model for Asynchronous AI Tasks -----
@@ -369,8 +376,10 @@ class Task(models.Model):
     status = models.CharField(max_length=10,
                               choices=TaskStatus.choices,
                               default=TaskStatus.PENDING)
-    progress_logs = models.JSONField(default=list, blank=True)  # List of dicts, e.g., [{"step": "Calling tool X", "timestamp": "2025-07-28T03:58:00Z"}]
-    result = models.TextField(blank=True, null=True)  # Final output or error message
+    # List of dicts, e.g., [{"step": "Calling tool X", "timestamp": "2025-07-28T03:58:00Z"}]
+    progress_logs = models.JSONField(default=list, blank=True)
+    # Final output or error message
+    result = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -380,13 +389,19 @@ class Task(models.Model):
 
 # Model for user-uploaded files stored in MinIO
 class UserFile(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='files')
-    thread = models.ForeignKey('Thread', on_delete=models.SET_NULL, null=True, blank=True, related_name='files')
-    key = models.CharField(max_length=255, unique=True)  # S3 object key (e.g., users/user_id/threads/thread_id/dir/subdir/file.txt)
-    original_filename = models.CharField(max_length=255)  # Updated: Now holds full path, e.g., '/dir/subdir/file.txt' (was just filename)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.CASCADE,
+                             related_name='files')
+    thread = models.ForeignKey('Thread', on_delete=models.SET_NULL, null=True,
+                               blank=True, related_name='files')
+    # S3 object key (e.g., users/user_id/threads/thread_id/dir/subdir/file.txt)
+    key = models.CharField(max_length=255, unique=True)
+    original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=100)
-    size = models.PositiveIntegerField()  # File size in bytes
-    expiration_date = models.DateTimeField(null=True, blank=True)  # Auto-delete after this date
+    # File size in bytes
+    size = models.PositiveIntegerField()
+    # Auto-delete after this date
+    expiration_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -394,10 +409,11 @@ class UserFile(models.Model):
         unique_together = (('user', 'key'),)
 
     def __str__(self):
-        return f"{self.original_filename} ({self.key})"  # Updated: Reflects full path in string rep for debugging
+        return f"{self.original_filename} ({self.key})"
 
     def save(self, *args, **kwargs):
-        if not self.key and self.user and self.thread:  # Generate key only if not set (allow overrides if needed)
+        # Generate key only if not set (allow overrides if needed)
+        if not self.key and self.user and self.thread:
             self.key = f"users/{self.user.id}/threads/{self.thread.id}{self.original_filename}"
 
         # Save the object first to set auto_now_add fields
@@ -406,25 +422,39 @@ class UserFile(models.Model):
         # Now calculate expiration_date if not already set
         if not self.expiration_date:
             self.expiration_date = self.created_at + timedelta(days=30)
-            super().save(update_fields=['expiration_date'])  # Save again with updated field
+            # Save again with updated field
+            super().save(update_fields=['expiration_date'])
 
     def get_download_url(self, expires_in=3600):
         """Generate presigned URL for download (expires in seconds)."""
         if self.expiration_date and self.expiration_date < timezone.now():
             self.delete()
             raise ValueError("File expired and deleted.")
+
+        # Get external base from trusted origins (includes port like :8080)
+        external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip('/')
+
         s3_client = boto3.client(
             's3',
             endpoint_url=settings.MINIO_ENDPOINT_URL,
             aws_access_key_id=settings.MINIO_ACCESS_KEY,
-            aws_secret_access_key=settings.MINIO_SECRET_KEY
+            aws_secret_access_key=settings.MINIO_SECRET_KEY,
+            config=botocore.config.Config(
+                signature_version='s3v4',
+            ),
         )
         try:
-            return s3_client.generate_presigned_url(
+            # Generate presigned URL
+            url = s3_client.generate_presigned_url(
                 'get_object',
                 Params={'Bucket': settings.MINIO_BUCKET_NAME, 'Key': self.key},
                 ExpiresIn=expires_in
             )
+
+            # Change the URL to include the external base
+            url = url.replace(settings.MINIO_ENDPOINT_URL, external_base)
+
+            return url
         except ClientError as e:
             logger.error(f"Error generating presigned URL: {e}")
             return None

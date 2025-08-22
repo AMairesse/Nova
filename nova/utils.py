@@ -59,23 +59,6 @@ def estimate_tokens(text: str = None, input_size: int = None) -> int:
         return 0
 
 
-def estimate_total_context(agent: 'LLMAgent') -> int:
-    """Estimate tokens for system_prompt + tools desc + history."""
-    total = 0
-    # System prompt
-    total += estimate_tokens(agent.build_system_prompt())
-    # Tools desc (approx: sum of descriptions from agent.tools)
-    tools_desc = " ".join([t.description for t in getattr(agent, 'tools', [])])
-    total += estimate_tokens(tools_desc)
-    # History (sum message contents from state via checkpointer)
-    state = agent.langchain_agent.get_state(agent.config)
-    messages = state.values.get('messages', [])  # Liste des BaseMessage
-    for msg in messages:
-        if isinstance(msg, BaseMessage):
-            total += estimate_tokens(msg.content)
-    return total
-
-
 def schedule_in_event_loop(coro):
     """
     Planifie la coroutine `coro` dans la boucle ASGI principale

@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from nova.models.models import UserFile
 from nova.models.Thread import Thread
 from nova.llm.llm_agent import LLMAgent
-from nova.utils import estimate_tokens, estimate_total_context
+from nova.utils import estimate_tokens
 import logging
 import uuid
 from io import BytesIO
@@ -86,9 +86,8 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
     if not file.mime_type.startswith('text/'):
         return "File is not text; use read_file_chunk for binary or large files."
 
-    approx_context = await sync_to_async(estimate_total_context,
-                                         thread_sensitive=False)(agent)
-    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
+    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens,
+                                     thread_sensitive=False)()
 
     session = aioboto3.Session()
     async with session.client(
@@ -98,13 +97,15 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
         aws_secret_access_key=settings.MINIO_SECRET_KEY
     ) as s3_client:
         try:
-            head = await s3_client.head_object(Bucket=settings.MINIO_BUCKET_NAME, Key=file.key)
+            head = await s3_client.head_object(Bucket=settings.MINIO_BUCKET_NAME,
+                                               Key=file.key)
             file_size = head['ContentLength']
             estimated_file_tokens = estimate_tokens(input_size=file_size)
-            if estimated_file_tokens + approx_context > max_tokens:
-                return f"File too large ({estimated_file_tokens} tokens + context > {max_tokens}). Use read_file_chunk."
+            if estimated_file_tokens > max_tokens:
+                return f"File too large ({estimated_file_tokens} tokens > {max_tokens}). Use read_file_chunk."
 
-            response = await s3_client.get_object(Bucket=settings.MINIO_BUCKET_NAME, Key=file.key)
+            response = await s3_client.get_object(Bucket=settings.MINIO_BUCKET_NAME,
+                                                  Key=file.key)
             content = await response['Body'].read()
             try:
                 return content.decode('utf-8')
@@ -115,7 +116,8 @@ async def read_file(agent: LLMAgent, file_id: int) -> str:
             return f"Error reading file: {str(e)}"
 
 
-async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_size: int = 4096) -> str:
+async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0,
+                          chunk_size: int = 4096) -> str:
     """Read a chunk of the file (bytes range). Use for large files."""
     file = await async_get_object_or_404(UserFile, id=file_id)
     thread_id, user = await async_get_threadid_and_user(agent)
@@ -124,7 +126,8 @@ async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_s
         return "Permission denied."
 
     estimated_chunk_tokens = chunk_size // 4 + 1
-    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
+    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens,
+                                     thread_sensitive=False)()
     if estimated_chunk_tokens > max_tokens * 0.5:
         return f"Chunk too large ({estimated_chunk_tokens} tokens > half of {max_tokens}). Reduce chunk_size."
 
@@ -152,7 +155,7 @@ async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0, chunk_s
 
 async def create_file(thread_id, user, filename: str, content: str) -> str:
     """Create a new file in the current thread with given content."""
-    thread = await async_get_object_or_404(Thread, id=thread_id, user=user)  # Ownership check implicite
+    thread = await async_get_object_or_404(Thread, id=thread_id, user=user)
     unique_id = uuid.uuid4().hex[:8]
     user_id = await async_get_user_id(user)
     key = f"{user_id}/{thread_id}/{unique_id}_{filename}"
@@ -181,7 +184,8 @@ async def create_file(thread_id, user, filename: str, content: str) -> str:
 
 
 async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
-    """Return a list of StructuredTool instances with agent bound via partial."""
+    """Return a list of StructuredTool instances
+       with agent bound via partial."""
     thread_id, user = await async_get_threadid_and_user(agent)
     return [
         StructuredTool.from_function(

@@ -18,7 +18,10 @@ services:
     extends:
       file: docker-compose.base.yml
       service: minio
-
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+  
   minio-nova-init:
     extends:
       file: docker-compose.base.yml
@@ -50,6 +53,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
+      - "8000:8000"  # Direct exposure
       - "5678:5678"  # Debug remote
       - "8000:8000"  # Direct exposure for debug without nginx if needed
     environment:

@@ -13,13 +13,14 @@ This setup include :
 
 1. Download the minimal setup:
 
-   You will need the `docker-compose.yml` file, the `nginx.conf` file and a `.env` file.
+   You will need the `docker-compose.yml` file, the `nginx.conf` file, the `template/nginx.conf.template` file and a `.env` file.
 
    ```bash
    mkdir nova
    cd nova
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.minimal.yml
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx.conf
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/template/nginx.conf.template
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/.env.example
    mv .env.example .env
    ```

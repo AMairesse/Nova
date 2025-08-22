@@ -3,9 +3,9 @@ from channels.layers import get_channel_layer
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import JsonResponse, HttpResponseBadRequest
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404
 from django.views import View
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 from django.views.decorators.csrf import csrf_protect
 from asgiref.sync import sync_to_async
 import logging
@@ -48,6 +48,21 @@ async def async_read_file(file) -> bytes:
             content += chunk
         return content
     return await sync_read()
+
+
+@csrf_protect
+@require_GET
+@login_required(login_url='login')
+def file_download_url(request, file_id):
+    file = get_object_or_404(UserFile, id=file_id, user=request.user)
+    if file.thread.user != request.user:  # Extra ownership check
+        return JsonResponse({'error': 'Unauthorized'}, status=403)
+
+    url = file.get_download_url(expires_in=3600)  # 1-hour expiry
+    if not url:
+        return JsonResponse({'error': 'Failed to generate URL'}, status=500)
+
+    return JsonResponse({'url': url})
 
 
 @csrf_protect
