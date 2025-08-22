@@ -72,7 +72,7 @@ function getProviderFields(providerType) {
       ${commonField}`
   };
 
-  return (fields[providerType] || (() => commonField))();
+  return (fields[providerType] || (() => ''))();  // Empty if unknown type
 }
 
 /* Simple helper */
@@ -135,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* Refresh provider-specific fields when provider changes in the edit form */
   document.getElementById('editLlmProvider').addEventListener('change', function () {
-    injectFields(this, 'editProviderFields');
+    injectFields(this, 'editProviderConfigFields');
   });
 
   /* Toggle tool description in create modal */
