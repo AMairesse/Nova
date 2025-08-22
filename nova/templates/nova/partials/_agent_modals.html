@@ -59,11 +59,12 @@
               <label class="form-label">{% trans "Available tools" %}</label>
               <div class="tools-selection" id="createToolsSelection">
                 {% for tool in tools %}
+                  <!-- In create agent modal, only show active tools -->
                   <div class="form-check">
                     <input class="form-check-input" type="checkbox"
                            name="tools" value="{{ tool.id }}" id="tool{{ tool.id }}">
-                    <label class="form-check-label" for="tool{{ tool.id }}">
-                      {{ tool.name }} — {{ tool.description }}
+                    <label class="form-check-label {% if not tool.is_active %}text-muted{% endif %}" for="editTool{{ tool.id }}">
+                      {{ tool.name }} — {{ tool.description }} {% if not tool.is_active %}({% trans "inactive" %}){% endif %}
                     </label>
                   </div>
                 {% endfor %}
@@ -157,11 +158,12 @@
               <label class="form-label">{% trans "Associated tools" %}</label>
               <div class="tools-selection" id="editToolsSelection">
                 {% for tool in tools %}
+                  <!-- In edit agent modal, show inactive tools if agent have their own tools already -->
                   <div class="form-check">
                     <input class="form-check-input" type="checkbox"
                            name="tools" value="{{ tool.id }}" id="editTool{{ tool.id }}">
-                    <label class="form-check-label" for="editTool{{ tool.id }}">
-                      {{ tool.name }} — {{ tool.description }}
+                    <label class="form-check-label {% if not tool.is_active %}text-muted{% endif %}" for="editTool{{ tool.id }}">
+                      {{ tool.name }} — {{ tool.description }} {% if not tool.is_active %}({% trans "inactive" %}){% endif %}
                     </label>
                   </div>
                 {% endfor %}

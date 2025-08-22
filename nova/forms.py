@@ -80,14 +80,15 @@ class LLMProviderForm(forms.ModelForm):
         widgets = {
             "api_key": forms.PasswordInput(render_value=False),
             "additional_config": forms.HiddenInput(),
-            "max_context_tokens": forms.NumberInput(attrs={'min': 512}),  # UI hint
+            "max_context_tokens": forms.NumberInput(attrs={'min': 512}),
         }
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # Set initial default based on provider_type (for new instances)
         if not self.instance.pk:
-            provider_type = self.data.get('provider_type') or self.initial.get('provider_type')
+            provider_type = self.data.get('provider_type') or \
+                            self.initial.get('provider_type')
             if provider_type in [ProviderType.OLLAMA, ProviderType.LLMSTUDIO]:
                 self.initial['max_context_tokens'] = 4096
             elif provider_type in [ProviderType.OPENAI, ProviderType.MISTRAL]:
@@ -106,7 +107,8 @@ class LLMProviderForm(forms.ModelForm):
         if data is None and self.instance.pk:
             return self.instance.max_context_tokens
         if data < 512:
-            raise forms.ValidationError(_("Max context tokens must be at least 512."))
+            raise forms.ValidationError(
+                _("Max context tokens must be at least 512."))
         return data
 
 
@@ -145,7 +147,6 @@ class AgentForm(forms.ModelForm):
             # Regular tools: owned by user or public built-ins
             self.fields["tools"].queryset = Tool.objects.filter(
                 models.Q(user=user) | models.Q(user__isnull=True),
-                is_active=True,
             )
 
             # Other agents that are flagged as tools
@@ -247,7 +248,7 @@ class ToolForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         # Built-in tools: name / description optional in the form
-        self.fields["name"].required        = False
+        self.fields["name"].required = False
         self.fields["description"].required = False
 
         # ---- 3) Populate the subtype <select> ----------------------------
@@ -259,9 +260,9 @@ class ToolForm(forms.ModelForm):
 
         # ---- 4) Pre-fill JSON editors when editing a non-builtin tool ----
         if self.instance and self.instance.pk:
-            if self.instance.input_schema and self.instance.tool_type != Tool.ToolType.BUILTIN:
+            if (self.instance.input_schema) and (self.instance.tool_type != Tool.ToolType.BUILTIN):
                 self.fields["input_schema"].initial = self.instance.input_schema
-            if self.instance.output_schema and self.instance.tool_type != Tool.ToolType.BUILTIN:
+            if (self.instance.output_schema) and (self.instance.tool_type != Tool.ToolType.BUILTIN):
                 self.fields["output_schema"].initial = self.instance.output_schema
 
     # --------------------------------------------------------------------- #

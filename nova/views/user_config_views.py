@@ -44,11 +44,10 @@ class UserConfigView(View):
             'agent_form': agent_form,
             'agents': agents,
             'agents_normal': agents_normal,
-            'agents_tools': agents_tools, 
+            'agents_tools': agents_tools,
             'llm_providers': LLMProvider.objects.filter(user=request.user),
             'tools': Tool.objects.filter(
-                models.Q(user=request.user) | models.Q(user__isnull=True),
-                is_active=True
+                models.Q(user=request.user) | models.Q(user__isnull=True)
             ).distinct(),
             'tool_types': tool_types,
             'user_profile': user_profile,
@@ -65,7 +64,8 @@ class UserConfigView(View):
         user_params, _ = UserParameters.objects.get_or_create(user=request.user)
 
         # Build the user parameters form
-        user_params_form = UserParametersForm(request.POST, instance=user_params)
+        user_params_form = UserParametersForm(request.POST,
+                                              instance=user_params)
 
         action = request.POST.get('action')
 
@@ -75,7 +75,9 @@ class UserConfigView(View):
                 return redirect('user_config')
 
             # Invalid: use common context with forced tab and bound form
-            context = self._get_common_context(request, user_params_form=user_params_form, active_tab='general-config')
+            context = self._get_common_context(request,
+                                               user_params_form=user_params_form,
+                                               active_tab='general-config')
             return render(request, self.template_name, context)
 
         # Fallback if neither button recognized (rare)

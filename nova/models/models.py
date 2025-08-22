@@ -253,6 +253,12 @@ class Agent(models.Model):
                 profile.default_agent = self
                 profile.save()
 
+        # If agent is a tool, remove from default if it was previously default
+        if self.is_tool and self == self.user.userprofile.default_agent:
+            profile, _ = UserProfile.objects.get_or_create(user=self.user)
+            profile.default_agent = None
+            profile.save()
+
     # -----------------------------------------------------------------
     # Internal cycle detector (DFS with recursion stack)
     # -----------------------------------------------------------------
