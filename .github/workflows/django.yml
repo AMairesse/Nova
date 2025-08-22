@@ -28,6 +28,7 @@ jobs:
     - name: Create .env file
       run: |
         cp docker/.env.example .env
+        echo "DEBUG=True" >> .env
     - name: Run Tests
       run: |
         python manage.py test --settings=nova.settings_test
