@@ -19,6 +19,11 @@ services:
       file: docker-compose.base.yml
       service: minio
 
+  minio-nova-init:
+    extends:
+      file: docker-compose.base.yml
+      service: minio-nova-init
+
   web:
     extends:
       file: docker-compose.base.yml
