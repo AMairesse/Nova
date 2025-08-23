@@ -11,9 +11,9 @@
             <div class="modal-body">
                 <p>{% trans "Are you sure you want to delete this tool ? This action cannot be undone." %}</p>
                 {% if tool.agents.exists %}
-                <div class="alert alert-warning">
-                    <strong>{% trans "Warning :" %}</strong>{% blocktrans %} This tool is used by {{ tool.agents.count }} agents. {% endblocktrans %} 
-                    {% trans "Deleting it will also delete these agents." %}
+                <div class="alert alert-info">
+                    <strong>{% trans "Information :" %}</strong>{% blocktrans %} This tool is used by {{ tool.agents.count }} agents. {% endblocktrans %} 
+                    {% trans "Deleting it will remove this tool from these agents, but the agents themselves will not be deleted." %}
                 </div>
                 {% endif %}
             </div>

@@ -1,6 +1,8 @@
-import re
+import asyncio
+from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
-from typing import Tuple
+from langchain_core.messages import BaseMessage
+
 
 def normalize_url(urlish) -> str:
     """
@@ -13,12 +15,12 @@ def normalize_url(urlish) -> str:
     """
     # 1. Parse
     parsed = urlparse(str(urlish))
-    scheme  = parsed.scheme.lower()
-    host    = parsed.hostname or ""
-    port    = parsed.port
-    params  = parsed.params
-    path    = parsed.path
-    query   = parsed.query
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname or ""
+    port = parsed.port
+    params = parsed.params
+    path = parsed.path
+    query = parsed.query
     fragment = parsed.fragment
 
     # 2. Strip default ports
@@ -34,6 +36,7 @@ def normalize_url(urlish) -> str:
     # 4. Re-assemble, keeping every component
     return urlunparse((scheme, netloc, path, params, query, fragment))
 
+
 def extract_final_answer(output):
     from langchain_core.messages import BaseMessage
     if isinstance(output, str):
@@ -44,3 +47,26 @@ def extract_final_answer(output):
     if isinstance(output, dict) and "messages" in output:
         return extract_final_answer(output["messages"])
     return str(output)
+
+
+def estimate_tokens(text: str = None, input_size: int = None) -> int:
+    """Simple token estimation: approx 1 token per 4 chars."""
+    if input_size:
+        return input_size // 4 + 1
+    elif text is not None:
+        return len(text) // 4 + 1
+    else:
+        return 0
+
+
+def schedule_in_event_loop(coro):
+    """
+    Planifie la coroutine `coro` dans la boucle ASGI principale
+    sans bloquer la vue synchrone.
+    """
+    async def _runner():
+        # on est DÉJÀ dans la boucle ASGI → create_task fonctionne
+        asyncio.create_task(coro)
+
+    # async_to_sync exécute _runner dans la boucle principale
+    async_to_sync(_runner)()

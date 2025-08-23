@@ -125,15 +125,10 @@ document.addEventListener("DOMContentLoaded", () => {
       resultDiv.style.display = "block";
 
       const formData = new FormData(form);
-      getCSRFToken()
-        .then((token) =>
-          fetch(`/tool/test-connection/${toolId}/`, {
-            method: "POST",
-            body: formData,
-            headers: { "X-CSRFToken": token },
-            credentials: "include",
-          })
-        )
+      DOMUtils.csrfFetch(`/tool/test-connection/${toolId}/`, {
+        method: "POST",
+        body: formData,
+      })
         .then((r) => r.json())
         .then((data) => {
           resultDiv.className = "alert mt-2";

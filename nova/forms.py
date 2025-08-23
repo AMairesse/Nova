@@ -6,17 +6,16 @@ All user-facing strings are wrapped in gettext_lazy for i18n.
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from django import forms
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from django.utils.encoding import force_str
 
-from .models import (
+from nova.models.models import (
     Agent,
     LLMProvider,
+    ProviderType,
     Tool,
     ToolCredential,
     UserParameters,
@@ -39,7 +38,7 @@ class UserParametersForm(forms.ModelForm):
             "langfuse_host"
         ]
         widgets = {
-            "langfuse_public_key": forms.PasswordInput(render_value=False),
+            "langfuse_public_key": forms.TextInput(),
             "langfuse_secret_key": forms.PasswordInput(render_value=False)
         }
 
@@ -76,17 +75,40 @@ class LLMProviderForm(forms.ModelForm):
             "api_key",
             "base_url",
             "additional_config",
+            "max_context_tokens",
         ]
         widgets = {
             "api_key": forms.PasswordInput(render_value=False),
             "additional_config": forms.HiddenInput(),
+            "max_context_tokens": forms.NumberInput(attrs={'min': 512}),
         }
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Set initial default based on provider_type (for new instances)
+        if not self.instance.pk:
+            provider_type = self.data.get('provider_type') or \
+                            self.initial.get('provider_type')
+            if provider_type in [ProviderType.OLLAMA, ProviderType.LLMSTUDIO]:
+                self.initial['max_context_tokens'] = 4096
+            elif provider_type in [ProviderType.OPENAI, ProviderType.MISTRAL]:
+                self.initial['max_context_tokens'] = 100000
 
     def clean_api_key(self) -> str:
         """Preserve the encrypted value if the field is left blank."""
         data = self.cleaned_data.get("api_key", "")
         if not data and self.instance.pk:
             return self.instance.api_key
+        return data
+
+    def clean_max_context_tokens(self) -> int:
+        """Preserve existing value if not provided, with min validation."""
+        data = self.cleaned_data.get("max_context_tokens")
+        if data is None and self.instance.pk:
+            return self.instance.max_context_tokens
+        if data is not None and data < 512:
+            raise forms.ValidationError(
+                _("Max context tokens must be at least 512."))
         return data
 
 
@@ -125,7 +147,6 @@ class AgentForm(forms.ModelForm):
             # Regular tools: owned by user or public built-ins
             self.fields["tools"].queryset = Tool.objects.filter(
                 models.Q(user=user) | models.Q(user__isnull=True),
-                is_active=True,
             )
 
             # Other agents that are flagged as tools
@@ -227,7 +248,7 @@ class ToolForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         # Built-in tools: name / description optional in the form
-        self.fields["name"].required        = False
+        self.fields["name"].required = False
         self.fields["description"].required = False
 
         # ---- 3) Populate the subtype <select> ----------------------------
@@ -239,9 +260,9 @@ class ToolForm(forms.ModelForm):
 
         # ---- 4) Pre-fill JSON editors when editing a non-builtin tool ----
         if self.instance and self.instance.pk:
-            if self.instance.input_schema and self.instance.tool_type != Tool.ToolType.BUILTIN:
+            if (self.instance.input_schema) and (self.instance.tool_type != Tool.ToolType.BUILTIN):
                 self.fields["input_schema"].initial = self.instance.input_schema
-            if self.instance.output_schema and self.instance.tool_type != Tool.ToolType.BUILTIN:
+            if (self.instance.output_schema) and (self.instance.tool_type != Tool.ToolType.BUILTIN):
                 self.fields["output_schema"].initial = self.instance.output_schema
 
     # --------------------------------------------------------------------- #

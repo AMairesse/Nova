@@ -14,11 +14,11 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='tool',
             name='input_schema',
-            field=models.JSONField(blank=True, default=nova.models.get_default_schema, null=True),
+            field=models.JSONField(blank=True, default={}, null=True),
         ),
         migrations.AlterField(
             model_name='tool',
             name='output_schema',
-            field=models.JSONField(blank=True, default=nova.models.get_default_schema, null=True),
+            field=models.JSONField(blank=True, default={}, null=True),
         ),
     ]

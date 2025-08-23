@@ -1,21 +1,18 @@
-/* nova/static/js/utils.js - Utility functions */
+/* nova/static/js/utils.js - Utility functions with absorbed CSRF */
 (function() {
   'use strict';
 
   // LocalStorage utilities with expiration support
   const StorageUtils = {
-    // Set item with expiry (TTL in ms, default 1h)
     setWithExpiry(key, value, ttl = 3600000) {
       const now = new Date().getTime();
       const item = { value: value, expiry: now + ttl };
       localStorage.setItem(key, JSON.stringify(item));
     },
 
-    // Get item and check expiry
     getWithExpiry(key) {
       const itemStr = localStorage.getItem(key);
       if (!itemStr) return null;
-      
       try {
         const item = JSON.parse(itemStr);
         const now = new Date().getTime();
@@ -30,7 +27,6 @@
       }
     },
 
-    // Simple get/set without expiry
     set(key, value) {
       try {
         localStorage.setItem(key, JSON.stringify(value));
@@ -52,7 +48,6 @@
       localStorage.removeItem(key);
     },
 
-    // Task-specific helpers
     addStoredTask(threadId, taskId) {
       if (!threadId || !taskId) return;
       const key = `storedTask_${threadId}`;
@@ -62,9 +57,7 @@
     removeStoredTask(threadId, taskId) {
       const key = `storedTask_${threadId}`;
       const storedTask = this.getWithExpiry(key);
-      if (storedTask === taskId) {
-        this.remove(key);
-      }
+      if (storedTask === taskId) this.remove(key);
     },
 
     getStoredRunningTasks(threadId) {
@@ -76,7 +69,7 @@
     }
   };
 
-  // DOM utilities to replace jQuery
+  // DOM and Network utilities
   const DOMUtils = {
     // Query selectors
     $(selector) {
@@ -89,38 +82,48 @@
 
     // Event handling
     on(element, event, handler) {
-      if (typeof element === 'string') {
-        element = this.$(element);
-      }
-      if (element) {
-        element.addEventListener(event, handler);
-      }
+      if (typeof element === 'string') element = this.$(element);
+      if (element) element.addEventListener(event, handler);
     },
 
     // Form data serialization
     serializeForm(form) {
-      if (typeof form === 'string') {
-        form = this.$(form);
-      }
+      if (typeof form === 'string') form = this.$(form);
       return new FormData(form);
+    },
+
+    // CSRF token cache
+    _tokenPromise: null,
+    async getCSRFToken() {
+      if (!this._tokenPromise) {
+        this._tokenPromise = fetch("/api/csrf/", { credentials: "include" })
+          .then(r => r.json())
+          .then(({ csrfToken }) => csrfToken);
+      }
+      return this._tokenPromise;
+    },
+
+    // Fetch with auto-CSRF
+    async csrfFetch(input, init = {}) {
+      const method = (init.method || "GET").toUpperCase();
+      const headers = new Headers(init.headers || {});
+
+      if (!/^(GET|HEAD|OPTIONS|TRACE)$/.test(method)) {
+        headers.set("X-CSRFToken", await this.getCSRFToken());
+      }
+
+      return fetch(input, {
+        ...init,
+        method,
+        headers,
+        credentials: "include",
+      });
     },
 
     // Simple AJAX wrapper
     async ajax(options) {
-      const {
-        url,
-        method = 'GET',
-        data,
-        headers = {}
-      } = options;
-
-      const config = {
-        method,
-        headers: {
-          'X-AJAX': 'true',
-          ...headers
-        }
-      };
+      const { url, method = 'GET', data, headers = {} } = options;
+      const config = { method, headers: { 'X-AJAX': 'true', ...headers } };
 
       if (data) {
         if (data instanceof FormData) {
@@ -134,25 +137,13 @@
       }
 
       const response = await fetch(url, config);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        return response.json();
-      }
-      return response.text();
+      return contentType?.includes('application/json') ? response.json() : response.text();
     }
   };
 
   // Expose utilities globally
   window.StorageUtils = StorageUtils;
   window.DOMUtils = DOMUtils;
-
-  // Backward compatibility
-  window.addStoredTask = StorageUtils.addStoredTask.bind(StorageUtils);
-  window.removeStoredTask = StorageUtils.removeStoredTask.bind(StorageUtils);
-
 })();

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-08-01 15:04+0200\n"
+"POT-Creation-Date: 2025-08-22 16:53+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,63 +18,75 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: nova/static/js/tool_management.js:100
+#: nova/static/js/files.js:155
+msgid "No files in this thread."
+msgstr "No files in this thread."
+
+#: nova/static/js/tool_management.js:103
 msgid "Invalid JSON: "
 msgstr "Invalid JSON: "
 
-#: nova/static/js/tool_management.js:120
+#: nova/static/js/tool_management.js:123
 msgid "Testing…"
 msgstr "Testing…"
 
-#: nova/static/js/tool_management.js:143
+#: nova/static/js/tool_management.js:141
 msgid "Available calendars:"
 msgstr "Available calendars:"
 
-#: nova/static/js/tool_management.js:151
+#: nova/static/js/tool_management.js:149
 msgid "MCP tools available:"
 msgstr "MCP tools available:"
 
-#: nova/static/js/tool_management.js:163
+#: nova/static/js/tool_management.js:161
 msgid "input_schema"
 msgstr "input_schema"
 
-#: nova/static/js/tool_management.js:169
+#: nova/static/js/tool_management.js:167
 msgid "output_schema"
 msgstr "output_schema"
 
-#: nova/static/js/tool_management.js:178
+#: nova/static/js/tool_management.js:176
 msgid "Error"
 msgstr "Error"
 
-#: nova/static/js/tool_management.js:179
+#: nova/static/js/tool_management.js:177
 msgid "Unknown error"
 msgstr "Unknown error"
 
-#: nova/static/js/tool_management.js:187
+#: nova/static/js/tool_management.js:185
 msgid "Network error: "
 msgstr "Network error: "
 
-#: nova/static/js/user_config.js:9 nova/static/js/user_config.js:22
-#: nova/static/js/user_config.js:39 nova/static/js/user_config.js:49
+#: nova/static/js/user_config.js:14
+msgid "Max context tokens"
+msgstr "Max context tokens"
+
+#: nova/static/js/user_config.js:16
+msgid "Max tokens for this provider's context (e.g., 4096 for small models)."
+msgstr "Max tokens for this provider's context (e.g., 4096 for small models)."
+
+#: nova/static/js/user_config.js:22 nova/static/js/user_config.js:36
+#: nova/static/js/user_config.js:54 nova/static/js/user_config.js:65
 msgid "Model"
 msgstr "Model"
 
-#: nova/static/js/user_config.js:13 nova/static/js/user_config.js:26
+#: nova/static/js/user_config.js:26 nova/static/js/user_config.js:40
 msgid "API key"
 msgstr "API key"
 
-#: nova/static/js/user_config.js:16 nova/static/js/user_config.js:29
+#: nova/static/js/user_config.js:29 nova/static/js/user_config.js:43
 msgid "A key is already registered ; leave empty to keep it."
 msgstr "A key is already registered ; leave empty to keep it."
 
-#: nova/static/js/user_config.js:33
+#: nova/static/js/user_config.js:47
 msgid "Base URL (optional)"
 msgstr "Base URL (optional)"
 
-#: nova/static/js/user_config.js:43 nova/static/js/user_config.js:53
+#: nova/static/js/user_config.js:58 nova/static/js/user_config.js:69
 msgid "Base URL"
 msgstr "Base URL"
 
-#: nova/static/js/user_config.js:143
+#: nova/static/js/user_config.js:160
 msgid "Tool description is required when using as tool."
 msgstr "Tool description is required when using as tool."

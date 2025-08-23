@@ -1,41 +1,17 @@
 /* Nova Application Main Styles */
 
-/* Layout Structure */
+/* Layout Structure - Using Bootstrap flex utilities where possible */
 body {
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
 }
 
 .main-container {
     flex: 1;
-    display: flex;
-    flex-direction: column;
     min-height: 0;
-    /* Important for flex children */
-}
-
-.chat-layout {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-}
-
-/* Sidebar */
-.sidebar-sticky {
-    position: sticky;
-    top: 0;
-    height: calc(100vh - 56px);
-    /* Account for navbar height */
-    overflow-y: auto;
-    flex-shrink: 0;
 }
 
 /* Message Area */
 .message-area {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
     min-height: 0;
 }
 
@@ -54,12 +30,6 @@ body {
     height: 38px;
 }
 
-/* Thread List */
-.thread-list {
-    max-height: calc(100vh - 200px);
-    overflow-y: auto;
-}
-
 /* Progress Indicators */
 #progress-logs {
     transition: opacity 0.3s ease;
@@ -67,4 +37,104 @@ body {
 
 .updating #progress-logs {
     opacity: 0.5;
+}
+
+/* File Panel Styles */
+.file-tree-item {
+    position: relative;
+}
+
+.file-item-content {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
+}
+
+.file-item-content:hover {
+    background-color: var(--bs-light);
+}
+
+.file-item-icon {
+    margin-right: 8px;
+    color: var(--bs-secondary);
+}
+
+.file-item-name {
+    flex: 1;
+    font-size: 14px;
+    color: var(--bs-body-color);
+}
+
+.file-item-actions {
+    margin-left: 8px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.file-item-content:hover .file-item-actions {
+    opacity: 1;
+}
+
+.file-delete-btn {
+    padding: 2px 6px;
+    border: none;
+    background: transparent;
+    color: var(--bs-danger);
+    border-radius: 3px;
+    transition: all 0.2s ease;
+}
+
+.file-delete-btn:hover {
+    background-color: var(--bs-danger);
+    color: white;
+    transform: scale(1.1);
+}
+
+.file-delete-btn i {
+    font-size: 12px;
+}
+
+.file-tree-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.file-tree-item.selected .file-item-content {
+    background-color: var(--bs-primary);
+    color: white;
+}
+
+.file-tree-item.selected .file-item-icon,
+.file-tree-item.selected .file-item-name {
+    color: white;
+}
+
+/* Upload Progress Bar */
+#upload-progress {
+    margin: 10px 0;
+    padding: 0 10px;
+}
+
+#upload-progress .progress {
+    height: 20px;
+    background-color: var(--bs-gray-200);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+#upload-progress .progress-bar {
+    background-color: var(--bs-primary);
+    color: white;
+    font-size: 12px;
+    line-height: 20px;
+    text-align: center;
+    transition: width 0.3s ease;
+    border-radius: 10px;
+}
+
+#upload-progress .progress-bar:empty::after {
+    content: "0%";
 }

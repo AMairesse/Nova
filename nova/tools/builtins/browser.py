@@ -1,11 +1,10 @@
-import asyncio
 from typing import List
 
 from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
 from playwright.async_api import async_playwright
 
-from nova.llm_agent import LLMAgent
-from nova.models import Tool
+from nova.llm.llm_agent import LLMAgent
+from nova.models.models import Tool
 
 METADATA = {
     'name': 'Browser',
@@ -15,6 +14,7 @@ METADATA = {
     'test_function': None,
     'test_function_args': [],
 }
+
 
 async def init(agent: LLMAgent) -> None:
     """
@@ -28,6 +28,7 @@ async def init(agent: LLMAgent) -> None:
     browser = await playwright.chromium.launch(headless=True)
     agent._resources['playwright_async'] = playwright
     agent._resources['browser'] = browser
+
 
 async def close(agent: LLMAgent) -> None:
     """
@@ -47,6 +48,7 @@ async def close(agent: LLMAgent) -> None:
             await playwright.stop()
         finally:
             del agent._resources['playwright_async']
+
 
 async def get_functions(tool: Tool, agent: LLMAgent) -> List:
     """

@@ -1,10 +1,12 @@
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, reverse, get_object_or_404
 from django.views.decorators.http import require_POST
-from ..models import Agent, UserProfile
-from ..forms import AgentForm
+from django.views.decorators.csrf import csrf_protect
+from nova.models.models import Agent, UserProfile, LLMProvider
+from ..forms import AgentForm, LLMProviderForm
 
 
+@csrf_protect
 @login_required
 def create_agent(request):
     if request.method == "POST":
@@ -24,6 +26,7 @@ def create_agent(request):
     return redirect(reverse('user_config') + '?tab=agents')
 
 
+@csrf_protect
 @login_required
 def edit_agent(request, agent_id):
     agent = get_object_or_404(Agent, pk=agent_id, user=request.user)
@@ -40,6 +43,7 @@ def edit_agent(request, agent_id):
     return redirect(reverse('user_config') + '?tab=agents')
 
 
+@csrf_protect
 @login_required
 @require_POST
 def delete_agent(request, agent_id):
@@ -50,6 +54,7 @@ def delete_agent(request, agent_id):
     return redirect(reverse('user_config') + '?tab=agents')
 
 
+@csrf_protect
 @login_required
 def make_default_agent(request, agent_id):
     agent = get_object_or_404(Agent, id=agent_id, user=request.user)
@@ -58,3 +63,50 @@ def make_default_agent(request, agent_id):
         profile.default_agent = agent
         profile.save()
     return redirect(reverse('user_config') + '?tab=agents')
+
+
+@csrf_protect
+@login_required
+def create_provider(request):
+    if request.method == 'POST':
+        form = LLMProviderForm(request.POST)
+        if form.is_valid():
+            provider = form.save(commit=False)
+            provider.user = request.user
+            form.save()
+            return redirect(reverse('user_config') + '?tab=providers')
+        request.session['provider_errors'] = form.errors.as_json()
+        return redirect(reverse('user_config') + '?tab=providers&error=1')
+    return redirect(reverse('user_config') + '?tab=providers')
+
+
+@csrf_protect
+@login_required
+def edit_provider(request, provider_id):
+    provider = get_object_or_404(LLMProvider, id=provider_id,
+                                 user=request.user)
+    if request.method == 'POST':
+        form = LLMProviderForm(request.POST, instance=provider)
+        if form.is_valid():
+            form.save()
+            return redirect(reverse('user_config') + '?tab=providers')
+        request.session['provider_errors'] = form.errors.as_json()
+        return redirect(reverse('user_config') + '?tab=providers&error=1')
+    return redirect(reverse('user_config') + '?tab=providers')
+
+
+@csrf_protect
+@login_required
+def delete_provider(request, provider_id):
+    provider = get_object_or_404(LLMProvider, id=provider_id,
+                                 user=request.user)
+
+    # Check if provider is used by any agents
+    if provider.agents.exists():
+        # Delete all agents using this provider
+        provider.agents.all().delete()
+
+    # Delete the provider
+    provider.delete()
+
+    return redirect(reverse('user_config') + '?tab=providers')

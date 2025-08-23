@@ -1,0 +1,138 @@
+services:
+  db: &base-db  # Anchor for reuse if needed
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: nova
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis: &base-redis
+    image: redis:alpine
+    restart: unless-stopped
+    command: redis-server
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nginx: &base-nginx
+    image: nginx:latest
+    ports:
+      - "${HOST_PORT}:80"
+    restart: unless-stopped
+    environment:
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-nova-files}
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_data:/app/static
+      - media_data:/app/media
+      # Warning : we are using a template file to allow variable substitution
+      # See https://hub.docker.com/_/nginx
+      # ==> Overriding CMD will break the substitution !
+      # ==> The template file must be named default.conf.template
+      - ./templates:/etc/nginx/templates
+    depends_on:
+      - web
+
+  minio: &base-minio
+    image: minio/minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio-nova-init:  # One-shot init for Nova's MinIO setup
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy  # Wait for MinIO
+    entrypoint: /bin/sh
+    command: |
+      -c '
+      echo "Initializing MinIO for Nova...";
+      mc alias set myminio http://minio:9000 "${MINIO_ROOT_USER:-minioadmin}" "${MINIO_ROOT_PASSWORD:-minioadmin}";
+
+      # Create bucket if not exists
+      mc mb myminio/${MINIO_BUCKET_NAME:-nova-files} --ignore-existing || true;
+
+      # Create user if not exists (check via list, add if missing)
+      if ! mc admin user info myminio ${MINIO_ACCESS_KEY:-nova_user} > /dev/null 2>&1; then
+        mc admin user add myminio ${MINIO_ACCESS_KEY:-nova_user} ${MINIO_SECRET_KEY} || true;
+      fi;
+
+      # Create policy (read/write on bucket)
+      echo "{
+        \"Version\": \"2012-10-17\",
+        \"Statement\": [
+          {
+            \"Effect\": \"Allow\",
+            \"Action\": [\"s3:*\"],
+            \"Resource\": [\"arn:aws:s3:::${MINIO_BUCKET_NAME:-nova-files}/*\"]
+          }
+        ]
+      }" > /tmp/nova-policy.json;
+      mc admin policy create myminio nova-policy /tmp/nova-policy.json || true;
+
+      # Attach policy to user
+      mc admin policy attach myminio nova-policy --user ${MINIO_ACCESS_KEY:-nova_user} || true;
+
+      # Set bucket policy (e.g., private by default)
+      mc anonymous set none myminio/${MINIO_BUCKET_NAME:-nova-files} || true;
+
+      echo "MinIO init for Nova completed.";
+      exit 0;
+      '
+    restart: "no"  # Run once
+    environment:
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-nova-files}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-nova_user}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}  # REQUIRED: no default for security
+
+  web:
+    image: amairesse/nova:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-nova-init:
+        condition: service_completed_successfully
+    volumes:
+      - static_data:/app/static
+      - media_data:/app/media
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_NAME: nova
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+
+volumes:
+  postgres_data:
+  static_data:
+  media_data:
+  minio_data:

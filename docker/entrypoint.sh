@@ -9,11 +9,6 @@ if [ -f /app/.env ]; then
     set +a
 fi
 
-# Install playwright
-echo "Installing Playwright..."
-playwright install chromium
-playwright install-deps
-
 # Wait for PostgreSQL using connection string (no PGPASSWORD export)
 if [ "$DB_ENGINE" = "postgresql" ]; then
     echo "Waiting for PostgreSQL (timeout 30s)..."

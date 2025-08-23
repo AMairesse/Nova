@@ -20,7 +20,8 @@ class QuestionAnswerViewTests(TestCase):
         request = self.factory.get("/api/qa/")
         response = QuestionAnswerView.as_view()(request)
 
-        self.assertIn(response.status_code, {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
+        self.assertIn(response.status_code, {status.HTTP_401_UNAUTHORIZED,
+                                             status.HTTP_403_FORBIDDEN})
 
     def test_get_usage_ok(self):
         request = self.factory.get("/api/qa/")
@@ -46,12 +47,13 @@ class QuestionAnswerViewTests(TestCase):
                 self.user = user
                 self.thread_id = thread_id
 
-            def invoke(self, question):
+            def ainvoke(self, question):
                 return "This is the answer"
 
         from unittest.mock import patch
         with patch("nova.api.views.LLMAgent", FakeLLMAgent):
-            request = self.factory.post("/api/qa/", data={"question": "Hi?"}, format="json")
+            request = self.factory.post("/api/qa/", data={"question": "Hi?"},
+                                        format="json")
             force_authenticate(request, user=self.user)
             response = QuestionAnswerView.as_view()(request)
 
@@ -64,14 +66,16 @@ class QuestionAnswerViewTests(TestCase):
             def __init__(self, user, thread_id):
                 pass
 
-            def invoke(self, question):
+            def ainvoke(self, question):
                 raise RuntimeError("boom")
 
         from unittest.mock import patch
         with patch("nova.api.views.LLMAgent", FailingLLMAgent):
-            request = self.factory.post("/api/qa/", data={"question": "Hi?"}, format="json")
+            request = self.factory.post("/api/qa/", data={"question": "Hi?"},
+                                        format="json")
             force_authenticate(request, user=self.user)
             response = QuestionAnswerView.as_view()(request)
 
-        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(response.status_code,
+                         status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertIn("LLM error", response.data.get("detail", ""))

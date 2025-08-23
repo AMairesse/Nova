@@ -1,9 +1,9 @@
-# nova/tests/test_provider_views.py
+# nova/tests/test_config_views.py
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
-from nova.models import LLMProvider, ProviderType, Agent
+from nova.models.models import LLMProvider, ProviderType, Agent
 
 
 class ProviderViewsTests(TestCase):
@@ -42,6 +42,7 @@ class ProviderViewsTests(TestCase):
                 "model": "gpt-4o-mini",
                 "api_key": "",            # should become None
                 "base_url": "   ",        # should become None
+                "max_context_tokens": 100000,
             },
         )
         self.assertEqual(resp.status_code, 302)
@@ -65,6 +66,7 @@ class ProviderViewsTests(TestCase):
             "model": "mistral-small-latest",
             "api_key": "secret",
             "base_url": "https://api.example.com",
+            "max_context_tokens": 4096,
         }
         defaults.update(overrides)
         return LLMProvider.objects.create(**defaults)
@@ -88,15 +90,16 @@ class ProviderViewsTests(TestCase):
         self.client.login(username="alice", password="pass")
         url = reverse("edit_provider", args=[prov.id])
 
-        # Post empty model/api_key so they should be preserved; base_url present but empty => cleared
+        # Post empty api_key so it should be preserved; base_url present but empty => cleared
         resp = self.client.post(
             url,
             data={
                 "name": "Renamed",
                 "provider_type": ProviderType.OLLAMA,
-                "model": "   ",      # keep original
+                "model": "mistral-small-latest",
                 "api_key": "",       # keep original
-                "base_url": "  ",    # clear to None
+                "base_url": "",    # clear to None
+                "max_context_tokens": 4096,
             },
         )
         self.assertEqual(resp.status_code, 302)
@@ -105,7 +108,7 @@ class ProviderViewsTests(TestCase):
         prov.refresh_from_db()
         self.assertEqual(prov.name, "Renamed")
         self.assertEqual(prov.provider_type, ProviderType.OLLAMA)
-        self.assertEqual(prov.model, "mistral-small-latest")  # unchanged
+        self.assertEqual(prov.model, "mistral-small-latest")
         self.assertEqual(prov.api_key, "secret")              # unchanged
         self.assertIsNone(prov.base_url)                      # cleared
 
@@ -119,8 +122,9 @@ class ProviderViewsTests(TestCase):
             data={
                 "name": "Prov",
                 "provider_type": ProviderType.OPENAI,
-                "model": "mistral-small-latest",  # unchanged by logic but acceptable
+                "model": "mistral-small-latest",
                 "base_url": "https://new.example.org",
+                "max_context_tokens": 4096,
             },
         )
         self.assertEqual(resp.status_code, 302)

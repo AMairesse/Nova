@@ -4,7 +4,7 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
 from django.views.generic import View
-from ..models import UserParameters, Agent, UserProfile, LLMProvider, Tool, ProviderType
+from nova.models.models import UserParameters, Agent, UserProfile, LLMProvider, Tool, ProviderType
 from ..forms import UserParametersForm, AgentForm
 from nova.tools import get_available_tool_types
 
@@ -13,76 +13,72 @@ from nova.tools import get_available_tool_types
 class UserConfigView(View):
     template_name = 'nova/user_config.html'
 
-    def get(self, request, *args, **kwargs):
-        # Retrieve / create the user’s parameters
+    def _get_common_context(self, request, user_params_form=None,
+                            active_tab='providers'):
+        """
+        Prépare le contexte commun pour GET et invalid POST.
+        Factorise la logique pour éviter la duplication.
+        """
+        # Retrieve / create the user's parameters and profile
         user_params, _ = UserParameters.objects.get_or_create(user=request.user)
-        
-        # Retrieve / create the user's profile
         user_profile, _ = UserProfile.objects.get_or_create(user=request.user)
 
-        # Bind forms
-        user_params_form = UserParametersForm(instance=user_params)
+        # Bind forms (use provided form if available, else create new)
+        if user_params_form is None:
+            user_params_form = UserParametersForm(instance=user_params)
 
-        # Get availables tool types
-        tool_types = get_available_tool_types()
-        
         agent_form = AgentForm(user=request.user)
-        
+
+        # Get available tool types
+        tool_types = get_available_tool_types()
+
         # Get agents and tools agents
         agents = Agent.objects.filter(user=request.user)
         agents_normal = agents.filter(is_tool=False)
         agents_tools = agents.filter(is_tool=True)
-        
-        return render(request, self.template_name, {
+
+        return {
             'user_params_form': user_params_form,
-            'user_params': user_params,  # For template rendering
+            'active_tab': active_tab,
+            'user_params': user_params,
             'agent_form': agent_form,
             'agents': agents,
             'agents_normal': agents_normal,
-            'agents_tools': agents_tools, 
+            'agents_tools': agents_tools,
             'llm_providers': LLMProvider.objects.filter(user=request.user),
             'tools': Tool.objects.filter(
-                models.Q(user=request.user) | models.Q(user__isnull=True),
-                is_active=True
+                models.Q(user=request.user) | models.Q(user__isnull=True)
             ).distinct(),
             'tool_types': tool_types,
             'user_profile': user_profile,
             "PROVIDER_CHOICES": ProviderType.choices,
-        })
+        }
+
+    def get(self, request, *args, **kwargs):
+        active_tab = request.GET.get('tab', 'providers')
+        context = self._get_common_context(request, active_tab=active_tab)
+        return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
         # Retrieve user parameters
         user_params, _ = UserParameters.objects.get_or_create(user=request.user)
 
         # Build the user parameters form
-        user_params_form = UserParametersForm(request.POST, instance=user_params)
+        user_params_form = UserParametersForm(request.POST,
+                                              instance=user_params)
 
         action = request.POST.get('action')
 
         if action == 'save_settings':
-            # Now we do the full save
             if user_params_form.is_valid():
                 user_params_form.save()
-
                 return redirect('user_config')
 
-            # Load all available tools
-            from nova.tools import get_available_tool_types
-            tool_types = get_available_tool_types()
-
-            # If invalid, re-render with errors
-            return render(request, self.template_name, {
-                'user_params_form': user_params_form,
-                'agents': Agent.objects.filter(user=request.user),
-                'llm_providers': LLMProvider.objects.filter(user=request.user),
-                'tools': Tool.objects.filter(
-                    models.Q(user=request.user) | models.Q(user__isnull=True),
-                    is_active=True
-                ).distinct(),
-                'agents_tools': Agent.objects.filter(user=request.user, is_tool=True),
-                'tool_types': tool_types,
-                'user_profile': request.user.userprofile if hasattr(request.user, 'userprofile') else None
-            })
+            # Invalid: use common context with forced tab and bound form
+            context = self._get_common_context(request,
+                                               user_params_form=user_params_form,
+                                               active_tab='general-config')
+            return render(request, self.template_name, context)
 
         # Fallback if neither button recognized (rare)
         return redirect('user_config')

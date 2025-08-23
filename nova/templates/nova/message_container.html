@@ -1,7 +1,6 @@
 <!-- nova/templates/nova/message_container.html -->
 {% load static %} {% load i18n %}
 
-
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
   <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
@@ -11,6 +10,16 @@
       <div class="card border-primary">
         <div class="card-body py-2">
           <strong class="text-primary">{{ message.rendered_html }}</strong>
+          <!-- Affichage fichiers attachés -->
+          {% if message.file_count %}
+            <div class="mt-2 small text-muted">
+              {% blocktrans count file_count=message.file_count %}
+                {{ file_count }} file was shared with this message.
+              {% plural %}
+                {{ file_count }} files were shared with this message.
+              {% endblocktrans %}
+            </div>
+          {% endif %}
         </div>
       </div>
       {% elif message.actor == Actor.AGENT %}
@@ -18,6 +27,12 @@
         <div class="card-body py-2">
           {{ message.rendered_html }}
         </div>
+        <!-- Context indication -->
+        {% if message.internal_data.context_tokens and message.internal_data.max_context %}
+        <div class="card-footer py-1 text-muted small text-end">
+          {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+        </div>
+        {% endif %}
       </div>
       {% endif %}
     </div>
@@ -47,7 +62,7 @@
   </div>
   {% else %}
   <div class="message-input-area p-3">
-    <form id="message-form" method="post">
+    <form id="message-form" method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <input
         type="hidden"
@@ -87,6 +102,9 @@
             </li>
             {% endif %}
           </ul>
+          <button id="files-toggle-btn" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-files"></i>
+          </button>
         </div>
         
         <!-- Hidden input -->
@@ -99,14 +117,13 @@
       </div>
 
       <!-- Message input group -->
-      <div class="input-group">
-        <textarea
-          class="form-control auto-resize-textarea"
-          name="new_message"
-          placeholder="{% trans 'Type your message...' %}"
-          rows="1"
-          autofocus
-        ></textarea>
+      <div class="input-group mb-2">
+        <textarea class="form-control auto-resize-textarea"
+                  name="new_message"
+                  placeholder="{% trans 'Type your message...' %}"
+                  rows="1"
+                  maxlength="2000"
+                  autofocus></textarea>
         <button
           type="submit"
           id="send-btn"

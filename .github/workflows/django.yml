@@ -27,8 +27,8 @@ jobs:
         pip install -r requirements.txt
     - name: Create .env file
       run: |
-        cp .env.example .env
-        sed -i.bak 's/DB_ENGINE=postgresql/DB_ENGINE=sqlite/' .env
+        cp docker/.env.example .env
+        echo "DEBUG=True" >> .env
     - name: Run Tests
       run: |
-        python manage.py test
+        python manage.py test --settings=nova.settings_test

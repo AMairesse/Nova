@@ -3,7 +3,7 @@ from django.test import SimpleTestCase, RequestFactory, override_settings
 from django.template import engines
 
 from nova.context_processors import actor_enum
-from nova.models import Actor
+from nova.models.Message import Actor
 
 
 class ContextProcessorsTests(SimpleTestCase):
@@ -39,6 +39,9 @@ class ContextProcessorsTests(SimpleTestCase):
         expected_user_value = str(Actor.USER)
         expected_agent_value = str(Actor.AGENT)
 
-        template = django_engine.from_string("{{ Actor.USER }}|{{ Actor.AGENT }}")
+        template = django_engine.from_string("""
+            {{ Actor.USER }}|{{ Actor.AGENT }}
+        """)
         rendered = template.render({}, request=request).strip()
-        self.assertEqual(rendered, f"{expected_user_value}|{expected_agent_value}")
+        self.assertEqual(rendered,
+                         f"{expected_user_value}|{expected_agent_value}")

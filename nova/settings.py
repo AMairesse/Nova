@@ -28,7 +28,12 @@ load_dotenv(dotenv_path)
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DJANGO_DEBUG', 'False').lower() == 'true'
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+if DEBUG:
+    import debugpy
+    debugpy.listen(('0.0.0.0', 5678))
+    # debugpy.wait_for_client()  # Uncomment to attach debugger
+
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
@@ -85,34 +90,24 @@ CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            "hosts": [(os.getenv('REDIS_HOST', '127.0.0.1'), int(os.getenv('REDIS_PORT', '6379')))],
+            "hosts": [(os.getenv('REDIS_HOST', 'redis'),
+                      int(os.getenv('REDIS_PORT', '6379')))],
         },
     },
 }
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-db_engine = os.getenv('DB_ENGINE', 'sqlite')  # 'postgresql' or 'sqlite'
-
-if db_engine == 'postgresql':
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME', 'nova'),
-            'USER': os.getenv('DB_USER', 'postgres'),
-            'PASSWORD': os.getenv('DB_PASSWORD', 'secret'),
-            'HOST': os.getenv('DB_HOST', 'db'),
-            'PORT': os.getenv('DB_PORT', '5432'),
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'nova'),
+        'USER': os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'secret'),
+        'HOST': os.getenv('DB_HOST', 'db'),
+        'PORT': os.getenv('DB_PORT', '5432'),
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
-
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
@@ -163,6 +158,9 @@ LOGOUT_REDIRECT_URL = '/'
 
 # Encryption key
 FIELD_ENCRYPTION_KEY = os.environ.get('FIELD_ENCRYPTION_KEY', '')
+# Validate encryption key
+if not FIELD_ENCRYPTION_KEY or len(FIELD_ENCRYPTION_KEY) < 32:
+    raise ValueError("FIELD_ENCRYPTION_KEY must be set in .env and at least 32 characters long")
 
 # Security settings
 CSRF_COOKIE_HTTPONLY = True
@@ -171,3 +169,25 @@ CSRF_COOKIE_SAMESITE = 'Strict'
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0  # 1 year HSTS in prod only
+
+# MinIO (S3-compatible) settings
+MINIO_ENDPOINT_URL = os.getenv('MINIO_ENDPOINT_URL', 'http://minio:9000')
+MINIO_ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY')
+MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY')
+MINIO_BUCKET_NAME = os.getenv('MINIO_BUCKET_NAME', 'nova-files')
+MINIO_SECURE = os.getenv('MINIO_SECURE', 'False').lower() == 'true'
+
+# Validate (fail-fast)
+if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
+    raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in .env")
+
+if not CSRF_TRUSTED_ORIGINS or all(not o.strip() for o in CSRF_TRUSTED_ORIGINS):
+    raise ValueError("CSRF_TRUSTED_ORIGINS must be set in .env and non-empty")
+
+# Optional: Validate origins format (https in prod)
+for origin in CSRF_TRUSTED_ORIGINS:
+    if not origin.startswith(('http://', 'https://')):
+        raise ValueError(f"Invalid CSRF_TRUSTED_ORIGINS format: {origin} (must start with http:// or https://)")
+    if not DEBUG and not origin.startswith('https://'):
+        raise ValueError(f"CSRF_TRUSTED_ORIGINS must use https:// in production: {origin}")

@@ -3,7 +3,7 @@
 {% load i18n %}
 
 <li class="list-group-item" id="thread-item-{{ thread.id }}">
-    <a href="#" class="thread-link" data-thread-id="{{ thread.id }}">
+    <a href="#" class="thread-link {% if forloop.first %} active{% endif %}" data-thread-id="{{ thread.id }}">
       {{ thread.subject }}
     </a>
     <button class="delete-thread-btn"

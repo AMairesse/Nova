@@ -16,9 +16,4 @@
     </select>
 </div>
 
-{% include 'nova/partials/_auth_type_fields.html' with credential=credential tool=tool %}
-
-{% if "CalDav" in tool.name %}
-    {% include 'nova/partials/_caldav_specific_fields.html' with credential=credential tool=tool %}
-{% endif %}
 {% endwith %}

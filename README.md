@@ -38,7 +38,7 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 
 - [Key Features](#key-features)
 - [Production Deployment (Docker)](#production-deployment-docker)
-- [Development Setup](#development-setup)
+- [Development Setup (Docker)](#development-setup-docker)
 - [Project Layout](#project-layout)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
@@ -53,51 +53,11 @@ This is the recommended way to run Nova.
 See the [Docker README.md](docker/) for details.
 
 
-## Development Setup
+## Development Setup (Docker)
 
-For development or testing only (uses SQLite, less scalable). Not recommended for production due to concurrency limits.
+Development setup also use Docker given the number of components involved.
 
-1. Clone and setup virtual env:
-
-   ```
-   git clone https://github.com/AMairesse/nova.git
-   cd nova
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
-
-2. Install dependencies:
-
-   ```
-   pip install -r requirements.txt
-   ```
-
-3. Launch a redis server:
-
-   ```
-   redis-server
-   ```
-
-4. Configure `.env` (from `.env.example`):
-
-   - Set `DB_ENGINE` to `sqlite` or remove all `DB_*` from `.env` file
-   - Fill `DJANGO_SECRET_KEY`, `FIELD_ENCRYPTION_KEY`.
-   - Fill `REDIS_HOST`, `REDIS_PORT` for your local Redis server.
-
-5. Run migrations and create superuser:
-
-   ```
-   python manage.py migrate
-   python manage.py createsuperuser
-   ```
-
-6. Launch dev server:
-
-   ```
-   daphne -b 0.0.0.0 -p 8000 nova.asgi:application
-   ```
-
-7. Open `http://localhost:8000`, log in, and configure via **Config › LLM Providers**.
+See the [Docker README.md](docker/) for details.
 
 
 ## Project Layout

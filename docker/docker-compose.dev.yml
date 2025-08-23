@@ -1,0 +1,72 @@
+services:
+  db:
+    extends:
+      file: docker-compose.base.yml
+      service: db
+
+  redis:
+    extends:
+      file: docker-compose.base.yml
+      service: redis
+
+  nginx:
+    extends:
+      file: docker-compose.base.yml
+      service: nginx
+  
+  minio:
+    extends:
+      file: docker-compose.base.yml
+      service: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+  
+  minio-nova-init:
+    extends:
+      file: docker-compose.base.yml
+      service: minio-nova-init
+
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    build: 
+      context: ../
+      dockerfile: docker/Dockerfile
+    command: >
+      bash -c "
+      python manage.py migrate --noinput &&
+      python manage.py createsuperuser --noinput \
+        --username '$DJANGO_SUPERUSER_USERNAME' \
+        --email '${DJANGO_SUPERUSER_EMAIL:-admin@example.com}'
+      python manage.py collectstatic --noinput --clear &&
+      uvicorn nova.asgi:application --host 0.0.0.0 --port 8000 --reload"  # Uvicorn with hot-reload
+    restart: "no"  # No auto-restart for dev
+    stdin_open: true
+    tty: true
+    volumes:
+      - ../nova:/app/nova  # Hot-reload code app
+      - ../requirements.txt:/app/requirements.txt  # If deps change then rebuild manually
+      - ../manage.py:/app/manage.py
+      - ../docker/entrypoint.sh:/app/entrypoint.sh  # In case entrypoint changes
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"  # Direct exposure
+      - "5678:5678"  # Debug remote
+      - "8000:8000"  # Direct exposure for debug without nginx if needed
+    environment:
+      DEBUG: "True"
+      PYTHONUNBUFFERED: 1
+    healthcheck:  # Checks container health
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:  # Merge auto
+  postgres_data:
+  static_data:
+  media_data:
+  minio_data:

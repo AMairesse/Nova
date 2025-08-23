@@ -2,27 +2,58 @@
 {% load i18n %} {% load static %}
 
 {% block content %}
-<div class="chat-layout">
-  <div class="col-md-4 sidebar-sticky p-3">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2 class="h4 mb-0">{% trans "Threads" %}</h2>
-      <button class="btn btn-sm btn-outline-primary create-thread-btn">
-        {% trans "Create Thread" %}
-      </button>
+<div class="container-fluid h-100 p-0">
+  <div class="row g-0 h-100">
+    <!-- Thread list column (left) -->
+    <div class="col-2 d-flex flex-column border-end" style="height: calc(100vh - 76px);">
+      <div class="d-flex justify-content-between align-items-center mb-3 p-2 border-bottom">
+        <h2 class="h6 mb-0">{% trans "Threads" %}</h2>
+        <button class="btn btn-sm btn-outline-primary create-thread-btn">
+          <i class="bi bi-plus" title="{% trans 'Create a new thread' %}"></i>
+        </button>
+      </div>
+      <div class="flex-grow-1 overflow-auto">
+        <ul class="list-group list-group-flush">
+          {% for thread in threads %}
+            {% include 'nova/partials/_thread_item.html' with thread=thread %}
+          {% endfor %}
+        </ul>
+      </div>
     </div>
-    <ul class="list-group thread-list border">
-      {% for thread in threads %}
-        {% include 'nova/partials/_thread_item.html' with thread=thread %}
-      {% endfor %}
-    </ul>
-  </div>
-  <div class="col-md-8 message-area">
-    <div class="p-3 pb-0">
-      <h2 class="h4 mb-3">{% trans "Messages" %}</h2>
+    
+    <!-- Message area (center) -->
+    <div id="message-column" class="col-8 d-flex flex-column message-area" style="height: calc(100vh - 76px);">
+      <div class="p-3 pb-0 border-bottom">
+        <h2 class="h4 mb-3">{% trans "Messages" %}</h2>
+      </div>
+      <div id="message-container" class="flex-grow-1 overflow-hidden"></div>
     </div>
-    <div id="message-container" class="flex-fill"></div>
+    
+    <!-- Files panel (right) -->
+    <div id="files-column" class="col-2 d-flex flex-column border-start" style="height: calc(100vh - 76px);">
+      <div class="d-flex justify-content-between align-items-center mb-3 p-2 border-bottom">
+        <h2 class="h6 mb-0">{% trans "Files" %}</h2>
+        <div class="file-actions">
+          <button id="upload-files-btn" class="btn btn-sm btn-primary" title="Upload files">
+            <i class="bi bi-upload"></i>
+          </button>
+          <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="Upload directory">
+            <i class="bi bi-folder-plus"></i>
+          </button>
+        </div>
+      </div>
+      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto">
+        <!-- Content loaded dynamically -->
+      </div>
+    </div>
   </div>
 </div>
+
+<!-- Scroll to bottom button -->
+<button id="scroll-to-bottom" class="btn btn-primary position-fixed bottom-0 end-0 m-3 rounded-circle d-none" style="z-index: 1050;">
+  <i class="bi bi-arrow-down"></i>
+</button>
+
 
 <script>
   // Configure URLs for the JavaScript modules
@@ -32,9 +63,14 @@
     messageList: "{% url 'message_list' %}",
     runningTasksBase: "/running-tasks/",
     createThread: "{% url 'create_thread' %}",
-    deleteThread: "{% url 'delete_thread' 0 %}"
+    deleteThread: "{% url 'delete_thread' 0 %}",
+    // New: File URLs
+    fileList: "{% url 'file_list' 0 %}",  // Use with thread_id replacement
+    fileUpload: "{% url 'file_upload' 0 %}",
+    fileDelete: "{% url 'file_delete' 0 %}",
+    fileMove: "{% url 'file_move' 0 %}"
   };
 </script>
-<script src="{% static 'js/message_container.js' %}" defer></script>
-<script src="{% static 'js/index.js' %}" defer></script>
+<script src="{% static 'js/thread_management.js' %}" defer></script>
+<script src="{% static 'js/files.js' %}" defer></script>  <!-- New: Load files.js -->
 {% endblock %}

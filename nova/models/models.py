@@ -1,25 +1,47 @@
-# nova/models.py
-from importlib import import_module
+# nova/models/models.py
+import re
+import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
-import json, logging
-from datetime import datetime
-
+import logging
+from datetime import timedelta
+import botocore.config
+import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
-class Actor(models.TextChoices):
-    USER  = "USR", _("User")
-    AGENT = "AGT", _("Agent")
+
+def validate_relaxed_url(value):
+    """
+    Simple validator for relaxed URLs:
+    This allows single-label hosts like 'langfuse:3000'.
+    Checks for scheme (http/https), host, optional port/path.
+    """
+    if not value:
+        return  # Allow empty if blank=True
+
+    # Relaxed regex: scheme://host[:port][/path]
+    regex = re.compile(
+        r'^(https?://)'  # Scheme (http or https)
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host
+        r'(?::\d{1,5})?'  # Optional port
+        r'(?:/[^\s]*)?$'  # Optional path
+    )
+    if not regex.match(value):
+        raise ValidationError(_("Enter a valid URL."))
+
 
 class ProviderType(models.TextChoices):
-    OPENAI     = "openai",     "OpenAI"
-    MISTRAL    = "mistral",    "Mistral"
-    OLLAMA     = "ollama",     "Ollama"
-    LLMSTUDIO  = "lmstudio",   "LMStudio"
+    OPENAI = "openai", "OpenAI"
+    MISTRAL = "mistral", "Mistral"
+    OLLAMA = "ollama", "Ollama"
+    LLMSTUDIO = "lmstudio", "LMStudio"
+
 
 class LLMProvider(models.Model):
     name = models.CharField(max_length=120)
@@ -28,80 +50,87 @@ class LLMProvider(models.Model):
         choices=ProviderType.choices,
         default=ProviderType.OLLAMA,
     )
-    model = models.CharField(max_length=120)  # mistral-small-latest, gpt-4o-mini, llama3, etc.
+    model = models.CharField(max_length=120)
     api_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    base_url = models.URLField(blank=True, null=True)  # For custom endpoints
-    additional_config = models.JSONField(default=dict, blank=True)  # For other provider-specific settings
-    
+    base_url = models.URLField(blank=True, null=True)
+    # For other provider-specific settings
+    additional_config = models.JSONField(default=dict, blank=True)
+    max_context_tokens = models.PositiveIntegerField(
+        default=4096,
+        help_text=_("Maximum tokens for this provider's context window (e.g., 4096 for small models, 100000 or more for large).")
+    )
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='llm_providers',
                              verbose_name=_("LLM providers"))
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         unique_together = (("user", "name"),)
-    
+
     def __str__(self):
         return f"{self.name} ({self.provider_type})"
 
+    def clean(self):
+        super().clean()
+        if self.max_context_tokens < 512:
+            raise ValidationError(_("Max context tokens must be at least 512."))
+
 
 class UserParameters(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL,
+                                on_delete=models.CASCADE)
     allow_langfuse = models.BooleanField(default=False)
 
     # Langfuse per-user config
-    langfuse_public_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    langfuse_secret_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    langfuse_host = models.URLField(blank=True, null=True)
+    langfuse_public_key = EncryptedCharField(max_length=255, blank=True,
+                                             null=True)
+    langfuse_secret_key = EncryptedCharField(max_length=255, blank=True,
+                                             null=True)
+    langfuse_host = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        validators=[validate_relaxed_url],
+    )
 
     def __str__(self):
         return f'Parameters for {self.user.username}'
 
-class Message(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL,
-                             on_delete=models.CASCADE,
-                             related_name='user_messages',
-                             verbose_name=_("User messages"))
-    text = models.TextField()
-    actor = models.CharField(max_length=3, choices=Actor.choices)
-    thread = models.ForeignKey('Thread', on_delete=models.CASCADE)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return self.text
 
 def get_default_schema():
     return {}
 
+
 class Tool(models.Model):
     class ToolType(models.TextChoices):
         BUILTIN = "builtin", _("Builtin")
-        API     = "api",     _("API HTTP/REST")
-        MCP     = "mcp",     _("MCP Server")
-    
+        API = "api", _("API HTTP/REST")
+        MCP = "mcp", _("MCP Server")
+
     class TransportType(models.TextChoices):
         STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
         SSE = "sse", _("SSE (Legacy)")
-        
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL, 
                              on_delete=models.CASCADE, 
                              related_name='tools',
                              verbose_name=_("Tools"))
 
-    name        = models.CharField(max_length=120)
+    name = models.CharField(max_length=120)
     description = models.TextField()
 
-    tool_type   = models.CharField(max_length=10,
-                                   choices=ToolType.choices,
-                                   default=ToolType.BUILTIN)
-    
+    tool_type = models.CharField(max_length=10,
+                                 choices=ToolType.choices,
+                                 default=ToolType.BUILTIN)
+
     # Subtype for BUILTIN tools
     tool_subtype = models.CharField(max_length=50, blank=True, null=True)
 
-    python_path = models.CharField(max_length=255, blank=True)  # ex: "my_pkg.utils.search"
-    endpoint    = models.URLField(blank=True)                   # ex: "https://weather.xyz/v1"
+    python_path = models.CharField(max_length=255, blank=True)
+    endpoint = models.URLField(blank=True)
 
     # Transport type for MCP servers
     transport_type = models.CharField(
@@ -113,8 +142,10 @@ class Tool(models.Model):
     )
 
     # I/O JSON-Schema contract
-    input_schema  = models.JSONField(default=get_default_schema, blank=True, null=True)
-    output_schema = models.JSONField(default=get_default_schema, blank=True, null=True)
+    input_schema = models.JSONField(default=get_default_schema,
+                                    blank=True, null=True)
+    output_schema = models.JSONField(default=get_default_schema,
+                                     blank=True, null=True)
 
     available_functions = models.JSONField(
         default=dict,
@@ -122,10 +153,10 @@ class Tool(models.Model):
         help_text=_("Available functions for this tool, if any.")
     )
 
-    is_active   = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
 
-    created_at  = models.DateTimeField(auto_now_add=True)
-    updated_at  = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     # ----- helpers ---------------------------------------------------------
     def clean(self):
@@ -133,36 +164,38 @@ class Tool(models.Model):
         if self.tool_type == self.ToolType.BUILTIN:
             if not self.tool_subtype:
                 raise ValidationError(_("A BUILTIN tool must select a subtype."))
-            
+
             from nova.tools import get_tool_type
             metadata = get_tool_type(self.tool_subtype)
             if not metadata:
                 raise ValidationError(_("Invalid builtin subtype: %s") % self.tool_subtype)
-            
+
             self.python_path = metadata.get("python_path", "")
             self.input_schema = metadata.get("input_schema", {})
             self.output_schema = metadata.get("output_schema", {})
-                    
+
         if self.tool_type in {self.ToolType.API, self.ToolType.MCP} and not self.endpoint:
             raise ValidationError(_("Endpoint is mandatory for API or MCP tools."))
 
     def __str__(self):
         return f"{self.name} ({self.tool_type})"
 
+
 class Agent(models.Model):
-    user              = models.ForeignKey(settings.AUTH_USER_MODEL,
-                                          on_delete=models.CASCADE,
-                                          related_name='user_agents',
-                                          verbose_name=_("User agents"))
-    name              = models.CharField(max_length=120)
-    llm_provider      = models.ForeignKey(LLMProvider,
-                                          on_delete=models.CASCADE,
-                                          related_name='agents',
-                                          verbose_name=_("Agents"))
-    system_prompt     = models.TextField()
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.CASCADE,
+                             related_name='user_agents',
+                             verbose_name=_("User agents"))
+    name = models.CharField(max_length=120)
+    llm_provider = models.ForeignKey(LLMProvider,
+                                     on_delete=models.CASCADE,
+                                     related_name='agents',
+                                     verbose_name=_("Agents"))
+    system_prompt = models.TextField()
 
     # Tools
-    tools   = models.ManyToManyField(Tool, blank=True, related_name="agents", verbose_name=_("Agents"))
+    tools = models.ManyToManyField(Tool, blank=True, related_name="agents",
+                                   verbose_name=_("Agents"))
     is_tool = models.BooleanField(
         default=False,
         help_text=_("If true, this agent can be used as a tool by other agents.")
@@ -170,8 +203,8 @@ class Agent(models.Model):
 
     # Agents as tools
     agent_tools = models.ManyToManyField(
-        'self', 
-        blank=True, 
+        'self',
+        blank=True,
         symmetrical=False,
         related_name='used_by_agents',
         verbose_name=_("Used by agents"),
@@ -205,20 +238,26 @@ class Agent(models.Model):
         # Skip cycle-detection on instances without PK
         if self._state.adding:        # object not yet in DB
             return
-        
+
         # Check for cycles
         if self._has_cycle():
             raise ValidationError(_("Found a cyclic dependency between agents."))
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
-        
+
         # Auto-set as default if first normal agent (not tool)
         if not self.is_tool:
             profile, _ = UserProfile.objects.get_or_create(user=self.user)
             if not profile.default_agent:
                 profile.default_agent = self
                 profile.save()
+
+        # If agent is a tool, remove from default if it was previously default
+        if self.is_tool and self == self.user.userprofile.default_agent:
+            profile, _ = UserProfile.objects.get_or_create(user=self.user)
+            profile.default_agent = None
+            profile.save()
 
     # -----------------------------------------------------------------
     # Internal cycle detector (DFS with recursion stack)
@@ -228,9 +267,9 @@ class Agent(models.Model):
         Return True if a dependency cycle is found starting from `self`.
         """
         visited = visited or set()
-        stack   = stack   or set()
+        stack = stack or set()
 
-        if self in stack:          # back-edge ⇒ cycle
+        if self in stack:          # back-edge ==> cycle
             return True
         if self in visited:        # already explored, no cycle via this node
             return False
@@ -245,9 +284,12 @@ class Agent(models.Model):
         stack.remove(self)
         return False
 
+
 class UserProfile(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    default_agent = models.ForeignKey(Agent, null=True, blank=True, on_delete=models.SET_NULL)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL,
+                                on_delete=models.CASCADE)
+    default_agent = models.ForeignKey(Agent, null=True, blank=True,
+                                      on_delete=models.SET_NULL)
 
     # Default agent must be normal agent and belong to the user
     def clean(self):
@@ -258,9 +300,10 @@ class UserProfile(models.Model):
         if self.default_agent and self.default_agent.user != self.user:
             raise ValidationError(_("Default agent must belong to the user."))
 
+
 class ToolCredential(models.Model):
     """Store credentials for tools."""
-    
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='tool_credentials',
@@ -269,7 +312,7 @@ class ToolCredential(models.Model):
                              on_delete=models.CASCADE,
                              related_name='credentials',
                              verbose_name=_("Credentials"))
-    
+
     auth_type = models.CharField(
         max_length=20,
         choices=[
@@ -282,58 +325,36 @@ class ToolCredential(models.Model):
         ],
         default='basic'
     )
-    
+
     # Basic Auth fields
     username = models.CharField(max_length=255, blank=True, null=True)
     password = EncryptedCharField(max_length=255, blank=True, null=True)
-    
+
     # Token/API Key fields
     token = EncryptedCharField(max_length=512, blank=True, null=True)
-    token_type = models.CharField(max_length=50, blank=True, null=True)  # ex: "Bearer", "Basic", etc.
-    
+    token_type = models.CharField(max_length=50, blank=True, null=True)
+
     # OAuth fields
     client_id = models.CharField(max_length=255, blank=True, null=True)
     client_secret = EncryptedCharField(max_length=255, blank=True, null=True)
     refresh_token = EncryptedCharField(max_length=255, blank=True, null=True)
     access_token = EncryptedCharField(max_length=255, blank=True, null=True)
     expires_at = models.DateTimeField(blank=True, null=True)
-    
+
     # Additional config
     config = models.JSONField(default=dict, blank=True)
-    
+
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         unique_together = ('user', 'tool')
-    
-    def __str__(self):
-        return _("{}'s credentials for {}").format(self.user.username, self.tool.name)
-
-
-class Thread(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL,
-                             on_delete=models.CASCADE,
-                             related_name='user_threads',
-                             verbose_name=_("User threads"))
-    subject = models.CharField(max_length=255)
-    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.subject
+        return _("{}'s credentials for {}").format(self.user.username,
+                                                   self.tool.name)
 
-    def add_message(self, message_text, actor):
-        message = Message(text=message_text, thread=self)
-        message.user = self.user
-        if actor not in Actor.values:
-            raise ValueError(_("Invalid actor: {}").format(actor))
-        message.actor = actor
-        message.save()
-        return message
-    
-    def get_messages(self):
-        return Message.objects.filter(thread=self, user=self.user)
 
 # ----- Task Model for Asynchronous AI Tasks -----
 class TaskStatus(models.TextChoices):
@@ -341,6 +362,7 @@ class TaskStatus(models.TextChoices):
     RUNNING = "RUNNING", _("Running")
     COMPLETED = "COMPLETED", _("Completed")
     FAILED = "FAILED", _("Failed")
+
 
 class Task(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
@@ -360,10 +382,117 @@ class Task(models.Model):
     status = models.CharField(max_length=10,
                               choices=TaskStatus.choices,
                               default=TaskStatus.PENDING)
-    progress_logs = models.JSONField(default=list, blank=True)  # List of dicts, e.g., [{"step": "Calling tool X", "timestamp": "2025-07-28T03:58:00Z"}]
-    result = models.TextField(blank=True, null=True)  # Final output or error message
+    # List of dicts, e.g., [{"step": "Calling tool X", "timestamp": "2025-07-28T03:58:00Z"}]
+    progress_logs = models.JSONField(default=list, blank=True)
+    # Final output or error message
+    result = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Task {self.id} for Thread {self.thread.subject} ({self.status})"
+
+
+# Model for user-uploaded files stored in MinIO
+class UserFile(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.CASCADE,
+                             related_name='files')
+    thread = models.ForeignKey('Thread', on_delete=models.SET_NULL, null=True,
+                               blank=True, related_name='files')
+    # S3 object key (e.g., users/user_id/threads/thread_id/dir/subdir/file.txt)
+    key = models.CharField(max_length=255, unique=True)
+    original_filename = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100)
+    # File size in bytes
+    size = models.PositiveIntegerField()
+    # Auto-delete after this date
+    expiration_date = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (('user', 'key'),)
+
+    def __str__(self):
+        return f"{self.original_filename} ({self.key})"
+
+    def save(self, *args, **kwargs):
+        # Generate key only if not set (allow overrides if needed)
+        if not self.key and self.user and self.thread:
+            self.key = f"users/{self.user.id}/threads/{self.thread.id}{self.original_filename}"
+
+        # Save the object first to set auto_now_add fields
+        super().save(*args, **kwargs)
+
+        # Now calculate expiration_date if not already set
+        if not self.expiration_date:
+            self.expiration_date = self.created_at + timedelta(days=30)
+            # Save again with updated field
+            super().save(update_fields=['expiration_date'])
+
+    def get_download_url(self, expires_in=3600):
+        """Generate presigned URL for download (expires in seconds)."""
+        if self.expiration_date and self.expiration_date < timezone.now():
+            self.delete()
+            raise ValueError("File expired and deleted.")
+
+        # Get external base from trusted origins (includes port like :8080)
+        external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip('/')
+
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=settings.MINIO_ENDPOINT_URL,
+            aws_access_key_id=settings.MINIO_ACCESS_KEY,
+            aws_secret_access_key=settings.MINIO_SECRET_KEY,
+            config=botocore.config.Config(
+                signature_version='s3v4',
+            ),
+        )
+        try:
+            # Generate presigned URL
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': settings.MINIO_BUCKET_NAME, 'Key': self.key},
+                ExpiresIn=expires_in
+            )
+
+            # Change the URL to include the external base
+            url = url.replace(settings.MINIO_ENDPOINT_URL, external_base)
+
+            return url
+        except ClientError as e:
+            logger.error(f"Error generating presigned URL: {e}")
+            return None
+
+    def delete(self, *args, **kwargs):
+        """Delete from DB and MinIO."""
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=settings.MINIO_ENDPOINT_URL,
+            aws_access_key_id=settings.MINIO_ACCESS_KEY,
+            aws_secret_access_key=settings.MINIO_SECRET_KEY
+        )
+        try:
+            s3_client.delete_object(Bucket=settings.MINIO_BUCKET_NAME,
+                                    Key=self.key)
+        except ClientError as e:
+            logger.error(f"Error deleting from MinIO: {e}")
+        super().delete(*args, **kwargs)
+
+
+class CheckpointLink(models.Model):
+    # Link to a checkpoint for a given "thread+agent"
+    # The langgraph's checkpoint is identified by checkpoint_id
+    thread = models.ForeignKey('Thread', on_delete=models.CASCADE,
+                               related_name='checkpoint_links')
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE)
+    checkpoint_id = models.UUIDField(primary_key=True,
+                                     default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (('thread', 'agent'),)
+
+    def __str__(self):
+        return f"Link to Checkpoint {self.checkpoint_id} for Thread {self.thread.id} and agent {self.agent.id}"
