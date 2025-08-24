@@ -130,6 +130,7 @@ class AgentForm(forms.ModelForm):
             "name",
             "llm_provider",
             "system_prompt",
+            "recursion_limit",
             "is_tool",
             "tools",
             "agent_tools",

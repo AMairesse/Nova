@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-08-22 16:53+0000\n"
+"POT-Creation-Date: 2025-08-24 13:22+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -87,6 +87,6 @@ msgstr "Base URL (optional)"
 msgid "Base URL"
 msgstr "Base URL"
 
-#: nova/static/js/user_config.js:160
+#: nova/static/js/user_config.js:184
 msgid "Tool description is required when using as tool."
 msgstr "Tool description is required when using as tool."

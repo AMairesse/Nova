@@ -38,6 +38,14 @@
             <textarea class="form-control" id="systemPrompt" name="system_prompt" rows="3"></textarea>
           </div>
 
+          <!-- Recursion limit -->
+          <div class="mb-3">
+            <label for="recursionLimit" class="form-label">{% trans "Recursion limit: " %}</label><span id="recursionValue">25</span>
+            <input type="range" class="form-range" min="10" max="100" step="1" id="recursionLimit" name="recursion_limit" value="25"
+                   oninput="document.getElementById('recursionValue').textContent = this.value"
+                   onloadeddata="document.getElementById('recursionValue').textContent = this.value"></input>
+          </div>
+          
           <!-- Use as tool -->
           <div class="mb-3 form-check">
             <input class="form-check-input" type="checkbox" id="createIsToolCheckbox" name="is_tool">
@@ -133,9 +141,18 @@
             </select>
           </div>
 
+          <!-- System prompt -->
           <div class="mb-3">
             <label for="editSystemPrompt" class="form-label">{% trans "System prompt" %}</label>
             <textarea class="form-control" id="editSystemPrompt" name="system_prompt" rows="3"></textarea>
+          </div>
+
+          <!-- Recursion limit -->
+          <div class="mb-3">
+            <label for="editRecursionLimit" class="form-label">{% trans "Recursion limit: " %}</label><span id="editRecursionValue"></span>
+            <input type="range" class="form-range" min="10" max="100" step="1" id="editRecursionLimit" name="recursion_limit"
+                   oninput="document.getElementById('editRecursionValue').textContent = this.value"
+                   onloadeddata="document.getElementById('editRecursionValue').textContent = this.value"></input>
           </div>
 
           <div class="mb-3 form-check">

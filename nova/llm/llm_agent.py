@@ -102,14 +102,14 @@ class LLMAgent:
             langfuse_secret_key, langfuse_host
 
     @classmethod
-    def fetch_agent_data_sync(cls, agent, user):
+    def fetch_agent_data_sync(cls, agent_config, user):
         # Pre-fetch ORM data for load_tools
-        if not agent:
+        if not agent_config:
             return [], [], [], False, None, None
-        builtin_tools = list(agent.tools.filter(is_active=True,
+        builtin_tools = list(agent_config.tools.filter(is_active=True,
                                                 tool_type=Tool.ToolType.BUILTIN))
         mcp_tools_data = []
-        mcp_tools = list(agent.tools.filter(tool_type=Tool.ToolType.MCP,
+        mcp_tools = list(agent_config.tools.filter(tool_type=Tool.ToolType.MCP,
                                             is_active=True))
         for tool in mcp_tools:
             cred = tool.credentials.filter(user=user).first()
@@ -119,12 +119,14 @@ class LLMAgent:
             else:
                 func_metas = None
             mcp_tools_data.append((tool, cred, func_metas, cred_user_id))
-        agent_tools = list(agent.agent_tools.filter(is_tool=True))
-        has_agent_tools = agent.agent_tools.exists()
-        system_prompt = agent.system_prompt
-        llm_provider = agent.llm_provider
+        agent_tools = list(agent_config.agent_tools.filter(is_tool=True))
+        has_agent_tools = agent_config.agent_tools.exists()
+        system_prompt = agent_config.system_prompt
+        recursion_limit = agent_config.recursion_limit
+        llm_provider = agent_config.llm_provider
         return builtin_tools, mcp_tools_data, agent_tools, \
-            has_agent_tools, system_prompt, llm_provider
+            has_agent_tools, system_prompt, recursion_limit, \
+            llm_provider
 
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
@@ -140,7 +142,7 @@ class LLMAgent:
                                                 thread_sensitive=False)(user)
 
         builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, \
-            system_prompt, \
+            system_prompt, recursion_limit, \
             llm_provider = await sync_to_async(cls.fetch_agent_data_sync,
                                                thread_sensitive=False)(agent_config, user)
 
@@ -166,6 +168,7 @@ class LLMAgent:
             agent_tools=agent_tools,
             has_agent_tools=has_agent_tools,
             system_prompt=system_prompt,
+            recursion_limit=recursion_limit,
             llm_provider=llm_provider
         )
 
@@ -198,6 +201,7 @@ class LLMAgent:
                  agent_tools=None,
                  has_agent_tools=False,
                  system_prompt=None,
+                 recursion_limit=None,
                  llm_provider=None):
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
@@ -256,6 +260,7 @@ class LLMAgent:
         self.agent_tools = agent_tools or []
         self.has_agent_tools = has_agent_tools
         self._system_prompt = system_prompt
+        self.recursion_limit = recursion_limit
         self._llm_provider = llm_provider
 
         # Initialize resources and loaded modules tracker
@@ -299,6 +304,10 @@ class LLMAgent:
 
     async def ainvoke(self, question: str, silent_mode=False):
         config = self.silent_config if silent_mode else self.config
+
+        # Set the recursion limit
+        if self.recursion_limit is not None:
+            config.update({"recursion_limit": self.recursion_limit})
 
         # If the current thread as some files, alert the
         # agent by adding a message to the prompt

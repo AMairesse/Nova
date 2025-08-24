@@ -111,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const nameEsc       = this.dataset.name || '';
       const providerId    = this.dataset.llmProviderId;
       const promptEsc     = this.dataset.systemPrompt || '';
+      const recursionLimit = this.dataset.recursionLimit || '25';
       const toolDescEsc   = this.dataset.toolDescription || '';
       const isTool        = this.dataset.isTool === 'True';
       const toolsStr      = this.dataset.tools;
@@ -126,6 +127,8 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('editAgentName').value = name;
       document.getElementById('editLlmProvider').value = providerId;
       document.getElementById('editSystemPrompt').value = prompt;
+      document.getElementById('editRecursionLimit').value = recursionLimit;
+      document.getElementById('editRecursionValue').textContent = recursionLimit;
       document.getElementById('editToolDescription').value = toolDesc;
       document.getElementById('editIsToolCheckbox').checked = isTool;
       document.getElementById('editAgentForm').action = `/agent/edit/${id}/`;

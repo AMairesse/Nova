@@ -192,6 +192,7 @@ class Agent(models.Model):
                                      related_name='agents',
                                      verbose_name=_("Agents"))
     system_prompt = models.TextField()
+    recursion_limit = models.IntegerField(default=25)
 
     # Tools
     tools = models.ManyToManyField(Tool, blank=True, related_name="agents",

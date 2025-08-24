@@ -101,7 +101,7 @@
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-2 edit-agent-btn"
                                     data-id="{{ agent.id }}" data-name="{{ agent.name|escapejs }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
-                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-tool-description="{{ agent.tool_description|escapejs }}"
+                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-recursion-limit="{{ agent.recursion_limit }}" data-tool-description="{{ agent.tool_description|escapejs }}"
                                     data-is-tool="{{ agent.is_tool }}" data-tools="{% for tool in agent.tools.all %}{{ tool.id }}{% if not forloop.last %},{% endif %}{% endfor %}"
                                     data-agent-tools="{% for atool in agent.agent_tools.all %}{{ atool.id }}{% if not forloop.last %},{% endif %}{% endfor %}">
                                 {% trans "Edit" %}
@@ -146,7 +146,7 @@
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-2 edit-agent-btn"
                                     data-id="{{ agent.id }}" data-name="{{ agent.name|escapejs }}" data-llm-provider-id="{{ agent.llm_provider.id }}"
-                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-tool-description="{{ agent.tool_description|escapejs }}"
+                                    data-system-prompt="{{ agent.system_prompt|escapejs }}" data-recursion-limit="{{ agent.recursion_limit }}" data-tool-description="{{ agent.tool_description|escapejs }}"
                                     data-is-tool="{{ agent.is_tool }}" data-tools="{% for tool in agent.tools.all %}{{ tool.id }}{% if not forloop.last %},{% endif %}{% endfor %}"
                                     data-agent-tools="{% for atool in agent.agent_tools.all %}{{ atool.id }}{% if not forloop.last %},{% endif %}{% endfor %}">
                                 {% trans "Edit" %}
