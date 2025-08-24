@@ -81,21 +81,45 @@ function injectFields(selectElt, targetId) {
   div.innerHTML = getProviderFields(selectElt.value);
 }
 
+/*
+ * Helper to decode strings emitted with Django's `escapejs` into their
+ * real representation (interpret \n, \", \\ etc). We wrap the
+ * escaped string in quotes and use JSON.parse to let the JS engine
+ * interpret escape sequences. Fallback replaces common sequences.
+ */
+function unescapeJsDataAttr(s) {
+  if (!s) return s || '';
+  try {
+    // Protect existing double quotes before wrapping
+    return JSON.parse('"' + s.replace(/"/g, '\\"') + '"');
+  } catch (e) {
+    return s.replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\\"/g, '"')
+            .replace(/\\\\/g, '\\');
+  }
+}
+
 /* ------------------------------------------------------------------------
  * 2.  AGENT EDIT MODAL
  * --------------------------------------------------------------------- */
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.edit-agent-btn').forEach(btn => {
     btn.addEventListener('click', function () {
-      /* Data extraction */
-      const id          = this.dataset.id;
-      const name        = this.dataset.name;
-      const providerId  = this.dataset.llmProviderId;
-      const prompt      = this.dataset.systemPrompt || '';
-      const toolDesc    = this.dataset.toolDescription || '';
-      const isTool      = this.dataset.isTool === 'True';
-      const toolsStr    = this.dataset.tools;
+      /* Data extraction (decode values escaped with escapejs) */
+      const id            = this.dataset.id;
+      const nameEsc       = this.dataset.name || '';
+      const providerId    = this.dataset.llmProviderId;
+      const promptEsc     = this.dataset.systemPrompt || '';
+      const toolDescEsc   = this.dataset.toolDescription || '';
+      const isTool        = this.dataset.isTool === 'True';
+      const toolsStr      = this.dataset.tools;
       const agentToolsStr = this.dataset.agentTools;
+
+      /* Decode escaped strings before filling inputs */
+      const name     = unescapeJsDataAttr(nameEsc);
+      const prompt   = unescapeJsDataAttr(promptEsc);
+      const toolDesc = unescapeJsDataAttr(toolDescEsc);
 
       /* Fill the form */
       document.getElementById('editAgentId').value   = id;
@@ -107,7 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('editAgentForm').action = `/agent/edit/${id}/`;
       document.getElementById('editToolDescriptionWrapper').style.display = isTool ? 'block' : 'none';
       document.getElementById('editToolDescription').required = isTool;
-
+      
       /* Checkboxes (tools) */
       document.querySelectorAll('#editToolsSelection input[type="checkbox"]').forEach(cb => cb.checked = false);
       if (toolsStr) {

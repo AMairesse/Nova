@@ -182,16 +182,29 @@ async def retrieve_context_consumption(agent_config, agent):
         state = checkpoint_tuple.checkpoint
         memory = state.get('channel_values', {}).get('messages', [])
 
-    byte_size = 0
-    for m in memory:
-        if isinstance(m, BaseMessage):
-            byte_size += len(m.content.encode("utf-8", "ignore"))
+    # Try to get the info from last response
+    real_tokens = None
+    approx_tokens = None
+    if len(memory) > 0:
+        last_response = memory[-1]
+        # Get usage_metadata if available
+        usage_metadata = last_response.usage_metadata
+        if usage_metadata:
+            real_tokens = usage_metadata.get('total_tokens', None)
 
-    approx_tokens = byte_size // 4 + 1
-    # Get max from provider
-    max_ctx = await sync_to_async(lambda: agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
+    # If the info wasn't available, compute it from the context
+    if real_tokens is None:
+        byte_size = 0
+        for m in memory:
+            if isinstance(m, BaseMessage):
+                byte_size += len(m.content.encode("utf-8", "ignore"))
 
-    return approx_tokens, max_ctx
+        approx_tokens = byte_size // 4 + 1
+
+    # Get max from provider's config
+    max_context = await sync_to_async(lambda: agent_config.llm_provider.max_context_tokens, thread_sensitive=False)()
+
+    return real_tokens, approx_tokens, max_context
 
 
 async def run_ai_task(task, user, thread, agent_config, new_message):
@@ -235,17 +248,21 @@ async def run_ai_task(task, user, thread, agent_config, new_message):
                                                                   actor=Actor.AGENT)
 
             # Approximate token consumption relative to max context for this agent
-            approx_tokens, max_ctx = await retrieve_context_consumption(agent_config, llm)
+            real_tokens, approx_tokens, \
+                max_context = await retrieve_context_consumption(agent_config,
+                                                                 llm)
 
             # Publish context consumption
             await handler.publish_update('context_consumption',
-                                         {'approx_tokens': approx_tokens,
-                                          'max_ctx': max_ctx})
+                                         {'real_tokens': real_tokens,
+                                          'approx_tokens': approx_tokens,
+                                          'max_context': max_context})
 
             # Store in message internal_data
             message.internal_data.update({
-                'context_tokens': approx_tokens,
-                'max_context': max_ctx
+                'real_tokens': real_tokens,
+                'approx_tokens': approx_tokens,
+                'max_context': max_context
             })
             await sync_to_async(message.save, thread_sensitive=False)()
 

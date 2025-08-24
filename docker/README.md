@@ -61,7 +61,7 @@ This setup include :
 7. Updates:
 
    ```bash
-   git pull
+   docker compose pull
    docker compose up -d
    ```
 

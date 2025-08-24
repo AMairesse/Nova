@@ -299,9 +299,15 @@
 
         if (data.type === 'context_consumption') {
           const streamingFooter = document.querySelector(".message.streaming .card-footer");
-          if (streamingFooter && data.approx_tokens && data.max_ctx) {
-            streamingFooter.classList.remove('d-none');
-            streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_ctx} (approximated)`;
+          if (streamingFooter && data.max_context) {
+            if (data.real_tokens !== null) {
+              streamingFooter.classList.remove('d-none');
+              streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
+            }
+            else {
+              streamingFooter.classList.remove('d-none');
+              streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
+            }
           }
           return;
         }

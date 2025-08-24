@@ -28,9 +28,15 @@
           {{ message.rendered_html }}
         </div>
         <!-- Context indication -->
-        {% if message.internal_data.context_tokens and message.internal_data.max_context %}
+        {% if message.internal_data.max_context %}
         <div class="card-footer py-1 text-muted small text-end">
-          {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+          {% if message.internal_data.real_tokens is not None %}
+            {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
+          {% elif message.internal_data.approx_tokens %}
+            {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+          {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
+            {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+          {% endif %}
         </div>
         {% endif %}
       </div>
