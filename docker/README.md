@@ -2,7 +2,7 @@
 
 Using docker compose is the recommended way to run Nova, even for development.
 
-## Minimal setup (recommended)
+## Default setup
 
 This setup include :
    - A PostgreSQL database
@@ -11,10 +11,10 @@ This setup include :
    - A Minio S3 server
    - The Nova web app
 
-1. Download the minimal setup:
+1. Download the "minimal" setup:
 
    You will need:
-   - the `docker-compose.minimal.yml` file
+   - the `docker-compose.yml` file
    - the `docker-compose.base.yml` file
    - the `nginx.conf` file
    - the `templates/default.conf.template` file
@@ -23,10 +23,9 @@ This setup include :
    ```bash
    mkdir nova
    cd nova
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.minimal.yml
-   mv docker-compose.minimal.yml docker-compose.yml
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.yml
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx.conf
-   mkdir templates
+   mkdir -p templates
    cd templates
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/templates/default.conf.template
    cd ..
@@ -41,7 +40,6 @@ This setup include :
    ```bash
    docker compose up -d
    ```
-   Warning : first start may take a while because of the chromium install, you can check progress with `docker compose logs web -f`.
 
 3. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
 

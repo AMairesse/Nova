@@ -136,6 +136,7 @@ class AgentFormTest(BaseTestCase):
             'name': 'Test Agent',
             'llm_provider': self.provider.id,
             'system_prompt': 'You are helpful.',
+            'recursion_limit': '25',
             'is_tool': False,
             'tools': [self.tool.id]
         }
@@ -151,6 +152,7 @@ class AgentFormTest(BaseTestCase):
             'name': 'Tool Agent',
             'llm_provider': self.provider.id,
             'system_prompt': 'Tool prompt',
+            'recursion_limit': '25',
             'is_tool': True
         }
         form = AgentForm(data=data, user=self.user)
@@ -166,6 +168,7 @@ class AgentFormTest(BaseTestCase):
             'name': 'A1',
             'llm_provider': self.provider.id,
             'system_prompt': 'P1',
+            'recursion_limit': '25',
             'is_tool': True,
             'tool_description': 'D1',
             'agent_tools': []
@@ -189,6 +192,7 @@ class AgentFormTest(BaseTestCase):
             'name': 'A2',
             'llm_provider': self.provider.id,
             'system_prompt': 'P2',
+            'recursion_limit': '25',
             'is_tool': True,
             'tool_description': 'D2',
             'agent_tools': [agent1.id]

@@ -13,6 +13,27 @@
 | ![Simple question](./screenshots/Simple%20question.png) | ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Webbrowsing by agent](./screenshots/Webbrowsing%20by%20agent.png) | ![Agents and Agents as tools](./screenshots/Agents%20and%20Agents%20as%20tools.png) |
 | | | | |
 
+
+## Quickstart
+
+Quickstart on your computer (with Docker):
+
+```
+git clone https://github.com/AMairesse/Nova.git
+cd Nova/docker
+cp .env.example .env
+docker compose up -d
+```
+
+Open [http://localhost:8080](http://localhost:8080)
+
+The default username is `admin` and the default password is `changeme`.
+
+Then you can create your first agent and start playing with it : [How to configure agents](README-agents.md).
+
+
+## Description
+
 Instead of sending every prompt to a remote model, Nova lets you decide – transparently and at run-time – whether an agent should reason with a local LLM running on your own machine or delegate to a cloud model only when extra horsepower is really needed. The result is a flexible “best of both worlds” setup that keeps sensitive data on-prem while still giving you access to state-of-the-art capabilities when you want them.
 
 - **Agent-centric workflow** – Create smart assistants (agents) and equip them with “tools” that can be simple Python helpers, calendar utilities, HTTP/APIs or even other agents. Agents can chain or delegate work to one another, allowing complex reasoning paths.

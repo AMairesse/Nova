@@ -462,7 +462,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         with patch.dict(sys.modules, fakes):
             # Mock fetch_user_params_sync and fetch_agent_data_sync
             with patch.object(llm_agent_mod.LLMAgent, "fetch_user_params_sync", return_value=(False, None, None, None)):
-                with patch.object(llm_agent_mod.LLMAgent, "fetch_agent_data_sync", return_value=([], [], [], False, "prompt", SimpleNamespace(provider_type=ProviderType.OPENAI, model="gpt-4", api_key="fake_key", base_url=None))):
+                with patch.object(llm_agent_mod.LLMAgent, "fetch_agent_data_sync", return_value=([], [], [], False, "prompt", 25, SimpleNamespace(provider_type=ProviderType.OPENAI, model="gpt-4", api_key="fake_key", base_url=None))):
                     # Mock load_tools to return fake tools
                     with patch("nova.llm.llm_agent.load_tools", AsyncMock(return_value=[{"tool": True}])):
                         # Mock get_checkpointer to return a fake checkpointer
