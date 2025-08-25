@@ -1,16 +1,19 @@
 # nova/signals.py
+import logging
+
 from django.conf import settings
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
-import logging
+from asgiref.sync import async_to_sync
 
 from nova.models.models import UserProfile, UserParameters
 from nova.models.Thread import Thread
-from nova.llm.checkpoints import get_checkpointer_sync
+from nova.llm.checkpoints import get_checkpointer
 
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------------------------------
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile_and_params(sender, instance, created, **kwargs):
     """
@@ -22,15 +25,16 @@ def create_user_profile_and_params(sender, instance, created, **kwargs):
         UserParameters.objects.create(user=instance)
 
 
+# --------------------------------------------------------------------------
 @receiver(pre_delete, sender=Thread)
-def cleanup_thread(sender, instance, **kwargs):
+def cleanup_thread(sender, instance: Thread, **kwargs):
     """
     Delete all files and CheckpointsLink associated with
     a thread before the thread is deleted. This ensures MinIO
     files are properly cleaned up and Langgraph's checkpoints are removed.
     """
+    # ---------- 1. Minio cleanup ------------------------------
     files_to_delete = instance.files.all()
-
     if files_to_delete.exists():
         file_count = files_to_delete.count()
         logger.info(f"Deleting {file_count} files for thread {instance.id} ('{instance.subject}')")
@@ -52,28 +56,44 @@ def cleanup_thread(sender, instance, **kwargs):
     else:
         logger.debug(f"No files to delete for thread {instance.id}")
 
-    # Get all checkpoints for this thread
-    checkpoints_to_delete = instance.checkpoint_links.all()
-    checkpointer = get_checkpointer_sync()
+    # ---------- 2. Delete checkpoints ---------------------------
+    checkpoint_links = list(instance.checkpoint_links.all())
+    if not checkpoint_links:
+        logger.debug("No checkpoints to delete for thread %s", instance.id)
+        return
 
-    if checkpoints_to_delete.exists():
-        checkpoint_count = checkpoints_to_delete.count()
-        logger.info(f"Deleting {checkpoint_count} checkpoints for thread {instance.id} ('{instance.subject}')")
+    logger.info(
+        "Deleting %s checkpoints for thread %s ('%s')",
+        len(checkpoint_links),
+        instance.id,
+        instance.subject,
+    )
 
-        deleted_count = 0
-        failed_count = 0
+    deleted, failed = async_to_sync(_delete_checkpoints_async)(checkpoint_links)
 
-        for checkpoint_obj in checkpoints_to_delete:
-            try:
-                checkpoint_id = checkpoint_obj.checkpoint_id
-                checkpointer.delete_thread(checkpoint_id)
-                checkpoint_obj.delete()
-                logger.debug(f"Successfully deleted checkpoint {checkpoint_id}")
-                deleted_count += 1
-            except Exception as e:
-                logger.error(f"Failed to delete checkpoint {checkpoint_obj.checkpoint_id}: {e}")
-                failed_count += 1
+    for cp in deleted:
+        cp.delete()
 
-        logger.info(f"Thread {instance.id} checkpoint cleanup completed: {deleted_count} deleted, {failed_count} failed")
-    else:
-        logger.debug(f"No checkpoints to delete for thread {instance.id}")
+    logger.info(
+        "Thread %s checkpoint cleanup completed: %s deleted, %s failed",
+        instance.id,
+        len(deleted),
+        len(failed),
+    )
+    for cp, err in failed:
+        logger.error("Failed to delete checkpoint %s: %s", cp.checkpoint_id, err)
+
+
+# --------------------------------------------------------------------------
+async def _delete_checkpoints_async(checkpoint_links):
+    saver = await get_checkpointer()
+    deleted, failed = [], []
+
+    for cp in checkpoint_links:
+        try:
+            await saver.delete_thread(cp.checkpoint_id)
+            deleted.append(cp)
+        except Exception as exc:
+            failed.append((cp, str(exc)))
+
+    return deleted, failed

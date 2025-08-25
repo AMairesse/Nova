@@ -31,6 +31,17 @@ The default username is `admin` and the default password is `changeme`.
 
 Then you can create your first agent and start playing with it : [How to configure agents](README-agents.md).
 
+<details>
+  <summary>Optionaly you can use Nova with Ollama included</summary>
+  If you also want to use Ollama for a default system provider available to all users, you can use the `docker-compose.add-ollama.yml` file:
+
+  ```
+  docker compose -f docker-compose.yml -f docker-compose.add-ollama.yml up -d
+  ```
+
+  See [docker/README.md](docker/README.md#add-ollama-to-your-default-setup) for more details
+</details>
+
 
 ## Description
 

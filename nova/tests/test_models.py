@@ -2,7 +2,7 @@
 import uuid
 from django.core.exceptions import ValidationError
 from django.contrib.auth.models import User
-from unittest.mock import patch, MagicMock, ANY, call
+from unittest.mock import patch, MagicMock, AsyncMock, ANY, call
 from botocore.exceptions import ClientError
 
 from nova.models.models import (
@@ -264,177 +264,162 @@ class ThreadModelTest(BaseTestCase):
         messages = thread.get_messages()
         self.assertEqual(messages.count(), 2)
 
-    @patch('nova.signals.get_checkpointer_sync')
-    @patch('nova.models.models.boto3.client')
-    def test_thread_deletion_cleans_up_files(self, mock_boto3_client,
-                                             mock_get_checkpointer):
-        """Test that deleting a thread also
-           deletes associated files from MinIO."""
-        # Mock the S3 client
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    @patch("nova.models.models.boto3.client")
+    def test_thread_deletion_cleans_up_files(
+        self,
+        mock_boto3_client,
+        mock_get_checkpointer,
+    ):
+        """Deleting a thread deletes associated files from MinIO."""
+        # Mock S3
         mock_s3_client = mock_boto3_client.return_value
         mock_s3_client.delete_object.return_value = {}
 
-        # Mock the checkpointer
-        mock_checkpointer = mock_get_checkpointer.return_value
-        mock_checkpointer.delete_thread = MagicMock()
+        # Mock checkpointer
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
 
-        # Create a thread
-        thread = Thread.objects.create(user=self.user, subject='Test Thread')
-
-        # Create some test files associated with the thread
-        _ = UserFile.objects.create(
+        # Create thread + files
+        thread = Thread.objects.create(user=self.user, subject="Test Thread")
+        UserFile.objects.create(
             user=self.user,
             thread=thread,
-            key='users/1/threads/1/file1.txt',
-            original_filename='file1.txt',
-            mime_type='text/plain',
-            size=100
+            key="users/1/threads/1/file1.txt",
+            original_filename="file1.txt",
+            mime_type="text/plain",
+            size=100,
         )
-        _ = UserFile.objects.create(
+        UserFile.objects.create(
             user=self.user,
             thread=thread,
-            key='users/1/threads/1/file2.txt',
-            original_filename='file2.txt',
-            mime_type='text/plain',
-            size=200
+            key="users/1/threads/1/file2.txt",
+            original_filename="file2.txt",
+            mime_type="text/plain",
+            size=200,
         )
 
-        # Verify files exist before deletion
-        self.assertEqual(UserFile.objects.filter(thread=thread).count(), 2)
-
-        # Delete the thread (this should trigger our signal)
+        # Delete
         thread.delete()
 
-        # Verify files were deleted from database
-        self.assertEqual(UserFile.objects.filter(key__in=[
-            'users/1/threads/1/file1.txt',
-            'users/1/threads/1/file2.txt'
-            ]).count(), 0)
-
-        # Verify MinIO delete_object was called for each file
+        # Assertions identiques à l’ancienne version
+        self.assertEqual(
+            UserFile.objects.filter(
+                key__in=[
+                    "users/1/threads/1/file1.txt",
+                    "users/1/threads/1/file2.txt",
+                ]
+            ).count(),
+            0,
+        )
         self.assertEqual(mock_s3_client.delete_object.call_count, 2)
-
-        # Verify the correct keys were deleted from MinIO
         expected_calls = [
-            call(Bucket=ANY, Key='users/1/threads/1/file1.txt'),
-            call(Bucket=ANY, Key='users/1/threads/1/file2.txt')
+            call(Bucket=ANY, Key="users/1/threads/1/file1.txt"),
+            call(Bucket=ANY, Key="users/1/threads/1/file2.txt"),
         ]
-        mock_s3_client.delete_object.assert_has_calls(expected_calls,
-                                                      any_order=True)
+        mock_s3_client.delete_object.assert_has_calls(expected_calls, any_order=True)
 
-    @patch('nova.signals.get_checkpointer_sync')
-    @patch('nova.models.models.boto3.client')
-    def test_thread_deletion_handles_minio_errors(self, mock_boto3_client,
-                                                  mock_get_checkpointer):
-        """Test that thread deletion continues even if MinIO deletion fails."""
-        # Mock the S3 client to raise an error
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    @patch("nova.models.models.boto3.client")
+    def test_thread_deletion_handles_minio_errors(
+        self,
+        mock_boto3_client,
+        mock_get_checkpointer,
+    ):
+        """Deletion continues even if MinIO deletion fails."""
         mock_s3_client = mock_boto3_client.return_value
         mock_s3_client.delete_object.side_effect = ClientError(
-            {'Error': {'Code': 'AccessDenied', 'Message': 'Access Denied'}},
-            'delete_object'
+            {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}},
+            "delete_object",
         )
 
-        # Mock the checkpointer
-        mock_checkpointer = mock_get_checkpointer.return_value
-        mock_checkpointer.delete_thread = MagicMock()
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
 
-        # Create a thread with a file
-        filename = 'users/1/threads/1/file1.txt'
-        thread = Thread.objects.create(user=self.user, subject='Test Thread')
-        _ = UserFile.objects.create(
+        filename = "users/1/threads/1/file1.txt"
+        thread = Thread.objects.create(user=self.user, subject="Test Thread")
+        UserFile.objects.create(
             user=self.user,
             thread=thread,
             key=filename,
-            original_filename='file1.txt',
-            mime_type='text/plain',
-            size=100
+            original_filename="file1.txt",
+            mime_type="text/plain",
+            size=100,
         )
 
-        # Delete the thread - should not raise an exception despite MinIO error
         thread.delete()
 
-        # Verify thread was deleted despite MinIO error
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
-
-        # Verify file was still deleted from database
         self.assertEqual(UserFile.objects.filter(key=filename).count(), 0)
 
-    @patch('nova.signals.get_checkpointer_sync')
-    def test_thread_deletion_cleans_up_checkpoints(self,
-                                                   mock_get_checkpointer):
-        """Test that deleting a thread also deletes associated checkpoints."""
-        # Mock the checkpointer
-        mock_checkpointer = mock_get_checkpointer.return_value
-        mock_checkpointer.delete_thread = MagicMock()
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    def test_thread_deletion_cleans_up_checkpoints(
+        self,
+        mock_get_checkpointer,
+    ):
+        """Deleting a thread also deletes associated checkpoints."""
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
 
-        # Create two threads
-        thread1 = Thread.objects.create(user=self.user,
-                                        subject='Test Thread 1')
-        thread2 = Thread.objects.create(user=self.user,
-                                        subject='Test Thread 2')
+        thread1 = Thread.objects.create(user=self.user, subject="T1")
+        thread2 = Thread.objects.create(user=self.user, subject="T2")
 
-        # Create some test checkpoint links associated with the thread
-        agent = Agent.objects.create(user=self.user, name='Test Agent',
-                                     llm_provider=LLMProvider.objects.create(
-                                        user=self.user, name='Provider',
-                                        provider_type=ProviderType.OLLAMA,
-                                        model='llama3'),
-                                     system_prompt='Prompt')
-        chk1 = uuid.uuid4()
-        chk2 = uuid.uuid4()
-        _ = CheckpointLink.objects.create(thread=thread1, agent=agent,
-                                          checkpoint_id=chk1)
-        _ = CheckpointLink.objects.create(thread=thread2, agent=agent,
-                                          checkpoint_id=chk2)
+        agent = Agent.objects.create(
+            user=self.user,
+            name="Agent",
+            llm_provider=LLMProvider.objects.create(
+                user=self.user,
+                name="Prov",
+                provider_type=ProviderType.OLLAMA,
+                model="llama3",
+            ),
+            system_prompt="Prompt",
+        )
+        chk1, chk2 = uuid.uuid4(), uuid.uuid4()
+        CheckpointLink.objects.create(thread=thread1, agent=agent, checkpoint_id=chk1)
+        CheckpointLink.objects.create(thread=thread2, agent=agent, checkpoint_id=chk2)
 
-        # Verify checkpoints exist before deletion
-        self.assertEqual(CheckpointLink.objects.filter(thread=thread1).count(),
-                         1)
-        self.assertEqual(CheckpointLink.objects.filter(thread=thread2).count(),
-                         1)
-
-        # Delete the threads (this should trigger our signal)
         thread1.delete()
         thread2.delete()
 
-        # Verify checkpoints were deleted from database
-        self.assertEqual(CheckpointLink.objects.filter(checkpoint_id__in=[chk1,
-                                                                          chk2]
-                                                       ).count(), 0)
+        self.assertEqual(
+            CheckpointLink.objects.filter(checkpoint_id__in=[chk1, chk2]).count(),
+            0,
+        )
+        self.assertEqual(mock_saver.delete_thread.call_count, 2)
 
-        # Verify checkpointer.delete_thread was called for each checkpoint
-        self.assertEqual(mock_checkpointer.delete_thread.call_count, 2)
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    def test_thread_deletion_handles_checkpoint_errors(
+        self,
+        mock_get_checkpointer,
+    ):
+        """Deletion continues even if checkpoint deletion fails."""
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock(side_effect=Exception("boom"))
+        mock_get_checkpointer.return_value = mock_saver
 
-    @patch('nova.signals.get_checkpointer_sync')
-    def test_thread_deletion_handles_checkpoint_errors(self,
-                                                       mock_get_checkpointer):
-        """Test that thread deletion continues even
-           if checkpoint deletion fails."""
-        # Mock the checkpointer to raise an error
-        mock_checkpointer = mock_get_checkpointer.return_value
-        mock_checkpointer.delete_thread.side_effect = Exception("Checkpoint deletion error")
+        thread = Thread.objects.create(user=self.user, subject="T")
+        agent = Agent.objects.create(
+            user=self.user,
+            name="Agent",
+            llm_provider=LLMProvider.objects.create(
+                user=self.user,
+                name="Prov",
+                provider_type=ProviderType.OLLAMA,
+                model="llama3",
+            ),
+            system_prompt="Prompt",
+        )
+        chk = uuid.uuid4()
+        CheckpointLink.objects.create(thread=thread, agent=agent, checkpoint_id=chk)
 
-        # Create a thread with a checkpoint
-        thread = Thread.objects.create(user=self.user, subject='Test Thread')
-        agent = Agent.objects.create(user=self.user, name='Test Agent',
-                                     llm_provider=LLMProvider.objects.create(
-                                        user=self.user, name='Provider',
-                                        provider_type=ProviderType.OLLAMA,
-                                        model='llama3'),
-                                     system_prompt='Prompt')
-        chk1 = uuid.uuid4()
-        _ = CheckpointLink.objects.create(thread=thread, agent=agent,
-                                          checkpoint_id=chk1)
-
-        # Delete the thread
-        # should not raise an exception despite checkpoint error
         thread.delete()
 
-        # Verify thread was deleted despite checkpoint error
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
-
-        # Verify checkpoint was still deleted from database
-        self.assertEqual(CheckpointLink.objects.filter(checkpoint_id=chk1).count(), 0)
+        self.assertEqual(CheckpointLink.objects.filter(checkpoint_id=chk).count(), 0)
 
 
 class TaskModelTest(BaseTestCase):

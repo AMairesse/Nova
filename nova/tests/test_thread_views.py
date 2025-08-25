@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.http import HttpResponse
 from django.urls import reverse
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from nova.models.models import (
     Agent,
@@ -123,27 +123,26 @@ class MainViewsTests(TestCase):
 
     # ------------ delete_thread -----------------------------------------
 
-    @patch('nova.signals.get_checkpointer_sync')
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
     def test_delete_thread_owner_only(self, mock_get_checkpointer):
-        # Mock the checkpointer
-        mock_checkpointer = mock_get_checkpointer.return_value
-        mock_checkpointer.delete_thread = MagicMock()
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
 
-        # Create a thread
         thread = Thread.objects.create(user=self.user, subject="Del")
 
-        # Non-authenticated -> redirect to login
+        # Non-authenticated
         resp = self.client.post(reverse("delete_thread", args=[thread.id]))
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/accounts/login/", resp["Location"])
 
-        # Other user -> 404
+        # Other user
         self.client.login(username="bob", password="pass")
         resp = self.client.post(reverse("delete_thread", args=[thread.id]))
         self.assertEqual(resp.status_code, 404)
         self.client.logout()
 
-        # Owner -> redirect to index and object deleted
+        # Owner
         self.client.login(username="alice", password="pass")
         resp = self.client.post(reverse("delete_thread", args=[thread.id]))
         self.assertEqual(resp.status_code, 302)

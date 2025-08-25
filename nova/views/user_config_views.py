@@ -5,8 +5,9 @@ from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
 from django.views.generic import View
 from nova.models.models import UserParameters, Agent, UserProfile, LLMProvider, Tool, ProviderType
-from ..forms import UserParametersForm, AgentForm
+from nova.forms import UserParametersForm, AgentForm
 from nova.tools import get_available_tool_types
+from nova.utils import check_and_create_system_provider
 
 
 @method_decorator(login_required(login_url='login'), name='dispatch')
@@ -37,6 +38,10 @@ class UserConfigView(View):
         agents_normal = agents.filter(is_tool=False)
         agents_tools = agents.filter(is_tool=True)
 
+        # Retrieve errors
+        provider_errors = request.session.pop('provider_errors', None)
+        agent_errors = request.session.pop('agent_errors', None)
+
         return {
             'user_params_form': user_params_form,
             'active_tab': active_tab,
@@ -45,16 +50,22 @@ class UserConfigView(View):
             'agents': agents,
             'agents_normal': agents_normal,
             'agents_tools': agents_tools,
-            'llm_providers': LLMProvider.objects.filter(user=request.user),
+            'llm_providers': LLMProvider.objects.filter(models.Q(user=request.user) |
+                                                        models.Q(user__isnull=True)),
             'tools': Tool.objects.filter(
                 models.Q(user=request.user) | models.Q(user__isnull=True)
             ).distinct(),
             'tool_types': tool_types,
             'user_profile': user_profile,
             "PROVIDER_CHOICES": ProviderType.choices,
+            'provider_errors': provider_errors,
+            'agent_errors': agent_errors,
         }
 
     def get(self, request, *args, **kwargs):
+        # Check if system providers are correctly created
+        check_and_create_system_provider()
+        # Retrieve active tab
         active_tab = request.GET.get('tab', 'providers')
         context = self._get_common_context(request, active_tab=active_tab)
         return render(request, self.template_name, context)

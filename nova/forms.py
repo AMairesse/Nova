@@ -143,7 +143,9 @@ class AgentForm(forms.ModelForm):
 
         if user:
             # Restrict choices to objects owned by the current user
-            self.fields["llm_provider"].queryset = LLMProvider.objects.filter(user=user)
+            # or system's ones (if user is None)
+            self.fields["llm_provider"].queryset = LLMProvider.objects.filter(models.Q(user=user) |
+                                                                              models.Q(user__isnull=True))
 
             # Regular tools: owned by user or public built-ins
             self.fields["tools"].queryset = Tool.objects.filter(
@@ -239,7 +241,7 @@ class ToolForm(forms.ModelForm):
 
                 meta = get_tool_type(data["tool_subtype"])
                 if meta:
-                    data["name"]        = meta["name"]
+                    data["name"] = meta["name"]
                     data["description"] = meta["description"]
                     data["python_path"] = meta["python_path"]
                 # Replace the positional arg so ModelForm sees the changes

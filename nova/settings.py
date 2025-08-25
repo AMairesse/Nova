@@ -191,3 +191,8 @@ for origin in CSRF_TRUSTED_ORIGINS:
         raise ValueError(f"Invalid CSRF_TRUSTED_ORIGINS format: {origin} (must start with http:// or https://)")
     if not DEBUG and not origin.startswith('https://'):
         raise ValueError(f"CSRF_TRUSTED_ORIGINS must use https:// in production: {origin}")
+
+# Get infos about an Ollama server if configured
+OLLAMA_SERVER_URL = os.getenv('OLLAMA_SERVER_URL', None)
+OLLAMA_MODEL_NAME = os.getenv('OLLAMA_MODEL_NAME', None)
+OLLAMA_CONTEXT_LENGTH = os.getenv('OLLAMA_CONTEXT_LENGTH', None)

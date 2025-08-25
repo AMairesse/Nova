@@ -12,7 +12,6 @@ services:
         condition: service_healthy
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-    # Optionnel : accès à la config .env pour auto-config (voir plus bas)
 
 volumes:
   pgadmin_data:
