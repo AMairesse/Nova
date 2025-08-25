@@ -74,6 +74,7 @@ This setup include :
    mkdir -p ollama
    cd ollama
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/ollama_entrypoint.sh
+   chmod +x ollama_entrypoint.sh
    mkdir -p modelfiles
    cd modelfiles
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/modelfiles/Modelfile.template
