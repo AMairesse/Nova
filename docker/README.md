@@ -24,11 +24,13 @@ This setup include :
    mkdir nova
    cd nova
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.yml
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx.conf
+   mkdir -p nginx
+   cd nginx
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx/nginx.conf
    mkdir -p templates
    cd templates
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/templates/default.conf.template
-   cd ..
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx/templates/default.conf.template
+   cd ../..
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/.env.example
    mv .env.example .env
    ```
@@ -62,6 +64,32 @@ This setup include :
    docker compose pull
    docker compose up -d
    ```
+
+## Add Ollama to your default setup
+
+1. Download the `docker-compose.add-ollama.yml` file and the `ollama` directory:
+
+   ```bash
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-ollama.yml
+   mkdir -p ollama
+   cd ollama
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/ollama_entrypoint.sh
+   mkdir -p modelfiles
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/modelfiles/Modelfile.template
+   cd ../..
+   ```
+
+2. Edit the `ollama/templates/default.conf.template` if you want to use a different model
+
+3. Edit the `.env` file if you want to change the context window size
+
+4. Start containers:
+
+   ```bash
+   docker compose -f docker-compose.add-ollama.yml up -d
+   ```
+
+5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
 
 ## Build from source
 
