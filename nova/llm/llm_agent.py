@@ -64,6 +64,7 @@ register_provider(
         base_url=p.base_url or "http://localhost:11434",
         temperature=0,
         max_retries=2,
+        reasoning=False,
         streaming=True
     )
 )

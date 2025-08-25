@@ -1,7 +1,16 @@
 import asyncio
+import logging
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
+from django.conf import settings
+from nova.models.models import LLMProvider, ProviderType
 from langchain_core.messages import BaseMessage
+
+OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
+OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
+OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_url(urlish) -> str:
@@ -38,7 +47,6 @@ def normalize_url(urlish) -> str:
 
 
 def extract_final_answer(output):
-    from langchain_core.messages import BaseMessage
     if isinstance(output, str):
         return output
     if isinstance(output, list):
@@ -70,3 +78,39 @@ def schedule_in_event_loop(coro):
 
     # async_to_sync exécute _runner dans la boucle principale
     async_to_sync(_runner)()
+
+
+def check_and_create_system_provider():
+    # Get the system provider if it exists
+    provider = LLMProvider.objects.filter(user=None,
+                                          name='System - Ollama',
+                                          provider_type=ProviderType.OLLAMA).first()
+    if OLLAMA_SERVER_URL and OLLAMA_MODEL_NAME:
+        # Check that Ollama is started
+        
+        # Create a "system provider" if it doesn't already exist
+        if not provider:
+            LLMProvider.objects.create(user=None,
+                                       name='System - Ollama',
+                                       provider_type=ProviderType.OLLAMA,
+                                       model=OLLAMA_MODEL_NAME,
+                                       base_url=OLLAMA_SERVER_URL,
+                                       max_context_tokens=OLLAMA_CONTEXT_LENGTH)
+        else:
+            # Update it if needed
+            if provider.model != OLLAMA_MODEL_NAME or \
+               provider.base_url != OLLAMA_SERVER_URL or \
+               provider.max_context_tokens != OLLAMA_CONTEXT_LENGTH:
+                provider.model = OLLAMA_MODEL_NAME
+                provider.base_url = OLLAMA_SERVER_URL
+                provider.max_context_tokens = OLLAMA_CONTEXT_LENGTH
+                provider.save()
+    else:
+        if LLMProvider.objects.filter(user=None,
+                                      provider_type=ProviderType.OLLAMA).exists():
+            # If the system provider is not used then delete it
+            if not provider.agents.exists():
+                provider.delete()
+            else:
+                logger.warning(
+                    "WARNING: OLLAMA_SERVER_URL or OLLAMA_MODEL_NAME not set, but a system provider exists and is being used by at least one agent.")

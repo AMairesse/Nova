@@ -43,7 +43,7 @@
                             <p class="text-muted mb-0">{{ provider.get_provider_type_display }} – {{ provider.model }}</p>
                         </div>
                         <div>
-                            <button class="btn btn-sm btn-outline-primary me-2 edit-provider-btn"
+                            <button class="btn btn-sm btn-outline-primary me-2 edit-provider-btn {% if provider.user is null %}disabled{% endif %}"
                                     data-id="{{ provider.id }}" data-name="{{ provider.name }}"
                                     data-provider-type="{{ provider.provider_type }}"
                                     data-model="{{ provider.model }}"
@@ -55,7 +55,7 @@
                             <form method="post" action="{% url 'delete_provider' provider.id %}" class="d-inline"
                                   onsubmit="return confirm(getDeleteConfirmation('{{ provider.name }}'))">
                                 {% csrf_token %}
-                                <button type="submit" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</button>
+                                <button type="submit" class="btn btn-sm btn-outline-danger {% if provider.user is null %}disabled{% endif %}">{% trans "Delete" %}</button>
                             </form>
                         </div>
                     </div>
@@ -64,6 +64,12 @@
                 <div class="alert alert-info">{% trans "No LLM providers configured. Create one to be able to configure agents." %}</div>
             {% endfor %}
         </div>
+        <!-- Display error messages if any -->
+        {% if provider_errors %}
+            <div class="alert alert-danger">
+                {{ provider_errors }}
+            </div>
+        {% endif %}
         <button class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#providerModal">{% trans "Create a new provider" %}</button>
     </div>
 
@@ -161,6 +167,12 @@
                 {% endfor %}
             </div>
         </div>
+        <!-- Display error messages if any -->
+        {% if agent_errors %}
+            <div class="alert alert-danger">
+                {{ agent_errors }}
+            </div>
+        {% endif %}
         {% if llm_providers %}
             <button class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#agentModal">{% trans "Create an agent" %}</button>
         {% else %}

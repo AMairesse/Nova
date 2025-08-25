@@ -32,14 +32,14 @@ services:
     environment:
       MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-nova-files}
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - static_data:/app/static
       - media_data:/app/media
       # Warning : we are using a template file to allow variable substitution
       # See https://hub.docker.com/_/nginx
       # ==> Overriding CMD will break the substitution !
       # ==> The template file must be named default.conf.template
-      - ./templates:/etc/nginx/templates
+      - ./nginx/templates:/etc/nginx/templates
     depends_on:
       - web
 

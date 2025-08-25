@@ -52,7 +52,12 @@ class LLMProvider(models.Model):
     )
     model = models.CharField(max_length=120)
     api_key = EncryptedCharField(max_length=255, blank=True, null=True)
-    base_url = models.URLField(blank=True, null=True)
+    base_url = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        validators=[validate_relaxed_url],
+    )
     # For other provider-specific settings
     additional_config = models.JSONField(default=dict, blank=True)
     max_context_tokens = models.PositiveIntegerField(
@@ -60,7 +65,11 @@ class LLMProvider(models.Model):
         help_text=_("Maximum tokens for this provider's context window (e.g., 4096 for small models, 100000 or more for large).")
     )
 
+    # If the LLMProvider is not owned by a user, this will be null
+    # it means the LLMProvider is public (available to all users)
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             blank=True,
+                             null=True,
                              on_delete=models.CASCADE,
                              related_name='llm_providers',
                              verbose_name=_("LLM providers"))

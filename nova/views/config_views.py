@@ -1,4 +1,5 @@
 from django.contrib.auth.decorators import login_required
+from django.db import models
 from django.shortcuts import redirect, reverse, get_object_or_404
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_protect
@@ -83,8 +84,14 @@ def create_provider(request):
 @csrf_protect
 @login_required
 def edit_provider(request, provider_id):
-    provider = get_object_or_404(LLMProvider, id=provider_id,
-                                 user=request.user)
+    provider = get_object_or_404(LLMProvider, models.Q(user=request.user) | models.Q(user__isnull=True),
+                                 id=provider_id)
+
+    # If the provider is a system one, don't allow edit
+    if provider.user is None:
+        request.session['provider_errors'] = 'Cannot modify a system provider'
+        return redirect(reverse('user_config') + '?tab=providers&error=1')
+
     if request.method == 'POST':
         form = LLMProviderForm(request.POST, instance=provider)
         if form.is_valid():
@@ -98,8 +105,13 @@ def edit_provider(request, provider_id):
 @csrf_protect
 @login_required
 def delete_provider(request, provider_id):
-    provider = get_object_or_404(LLMProvider, id=provider_id,
-                                 user=request.user)
+    provider = get_object_or_404(LLMProvider, models.Q(user=request.user) | models.Q(user__isnull=True),
+                                 id=provider_id)
+
+    # If the provider is a system one, don't allow deletion
+    if provider.user is None:
+        request.session['provider_errors'] = 'Cannot delete a system provider'
+        return redirect(reverse('user_config') + '?tab=providers&error=1')
 
     # Check if provider is used by any agents
     if provider.agents.exists():
