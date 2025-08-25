@@ -75,10 +75,10 @@ This setup include :
    cd ollama
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/ollama_entrypoint.sh
    chmod +x ollama_entrypoint.sh
-   mkdir -p modelfiles/templates
-   cd modelfiles/templates
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/modelfiles/templates/Modelfile.template
-   cd ../../..
+   mkdir -p templates
+   cd templates
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/templates/Modelfile.template
+   cd ../..
    ```
 
 2. Edit the `ollama/templates/default.conf.template` if you want to use a different model
