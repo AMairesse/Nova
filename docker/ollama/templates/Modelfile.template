@@ -1,4 +1,4 @@
 FROM qwen3:8b
 
 # Set context window size (context_size)
-PARAMETER num_ctx {{OLLAMA_CONTEXT_LENGTH}}
+PARAMETER num_ctx ${OLLAMA_CONTEXT_LENGTH}

@@ -15,7 +15,7 @@ services:
       - OLLAMA_MODEL_NAME=${OLLAMA_MODEL_NAME:-NovaModel}
       - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-4096}
     volumes:
-      - ./ollama/modelfiles/templates:/modelfiles/templates:ro
+      - ./ollama/templates:/templates:ro
       - ./ollama/ollama_entrypoint.sh:/ollama_entrypoint.sh
       - ollama_storage:/root/.ollama
     entrypoint: ["./ollama_entrypoint.sh"]

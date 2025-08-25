@@ -11,8 +11,9 @@ until ollama list > /dev/null 2>&1; do
 done
 
 # Update the Modelfile's env variables
-export BASE_MODEL=my-base-model
-envsubst < /modelfiles/templates/Modelfile.template > /modelfiles/Modelfile
+apt-get update && apt-get install -y gettext
+mkdir -p /modelfiles
+envsubst < /templates/Modelfile.template > /modelfiles/Modelfile
 
 # Build the custom model if not already present
 if ! ollama list | grep -q "$OLLAMA_MODEL_NAME"; then
