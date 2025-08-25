@@ -36,7 +36,7 @@ Then you can create your first agent and start playing with it : [How to configu
   If you also want to use Ollama for a default system provider available to all users, you can use the `docker-compose.add-ollama.yml` file:
 
   ```
-  docker compose -f docker-compose.add-ollama.yml up -d
+  docker compose -f docker-compose.yml -f docker-compose.add-ollama.yml up -d
   ```
 
   See [docker/README.md](docker/README.md#add-ollama-to-your-default-setup) for more details

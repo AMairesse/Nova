@@ -75,6 +75,7 @@ This setup include :
    cd ollama
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/ollama_entrypoint.sh
    mkdir -p modelfiles
+   cd modelfiles
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/modelfiles/Modelfile.template
    cd ../..
    ```
@@ -86,7 +87,7 @@ This setup include :
 4. Start containers:
 
    ```bash
-   docker compose -f docker-compose.add-ollama.yml up -d
+   docker compose -f docker-compose.yml -f docker-compose.add-ollama.yml up -d
    ```
 
 5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
