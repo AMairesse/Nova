@@ -117,7 +117,7 @@ class AgentForm(forms.ModelForm):
         queryset=Agent.objects.none(),
         required=False,
         widget=forms.CheckboxSelectMultiple,
-        label=_("Agents to expose as tools"),
+        label=_("Agents to use as tools"),
     )
 
     class Meta:
