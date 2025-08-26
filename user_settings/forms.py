@@ -1,3 +1,8 @@
+"""
+Wrappers around the original nova.forms so they silently accept the
+`user` keyword injected by OwnerFormKwargsMixin and by Tool form-set helpers.
+"""
+
 from nova.forms import (
     LLMProviderForm as _LLMProviderForm,
     AgentForm as _AgentForm,
@@ -5,27 +10,40 @@ from nova.forms import (
     ToolCredentialForm as _ToolCredentialForm,
 )
 
-# -------- déjà présents ---------------------------------------------------
+
+# ───────────────────────────────────────────────────────────────
+# Provider
+# ───────────────────────────────────────────────────────────────
 class LLMProviderForm(_LLMProviderForm):
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
 
 
+# ───────────────────────────────────────────────────────────────
+# Agent
+# ───────────────────────────────────────────────────────────────
 class AgentForm(_AgentForm):
     def __init__(self, *args, user=None, **kwargs):
-        super().__init__(*args, user=user, **kwargs)
-
-
-# -------- nouveaux wrappers ----------------------------------------------
-class ToolForm(_ToolForm):
-    def __init__(self, *args, user=None, **kwargs):
-        # On conserve l’utilisateur pour filtrer les FK éventuels
         self.user = user
         super().__init__(*args, **kwargs)
 
 
+# ───────────────────────────────────────────────────────────────
+# Tool
+# ───────────────────────────────────────────────────────────────
+class ToolForm(_ToolForm):
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+
+# ───────────────────────────────────────────────────────────────
+# ToolCredential  (inline formset)
+# ───────────────────────────────────────────────────────────────
 class ToolCredentialForm(_ToolCredentialForm):
-    """Le mixin injecte user ; on le transmet à la sous-form."""
     def __init__(self, *args, user=None, tool=None, **kwargs):
-        super().__init__(*args, user=user, tool=tool, **kwargs)
+        # store whatever you may need for custom clean() later
+        self.user = user
+        self.tool = tool
+        super().__init__(*args, **kwargs)
