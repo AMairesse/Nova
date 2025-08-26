@@ -42,6 +42,7 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
 INSTALLED_APPS = [
     'nova.apps.NovaConfig',
+    'user_settings',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',

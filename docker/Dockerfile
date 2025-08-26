@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y gcc libpq-dev postgresql-client gettext
 COPY requirements.txt /app/
 RUN pip install -r requirements.txt
 COPY nova/ /app/nova/
+COPY user_settings/ /app/user_settings/
 COPY manage.py ./docker/entrypoint.sh /app/
 
 # Make entrypoint executable

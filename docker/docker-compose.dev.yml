@@ -46,7 +46,8 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - ../nova:/app/nova  # Hot-reload code app
+      - ../nova:/app/nova  # Hot-reload code app nova
+      - ../user_settings:/app/user_settings  # Hot-reload code app user_settings
       - ../requirements.txt:/app/requirements.txt  # If deps change then rebuild manually
       - ../manage.py:/app/manage.py
       - ./entrypoint.sh:/app/entrypoint.sh  # In case entrypoint changes

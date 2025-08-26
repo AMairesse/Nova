@@ -84,3 +84,8 @@ if settings.DEBUG:
     urlpatterns += [
         path('healthz/', healthz, name='healthz'),
     ]
+
+# User settings
+urlpatterns += [
+     path("settings/", include("user_settings.urls")),
+]
