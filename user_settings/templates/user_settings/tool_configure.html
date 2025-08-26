@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags static i18n %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script src="{% static 'user_settings/tool_configure.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+<h2>{% blocktrans %}Configure {{ tool.name }}{% endblocktrans %}</h2>
+
+<form id="configForm" method="post" class="mb-3">
+  {% csrf_token %}
+  {{ form|crispy }}
+  <button class="btn btn-primary" type="submit">{% trans "Save" %}</button>
+
+  {% if tool.tool_type == 'builtin' or tool.tool_type == 'mcp' %}
+    <button type="button" class="btn btn-outline-secondary ms-2"
+            id="testBtn"
+            data-test-url="{% url 'user_settings:tool-test' tool.pk %}">
+      <i class="bi bi-check2-circle me-1"></i> {% trans "Test connection" %}
+    </button>
+  {% endif %}
+</form>
+
+<div id="testResult" class="alert d-none"></div>
+
+{% endblock %}

@@ -18,9 +18,11 @@
           <td>{{ tool.get_tool_type_display }}</td>
           <td class="text-end">
             <a href="{% url 'user_settings:tool-edit' tool.pk %}"
-               class="btn btn-sm btn-outline-secondary me-1"><i class="bi bi-pencil"></i> Edit</a>
+              class="btn btn-sm btn-outline-secondary me-1"><i class="bi bi-pencil"></i> Edit</a>
+            <a href="{% url 'user_settings:tool-configure' tool.pk %}"
+              class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-gear"></i> Configure</a>
             <a href="{% url 'user_settings:tool-delete' tool.pk %}"
-               class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
+              class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
           </td>
         </tr>
       {% endfor %}
