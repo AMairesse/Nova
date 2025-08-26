@@ -1,6 +1,7 @@
 # user_settings/views/tool.py
 from __future__ import annotations
 import logging
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.forms import inlineformset_factory
 from django.http import HttpResponseRedirect, JsonResponse
@@ -9,6 +10,8 @@ from django.views.generic import ListView, DeleteView, FormView
 from django import forms
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
+
+from crispy_forms.helper import FormHelper
 
 from asgiref.sync import sync_to_async
 
@@ -56,7 +59,7 @@ class ToolListView(LoginRequiredMixin,
 
 
 # ------------------------------------------------------------------ #
-#  CREATE / UPDATE mixin                                             #
+#  CREATE / UPDATE mixin (no credential formset)                     #
 # ------------------------------------------------------------------ #
 class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
     model = Tool
@@ -64,36 +67,27 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
     template_name = "user_settings/tool_form.html"
     dashboard_tab = "tools"
 
-    # -------- redirection vers le bon onglet ------------------------
+    # ------------------------------------------------------------
+    # redirect to the correct dashboard tab
+    # ------------------------------------------------------------
     def get_success_url(self):
         base = reverse_lazy("user_settings:dashboard")
         return f"{base}?from={self.dashboard_tab}"
 
-    # -------- kwargs supplémentaires pour le form ------------------
+    # ------------------------------------------------------------
+    # extra kwargs for the form (current user)
+    # ------------------------------------------------------------
     def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["user"] = self.request.user
-        return kwargs
+        kw = super().get_form_kwargs()
+        kw["user"] = self.request.user
+        return kw
 
-    # -------- inline formset (credentials) -------------------------
-    def get_formset(self, form, **kwargs):
-        return ToolCredentialFormSet(
-            instance=form.instance,
-            data=self.request.POST if self.request.method == "POST" else None,
-            files=self.request.FILES if self.request.method == "POST" else None,
-            prefix="cred",
-            form_kwargs={"user": self.request.user},
-            **kwargs,
-        )
-
-    # -------- logique de sauvegarde complète -----------------------
+    # ------------------------------------------------------------
+    # save logic (no formset)
+    # ------------------------------------------------------------
     def form_valid(self, form):
-        formset = self.get_formset(form)
-        if not formset.is_valid():
-            return self.form_invalid(form, formset=formset)
-
-        # 1) Sauvegarde principale
         is_new = form.instance.pk is None
+
         obj = form.save(commit=False)
         if is_new:
             obj.user = self.request.user
@@ -101,21 +95,25 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
         if hasattr(form, "save_m2m"):
             form.save_m2m()
 
-        # 2) Credentials
-        formset.instance = obj
-        formset.save()
-
         self.object = obj
+
+        # Success banner
+        messages.success(self.request, "Tool saved successfully.")
+
+        # Redirect
         return HttpResponseRedirect(
             reverse("user_settings:tool-configure", args=[obj.pk])
             if is_new else self.get_success_url()
         )
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        if "formset" not in ctx:
-            ctx["formset"] = self.get_formset(ctx["form"])
-        return ctx
+    
+    def form_invalid(self, form):
+        """
+        Ensure validation errors are re-rendered with HTTP 400 status,
+        so browser and dev-tools make the failure obvious.
+        """
+        return self.render_to_response(
+            self.get_context_data(form=form), status=400
+        )
 
 
 class ToolCreateView(DashboardRedirectMixin,
@@ -149,16 +147,18 @@ class ToolDeleteView(DashboardRedirectMixin,
 # ------------------------------------------------------------------ #
 class _BuiltInConfigForm(forms.Form):
     """
-    Dynamic form for built-in tools that declare `config_fields`
-    in their metadata (e.g. CalDav).
+    Dynamic form for built-in tools that expose config fields.
     """
-
     def __init__(self, *args, meta: dict, initial=None, **kwargs):
-        # Remove keys that BaseForm does not understand (e.g. "user")
-        kwargs.pop("user", None)
-
+        kwargs.pop("user", None)          # strip extra kwarg
         super().__init__(*args, initial=initial or {}, **kwargs)
 
+        # Crispy helper: no inner <form>
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+
+        # Build dynamic fields
         for field in meta.get("config_fields", []):
             ftype = field["type"]
             required = field.get("required", False)
@@ -229,7 +229,10 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
         else:
             form.save()
 
-        # Stay on configure page
+        # Success banner
+        messages.success(self.request, "Configuration saved.")
+
+        # Stay on the same page
         return HttpResponseRedirect(self.request.path)
 
     def get_context_data(self, **kwargs):
@@ -275,11 +278,15 @@ async def tool_test_connection(request, pk: int):
         )
         if not created:
             cred.auth_type = auth_type
-            if username: cred.username = username
-            if password: cred.password = password
-            if token:    cred.token = token
+            if username:
+                cred.username = username
+            if password:
+                cred.password = password
+            if token:
+                cred.token = token
             cred.config.update(
-                {"caldav_url": caldav_url, "username": username, "password": password or cred.config.get("password", "")}
+                {"caldav_url": caldav_url, "username": username,
+                 "password": password or cred.config.get("password", "")}
             )
             await sync_to_async(cred.save)()
 

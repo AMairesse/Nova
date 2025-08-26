@@ -101,6 +101,12 @@ class ToolForm(_ToolForm):
         self.user = user
         super().__init__(*args, **kwargs)
 
+        # --- Crispy: prevent nested <form> -------------------------
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True   # outer form already holds the token
+
+        # --- dynamic field requirements ----------------------------
         ttype = (
             self.initial.get("tool_type")
             or getattr(self.instance, "tool_type", None)
@@ -131,6 +137,11 @@ class ToolCredentialForm(_ToolCredentialForm):
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
+
+        # Avoid nested <form> when rendered inside outer form
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
 
 
 # ─── General settings (Langfuse) ───────────────────────────────────────────
