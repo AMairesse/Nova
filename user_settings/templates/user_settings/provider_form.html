@@ -30,11 +30,11 @@
       {% if request.GET.from %}
         <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
           class="btn btn-secondary">
-          Cancel
+          {% trans "Cancel" %}
         </a>
       {% else %}
         <a href="{% url 'user_settings:providers' %}" class="btn btn-secondary">
-          Cancel
+          {% trans "Cancel" %}
         </a>
       {% endif %}
     </div>

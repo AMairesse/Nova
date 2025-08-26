@@ -2,19 +2,21 @@
 
 {% block content %}
 <div class="container py-4" style="max-width: 540px;">
-  <h2 class="mb-4">Delete tool</h2>
+  <h2 class="mb-4">{% trans "Delete tool" %}</h2>
 
   <p class="lead">
-    Are you sure you want to delete “{{ object.name }}”?
+    {% blocktrans with name=object.name %}
+      Are you sure you want to delete “{{ name }}”?
+    {% endblocktrans %}
   </p>
 
   <form method="post">
     {% csrf_token %}
     <button type="submit" class="btn btn-danger me-2">
-      <i class="bi bi-trash me-1"></i>Yes, delete
+      <i class="bi bi-trash me-1"></i>{% trans "Yes, delete" %}
     </button>
     <a href="{% url 'user_settings:dashboard' %}" class="btn btn-secondary">
-      Cancel
+      {% trans "Cancel" %}
     </a>
   </form>
 </div>

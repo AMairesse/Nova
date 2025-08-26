@@ -10,7 +10,7 @@
   {% if tools %}
     {% include "user_settings/fragments/tool_table.html" %}
   {% else %}
-    <p class="text-muted">No tools found.</p>
+    <p class="text-muted">{% trans "No tools found." %}</p>
   {% endif %}
 </div>
 {% endblock %}
