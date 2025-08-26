@@ -151,24 +151,37 @@ class ToolDeleteView(DashboardRedirectMixin,
 class _BuiltInConfigForm(forms.Form):
     """
     Dynamic form for built-in tools that declare `config_fields`
-    in their METADATA (e.g. CalDav).
+    in their metadata (e.g. CalDav).
     """
+
     def __init__(self, *args, meta: dict, initial=None, **kwargs):
+        # Remove keys that BaseForm does not understand (e.g. "user")
+        kwargs.pop("user", None)
+
         super().__init__(*args, initial=initial or {}, **kwargs)
+
         for field in meta.get("config_fields", []):
             ftype = field["type"]
-            req = field.get("required", False)
+            required = field.get("required", False)
             name = field["name"]
             label = field["label"]
 
             if ftype == "password":
                 self.fields[name] = forms.CharField(
-                    label=label, required=req, widget=forms.PasswordInput
+                    label=label,
+                    required=required,
+                    widget=forms.PasswordInput,
                 )
             elif ftype == "url":
-                self.fields[name] = forms.URLField(label=label, required=req)
-            else:
-                self.fields[name] = forms.CharField(label=label, required=req)
+                self.fields[name] = forms.URLField(
+                    label=label,
+                    required=required,
+                )
+            else:  # default to plain text
+                self.fields[name] = forms.CharField(
+                    label=label,
+                    required=required,
+                )
 
 
 class ToolConfigureView(LoginRequiredMixin, FormView):

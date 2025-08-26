@@ -7,22 +7,42 @@
 {% endblock %}
 
 {% block content %}
-<h2>{% blocktrans %}Configure {{ tool.name }}{% endblocktrans %}</h2>
+<div class="container py-4" style="max-width: 640px;">
+  <h2 class="mb-3">
+    {% blocktrans %}Configure {{ tool.name }}{% endblocktrans %}
+  </h2>
+  
+  <form id="configForm" method="post" class="mb-3">
+    {% csrf_token %}
+    {% crispy form %}
 
-<form id="configForm" method="post" class="mb-3">
-  {% csrf_token %}
-  {{ form|crispy }}
-  <button class="btn btn-primary" type="submit">{% trans "Save" %}</button>
+    {% if tool.tool_type == 'builtin' and tool.tool_subtype == 'caldav' or tool.tool_type == 'mcp' %}
+      <button type="button" class="btn btn-outline-secondary ms-2"
+              id="testBtn"
+              data-test-url="{% url 'user_settings:tool-test' tool.pk %}">
+        <i class="bi bi-check2-circle me-1"></i> {% trans "Test connection" %}
+      </button>
+    {% else %}
+      <p>{% trans "No configuration required for this tool." %}</p>
+    {% endif %}
 
-  {% if tool.tool_type == 'builtin' or tool.tool_type == 'mcp' %}
-    <button type="button" class="btn btn-outline-secondary ms-2"
-            id="testBtn"
-            data-test-url="{% url 'user_settings:tool-test' tool.pk %}">
-      <i class="bi bi-check2-circle me-1"></i> {% trans "Test connection" %}
-    </button>
-  {% endif %}
-</form>
+    <div class="mt-4">
+      <button class="btn btn-primary me-2" type="submit">
+        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+      </button>
+      {% if request.GET.from %}
+        <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
+          class="btn btn-secondary">
+          {% trans "Cancel" %}
+        </a>
+      {% else %}
+        <a href="{% url 'user_settings:tools' %}" class="btn btn-secondary">
+          {% trans "Cancel" %}
+        </a>
+      {% endif %}
+    </div>
+  </form>
 
-<div id="testResult" class="alert d-none"></div>
-
+  <div id="testResult" class="alert d-none"></div>
+</div>
 {% endblock %}
