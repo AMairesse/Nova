@@ -8,6 +8,7 @@ from user_settings.mixins import (
     OwnerCreateView,
     OwnerUpdateView,
     OwnerDeleteView,
+    DashboardRedirectMixin,
 )
 from user_settings.forms import LLMProviderForm
 
@@ -26,21 +27,24 @@ class ProviderListView(LoginRequiredMixin,
         return super().get_template_names()
 
 
-class ProviderCreateView(LoginRequiredMixin, OwnerCreateView):
+class ProviderCreateView(DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView):
     model = LLMProvider
     form_class = LLMProviderForm
     template_name = "user_settings/provider_form.html"
-    success_url = reverse_lazy("user_settings:providers")
+    dashboard_tab = "providers"
+    success_url = reverse_lazy("user_settings:dashboard")
 
 
-class ProviderUpdateView(LoginRequiredMixin, OwnerUpdateView):
+class ProviderUpdateView(DashboardRedirectMixin, LoginRequiredMixin, OwnerUpdateView):
     model = LLMProvider
     form_class = LLMProviderForm
     template_name = "user_settings/provider_form.html"
-    success_url = reverse_lazy("user_settings:providers")
+    dashboard_tab = "providers"
+    success_url = reverse_lazy("user_settings:dashboard")
 
 
-class ProviderDeleteView(LoginRequiredMixin, OwnerDeleteView):
+class ProviderDeleteView(DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView):
     model = LLMProvider
     template_name = "user_settings/provider_confirm_delete.html"
-    success_url = reverse_lazy("user_settings:providers")
+    dashboard_tab = "providers"
+    success_url = reverse_lazy("user_settings:dashboard")

@@ -14,15 +14,25 @@
 
   <form method="post" novalidate>
     {% csrf_token %}
+    {% if request.GET.from %}
+      <input type="hidden" name="from" value="{{ request.GET.from }}">
+    {% endif %}
     {% crispy form %}
 
     <div class="mt-4">
       <button class="btn btn-primary me-2" type="submit">
         <i class="bi bi-check-lg me-1"></i>Save
       </button>
-      <a href="{% url 'user_settings:agents' %}" class="btn btn-secondary">
-        Cancel
-      </a>
+      {% if request.GET.from %}
+        <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
+          class="btn btn-secondary">
+          Cancel
+        </a>
+      {% else %}
+        <a href="{% url 'user_settings:agents' %}" class="btn btn-secondary">
+          Cancel
+        </a>
+      {% endif %}
     </div>
   </form>
 </div>

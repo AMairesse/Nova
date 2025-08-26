@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.http import Http404
-from django.urls import reverse_lazy
+from django.urls import reverse_lazy, reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import CreateView, UpdateView, DeleteView
 
@@ -55,4 +55,19 @@ class OwnerUpdateView(
 
 class OwnerDeleteView(OwnerAccessMixin, SuccessMessageMixin, DeleteView):
     success_message = _("Deleted successfully")
-    success_url = reverse_lazy("user_settings:providers")   # valeur par défaut
+    success_url = reverse_lazy("user_settings:providers")
+
+
+class DashboardRedirectMixin:
+    """
+    If the request contains ?from=<tab> (GET or POST), go back to the
+    dashboard with the correct anchor; otherwise fall back to the normal
+    success_url defined in the CBV.
+    """
+    dashboard_tab = ""  # must be overridden in subclass
+
+    def get_success_url(self):
+        origin = self.request.POST.get("from") or self.request.GET.get("from")
+        if origin == self.dashboard_tab:
+            return reverse("user_settings:dashboard") + f"#pane-{origin}"
+        return super().get_success_url()

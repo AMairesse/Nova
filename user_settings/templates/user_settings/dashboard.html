@@ -71,8 +71,14 @@
       <div class="text-muted">Loading tools…</div>
     </div>
 
-    <div class="tab-pane fade" id="pane-general" role="tabpanel">
-      <p class="text-muted">General settings will come here.</p>
+    <div class="tab-pane fade htmx-pane"
+        id="pane-general"
+        role="tabpanel"
+        hx-get="{% url 'user_settings:general' %}?partial=1"
+        hx-trigger="revealed"
+        hx-target="this"
+        hx-swap="innerHTML">
+      <div class="text-muted">Loading…</div>
     </div>
   </div>
 </div>

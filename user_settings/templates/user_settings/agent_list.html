@@ -5,80 +5,10 @@
 <div class="container py-4">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2>{% trans "Agents" %}</h2>
-    <a href="{% url 'user_settings:agent-add' %}"
-       class="btn btn-primary">
-      <i class="bi bi-plus-lg me-1"></i>{% trans "Add agent" %}
-    </a>
   </div>
 
   {% if agents %}
-    <div class="table-responsive">
-      <table class="table table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>{% trans "Name" %}</th>
-            <th>{% trans "Provider" %}</th>
-            <th>{% trans "Model" %}</th>
-            <th class="text-end">{% trans "Actions" %}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for agent in agents %}
-            <tr>
-              <td>{{ agent.name }}</td>
-              <td>{{ agent.provider.name }}</td>
-              <td>{{ agent.model }}</td>
-              <td class="text-end">
-                <a href="{% url 'user_settings:agent-edit' agent.pk %}"
-                   class="btn btn-sm btn-outline-secondary me-1">
-                  <i class="bi bi-pencil"></i> {% trans "Edit" %}
-                </a>
-                <a href="{% url 'user_settings:agent-delete' agent.pk %}"
-                   class="btn btn-sm btn-outline-danger">
-                  <i class="bi bi-trash"></i> {% trans "Delete" %}
-                </a>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-
-    {% if is_paginated %}
-      <nav>
-        <ul class="pagination justify-content-center">
-          {% if page_obj.has_previous %}
-            <li class="page-item">
-              <a class="page-link"
-                 href="?page={{ page_obj.previous_page_number }}">&laquo;</a>
-            </li>
-          {% else %}
-            <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
-          {% endif %}
-
-          {% for num in paginator.page_range %}
-            {% if page_obj.number == num %}
-              <li class="page-item active">
-                <span class="page-link">{{ num }}</span>
-              </li>
-            {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
-              <li class="page-item">
-                <a class="page-link" href="?page={{ num }}">{{ num }}</a>
-              </li>
-            {% endif %}
-          {% endfor %}
-
-          {% if page_obj.has_next %}
-            <li class="page-item">
-              <a class="page-link"
-                 href="?page={{ page_obj.next_page_number }}">&raquo;</a>
-            </li>
-          {% else %}
-            <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
-          {% endif %}
-        </ul>
-      </nav>
-    {% endif %}
+    {% include "user_settings/fragments/agent_table.html" %}
   {% else %}
     <p class="text-muted">{% trans "No agents found." %}</p>
   {% endif %}

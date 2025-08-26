@@ -7,6 +7,7 @@ from user_settings.mixins import (
     UserOwnedQuerySetMixin,
     OwnerAccessMixin,
     SuccessMessageMixin,
+    DashboardRedirectMixin,
 )
 from user_settings.forms import ToolForm, ToolCredentialForm
 from nova.models.models import Tool, ToolCredential
@@ -44,7 +45,8 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
     model = Tool
     form_class = ToolForm
     template_name = "user_settings/tool_form.html"
-    success_url = reverse_lazy("user_settings:tools")
+    dashboard_tab = "tools"
+    success_url = reverse_lazy("user_settings:dashboard")
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -78,15 +80,16 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
         return ctx
 
 
-class ToolCreateView(_ToolBaseMixin, CreateView):
+class ToolCreateView(DashboardRedirectMixin, _ToolBaseMixin, CreateView):
     success_message = "Tool created successfully"
 
 
-class ToolUpdateView(_ToolBaseMixin, OwnerAccessMixin, UpdateView):
+class ToolUpdateView(DashboardRedirectMixin, _ToolBaseMixin, OwnerAccessMixin, UpdateView):
     success_message = "Tool updated successfully"
 
 
-class ToolDeleteView(LoginRequiredMixin,
+class ToolDeleteView(DashboardRedirectMixin,
+                     LoginRequiredMixin,
                      OwnerAccessMixin,
                      SuccessMessageMixin,
                      DeleteView):

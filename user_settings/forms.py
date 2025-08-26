@@ -1,4 +1,3 @@
-from django.utils.translation import gettext_lazy as _
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Field
 
@@ -7,6 +6,7 @@ from nova.forms import (
     AgentForm as _AgentForm,
     ToolForm as _ToolForm,
     ToolCredentialForm as _ToolCredentialForm,
+    UserParametersForm as _UserParametersForm,
 )
 from nova.models.models import Tool, Agent
 
@@ -82,4 +82,12 @@ class ToolCredentialForm(_ToolCredentialForm):
     def __init__(self, *args, user=None, tool=None, **kwargs):
         self.user = user
         self.tool = tool
+        super().__init__(*args, **kwargs)
+
+
+# ─── General settings (Langfuse) ───────────────────────────────────────────
+class UserParametersForm(_UserParametersForm):
+    """Swallow the extra 'user' kwarg injected by OwnerFormKwargsMixin."""
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
         super().__init__(*args, **kwargs)

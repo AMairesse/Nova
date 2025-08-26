@@ -19,6 +19,7 @@ from user_settings.views.tool import (
     ToolUpdateView,
     ToolDeleteView,
 )
+from user_settings.views.general import GeneralSettingsView
 
 app_name = "user_settings"
 
@@ -48,4 +49,9 @@ urlpatterns += [
     path("tools/add/", ToolCreateView.as_view(), name="tool-add"),
     path("tools/<int:pk>/edit/", ToolUpdateView.as_view(), name="tool-edit"),
     path("tools/<int:pk>/delete/", ToolDeleteView.as_view(), name="tool-delete"),
+]
+
+urlpatterns += [
+    # General
+    path("general/", GeneralSettingsView.as_view(), name="general"),
 ]

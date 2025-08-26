@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 640px;">
+  <h2 class="mb-3">General settings</h2>
+  {% include "user_settings/fragments/general_form.html" %}
+</div>
+{% endblock %}

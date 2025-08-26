@@ -1,4 +1,11 @@
 {% load i18n %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h5 class="mb-0"></h5>
+  <a href="{% url 'user_settings:provider-add' %}?from=providers"
+     class="btn btn-sm btn-primary">
+    <i class="bi bi-plus-lg me-1"></i>Add provider
+  </a>
+</div>
 <div class="table-responsive">
   <table class="table table-hover align-middle">
     <thead class="table-light">

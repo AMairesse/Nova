@@ -8,6 +8,7 @@ from user_settings.mixins import (
     OwnerCreateView,
     OwnerUpdateView,
     OwnerDeleteView,
+    DashboardRedirectMixin,
 )
 from user_settings.forms import AgentForm
 
@@ -26,21 +27,24 @@ class AgentListView(LoginRequiredMixin,
         return super().get_template_names()
 
 
-class AgentCreateView(LoginRequiredMixin, OwnerCreateView):
+class AgentCreateView(DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView):
     model = Agent
     form_class = AgentForm
     template_name = "user_settings/agent_form.html"
-    success_url = reverse_lazy("user_settings:agents")
+    dashboard_tab = "agents"
+    success_url = reverse_lazy("user_settings:dashboard")
 
 
-class AgentUpdateView(LoginRequiredMixin, OwnerUpdateView):
+class AgentUpdateView(DashboardRedirectMixin, LoginRequiredMixin, OwnerUpdateView):
     model = Agent
     form_class = AgentForm
     template_name = "user_settings/agent_form.html"
-    success_url = reverse_lazy("user_settings:agents")
+    dashboard_tab = "agents"
+    success_url = reverse_lazy("user_settings:dashboard")
 
 
-class AgentDeleteView(LoginRequiredMixin, OwnerDeleteView):
+class AgentDeleteView(DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView):
     model = Agent
     template_name = "user_settings/agent_confirm_delete.html"
-    success_url = reverse_lazy("user_settings:agents")
+    dashboard_tab = "agents"
+    success_url = reverse_lazy("user_settings:dashboard")
