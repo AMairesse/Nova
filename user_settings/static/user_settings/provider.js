@@ -1,3 +1,4 @@
+/* user_settings/static/user_settings/provider.js */
 document.addEventListener("DOMContentLoaded", function () {
   const select = document.getElementById("id_provider_type");
   const input  = document.getElementById("id_api_key");

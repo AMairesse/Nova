@@ -1,4 +1,4 @@
-/* dashboard_tabs.js
+/* user_settings/static/user_settings/dashboard_tabs.js
  * Activate the correct Bootstrap tab when the page loads
  * and keep the location.hash in sync when the user navigates.
  */

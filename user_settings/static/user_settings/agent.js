@@ -1,3 +1,4 @@
+/* user_settings/static/user_settings/agent.js */
 (function () {
   const isTool = document.querySelector("#id_is_tool");
   const wrapper = document.getElementById("tool-description-wrapper");

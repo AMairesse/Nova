@@ -1,3 +1,4 @@
+# user_settings/views/dashboard.py
 from django.views.generic import TemplateView
 
 

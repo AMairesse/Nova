@@ -99,7 +99,7 @@ class DashboardRedirectMixin:
     # ------------------------------------------------------------------ #
     #  Main entry point                                                  #
     # ------------------------------------------------------------------ #
-    def get_success_url(self) -> str:  # noqa: D401 (simple method name)
+    def get_success_url(self) -> str:
         origin = self.request.POST.get("from") or self.request.GET.get("from")
         target_tab = origin or self.dashboard_tab
         return f"{self._dashboard_url()}{self._anchor(target_tab)}"

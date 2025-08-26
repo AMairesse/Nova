@@ -1,3 +1,4 @@
+# user_settings/urls.py
 from django.urls import path
 
 from user_settings.views.dashboard import DashboardView

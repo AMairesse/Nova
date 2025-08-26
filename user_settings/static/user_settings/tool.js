@@ -1,4 +1,4 @@
-/* Dynamic generic fields on the Tool create / edit form */
+/* user_settings/static/user_settings/tool.js */
 document.addEventListener("DOMContentLoaded", () => {
   const typeSelect = document.querySelector('[name="tool_type"]');
   if (!typeSelect) return;

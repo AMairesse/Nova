@@ -1,4 +1,4 @@
-/* Auth-field toggle + AJAX test connection on the Configure page */
+/* user_settings/static/user_settings/tool_configure.js */
 
 document.addEventListener("DOMContentLoaded", () => {
   //------------------------------------------------------------
