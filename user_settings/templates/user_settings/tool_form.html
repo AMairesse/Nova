@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 760px;">
+  <h2 class="mb-3">
+    {% if object.pk %}
+      Edit tool
+    {% else %}
+      Add tool
+    {% endif %}
+  </h2>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+
+    {# Main Tool model fields #}
+    {{ form|crispy }}
+
+    <hr>
+    <h5>Credentials</h5>
+
+    {{ formset.management_form }}
+
+    <div id="credentials-forms">
+      {% for cred_form in formset %}
+        <div class="border rounded p-3 mb-3">
+          {% for hidden in cred_form.hidden_fields %}
+            {{ hidden }}
+          {% endfor %}
+
+          {{ cred_form|crispy }}
+
+          {% if formset.can_delete %}
+            <div class="form-check mt-2">
+              {{ cred_form.DELETE }}
+              <label class="form-check-label"
+                     for="{{ cred_form.DELETE.id_for_label }}">
+                Delete this credential
+              </label>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <button type="submit" class="btn btn-primary me-2">
+      <i class="bi bi-check-lg me-1"></i>Save
+    </button>
+    <a href="{% url 'user_settings:tools' %}" class="btn btn-secondary">
+      Cancel
+    </a>
+  </form>
+</div>
+{% endblock %}

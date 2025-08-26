@@ -14,6 +14,13 @@ from user_settings.views.agent import (
     AgentDeleteView,
 )
 
+from user_settings.views.tool import (
+    ToolListView,
+    ToolCreateView,
+    ToolUpdateView,
+    ToolDeleteView,
+)
+
 app_name = "user_settings"
 
 urlpatterns = [
@@ -30,4 +37,12 @@ urlpatterns += [
     path("agents/add/", AgentCreateView.as_view(), name="agent-add"),
     path("agents/<int:pk>/edit/", AgentUpdateView.as_view(), name="agent-edit"),
     path("agents/<int:pk>/delete/", AgentDeleteView.as_view(), name="agent-delete"),
+]
+
+urlpatterns += [
+    # Tools
+    path("tools/", ToolListView.as_view(), name="tools"),
+    path("tools/add/", ToolCreateView.as_view(), name="tool-add"),
+    path("tools/<int:pk>/edit/", ToolUpdateView.as_view(), name="tool-edit"),
+    path("tools/<int:pk>/delete/", ToolDeleteView.as_view(), name="tool-delete"),
 ]

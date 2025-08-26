@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Tools</h2>
+    <a href="{% url 'user_settings:tool-add' %}" class="btn btn-primary">
+      <i class="bi bi-plus-lg me-1"></i>Add tool
+    </a>
+  </div>
+
+  {% if tools %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for tool in tools %}
+            <tr>
+              <td>{{ tool.name }}</td>
+              <td>{{ tool.get_tool_type_display }}</td>
+              <td class="text-end">
+                <a href="{% url 'user_settings:tool-edit' tool.pk %}"
+                   class="btn btn-sm btn-outline-secondary me-1">
+                  <i class="bi bi-pencil"></i> Edit
+                </a>
+                <a href="{% url 'user_settings:tool-delete' tool.pk %}"
+                   class="btn btn-sm btn-outline-danger">
+                  <i class="bi bi-trash"></i> Delete
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Pagination identical to previous lists #}
+    {% if is_paginated %}
+      <nav>
+        <ul class="pagination justify-content-center">
+          {% if page_obj.has_previous %}
+            <li class="page-item">
+              <a class="page-link" href="?page={{ page_obj.previous_page_number }}">
+                &laquo;
+              </a>
+            </li>
+          {% else %}
+            <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+          {% endif %}
+
+          {% for num in paginator.page_range %}
+            {% if page_obj.number == num %}
+              <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+            {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+              <li class="page-item">
+                <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+              </li>
+            {% endif %}
+          {% endfor %}
+
+          {% if page_obj.has_next %}
+            <li class="page-item">
+              <a class="page-link" href="?page={{ page_obj.next_page_number }}">
+                &raquo;
+              </a>
+            </li>
+          {% else %}
+            <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+          {% endif %}
+        </ul>
+      </nav>
+    {% endif %}
+  {% else %}
+    <p class="text-muted">No tools found.</p>
+  {% endif %}
+</div>
+{% endblock %}
