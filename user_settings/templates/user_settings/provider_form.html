@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% load i18n crispy_forms_tags %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 640px;">
+  <h2 class="mb-3">
+    {% if object.pk %}
+      {% trans "Edit provider" %}
+    {% else %}
+      {% trans "Add provider" %}
+    {% endif %}
+  </h2>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {{ form|crispy }}  {# ou form.as_p si vous n’utilisez pas crispy-forms #}
+
+    <div class="mt-4">
+      <button class="btn btn-primary me-2" type="submit">
+        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+      </button>
+      <a class="btn btn-secondary"
+         href="{% url 'user_settings:providers' %}">
+        {% trans "Cancel" %}
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}
