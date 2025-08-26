@@ -1,10 +1,12 @@
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.forms import inlineformset_factory
 from django.urls import reverse_lazy
-from django.views.generic import ListView, CreateView, UpdateView, DeleteView
+from django.views.generic import ListView, DeleteView
 
 from user_settings.mixins import (
     UserOwnedQuerySetMixin,
+    OwnerCreateView,
+    OwnerUpdateView,
     OwnerAccessMixin,
     SuccessMessageMixin,
     DashboardRedirectMixin,
@@ -59,8 +61,8 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
             instance=form.instance,
             data=self.request.POST if self.request.method == "POST" else None,
             files=self.request.FILES if self.request.method == "POST" else None,
-            user=self.request.user,
             prefix="cred",
+            form_kwargs={"user": self.request.user},
             **kwargs,
         )
 
@@ -80,11 +82,11 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
         return ctx
 
 
-class ToolCreateView(DashboardRedirectMixin, _ToolBaseMixin, CreateView):
+class ToolCreateView(DashboardRedirectMixin, _ToolBaseMixin, OwnerCreateView):
     success_message = "Tool created successfully"
 
 
-class ToolUpdateView(DashboardRedirectMixin, _ToolBaseMixin, OwnerAccessMixin, UpdateView):
+class ToolUpdateView(DashboardRedirectMixin, _ToolBaseMixin, OwnerUpdateView):
     success_message = "Tool updated successfully"
 
 
@@ -95,5 +97,5 @@ class ToolDeleteView(DashboardRedirectMixin,
                      DeleteView):
     model = Tool
     template_name = "user_settings/tool_confirm_delete.html"
-    success_url = reverse_lazy("user_settings:tools")
+    success_url = reverse_lazy("user_settings:dashboard")
     success_message = "Tool deleted successfully"

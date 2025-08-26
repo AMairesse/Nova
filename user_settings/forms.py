@@ -79,9 +79,8 @@ class ToolForm(_ToolForm):
 
 
 class ToolCredentialForm(_ToolCredentialForm):
-    def __init__(self, *args, user=None, tool=None, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         self.user = user
-        self.tool = tool
         super().__init__(*args, **kwargs)
 
 

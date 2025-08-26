@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.http import Http404
-from django.urls import reverse_lazy, reverse
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import CreateView, UpdateView, DeleteView
 
@@ -55,7 +55,6 @@ class OwnerUpdateView(
 
 class OwnerDeleteView(OwnerAccessMixin, SuccessMessageMixin, DeleteView):
     success_message = _("Deleted successfully")
-    success_url = reverse_lazy("user_settings:providers")
 
 
 class DashboardRedirectMixin:
