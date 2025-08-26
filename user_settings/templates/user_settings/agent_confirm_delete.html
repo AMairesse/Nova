@@ -16,16 +16,16 @@
     <button type="submit" class="btn btn-danger me-2">
       <i class="bi bi-trash me-1"></i>{% trans "Yes, delete" %}
     </button>
-      {% if request.GET.from %}
-        <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
-          class="btn btn-secondary">
-          {% trans "Cancel" %}
-        </a>
-      {% else %}
-        <a href="{% url 'user_settings:agents' %}" class="btn btn-secondary">
-          {% trans "Cancel" %}
-        </a>
-      {% endif %}
+    {% if request.GET.from %}
+      <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
+        class="btn btn-secondary">
+        {% trans "Cancel" %}
+      </a>
+    {% else %}
+      <a href="{% url 'user_settings:agents' %}" class="btn btn-secondary">
+        {% trans "Cancel" %}
+      </a>
+    {% endif %}
   </form>
 </div>
 {% endblock %}

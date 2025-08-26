@@ -23,11 +23,11 @@
           <td>{{ provider.get_provider_type_display }}</td>
           <td>{{ provider.model }}</td>
           <td class="text-end">
-            <a href="{% url 'user_settings:provider-edit' provider.pk %}"
+            <a href="{% url 'user_settings:provider-edit' provider.pk %}?from=providers"
                class="btn btn-sm btn-outline-secondary me-1">
               <i class="bi bi-pencil"></i> Edit
             </a>
-            <a href="{% url 'user_settings:provider-delete' provider.pk %}"
+            <a href="{% url 'user_settings:provider-delete' provider.pk %}?from=providers"
                class="btn btn-sm btn-outline-danger">
               <i class="bi bi-trash"></i> Delete
             </a>

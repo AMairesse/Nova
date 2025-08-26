@@ -8,7 +8,6 @@ from django.urls import reverse, reverse_lazy
 from django.views.generic import ListView, DeleteView, FormView
 from django import forms
 from django.views.decorators.http import require_POST
-from django.utils.decorators import method_decorator
 from django.contrib.auth.decorators import login_required
 
 from asgiref.sync import sync_to_async
@@ -242,7 +241,7 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
 # ------------------------------------------------------------------ #
 #  AJAX “Test connection” endpoint                                   #
 # ------------------------------------------------------------------ #
-@method_decorator(login_required, name="dispatch")
+@login_required
 @require_POST
 async def tool_test_connection(request, pk: int):
     tool = await sync_to_async(Tool.objects.get)(pk=pk, user=request.user)

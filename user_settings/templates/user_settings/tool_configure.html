@@ -14,6 +14,9 @@
   
   <form id="configForm" method="post" class="mb-3">
     {% csrf_token %}
+    {% if request.GET.from %}
+      <input type="hidden" name="from" value="{{ request.GET.from }}">
+    {% endif %}
     {% crispy form %}
 
     {% if tool.tool_type == 'builtin' and tool.tool_subtype == 'caldav' or tool.tool_type == 'mcp' %}

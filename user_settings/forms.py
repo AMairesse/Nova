@@ -123,6 +123,9 @@ class ToolForm(_ToolForm):
             self.add_error("endpoint", "L’endpoint est requis pour un outil API.")
         return cleaned
 
+    class Media:
+        js = ["user_settings/tool.js"]
+
 
 class ToolCredentialForm(_ToolCredentialForm):
     def __init__(self, *args, user=None, **kwargs):
