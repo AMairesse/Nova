@@ -1,0 +1,24 @@
+{% load i18n %}
+<div class="table-responsive">
+  <table class="table table-hover align-middle">
+    <thead class="table-light">
+      <tr><th>Name</th><th>Provider</th><th>Model</th><th class="text-end">Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for agent in agents %}
+        <tr>
+          <td>{{ agent.name }}</td>
+          <td>{{ agent.provider.name }}</td>
+          <td>{{ agent.model }}</td>
+          <td class="text-end">
+            <a href="{% url 'user_settings:agent-edit' agent.pk %}"
+               class="btn btn-sm btn-outline-secondary me-1"><i class="bi bi-pencil"></i> Edit</a>
+            <a href="{% url 'user_settings:agent-delete' agent.pk %}"
+               class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if is_paginated %}{% include "includes/pagination.html" %}{% endif %}

@@ -19,7 +19,11 @@ class AgentListView(LoginRequiredMixin,
     template_name = "user_settings/agent_list.html"
     context_object_name = "agents"
     paginate_by = 20
-    ordering = ["name"]
+
+    def get_template_names(self):
+        if self.request.GET.get("partial") == "1":
+            return ["user_settings/fragments/agent_table.html"]
+        return super().get_template_names()
 
 
 class AgentCreateView(LoginRequiredMixin, OwnerCreateView):

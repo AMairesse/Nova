@@ -16,15 +16,20 @@ class ProviderListView(LoginRequiredMixin,
                        UserOwnedQuerySetMixin,
                        ListView):
     model = LLMProvider
-    template_name = "user_settings/provider_list.html"   # arrivera à l’étape 2
+    template_name = "user_settings/provider_list.html"
     context_object_name = "providers"
-    paginate_by = 20
+    paginate_by = 5
+
+    def get_template_names(self):
+        if self.request.GET.get("partial") == "1":
+            return ["user_settings/fragments/provider_table.html"]
+        return super().get_template_names()
 
 
 class ProviderCreateView(LoginRequiredMixin, OwnerCreateView):
     model = LLMProvider
     form_class = LLMProviderForm
-    template_name = "user_settings/provider_form.html"   # étape 2
+    template_name = "user_settings/provider_form.html"
     success_url = reverse_lazy("user_settings:providers")
 
 

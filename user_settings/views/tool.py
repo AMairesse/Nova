@@ -19,7 +19,7 @@ ToolCredentialFormSet = inlineformset_factory(
     Tool,
     ToolCredential,
     form=ToolCredentialForm,
-    fields="__all__",          # ToolCredentialForm contrôle les widgets
+    fields="__all__",
     extra=1,
     can_delete=True,
 )
@@ -29,10 +29,15 @@ class ToolListView(LoginRequiredMixin,
                    UserOwnedQuerySetMixin,
                    ListView):
     model = Tool
-    template_name = "user_settings/tool_list.html"  # à fournir étape 2
+    template_name = "user_settings/tool_list.html"
     context_object_name = "tools"
     paginate_by = 20
     ordering = ["name"]
+
+    def get_template_names(self):
+        if self.request.GET.get("partial") == "1":
+            return ["user_settings/fragments/tool_table.html"]
+        return super().get_template_names()
 
 
 class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):

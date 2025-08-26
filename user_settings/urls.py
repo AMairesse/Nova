@@ -1,19 +1,18 @@
 from django.urls import path
 
+from user_settings.views.dashboard import DashboardView
 from user_settings.views.provider import (
     ProviderListView,
     ProviderCreateView,
     ProviderUpdateView,
     ProviderDeleteView,
 )
-
 from user_settings.views.agent import (
     AgentListView,
     AgentCreateView,
     AgentUpdateView,
     AgentDeleteView,
 )
-
 from user_settings.views.tool import (
     ToolListView,
     ToolCreateView,
@@ -24,6 +23,10 @@ from user_settings.views.tool import (
 app_name = "user_settings"
 
 urlpatterns = [
+    path("", DashboardView.as_view(), name="dashboard"),
+]
+
+urlpatterns += [
     # LLM Providers
     path("providers/", ProviderListView.as_view(), name="providers"),
     path("providers/add/", ProviderCreateView.as_view(), name="provider-add"),
