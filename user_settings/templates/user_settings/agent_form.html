@@ -1,5 +1,10 @@
 {% extends "base.html" %}
-{% load i18n crispy_forms_tags %}
+{% load i18n crispy_forms_tags static %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script src="{% static 'user_settings/agent.js' %}"></script>
+{% endblock %}
 
 {% block content %}
 <div class="container py-4" style="max-width: 640px;">
@@ -13,8 +18,29 @@
 
   <form method="post" novalidate>
     {% csrf_token %}
-    {{ form|crispy }}
+    {{ form.non_field_errors }}
 
+    <div class="row">
+      <div class="col-md-6">
+        {{ form.name|as_crispy_field }}
+      </div>
+      <div class="col-md-6">
+        {{ form.provider|as_crispy_field }}
+      </div>
+    </div>
+
+    <div class="row align-items-center">
+      <div class="col-md-3">
+        {{ form.is_tool|as_crispy_field }}
+      </div>
+      <div class="col-md-9">
+        {{ form.tool_description|as_crispy_field }}
+      </div>
+    </div>
+
+    {{ form.temperature|as_crispy_field }}
+    {{ form.tools|as_crispy_field }}
+    {{ form.sub_agents|as_crispy_field }}
     <div class="mt-4">
       <button class="btn btn-primary me-2" type="submit">
         <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
