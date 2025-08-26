@@ -4,7 +4,7 @@ from django import forms as django_forms
 from django.db import models as django_models
 from unittest.mock import patch
 
-from nova.forms import (
+from user_settings.forms import (
     UserParametersForm, UserProfileForm, LLMProviderForm,
     AgentForm, ToolForm, ToolCredentialForm
 )

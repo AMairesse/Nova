@@ -47,7 +47,7 @@ class ToolsViewsTests(TestCase):
     # ---------------------- create_tool ----------------------
 
     def test_create_tool_builtin_creates_tool_and_credential(self):
-        url = reverse("create_tool")
+        url = reverse("tool-add")
         resp = self.client.post(
             url,
             data={
@@ -68,7 +68,7 @@ class ToolsViewsTests(TestCase):
 
     def test_create_tool_api_invalid_redirects_with_error(self):
         # Missing required fields for API (name/description/endpoint)
-        url = reverse("create_tool")
+        url = reverse("tool-add")
         resp = self.client.post(
             url,
             data={
@@ -97,7 +97,7 @@ class ToolsViewsTests(TestCase):
 
     def test_edit_tool_updates_fields_and_redirects(self):
         tool = self._create_api_tool()
-        url = reverse("edit_tool", args=[tool.id])
+        url = reverse("tool-edit", args=[tool.id])
         resp = self.client.post(
             url,
             data={
@@ -156,7 +156,7 @@ class ToolsViewsTests(TestCase):
         self.assertTrue(agent.tools.filter(pk=tool.pk).exists())
         self.assertTrue(ToolCredential.objects.filter(tool=tool).exists())
 
-        url = reverse("delete_tool", args=[tool.id])
+        url = reverse("tool-delete", args=[tool.id])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp["Location"], reverse("user_config") + "?tab=tools")
@@ -178,7 +178,7 @@ class ToolsViewsTests(TestCase):
             python_path="nova.tools.builtins.caldav",
         )
 
-        url = reverse("configure_tool", args=[tool.id])
+        url = reverse("tool-configure", args=[tool.id])
         resp = self.client.post(
             url,
             data={
