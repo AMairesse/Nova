@@ -18,17 +18,21 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const toggle = () => {
-    ["tool_subtype", "endpoint", "transport_type", "input_schema", "output_schema"].forEach(hideRow);
+    ["name", "description", "tool_subtype", "endpoint", "transport_type", "input_schema", "output_schema"].forEach(hideRow);
     switch (typeSelect.value) {
       case "builtin":
         showRow("tool_subtype", true);
         break;
       case "api":
+        showRow("name", true);
+        showRow("description", true);
         showRow("endpoint", true);
         showRow("input_schema");
         showRow("output_schema");
         break;
       case "mcp":
+        showRow("name", true);
+        showRow("description", true);
         showRow("endpoint", true);
         showRow("transport_type");
         break;
