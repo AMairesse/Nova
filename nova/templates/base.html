@@ -38,8 +38,8 @@
               </a>
               <ul class="dropdown-menu dropdown-menu-end">
                 <li>
-                  <a class="dropdown-item" href="{% url 'user_config' %}">
-                    <i class="bi bi-gear me-2"></i>{% trans "Config" %}
+                  <a class="dropdown-item" href="{% url 'user_settings:dashboard' %}">
+                    <i class="bi bi-gear me-2"></i>{% trans "Settings" %}
                   </a>
                 </li>
                 {% if user.is_superuser %}

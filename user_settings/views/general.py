@@ -1,22 +1,31 @@
+# user_settings/views/general.py
+from __future__ import annotations
+
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
-from django.urls import reverse_lazy
 from django.views.generic import UpdateView
 
 from nova.models.models import UserParameters
 from user_settings.forms import UserParametersForm
+from user_settings.mixins import DashboardRedirectMixin
 
 
-class GeneralSettingsView(LoginRequiredMixin,
-                          SuccessMessageMixin,
-                          UpdateView):
+class GeneralSettingsView(  # type: ignore[misc]
+    DashboardRedirectMixin,
+    LoginRequiredMixin,
+    SuccessMessageMixin,
+    UpdateView
+):
+    """
+    Simple *one-row* model; the row is auto-created if it does not exist.
+    """
     model = UserParameters
     form_class = UserParametersForm
     template_name = "user_settings/general_form.html"
     success_message = "Settings saved successfully"
-    success_url = reverse_lazy("user_settings:dashboard")
+    dashboard_tab = "general"
 
-    # ensure every user has a row
+    # Ensure every user has a row
     def get_object(self, queryset=None):
         obj, _ = UserParameters.objects.get_or_create(user=self.request.user)
         return obj
@@ -26,7 +35,7 @@ class GeneralSettingsView(LoginRequiredMixin,
         kwargs["user"] = self.request.user
         return kwargs
 
-    # HTMX: if ?partial=1, return the fragment only
+    # HTMX: if ?partial=1, return only the fragment
     def get_template_names(self):
         if self.request.GET.get("partial") == "1":
             return ["user_settings/fragments/general_form.html"]

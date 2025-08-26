@@ -4,6 +4,7 @@
       hx-swap="innerHTML"
       class="needs-validation" novalidate>
   {% csrf_token %}
+  <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
   {{ form|crispy }}
 
   <button type="submit" class="btn btn-primary">

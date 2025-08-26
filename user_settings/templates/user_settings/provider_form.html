@@ -18,9 +18,7 @@
 
   <form method="post" novalidate>
     {% csrf_token %}
-    {% if request.GET.from %}
-      <input type="hidden" name="from" value="{{ request.GET.from }}">
-    {% endif %}
+    <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
     {{ form|crispy }}
 
     <div class="mt-4">

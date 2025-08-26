@@ -1,18 +1,17 @@
 # user_settings/views/tool.py
 from __future__ import annotations
+
 import logging
+from django import forms
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.forms import inlineformset_factory
 from django.http import HttpResponseRedirect, JsonResponse
-from django.urls import reverse, reverse_lazy
-from django.views.generic import ListView, DeleteView, FormView
-from django import forms
+from django.urls import reverse
 from django.views.decorators.http import require_POST
-from django.contrib.auth.decorators import login_required
-
+from django.views.generic import ListView, DeleteView, FormView
 from crispy_forms.helper import FormHelper
-
 from asgiref.sync import sync_to_async
 
 from user_settings.mixins import (
@@ -30,9 +29,9 @@ from nova.mcp.client import MCPClient
 
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------ #
-#  Helpers                                                           #
-# ------------------------------------------------------------------ #
+# ---------------------------------------------------------------------------#
+#  Helpers                                                                   #
+# ---------------------------------------------------------------------------#
 ToolCredentialFormSet = inlineformset_factory(
     Tool,
     ToolCredential,
@@ -43,9 +42,7 @@ ToolCredentialFormSet = inlineformset_factory(
 )
 
 
-class ToolListView(LoginRequiredMixin,
-                   UserOwnedQuerySetMixin,
-                   ListView):
+class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
     model = Tool
     template_name = "user_settings/tool_list.html"
     context_object_name = "tools"
@@ -58,34 +55,30 @@ class ToolListView(LoginRequiredMixin,
         return super().get_template_names()
 
 
-# ------------------------------------------------------------------ #
-#  CREATE / UPDATE mixin (no credential formset)                     #
-# ------------------------------------------------------------------ #
-class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
+# ---------------------------------------------------------------------------#
+#  CREATE / UPDATE (without credential formset)                              #
+# ---------------------------------------------------------------------------#
+class _ToolBaseMixin(DashboardRedirectMixin,
+                     LoginRequiredMixin,
+                     SuccessMessageMixin):
+    """
+    Common logic for Tool create / update views.
+    """
     model = Tool
     form_class = ToolForm
     template_name = "user_settings/tool_form.html"
     dashboard_tab = "tools"
 
-    # ------------------------------------------------------------
-    # redirect to the correct dashboard tab
-    # ------------------------------------------------------------
-    def get_success_url(self):
-        base = reverse_lazy("user_settings:dashboard")
-        return f"{base}?from={self.dashboard_tab}"
-
-    # ------------------------------------------------------------
-    # extra kwargs for the form (current user)
-    # ------------------------------------------------------------
     def get_form_kwargs(self):
         kw = super().get_form_kwargs()
         kw["user"] = self.request.user
         return kw
 
-    # ------------------------------------------------------------
-    # save logic (no formset)
-    # ------------------------------------------------------------
     def form_valid(self, form):
+        """
+        Custom save to inject the user and redirect to the *configure* view
+        right after creation.
+        """
         is_new = form.instance.pk is None
 
         obj = form.save(commit=False)
@@ -96,64 +89,54 @@ class _ToolBaseMixin(LoginRequiredMixin, SuccessMessageMixin):
             form.save_m2m()
 
         self.object = obj
-
-        # Success banner
         messages.success(self.request, "Tool saved successfully.")
 
-        # Redirect
-        return HttpResponseRedirect(
-            reverse("user_settings:tool-configure", args=[obj.pk])
-            if is_new else self.get_success_url()
-        )
-    
+        # New tool → go to configuration screen
+        if is_new:
+            return HttpResponseRedirect(
+                reverse("user_settings:tool-configure", args=[obj.pk])
+            )
+
+        # Updated tool → back to dashboard tab
+        return HttpResponseRedirect(self.get_success_url())
+
     def form_invalid(self, form):
-        """
-        Ensure validation errors are re-rendered with HTTP 400 status,
-        so browser and dev-tools make the failure obvious.
-        """
+        """Return HTTP 400 so dev-tools clearly show the validation error."""
         return self.render_to_response(
             self.get_context_data(form=form), status=400
         )
 
 
-class ToolCreateView(DashboardRedirectMixin,
-                     _ToolBaseMixin,
-                     OwnerCreateView):
+class ToolCreateView(_ToolBaseMixin, OwnerCreateView):
     success_message = "Tool created successfully"
 
 
-class ToolUpdateView(DashboardRedirectMixin,
-                     _ToolBaseMixin,
-                     OwnerUpdateView):
+class ToolUpdateView(_ToolBaseMixin, OwnerUpdateView):
     success_message = "Tool updated successfully"
 
 
-class ToolDeleteView(DashboardRedirectMixin,
-                     LoginRequiredMixin,
-                     OwnerAccessMixin,
-                     SuccessMessageMixin,
-                     DeleteView):
+class ToolDeleteView(  # type: ignore[misc]
+    DashboardRedirectMixin,
+    LoginRequiredMixin,
+    OwnerAccessMixin,
+    SuccessMessageMixin,
+    DeleteView
+):
     model = Tool
     template_name = "user_settings/tool_confirm_delete.html"
-    success_message = "Tool deleted successfully"
-
-    def get_success_url(self):
-        base = reverse_lazy("user_settings:dashboard")
-        return f"{base}?from=tools"
+    dashboard_tab = "tools"
 
 
-# ------------------------------------------------------------------ #
-#  Configure view                                                    #
-# ------------------------------------------------------------------ #
+# ---------------------------------------------------------------------------#
+#  Configure view                                                            #
+# ---------------------------------------------------------------------------#
 class _BuiltInConfigForm(forms.Form):
-    """
-    Dynamic form for built-in tools that expose config fields.
-    """
+    """Dynamic form for built-in tools exposing *config_fields* metadata."""
     def __init__(self, *args, meta: dict, initial=None, **kwargs):
         kwargs.pop("user", None)          # strip extra kwarg
         super().__init__(*args, initial=initial or {}, **kwargs)
 
-        # Crispy helper: no inner <form>
+        # Crispy: no nested <form>
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.disable_csrf = True
@@ -176,7 +159,7 @@ class _BuiltInConfigForm(forms.Form):
                     label=label,
                     required=required,
                 )
-            else:  # default to plain text
+            else:  # fallback to plain text
                 self.fields[name] = forms.CharField(
                     label=label,
                     required=required,
@@ -186,13 +169,18 @@ class _BuiltInConfigForm(forms.Form):
 class ToolConfigureView(LoginRequiredMixin, FormView):
     template_name = "user_settings/tool_configure.html"
 
+    # ------------------------------------------------------------------ #
+    #  Dispatch                                                          #
+    # ------------------------------------------------------------------ #
     def dispatch(self, request, *args, **kwargs):
         self.tool: Tool = Tool.objects.get(
             pk=kwargs["pk"], user=self.request.user
         )
         return super().dispatch(request, *args, **kwargs)
 
-    # ------- choose the proper form class ---------------------------
+    # ------------------------------------------------------------------ #
+    #  Build the proper form                                             #
+    # ------------------------------------------------------------------ #
     def get_form_class(self):
         if self.tool.tool_type == Tool.ToolType.BUILTIN:
             meta = get_metadata(self.tool.python_path)
@@ -217,6 +205,9 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
         kw["user"] = self.request.user
         return kw
 
+    # ------------------------------------------------------------------ #
+    #  Save                                                              #
+    # ------------------------------------------------------------------ #
     def form_valid(self, form):
         if self.tool.tool_type == Tool.ToolType.BUILTIN:
             cred, _ = ToolCredential.objects.get_or_create(
@@ -229,10 +220,7 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
         else:
             form.save()
 
-        # Success banner
         messages.success(self.request, "Configuration saved.")
-
-        # Stay on the same page
         return HttpResponseRedirect(self.request.path)
 
     def get_context_data(self, **kwargs):
@@ -241,16 +229,16 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
         return ctx
 
 
-# ------------------------------------------------------------------ #
-#  AJAX “Test connection” endpoint                                   #
-# ------------------------------------------------------------------ #
+# ---------------------------------------------------------------------------#
+#  AJAX “Test connection” endpoint                                           #
+# ---------------------------------------------------------------------------#
 @login_required
 @require_POST
 async def tool_test_connection(request, pk: int):
     tool = await sync_to_async(Tool.objects.get)(pk=pk, user=request.user)
-    # Re-use almost all of the legacy logic -------------------------
+
     try:
-        # Extract POST params
+        # Extract POST payload
         payload = request.POST
         auth_type = payload.get("auth_type", "basic")
         username = payload.get("username", "")
@@ -285,8 +273,11 @@ async def tool_test_connection(request, pk: int):
             if token:
                 cred.token = token
             cred.config.update(
-                {"caldav_url": caldav_url, "username": username,
-                 "password": password or cred.config.get("password", "")}
+                {
+                    "caldav_url": caldav_url,
+                    "username": username,
+                    "password": password or cred.config.get("password", ""),
+                }
             )
             await sync_to_async(cred.save)()
 
@@ -308,17 +299,24 @@ async def tool_test_connection(request, pk: int):
                 tools = await client.alist_tools(force_refresh=True)
                 count = len(tools)
                 message = (
-                    "Success connecting - no tools found"
+                    "Success connecting – no tools found"
                     if count == 0
-                    else f"Success connecting - {count} tool{'s' if count > 1 else ''} found"
+                    else f"Success connecting – {count} tool{'s' if count > 1 else ''} found"
                 )
-                return JsonResponse({"status": "success", "message": message, "tools": tools})
-            except Exception as e:
+                return JsonResponse(
+                    {"status": "success", "message": message, "tools": tools}
+                )
+            except Exception as e:  # noqa: BLE001 – broad catch on purpose
                 logger.error(e)
                 return JsonResponse({"status": "error", "message": str(e)})
 
-        return JsonResponse({"status": "not_implemented", "message": "No test implemented for this tool type"})
+        return JsonResponse(
+            {
+                "status": "not_implemented",
+                "message": "No test implemented for this tool type",
+            }
+        )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 – broad catch on purpose
         logger.error(e)
         return JsonResponse({"status": "error", "message": str(e)})

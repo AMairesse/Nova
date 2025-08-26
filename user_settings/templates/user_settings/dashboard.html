@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% load static i18n %}
 
+{% block extra_js %}
+  {{ block.super }}
+  <script src="{% static 'user_settings/dashboard_tabs.js' %}"></script>
+{% endblock %}
+
 {% block content %}
 <div class="container py-4">
   <h2 class="mb-4">{% trans "User configuration" %}</h2>

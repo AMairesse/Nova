@@ -1,3 +1,9 @@
+# user_settings/mixins.py
+"""
+Reusable mixins for the *user_settings* application.
+
+• All comments are in English (see contribution guidelines).
+"""
 from django.contrib import messages
 from django.http import Http404
 from django.urls import reverse
@@ -5,8 +11,11 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import CreateView, UpdateView, DeleteView
 
 
+# ---------------------------------------------------------------------------#
+#  Query / form / ownership helpers                                          #
+# ---------------------------------------------------------------------------#
 class UserOwnedQuerySetMixin:
-    """Ne renvoie que les objets de l’utilisateur (ou publics)."""
+    """Return only objects belonging to the current user (or public ones)."""
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
@@ -14,7 +23,7 @@ class UserOwnedQuerySetMixin:
 
 
 class OwnerFormKwargsMixin:
-    """Injecte request.user dans les kwargs du formulaire."""
+    """Inject `request.user` in the form's kwargs."""
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
@@ -22,7 +31,7 @@ class OwnerFormKwargsMixin:
 
 
 class OwnerAccessMixin:
-    """Empêche d’accéder à un objet d’un autre utilisateur."""
+    """Deny access to objects owned by another user."""
     def get_object(self, queryset=None):
         obj = super().get_object(queryset)
         if obj.user and obj.user != self.request.user:
@@ -31,6 +40,7 @@ class OwnerAccessMixin:
 
 
 class SuccessMessageMixin:
+    """Display a translatable *success* banner after `form_valid()`."""
     success_message = _("Saved successfully")
 
     def form_valid(self, form):
@@ -39,6 +49,7 @@ class SuccessMessageMixin:
 
 
 class OwnerCreateView(OwnerFormKwargsMixin, SuccessMessageMixin, CreateView):
+    """Create-view that automatically links the new object to the user."""
     success_message = _("Created successfully")
 
     def form_valid(self, form):
@@ -50,23 +61,45 @@ class OwnerCreateView(OwnerFormKwargsMixin, SuccessMessageMixin, CreateView):
 class OwnerUpdateView(
     OwnerAccessMixin, OwnerFormKwargsMixin, SuccessMessageMixin, UpdateView
 ):
+    """Update-view restricted to the owner only."""
     success_message = _("Updated successfully")
 
 
 class OwnerDeleteView(OwnerAccessMixin, SuccessMessageMixin, DeleteView):
+    """Delete-view restricted to the owner only."""
     success_message = _("Deleted successfully")
 
 
+# ---------------------------------------------------------------------------#
+#  Dashboard redirection helper                                              #
+# ---------------------------------------------------------------------------#
 class DashboardRedirectMixin:
     """
-    If the request contains ?from=<tab> (GET or POST), go back to the
-    dashboard with the correct anchor; otherwise fall back to the normal
-    success_url defined in the CBV.
-    """
-    dashboard_tab = ""  # must be overridden in subclass
+    Uniform redirection helper.
 
-    def get_success_url(self):
+    1. Every *form* template must embed:
+         <input type="hidden" name="from" value="{{ view.dashboard_tab }}">
+    2. If the request carries `?from=<tab>` (GET or POST), the mixin sends the
+       user back to the dashboard with the correct anchor: `/#pane-<tab>`.
+    3. If the parameter is missing but the view declares `dashboard_tab`,
+       the mixin falls back to that tab.
+    """
+
+    dashboard_tab: str | None = None   # must be set in subclasses
+
+    # ------------------------------------------------------------------ #
+    #  Helpers                                                           #
+    # ------------------------------------------------------------------ #
+    def _dashboard_url(self) -> str:
+        return reverse("user_settings:dashboard")
+
+    def _anchor(self, tab: str | None) -> str:
+        return "" if not tab else f"#pane-{tab}"
+
+    # ------------------------------------------------------------------ #
+    #  Main entry point                                                  #
+    # ------------------------------------------------------------------ #
+    def get_success_url(self) -> str:  # noqa: D401 (simple method name)
         origin = self.request.POST.get("from") or self.request.GET.get("from")
-        if origin == self.dashboard_tab:
-            return reverse("user_settings:dashboard") + f"#pane-{origin}"
-        return super().get_success_url()
+        target_tab = origin or self.dashboard_tab
+        return f"{self._dashboard_url()}{self._anchor(target_tab)}"
