@@ -11,19 +11,27 @@
 <div class="table-responsive">
   <table class="table table-hover align-middle">
     <thead class="table-light">
-      <tr><th>Name</th><th>Provider</th><th>Model</th><th class="text-end">Actions</th></tr>
+      <tr><th>{% trans "Name" %}</th><th>{% trans "Provider" %}</th><th>{% trans "Agent as tool" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
     </thead>
     <tbody>
       {% for agent in agents %}
         <tr>
           <td>{{ agent.name }}</td>
-          <td>{{ agent.provider.name }}</td>
-          <td>{{ agent.model }}</td>
+          <td>{{ agent.llm_provider.name }}</td>
+          <td>{{ agent.is_tool }}</td>
           <td class="text-end">
             <a href="{% url 'user_settings:agent-edit' agent.pk %}?from=agents"
-               class="btn btn-sm btn-outline-secondary me-1"><i class="bi bi-pencil"></i> Edit</a>
+               class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-pencil"></i>{% trans "Edit" %}</a>
+            {% if not agent.is_tool %}
+              <a href="{% url 'user_settings:make_default_agent' agent.pk %}?from=agents"
+                class="btn btn-sm btn-outline-secondary me-1{% if agent.id == default_agent_id %} disabled{% endif %}"
+                {% if agent.id == default_agent_id %} aria-disabled="true" tabindex="-1"{% endif %}>
+                <i class="bi bi-check2-circle"></i>
+                {% trans "Make default" %}
+              </a>
+            {% endif %}
             <a href="{% url 'user_settings:agent-delete' agent.pk %}?from=agents"
-               class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
+               class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i>{% trans "Delete" %}</a>
           </td>
         </tr>
       {% endfor %}

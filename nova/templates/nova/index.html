@@ -64,13 +64,12 @@
     runningTasksBase: "/running-tasks/",
     createThread: "{% url 'create_thread' %}",
     deleteThread: "{% url 'delete_thread' 0 %}",
-    // New: File URLs
-    fileList: "{% url 'file_list' 0 %}",  // Use with thread_id replacement
+    fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",
     fileMove: "{% url 'file_move' 0 %}"
   };
 </script>
 <script src="{% static 'js/thread_management.js' %}" defer></script>
-<script src="{% static 'js/files.js' %}" defer></script>  <!-- New: Load files.js -->
+<script src="{% static 'js/files.js' %}" defer></script>
 {% endblock %}
