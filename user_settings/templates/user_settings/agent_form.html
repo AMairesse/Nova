@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n crispy_forms_tags static %}
+{% load crispy_forms_tags static %}
 
 {% block extra_js %}
   {{ block.super }}
@@ -9,45 +9,19 @@
 {% block content %}
 <div class="container py-4" style="max-width: 640px;">
   <h2 class="mb-3">
-    {% if object.pk %}
-      {% trans "Edit agent" %}
-    {% else %}
-      {% trans "Add agent" %}
-    {% endif %}
+    {% if object.pk %}Edit agent{% else %}Add agent{% endif %}
   </h2>
 
   <form method="post" novalidate>
     {% csrf_token %}
-    {{ form.non_field_errors }}
+    {% crispy form %}
 
-    <div class="row">
-      <div class="col-md-6">
-        {{ form.name|as_crispy_field }}
-      </div>
-      <div class="col-md-6">
-        {{ form.provider|as_crispy_field }}
-      </div>
-    </div>
-
-    <div class="row align-items-center">
-      <div class="col-md-3">
-        {{ form.is_tool|as_crispy_field }}
-      </div>
-      <div class="col-md-9">
-        {{ form.tool_description|as_crispy_field }}
-      </div>
-    </div>
-
-    {{ form.temperature|as_crispy_field }}
-    {{ form.tools|as_crispy_field }}
-    {{ form.sub_agents|as_crispy_field }}
     <div class="mt-4">
       <button class="btn btn-primary me-2" type="submit">
-        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+        <i class="bi bi-check-lg me-1"></i>Save
       </button>
-      <a class="btn btn-secondary"
-         href="{% url 'user_settings:agents' %}">
-        {% trans "Cancel" %}
+      <a href="{% url 'user_settings:agents' %}" class="btn btn-secondary">
+        Cancel
       </a>
     </div>
   </form>

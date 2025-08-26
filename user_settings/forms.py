@@ -1,5 +1,6 @@
-from django import forms
 from django.utils.translation import gettext_lazy as _
+from crispy_forms.helper import FormHelper
+from crispy_forms.layout import Layout, Div, Field
 
 from nova.forms import (
     LLMProviderForm as _LLMProviderForm,
@@ -25,34 +26,19 @@ class LLMProviderForm(_LLMProviderForm):
         # mark api_key non-required if not needed
         if ptype in PROVIDER_NO_KEY:
             self.fields["api_key"].required = False
-            # add bootstrap util to wrapper via crispy’s CSS class helper
+            # Display the field anyway (js will hide it if needed)
             self.fields["api_key"].widget.attrs.setdefault("class", "")
-            #self.fields["api_key"].widget.attrs["class"] += " d-none"
 
     class Media:
         js = ["user_settings/provider.js"]
 
 
-# ─── Agent ─────────────────────────────────────────────────────────────────
 # ─── Agent ────────────────────────────────────────────────────────────────
 class AgentForm(_AgentForm):
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
 
-        # rename labels only when the field is present
-        if "provider" in self.fields:
-            self.fields["provider"].label = _("Provider")
-        if "tools" in self.fields:
-            self.fields["tools"].label = _("Tools")
-        if "sub_agents" in self.fields:
-            self.fields["sub_agents"].label = _("Agents to use as tools")
-        if "is_tool" in self.fields:
-            self.fields["is_tool"].label = _("Is tool")
-        if "tool_description" in self.fields:
-            self.fields["tool_description"].label = _("Tool description")
-
-        # limit querysets to current user
         if user is not None:
             if "tools" in self.fields:
                 self.fields["tools"].queryset = Tool.objects.filter(user=user)
@@ -61,8 +47,28 @@ class AgentForm(_AgentForm):
                     user=user, is_tool=True
                 )
 
+        # ---------- Crispy helper + layout ----------
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+
+        self.helper.layout = Layout(
+            "name",
+            "llm_provider",
+            "system_prompt",
+            "recursion_limit",
+            Field("is_tool", wrapper_class="mb-2"),
+            Div(
+                "tool_description",
+                css_id="tool-description-wrapper",
+                css_class="ms-3",
+            ),
+            "tools",
+            "agent_tools",
+        )
+
     class Media:
-        js = ["user_settings/agent.js"]  # toggles description field
+        js = ["user_settings/agent.js"]
 
 
 # ─── Tool (unchanged wrappers) ─────────────────────────────────────────────
