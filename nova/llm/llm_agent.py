@@ -1,5 +1,6 @@
 # nova/llm/llm_agent.py
 from datetime import date
+import uuid
 import logging
 from typing import Any, Callable, List
 from django.conf import settings
@@ -108,10 +109,10 @@ class LLMAgent:
         if not agent_config:
             return [], [], [], False, None, None
         builtin_tools = list(agent_config.tools.filter(is_active=True,
-                                                tool_type=Tool.ToolType.BUILTIN))
+                                                       tool_type=Tool.ToolType.BUILTIN))
         mcp_tools_data = []
         mcp_tools = list(agent_config.tools.filter(tool_type=Tool.ToolType.MCP,
-                                            is_active=True))
+                                                   is_active=True))
         for tool in mcp_tools:
             cred = tool.credentials.filter(user=user).first()
             cred_user_id = cred.user.id if cred and cred.user else None
@@ -147,17 +148,24 @@ class LLMAgent:
             llm_provider = await sync_to_async(cls.fetch_agent_data_sync,
                                                thread_sensitive=False)(agent_config, user)
 
-        # Get or create the CheckpointLink
-        checkpointLink, _ = await sync_to_async(CheckpointLink.objects.get_or_create, thread_sensitive=False)(
-            thread=thread,
-            agent=agent_config
-        )
-        checkpointer = await get_checkpointer()
+        # If there is a thread into the call then link a checkpoint to it
+        if thread:
+            # Get or create the CheckpointLink
+            checkpointLink, _ = await sync_to_async(CheckpointLink.objects.get_or_create, thread_sensitive=False)(
+                thread=thread,
+                agent=agent_config
+            )
+            checkpointer = await get_checkpointer()
+            langgraph_thread_id = checkpointLink.checkpoint_id
+        else:
+            checkpointLink = None
+            checkpointer = None
+            langgraph_thread_id = uuid.uuid4()
 
         agent = cls(
             user=user,
             thread=thread,
-            langgraph_thread_id=checkpointLink.checkpoint_id,
+            langgraph_thread_id=langgraph_thread_id,
             agent_config=agent_config,
             callbacks=callbacks,
             allow_langfuse=allow_langfuse,
@@ -180,9 +188,13 @@ class LLMAgent:
         system_prompt = agent.build_system_prompt()
 
         # Create the ReAct agent
-        agent.langchain_agent = create_react_agent(llm, tools=tools,
-                                                   prompt=system_prompt,
-                                                   checkpointer=checkpointer)
+        if checkpointer:
+            agent.langchain_agent = create_react_agent(llm, tools=tools,
+                                                       prompt=system_prompt,
+                                                       checkpointer=checkpointer)
+        else:
+            agent.langchain_agent = create_react_agent(llm, tools=tools,
+                                                       prompt=system_prompt)
 
         agent.tools = tools
 
@@ -310,7 +322,7 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
-        # If the current thread as some files, alert the
+        # If the current thread as some files, alert the
         # agent by adding a message to the prompt
         list_files = await sync_to_async(UserFile.objects.filter,
                                          thread_sensitive=False)(thread=self.thread)

@@ -7,7 +7,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .serializers import QuestionSerializer, AnswerSerializer
+from asgiref.sync import async_to_sync
+
+from .serializers import QuestionSerializer
+from nova.models.models import UserProfile
 from nova.llm.llm_agent import LLMAgent
 
 
@@ -17,10 +20,6 @@ class QuestionAnswerView(APIView):
 
     – GET  → usage information
     – POST → run the LLM synchronously and return the answer
-
-    We keep everything *synchronous* because DRF 3.14/3.15 still executes
-    `APIView.dispatch()` in sync mode.  Using `async def` handlers therefore
-    breaks when Django’s CSRF middleware tries to `await` a plain Response.
     """
 
     permission_classes = [IsAuthenticated]
@@ -35,7 +34,7 @@ class QuestionAnswerView(APIView):
                 "method": "POST",
                 "content_type": "application/json",
                 "payload_format": {"question": "string (required)"},
-                "example_payload": {"question": "What is your question ?"},
+                "example_payload": {"question": "Who are you and what can you do ?"},
             },
         }
         return Response(usage)
@@ -51,13 +50,19 @@ class QuestionAnswerView(APIView):
 
         question: str = serializer.validated_data["question"]
 
-        # Create the LLM agent (cheap)
-        thread_id = str(uuid.uuid4())
-        llm = LLMAgent(request.user, thread_id)
+        # Find the user's default agent
+        agent_config = UserProfile.objects.get(user=request.user).default_agent
+        if not agent_config:
+            return Response(
+                {"detail": "User has no default agent"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Run the LLM *synchronously*; unit-tests stub the call anyway.
+        # Create the agent
+        llm_agent = async_to_sync(LLMAgent.create)(request.user, None, agent_config)
+
         try:
-            answer = llm.ainvoke(question)
+            answer = async_to_sync(llm_agent.ainvoke)(question)
         except Exception as exc:
             return Response(
                 {"detail": f"LLM error: {exc}"},
@@ -65,5 +70,4 @@ class QuestionAnswerView(APIView):
             )
 
         response_data = {"question": question, "answer": answer}
-        return Response(AnswerSerializer(response_data).data,
-                        status=status.HTTP_200_OK)
+        return Response(response_data, status=status.HTTP_200_OK)

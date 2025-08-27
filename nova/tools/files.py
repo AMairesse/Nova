@@ -24,11 +24,15 @@ async def async_get_object_or_404(model, **kwargs):
 
 
 async def async_get_threadid_and_user(obj: LLMAgent | UserFile):
-    thread_id = await sync_to_async(lambda: obj.thread.id,
-                                    thread_sensitive=False)()
+    if obj.thread:
+        thread_id = await sync_to_async(lambda: obj.thread.id,
+                                        thread_sensitive=False)()
+    else:
+        thread_id = None
+
     user = await sync_to_async(lambda: obj.user, thread_sensitive=False)()
     return thread_id, user
-
+        
 
 async def async_get_user_id(user):
     return await sync_to_async(lambda: user.id, thread_sensitive=False)()
@@ -187,6 +191,12 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     """Return a list of StructuredTool instances
        with agent bound via partial."""
     thread_id, user = await async_get_threadid_and_user(agent)
+
+    # Return empty list if thread_id is None
+    # (e.g. when agent is not in a thread, like an API call)
+    if thread_id is None:
+        return []
+
     return [
         StructuredTool.from_function(
             coroutine=partial(list_files, thread_id, user),
