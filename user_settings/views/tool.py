@@ -167,7 +167,7 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
                 self.fields[name] = forms.CharField(label=label, required=required)
 
         # Preserve existing secrets
-        keep_msg = _("Password exists, leave blank to keep")
+        keep_msg = _("Secret exists, leave blank to keep")
         for f in self.secret_fields:
             if f in self.fields and f in self._existing_secrets:
                 fld = self.fields[f]

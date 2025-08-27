@@ -1,56 +1,8 @@
-#: nova/forms.py:111 nova/models/models.py:79
-msgid "Max context tokens must be at least 512."
-msgstr "Max context tokens must be at least 512."
-
-#: nova/forms.py:124
-msgid "Agents to expose as tools"
-msgstr "Agents to expose as tools"
-
-#: nova/forms.py:172
-msgid "Required when using as tool."
-msgstr "Required when using as tool."
-
-#: nova/forms.py:184
-msgid "Builtin tool subtype"
-msgstr "Builtin tool subtype"
-
-#: nova/forms.py:185
-msgid "Select a builtin tool subtype"
-msgstr "Select a builtin tool subtype"
-
-#: nova/forms.py:192
-msgid "JSON schema describing the tool inputs"
-msgstr "JSON schema describing the tool inputs"
-
-#: nova/forms.py:199
-msgid "JSON schema describing the tool outputs"
-msgstr "JSON schema describing the tool outputs"
-
-#: nova/forms.py:280
-msgid "A BUILTIN tool must have a subtype defined."
-msgstr "A BUILTIN tool must have a subtype defined."
-
-#: nova/forms.py:300
-msgid "Name is required for API/MCP tools."
-msgstr "Name is required for API/MCP tools."
-
-#: nova/forms.py:302
-msgid "Description is required for API/MCP tools."
-msgstr "Description is required for API/MCP tools."
-
-#: nova/forms.py:304
-msgid "Endpoint URL is required for API/MCP tools."
-msgstr "Endpoint URL is required for API/MCP tools."
-
-#: nova/forms.py:331
-msgid "CalDav server URL"
-msgstr "CalDav server URL"
-
 #: nova/models/Message.py:9
 msgid "User"
 msgstr "User"
 
-#: nova/models/Message.py:10 nova/models/models.py:382
+#: nova/models/Message.py:10 nova/models/models.py:394
 msgid "Agent"
 msgstr "Agent"
 
@@ -70,168 +22,186 @@ msgstr "Invalid actor: {}"
 msgid "Enter a valid URL."
 msgstr "Enter a valid URL."
 
-#: nova/models/models.py:60
+#: nova/models/models.py:65
+#, fuzzy
+#| msgid ""
+#| "Maximum tokens for this provider's context window (e.g., 4096 for small "
+#| "models, 100000 or more for large)."
 msgid ""
-"Maximum tokens for this provider's context window (e.g., 4096 for small "
-"models, 100000 or more for large)."
+"Maximum tokens for this provider's context window\n"
+"                       (e.g., 4096 for small models, 100000 or more for "
+"large)."
 msgstr ""
 "Maximum tokens for this provider's context window (e.g., 4096 for small "
 "models, 100000 or more for large)."
 
-#: nova/models/models.py:66
+#: nova/models/models.py:76
 msgid "LLM providers"
 msgstr "LLM providers"
 
-#: nova/models/models.py:109
-#: nova/templates/nova/partials/_tool_form_fields.html:13
+#: nova/models/models.py:89 user_settings/forms.py:103
+msgid "Max context tokens must be at least 512."
+msgstr "Max context tokens must be at least 512."
+
+#: nova/models/models.py:119
 msgid "Builtin"
 msgstr "Builtin"
 
-#: nova/models/models.py:110
+#: nova/models/models.py:120
 msgid "API HTTP/REST"
 msgstr "API HTTP/REST"
 
-#: nova/models/models.py:111
+#: nova/models/models.py:121
 msgid "MCP Server"
 msgstr "MCP Server"
 
-#: nova/models/models.py:114
-#: nova/templates/nova/partials/_tool_form_fields.html:77
+#: nova/models/models.py:124
 msgid "Streamable HTTP (Default)"
 msgstr "Streamable HTTP (Default)"
 
-#: nova/models/models.py:115
-#: nova/templates/nova/partials/_tool_form_fields.html:80
+#: nova/models/models.py:125
 msgid "SSE (Legacy)"
 msgstr "SSE (Legacy)"
 
-#: nova/models/models.py:120 nova/templates/nova/user_config.html:22
+#: nova/models/models.py:130 nova/models/models.py:209
+#: user_settings/templates/user_settings/dashboard.html:36
+#: user_settings/templates/user_settings/tool_list.html:8
 msgid "Tools"
 msgstr "Tools"
 
-#: nova/models/models.py:141
+#: nova/models/models.py:151
 msgid "Transport method for MCP servers"
 msgstr "Transport method for MCP servers"
 
-#: nova/models/models.py:153
+#: nova/models/models.py:163
 msgid "Available functions for this tool, if any."
 msgstr "Available functions for this tool, if any."
 
-#: nova/models/models.py:166
+#: nova/models/models.py:176
 msgid "A BUILTIN tool must select a subtype."
 msgstr "A BUILTIN tool must select a subtype."
 
-#: nova/models/models.py:171
+#: nova/models/models.py:181
 #, python-format
 msgid "Invalid builtin subtype: %s"
 msgstr "Invalid builtin subtype: %s"
 
-#: nova/models/models.py:178
+#: nova/models/models.py:188
 msgid "Endpoint is mandatory for API or MCP tools."
 msgstr "Endpoint is mandatory for API or MCP tools."
 
-#: nova/models/models.py:188
+#: nova/models/models.py:198
 msgid "User agents"
 msgstr "User agents"
 
-#: nova/models/models.py:193 nova/models/models.py:199
-#: nova/templates/nova/user_config.html:17
-msgid "Agents"
-msgstr "Agents"
+#: nova/models/models.py:203
+#: user_settings/templates/user_settings/fragments/agent_table.html:15
+msgid "Provider"
+msgstr "Providers"
 
-#: nova/models/models.py:202
+#: nova/models/models.py:204
+msgid "Prompt"
+msgstr "Prompt"
+
+#: nova/models/models.py:205
+msgid "Recursion limit"
+msgstr "Recursion limit"
+
+#: nova/models/models.py:212
+msgid "Is tool"
+msgstr "Is tool"
+
+#: nova/models/models.py:213
 msgid "If true, this agent can be used as a tool by other agents."
 msgstr "If true, this agent can be used as a tool by other agents."
 
-#: nova/models/models.py:211
-msgid "Used by agents"
-msgstr "Used by agents"
+#: nova/models/models.py:222 user_settings/forms.py:122
+msgid "Agents to use as tools"
+msgstr "Agents to use as tools"
 
-#: nova/models/models.py:219
+#: nova/models/models.py:230
+msgid "Tool description"
+msgstr "Tool description"
+
+#: nova/models/models.py:231
 msgid ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 msgstr ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 
-#: nova/models/models.py:236
+#: nova/models/models.py:248
 msgid "Tool description is required when 'is_tool' is True."
 msgstr "Tool description is required when 'is_tool' is True."
 
-#: nova/models/models.py:245
+#: nova/models/models.py:257
 msgid "Found a cyclic dependency between agents."
 msgstr "Found a cyclic dependency between agents."
 
-#: nova/models/models.py:299
+#: nova/models/models.py:311
 msgid "Default agent must be a normal agent."
 msgstr "Default agent must be a normal agent."
 
-#: nova/models/models.py:302
+#: nova/models/models.py:314
 msgid "Default agent must belong to the user."
 msgstr "Default agent must belong to the user."
 
-#: nova/models/models.py:311
+#: nova/models/models.py:323
 msgid "Tool credentials"
 msgstr "Tool credentials"
 
-#: nova/models/models.py:315
+#: nova/models/models.py:327
 msgid "Credentials"
 msgstr "Credentials"
 
-#: nova/models/models.py:320
-#: nova/templates/nova/partials/_tool_config_modal.html:54
+#: nova/models/models.py:332
 msgid "No Authentication"
 msgstr "No Authentication"
 
-#: nova/models/models.py:321 nova/templates/nova/partials/_auth_fields.html:11
-#: nova/templates/nova/partials/_tool_config_modal.html:55
+#: nova/models/models.py:333
 msgid "Basic Auth"
 msgstr "Basic Auth"
 
-#: nova/models/models.py:322 nova/templates/nova/partials/_auth_fields.html:12
-#: nova/templates/nova/partials/_tool_config_modal.html:56
+#: nova/models/models.py:334
 msgid "Token Auth"
 msgstr "Token Auth"
 
-#: nova/models/models.py:323 nova/templates/nova/partials/_auth_fields.html:14
-#: nova/templates/nova/partials/_tool_config_modal.html:58
+#: nova/models/models.py:335
 msgid "OAuth"
 msgstr "OAuth"
 
-#: nova/models/models.py:324 nova/templates/nova/partials/_auth_fields.html:13
-#: nova/templates/nova/partials/_tool_config_modal.html:57
+#: nova/models/models.py:336
 msgid "API Key"
 msgstr "API Key"
 
-#: nova/models/models.py:325 nova/templates/nova/partials/_auth_fields.html:15
-#: nova/templates/nova/partials/_tool_config_modal.html:59
+#: nova/models/models.py:337
 msgid "Custom"
 msgstr "Custom"
 
-#: nova/models/models.py:356
+#: nova/models/models.py:368
 msgid "{}'s credentials for {}"
 msgstr "{}'s credentials for {}"
 
-#: nova/models/models.py:362
+#: nova/models/models.py:374
 msgid "Pending"
 msgstr "Pending"
 
-#: nova/models/models.py:363
+#: nova/models/models.py:375
 msgid "Running"
 msgstr "Running"
 
-#: nova/models/models.py:364
+#: nova/models/models.py:376
 msgid "Completed"
 msgstr "Completed"
 
-#: nova/models/models.py:365
+#: nova/models/models.py:377
 msgid "Failed"
 msgstr "Failed"
 
-#: nova/models/models.py:372
+#: nova/models/models.py:384
 msgid "User tasks"
 msgstr "User tasks"
 
-#: nova/models/models.py:376
+#: nova/models/models.py:388
 msgid "Thread"
 msgstr "Thread"
 
@@ -239,17 +209,24 @@ msgstr "Thread"
 msgid "Nova Application"
 msgstr "Nova Application"
 
-#: nova/templates/base.html:40
-msgid "Config"
-msgstr "Config"
+#: nova/templates/base.html:42
+msgid "Settings"
+msgstr "Settings"
 
-#: nova/templates/base.html:46
+#: nova/templates/base.html:48
 msgid "Admin"
 msgstr "Admin"
 
-#: nova/templates/base.html:55
+#: nova/templates/base.html:57
 msgid "Logout"
 msgstr "Logout"
+
+#: nova/templates/includes/messages.html:10
+#: user_settings/templates/user_settings/provider_list.html:17
+#: user_settings/templates/user_settings/tool_configure.html:42
+#: user_settings/templates/user_settings/tool_configure.html:46
+msgid "Close"
+msgstr "Close"
 
 #: nova/templates/nova/index.html:10
 msgid "Threads"
@@ -329,393 +306,9 @@ msgstr "Type your message..."
 msgid "Send"
 msgstr "Send"
 
-#: nova/templates/nova/partials/_agent_modals.html:9
-#: nova/templates/nova/user_config.html:165
-msgid "Create an agent"
-msgstr "Create an agent"
-
-#: nova/templates/nova/partials/_agent_modals.html:18
-msgid "Agent name"
-msgstr "Agent name"
-
-#: nova/templates/nova/partials/_agent_modals.html:24
-#: nova/templates/nova/partials/_agent_modals.html:132
-msgid "LLM provider"
-msgstr "LLM provider"
-
-#: nova/templates/nova/partials/_agent_modals.html:26
-#: nova/templates/nova/partials/_provider_modals.html:21
-msgid "Choose a provider"
-msgstr "Choose a provider"
-
-#: nova/templates/nova/partials/_agent_modals.html:37
-#: nova/templates/nova/partials/_agent_modals.html:143
-msgid "System prompt"
-msgstr "System prompt"
-
-#: nova/templates/nova/partials/_agent_modals.html:43
-msgid "Recursion limit: "
-msgstr "Recursion limit: "
-
-#: nova/templates/nova/partials/_agent_modals.html:51
-#: nova/templates/nova/partials/_agent_modals.html:151
-msgid "Use as a tool"
-msgstr "Use as a tool"
-
-#: nova/templates/nova/partials/_agent_modals.html:57
-#: nova/templates/nova/partials/_agent_modals.html:157
-msgid "Tool description"
-msgstr "Tool description"
-
-#: nova/templates/nova/partials/_agent_modals.html:59
-#: nova/templates/nova/partials/_agent_modals.html:159
-msgid "Describe how this agent can be used as a tool."
-msgstr "Describe how this agent can be used as a tool."
-
-#: nova/templates/nova/partials/_agent_modals.html:65
-msgid "Available tools"
-msgstr "Available tools"
-
-#: nova/templates/nova/partials/_agent_modals.html:73
-#: nova/templates/nova/partials/_agent_modals.html:172
-msgid "inactive"
-msgstr "inactive"
-
-#: nova/templates/nova/partials/_agent_modals.html:84
-#: nova/templates/nova/partials/_agent_modals.html:182
-msgid "Agents available as tools"
-msgstr "Agents available as tools"
-
-#: nova/templates/nova/partials/_agent_modals.html:103
-#: nova/templates/nova/partials/_agent_modals.html:205
-#: nova/templates/nova/partials/_modal_create_tool.html:17
-#: nova/templates/nova/partials/_modal_edit_tool.html:17
-#: nova/templates/nova/partials/_provider_modals.html:32
-#: nova/templates/nova/partials/_provider_modals.html:72
-#: nova/templates/nova/partials/_tool_config_modal.html:112
-#: nova/templates/nova/partials/_tool_delete_modal.html:21
-msgid "Cancel"
-msgstr "Cancel"
-
-#: nova/templates/nova/partials/_agent_modals.html:105
-#: nova/templates/nova/partials/_modal_create_tool.html:20
-#: nova/templates/nova/partials/_provider_modals.html:35
-msgid "Create"
-msgstr "Create"
-
-#: nova/templates/nova/partials/_agent_modals.html:117
-#: nova/templates/nova/tool_list.html:34
-#: nova/templates/nova/user_config.html:53
-#: nova/templates/nova/user_config.html:107
-#: nova/templates/nova/user_config.html:152
-msgid "Edit"
-msgstr "Edit"
-
-#: nova/templates/nova/partials/_agent_modals.html:127
-#: nova/templates/nova/partials/_provider_modals.html:15
-#: nova/templates/nova/partials/_provider_modals.html:56
-#: nova/templates/nova/partials/_tool_form_fields.html:42
-#: nova/templates/nova/tool_list.html:16
-msgid "Name"
-msgstr "Name"
-
-#: nova/templates/nova/partials/_agent_modals.html:164
-msgid "Associated tools"
-msgstr "Associated tools"
-
-#: nova/templates/nova/partials/_agent_modals.html:207
-#: nova/templates/nova/partials/_modal_edit_tool.html:18
-#: nova/templates/nova/partials/_provider_modals.html:74
-#: nova/templates/nova/partials/_tool_config_modal.html:113
-#: nova/templates/nova/user_config.html:222
-msgid "Save"
-msgstr "Save"
-
-#: nova/templates/nova/partials/_auth_fields.html:6
-#: nova/templates/nova/partials/_tool_config_modal.html:51
-msgid "Authentication type"
-msgstr "Authentication type"
-
-#: nova/templates/nova/partials/_json_schema_fields.html:5
-msgid "Input schema (JSON)"
-msgstr "Input schema (JSON)"
-
-#: nova/templates/nova/partials/_json_schema_fields.html:10
-#: nova/templates/nova/partials/_json_schema_fields.html:19
-msgid "Example:"
-msgstr "Example:"
-
-#: nova/templates/nova/partials/_json_schema_fields.html:14
-msgid "Output schema (JSON)"
-msgstr "Output schema (JSON)"
-
-#: nova/templates/nova/partials/_modal_create_tool.html:7
-#: nova/templates/nova/tool_list.html:7
-msgid "Create a tool"
-msgstr "Create a tool"
-
-#: nova/templates/nova/partials/_modal_create_tool.html:8
-msgid "Close"
-msgstr "Close"
-
-#: nova/templates/nova/partials/_modal_edit_tool.html:8
-#, python-format
-msgid "Edit %(tool.name)s"
-msgstr "Edit %(tool.name)s"
-
-#: nova/templates/nova/partials/_provider_modals.html:8
-msgid "Create a LLM provider"
-msgstr "Create a LLM provider"
-
-#: nova/templates/nova/partials/_provider_modals.html:19
-#: nova/templates/nova/partials/_provider_modals.html:60
-#: nova/templates/nova/partials/_tool_form_fields.html:5
-#: nova/templates/nova/tool_list.html:17
-msgid "Type"
-msgstr "Type"
-
-#: nova/templates/nova/partials/_provider_modals.html:48
-msgid "Edit provider"
-msgstr "Edit provider"
-
 #: nova/templates/nova/partials/_thread_item.html:14
 msgid "Delete Thread"
 msgstr "Delete Thread"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:9
-#, python-format
-msgid " Configure %(tool.name)s "
-msgstr "Configure %(tool.name)s"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:35
-msgid "No configuration required for this tool."
-msgstr "No configuration required for this tool."
-
-#: nova/templates/nova/partials/_tool_config_modal.html:40
-msgid "Test"
-msgstr "Test"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:67
-msgid "Test MCP connection"
-msgstr "Test MCP connection"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:75
-#: nova/tools/builtins/caldav.py:296
-msgid "Username"
-msgstr "Username"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:80
-#: nova/tools/builtins/caldav.py:297
-msgid "Password"
-msgstr "Password"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:87
-msgid "Token / API Key"
-msgstr "Token / API Key"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:92
-msgid "Token type"
-msgstr "Token type"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:99
-msgid "Client ID"
-msgstr "Client ID"
-
-#: nova/templates/nova/partials/_tool_config_modal.html:104
-msgid "Client Secret"
-msgstr "Client Secret"
-
-#: nova/templates/nova/partials/_tool_delete_modal.html:8
-#, python-format
-msgid " Delete tool %(tool.name)s "
-msgstr "Delete Tool %(tool.name)s "
-
-#: nova/templates/nova/partials/_tool_delete_modal.html:12
-msgid ""
-"Are you sure you want to delete this tool ? This action cannot be undone."
-msgstr ""
-"Are you sure you want to delete this tool ? This action cannot be undone."
-
-#: nova/templates/nova/partials/_tool_delete_modal.html:15
-msgid "Information :"
-msgstr "Information :"
-
-#: nova/templates/nova/partials/_tool_delete_modal.html:15
-#, python-format
-msgid " This tool is used by %(tool.agents.count)s agents. "
-msgstr " This tool is used by %(tool.agents.count)s agents. "
-
-#: nova/templates/nova/partials/_tool_delete_modal.html:16
-msgid ""
-"Deleting it will remove this tool from these agents, but the agents "
-"themselves will not be deleted."
-msgstr ""
-"Deleting it will remove this tool from these agents, but the agents "
-"themselves will not be deleted."
-
-#: nova/templates/nova/partials/_tool_delete_modal.html:24
-#: nova/templates/nova/tool_list.html:38
-#: nova/templates/nova/user_config.html:58
-#: nova/templates/nova/user_config.html:72
-#: nova/templates/nova/user_config.html:114
-#: nova/templates/nova/user_config.html:156
-msgid "Delete"
-msgstr "Delete"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:12
-msgid "Select a type"
-msgstr "Select a type"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:14
-msgid "HTTP / REST API"
-msgstr "HTTP / REST API"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:15
-msgid "MCP server"
-msgstr "MCP Server"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:24
-msgid "Builtin subtype"
-msgstr "Builtin subtype"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:29
-msgid "Select a subtype"
-msgstr "Select a subtype"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:50
-#: nova/templates/nova/tool_list.html:18
-msgid "Description"
-msgstr "Description"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:58
-msgid "Endpoint URL"
-msgstr "Endpoint URL"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:71
-msgid "Transport Type"
-msgstr "Transport Type"
-
-#: nova/templates/nova/partials/_tool_form_fields.html:84
-msgid ""
-"Choose the transport method for this MCP server. Use SSE (Legacy) only if "
-"the server requires it."
-msgstr ""
-"Choose the transport method for this MCP server. Use SSE (Legacy) only if "
-"the server requires it."
-
-#: nova/templates/nova/partials/_tool_form_fields.html:101
-#: nova/templates/nova/tool_list.html:19
-msgid "Active"
-msgstr "Active"
-
-#: nova/templates/nova/tool_list.html:5
-msgid "My tools"
-msgstr "My tools"
-
-#: nova/templates/nova/tool_list.html:20
-msgid "Actions"
-msgstr "Actions"
-
-#: nova/templates/nova/tool_list.html:29
-msgid "Yes"
-msgstr "Yes"
-
-#: nova/templates/nova/tool_list.html:29
-msgid "No"
-msgstr "No"
-
-#: nova/templates/nova/tool_list.html:42
-msgid "Configure"
-msgstr "Configure"
-
-#: nova/templates/nova/tool_list.html:52
-msgid "No tools available."
-msgstr "No tools available."
-
-#: nova/templates/nova/user_config.html:6
-msgid "User Config"
-msgstr "User Config"
-
-#: nova/templates/nova/user_config.html:12
-msgid "LLM Providers"
-msgstr "LLM Providers"
-
-#: nova/templates/nova/user_config.html:27
-#: nova/templates/nova/user_config.html:181
-msgid "General Config"
-msgstr "General Config"
-
-#: nova/templates/nova/user_config.html:36
-msgid "My LLM providers"
-msgstr "My LLM providers"
-
-#: nova/templates/nova/user_config.html:64
-msgid "No LLM providers configured. Create one to be able to configure agents."
-msgstr ""
-"No LLM providers configured. Create one to be able to configure agents."
-
-#: nova/templates/nova/user_config.html:67
-msgid "Create a new provider"
-msgstr "Create a new provider"
-
-#: nova/templates/nova/user_config.html:75
-msgid "My agents"
-msgstr "My agents"
-
-#: nova/templates/nova/user_config.html:86
-#: nova/templates/nova/user_config.html:134
-#, fuzzy, python-format
-#| msgid ""
-#| "\n"
-#| "                                  %(tool_count)s tool\n"
-#| "                                "
-#| msgid_plural ""
-#| "\n"
-#| "                                  %(tool_count)s tools\n"
-#| "                                "
-msgid ""
-"\n"
-"                                      %(tool_count)s tool\n"
-"                                    "
-msgid_plural ""
-"\n"
-"                                      %(tool_count)s tools\n"
-"                                    "
-msgstr[0] "%(tool_count)s tool"
-msgstr[1] "%(tool_count)s tools"
-
-#: nova/templates/nova/user_config.html:92
-#: nova/templates/nova/user_config.html:140
-msgid "No tools configured"
-msgstr "No tools configured"
-
-#: nova/templates/nova/user_config.html:96
-msgid "Default agent"
-msgstr "Default agent"
-
-#: nova/templates/nova/user_config.html:110
-msgid "Set default"
-msgstr "Set default"
-
-#: nova/templates/nova/user_config.html:123
-msgid "My agent-tools"
-msgstr "My agent-tools"
-
-#: nova/templates/nova/user_config.html:168
-msgid "You must first create an LLM provider before you can create an agent."
-msgstr "You must first create an LLM provider before you can create an agent."
-
-#: nova/templates/nova/user_config.html:169
-msgid "Go to LLM Providers panel"
-msgstr "Go to LLM Providers panel"
-
-#: nova/templates/nova/user_config.html:195
-msgid "Allow trace (langfuse)"
-msgstr "Allow trace (langfuse)"
-
-#: nova/templates/nova/user_config.html:210
-msgid "A secret key is already registered; leave empty to keep it."
-msgstr "A secret key is already registered; leave empty to keep it."
 
 #: nova/templates/registration/login.html:9
 #: nova/templates/registration/login.html:67
@@ -756,104 +349,541 @@ msgstr "Could not import module: %s"
 msgid "Question or instruction sent to the agent %(name)s"
 msgstr "Question or instruction sent to the agent %(name)s"
 
-#: nova/tools/builtins/caldav.py:28
+#: nova/tools/builtins/caldav.py:29
 msgid "Incomplete CalDav configuration: missing URL, username, or password"
 msgstr "Incomplete CalDav configuration: missing URL, username, or password"
 
-#: nova/tools/builtins/caldav.py:47
+#: nova/tools/builtins/caldav.py:48
 #, python-brace-format
 msgid "No CalDav credential found for tool {tool_id}"
 msgstr "No CalDav credential found for tool {tool_id}"
 
-#: nova/tools/builtins/caldav.py:68 nova/tools/builtins/caldav.py:158
-#: nova/tools/builtins/caldav.py:208 nova/tools/builtins/caldav.py:238
+#: nova/tools/builtins/caldav.py:69 nova/tools/builtins/caldav.py:159
+#: nova/tools/builtins/caldav.py:209 nova/tools/builtins/caldav.py:239
 msgid "No calendars available."
 msgstr "No calendars available."
 
-#: nova/tools/builtins/caldav.py:70
+#: nova/tools/builtins/caldav.py:71
 msgid "Available calendars :\n"
 msgstr "Available calendars :\n"
 
-#: nova/tools/builtins/caldav.py:77
+#: nova/tools/builtins/caldav.py:78
 #, python-brace-format
 msgid "CalDav error: {error}. Check credentials and server URL."
 msgstr "CalDav error: {error}. Check credentials and server URL."
 
-#: nova/tools/builtins/caldav.py:79
+#: nova/tools/builtins/caldav.py:80
 #, python-brace-format
 msgid "Unexpected error when retrieving calendars: {error}"
 msgstr "Unexpected error when retrieving calendars: {error}"
 
-#: nova/tools/builtins/caldav.py:130 nova/tools/builtins/caldav.py:181
+#: nova/tools/builtins/caldav.py:131 nova/tools/builtins/caldav.py:182
 msgid "Error when retrieving events : {}"
 msgstr "Error when retrieving events : {}"
 
-#: nova/tools/builtins/caldav.py:153 nova/tools/builtins/caldav.py:203
+#: nova/tools/builtins/caldav.py:154 nova/tools/builtins/caldav.py:204
 #, python-brace-format
 msgid "Calendar '{calendar_name}' not found."
 msgstr "Calendar '{calendar_name}' not found."
 
-#: nova/tools/builtins/caldav.py:177
+#: nova/tools/builtins/caldav.py:178
 msgid "No events found"
 msgstr "No events found"
 
-#: nova/tools/builtins/caldav.py:214
+#: nova/tools/builtins/caldav.py:215
 msgid "Event not found."
 msgstr "Event not found."
 
-#: nova/tools/builtins/caldav.py:217
+#: nova/tools/builtins/caldav.py:218
 msgid "Error when retrieving event's details : {}"
 msgstr "Error when retrieving event's details : {}"
 
-#: nova/tools/builtins/caldav.py:254 nova/tools/builtins/caldav.py:259
+#: nova/tools/builtins/caldav.py:255 nova/tools/builtins/caldav.py:260
 msgid "Error when searching events : {}"
 msgstr "Error when searching events : {}"
 
-#: nova/tools/builtins/caldav.py:273
+#: nova/tools/builtins/caldav.py:274
 msgid "No calendars found"
 msgstr "No calendars found"
 
-#: nova/tools/builtins/caldav.py:278
+#: nova/tools/builtins/caldav.py:279
 #, python-format
 msgid "%(count)d calendar found"
 msgid_plural "%(count)d calendars found"
 msgstr[0] "%(count)d calendar found"
 msgstr[1] "%(count)d calendars found"
 
-#: nova/tools/builtins/caldav.py:286
+#: nova/tools/builtins/caldav.py:287
 #, python-format
 msgid "Connection error: %(err)s"
 msgstr "Connection error: %(err)s"
 
-#: nova/tools/builtins/caldav.py:295
+#: nova/tools/builtins/caldav.py:296
 msgid "URL CalDav"
 msgstr "URL CalDav"
 
-#: nova/views/tools_views.py:168
-msgid "Failed to create credential"
-msgstr "Failed to create credential"
+#: nova/tools/builtins/caldav.py:297
+msgid "Username"
+msgstr "Username"
 
-#: nova/views/tools_views.py:195
-msgid "Success connecting - No tools found"
-msgstr "Success connecting - No tools found"
+#: nova/tools/builtins/caldav.py:298
+msgid "Password"
+msgstr "Password"
 
-#: nova/views/tools_views.py:200
+#: user_settings/forms.py:195
+msgid "Required when using an agent as a tool."
+msgstr "Required when using an agent as a tool."
+
+#: user_settings/forms.py:214
+msgid "Builtin tool subtype"
+msgstr "Builtin tool subtype"
+
+#: user_settings/forms.py:215
+msgid "Select a builtin tool subtype"
+msgstr "Select a builtin tool subtype"
+
+#: user_settings/forms.py:222
+msgid "JSON schema describing the tool inputs"
+msgstr "JSON schema describing the tool inputs"
+
+#: user_settings/forms.py:229
+msgid "JSON schema describing the tool outputs"
+msgstr "JSON schema describing the tool outputs"
+
+#: user_settings/forms.py:316
+msgid "A BUILTIN tool must have a subtype defined."
+msgstr "A BUILTIN tool must have a subtype defined."
+
+#: user_settings/forms.py:335
+msgid "This field is required."
+msgstr "This field is required."
+
+#: user_settings/forms.py:368
+msgid "CalDav server URL"
+msgstr "CalDav server URL"
+
+#: user_settings/mixins.py:44
+msgid "Saved successfully"
+msgstr "Saved successfully"
+
+#: user_settings/mixins.py:53
+msgid "Created successfully"
+msgstr "Created successfully"
+
+#: user_settings/mixins.py:65
+msgid "Updated successfully"
+msgstr "Updated successfully"
+
+#: user_settings/mixins.py:70
+msgid "Deleted successfully"
+msgstr "Deleted successfully"
+
+#: user_settings/mixins.py:80 user_settings/views/tool.py:170
+msgid "Secret exists, leave blank to keep"
+msgstr "Secret exists, leave blank to keep"
+
+#: user_settings/templates/user_settings/agent_confirm_delete.html:7
+msgid "Delete agent"
+msgstr "Delete agent"
+
+#: user_settings/templates/user_settings/agent_confirm_delete.html:10
+#: user_settings/templates/user_settings/provider_confirm_delete.html:10
+#: user_settings/templates/user_settings/tool_confirm_delete.html:10
 #, fuzzy, python-format
-#| msgid "Success connecting  %(count)d tool found"
-#| msgid_plural "Success connecting  %(count)d tools found"
-msgid "Success connecting - %(count)d tool found"
-msgid_plural "Success connecting - %(count)d tools found"
-msgstr[0] "Success connecting  %(count)d tool found"
-msgstr[1] "Success connecting  %(count)d tools found"
+#| msgid ""
+#| "\n"
+#| "      Are you sure you want to delete %(name)s?\n"
+#| "    "
+msgid ""
+"\n"
+"      Are you sure you want to delete %(name)s?\n"
+"    "
+msgstr "Are you sure you want to delete %(name)s?"
 
-#: nova/views/tools_views.py:214
+#: user_settings/templates/user_settings/agent_confirm_delete.html:18
+#: user_settings/templates/user_settings/provider_confirm_delete.html:18
+#: user_settings/templates/user_settings/tool_confirm_delete.html:18
+msgid "Yes, delete"
+msgstr "Yes, delete"
+
+#: user_settings/templates/user_settings/agent_confirm_delete.html:23
+#: user_settings/templates/user_settings/agent_confirm_delete.html:27
+#: user_settings/templates/user_settings/agent_form.html:28
+#: user_settings/templates/user_settings/agent_form.html:32
+#: user_settings/templates/user_settings/provider_confirm_delete.html:21
+#: user_settings/templates/user_settings/provider_form.html:32
+#: user_settings/templates/user_settings/provider_form.html:36
+#: user_settings/templates/user_settings/tool_confirm_delete.html:23
+#: user_settings/templates/user_settings/tool_confirm_delete.html:27
+#: user_settings/templates/user_settings/tool_form.html:28
+#: user_settings/templates/user_settings/tool_form.html:32
+msgid "Cancel"
+msgstr "Cancel"
+
+#: user_settings/templates/user_settings/agent_form.html:13
+msgid "Edit agent"
+msgstr "Edit agent"
+
+#: user_settings/templates/user_settings/agent_form.html:13
+msgid "Add agent"
+msgstr "Add agent"
+
+#: user_settings/templates/user_settings/agent_form.html:23
+#: user_settings/templates/user_settings/provider_form.html:27
+#: user_settings/templates/user_settings/tool_configure.html:36
+#: user_settings/templates/user_settings/tool_form.html:23
+msgid "Save"
+msgstr "Save"
+
+#: user_settings/templates/user_settings/agent_list.html:8
+#: user_settings/templates/user_settings/dashboard.html:28
+msgid "Agents"
+msgstr "Agents"
+
+#: user_settings/templates/user_settings/agent_list.html:14
+msgid "No agents found."
+msgstr "No agents found."
+
+#: user_settings/templates/user_settings/dashboard.html:12
+msgid "User configuration"
+msgstr "User configuration"
+
+#: user_settings/templates/user_settings/dashboard.html:20
+#: user_settings/templates/user_settings/provider_list.html:8
+msgid "LLM Providers"
+msgstr "LLM Providers"
+
+#: user_settings/templates/user_settings/dashboard.html:44
+msgid "General"
+msgstr "General"
+
+#: user_settings/templates/user_settings/dashboard.html:57
+msgid "Loading providers"
+msgstr "Loading providers"
+
+#: user_settings/templates/user_settings/dashboard.html:67
+msgid "Loading agents"
+msgstr "Loading agents"
+
+#: user_settings/templates/user_settings/dashboard.html:77
+msgid "Loading tools"
+msgstr "Loading tools"
+
+#: user_settings/templates/user_settings/dashboard.html:87
+msgid "Loading"
+msgstr "Loading"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/provider_table.html:13
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Name"
+msgstr "Name"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:15
+msgid "Agent as tool"
+msgstr "Agent as a tool"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/provider_table.html:13
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Actions"
+msgstr "Actions"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:25
+#: user_settings/templates/user_settings/fragments/provider_table.html:24
+msgid "Edit"
+msgstr "Edit"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:31
+msgid "Make default"
+msgstr "Make default"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:35
+#: user_settings/templates/user_settings/fragments/provider_table.html:28
+msgid "Delete"
+msgstr "Delete"
+
+#: user_settings/templates/user_settings/fragments/provider_table.html:13
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Type"
+msgstr "Type"
+
+#: user_settings/templates/user_settings/fragments/provider_table.html:13
+msgid "Model"
+msgstr "Model"
+
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Active"
+msgstr "Active"
+
+#: user_settings/templates/user_settings/general_form.html:7
+msgid "General settings"
+msgstr "General settings"
+
+#: user_settings/templates/user_settings/provider_confirm_delete.html:7
+msgid "Delete provider"
+msgstr "Delete provider"
+
+#: user_settings/templates/user_settings/provider_form.html:14
+msgid "Edit provider"
+msgstr "Edit provider"
+
+#: user_settings/templates/user_settings/provider_form.html:16
+msgid "Add provider"
+msgstr "Add provider"
+
+#: user_settings/templates/user_settings/provider_list.html:25
+msgid "No providers found."
+msgstr "No providers found."
+
+#: user_settings/templates/user_settings/tool_configure.html:13
 #, python-format
-msgid "MCP connection error: %(err)s"
-msgstr "MCP connection error: %(err)s"
+#| msgid " Configure %(tool.name)s "
+msgid "Configure %(tool.name)s"
+msgstr "Configure %(tool.name)s"
 
-#: nova/views/tools_views.py:244
-msgid "No test implemented for this tool type"
-msgstr "No test implemented for this tool type"
+#: user_settings/templates/user_settings/tool_configure.html:27
+msgid "Test connection"
+msgstr "Test connection"
+
+#: user_settings/templates/user_settings/tool_configure.html:30
+msgid "No configuration required for this tool."
+msgstr "No configuration required for this tool."
+
+#: user_settings/templates/user_settings/tool_confirm_delete.html:7
+msgid "Delete tool"
+msgstr "Delete tool"
+
+#: user_settings/templates/user_settings/tool_form.html:13
+msgid "Edit tool"
+msgstr "Edit tool"
+
+#: user_settings/templates/user_settings/tool_form.html:13
+msgid "Add tool"
+msgstr "Add tools"
+
+#: user_settings/templates/user_settings/tool_list.html:14
+msgid "No tools found."
+msgstr "No tools found"
+
+#~ msgid "Name is required for API/MCP tools."
+#~ msgstr "Name is required for API/MCP tools."
+
+#~ msgid "Description is required for API/MCP tools."
+#~ msgstr "Description is required for API/MCP tools."
+
+#~ msgid "Endpoint URL is required for API/MCP tools."
+#~ msgstr "Endpoint URL is required for API/MCP tools."
+
+#~ msgid "Used by agents"
+#~ msgstr "Used by agents"
+
+#~ msgid "Config"
+#~ msgstr "Config"
+
+#~ msgid "Create an agent"
+#~ msgstr "Create an agent"
+
+#~ msgid "Agent name"
+#~ msgstr "Agent name"
+
+#~ msgid "LLM provider"
+#~ msgstr "LLM provider"
+
+#~ msgid "Choose a provider"
+#~ msgstr "Choose a provider"
+
+#~ msgid "System prompt"
+#~ msgstr "System prompt"
+
+#~ msgid "Describe how this agent can be used as a tool."
+#~ msgstr "Describe how this agent can be used as a tool."
+
+#~ msgid "Available tools"
+#~ msgstr "Available tools"
+
+#~ msgid "inactive"
+#~ msgstr "inactive"
+
+#~ msgid "Agents available as tools"
+#~ msgstr "Agents available as tools"
+
+#~ msgid "Create"
+#~ msgstr "Create"
+
+#~ msgid "Associated tools"
+#~ msgstr "Associated tools"
+
+#~ msgid "Authentication type"
+#~ msgstr "Authentication type"
+
+#~ msgid "Input schema (JSON)"
+#~ msgstr "Input schema (JSON)"
+
+#~ msgid "Example:"
+#~ msgstr "Example:"
+
+#~ msgid "Output schema (JSON)"
+#~ msgstr "Output schema (JSON)"
+
+#~ msgid "Create a tool"
+#~ msgstr "Create a tool"
+
+#~ msgid "Create a LLM provider"
+#~ msgstr "Create a LLM provider"
+
+#~ msgid "Test"
+#~ msgstr "Test"
+
+#~ msgid "Token / API Key"
+#~ msgstr "Token / API Key"
+
+#~ msgid "Token type"
+#~ msgstr "Token type"
+
+#~ msgid "Client ID"
+#~ msgstr "Client ID"
+
+#~ msgid "Client Secret"
+#~ msgstr "Client Secret"
+
+#, python-format
+#~ msgid " Delete tool %(tool.name)s "
+#~ msgstr "Delete Tool %(tool.name)s "
+
+#~ msgid ""
+#~ "Are you sure you want to delete this tool ? This action cannot be undone."
+#~ msgstr ""
+#~ "Are you sure you want to delete this tool ? This action cannot be undone."
+
+#~ msgid "Information :"
+#~ msgstr "Information :"
+
+#, python-format
+#~ msgid " This tool is used by %(tool.agents.count)s agents. "
+#~ msgstr " This tool is used by %(tool.agents.count)s agents. "
+
+#~ msgid ""
+#~ "Deleting it will remove this tool from these agents, but the agents "
+#~ "themselves will not be deleted."
+#~ msgstr ""
+#~ "Deleting it will remove this tool from these agents, but the agents "
+#~ "themselves will not be deleted."
+
+#~ msgid "Select a type"
+#~ msgstr "Select a type"
+
+#~ msgid "HTTP / REST API"
+#~ msgstr "HTTP / REST API"
+
+#~ msgid "MCP server"
+#~ msgstr "MCP Server"
+
+#~ msgid "Builtin subtype"
+#~ msgstr "Builtin subtype"
+
+#~ msgid "Select a subtype"
+#~ msgstr "Select a subtype"
+
+#~ msgid "Description"
+#~ msgstr "Description"
+
+#~ msgid "Endpoint URL"
+#~ msgstr "Endpoint URL"
+
+#~ msgid "Transport Type"
+#~ msgstr "Transport Type"
+
+#~ msgid ""
+#~ "Choose the transport method for this MCP server. Use SSE (Legacy) only if "
+#~ "the server requires it."
+#~ msgstr ""
+#~ "Choose the transport method for this MCP server. Use SSE (Legacy) only if "
+#~ "the server requires it."
+
+#~ msgid "Yes"
+#~ msgstr "Yes"
+
+#~ msgid "No"
+#~ msgstr "No"
+
+#~ msgid "Configure"
+#~ msgstr "Configure"
+
+#~ msgid "No tools available."
+#~ msgstr "No tools available."
+
+#~ msgid "My LLM providers"
+#~ msgstr "My LLM providers"
+
+#~ msgid ""
+#~ "No LLM providers configured. Create one to be able to configure agents."
+#~ msgstr ""
+#~ "No LLM providers configured. Create one to be able to configure agents."
+
+#~ msgid "Create a new provider"
+#~ msgstr "Create a new provider"
+
+#, fuzzy, python-format
+#~| msgid ""
+#~| "\n"
+#~| "                                  %(tool_count)s tool\n"
+#~| "                                "
+#~| msgid_plural ""
+#~| "\n"
+#~| "                                  %(tool_count)s tools\n"
+#~| "                                "
+#~ msgid ""
+#~ "\n"
+#~ "                                      %(tool_count)s tool\n"
+#~ "                                    "
+#~ msgid_plural ""
+#~ "\n"
+#~ "                                      %(tool_count)s tools\n"
+#~ "                                    "
+#~ msgstr[0] "%(tool_count)s tool"
+#~ msgstr[1] "%(tool_count)s tools"
+
+#~ msgid "No tools configured"
+#~ msgstr "No tools configured"
+
+#~ msgid "My agent-tools"
+#~ msgstr "My agent-tools"
+
+#~ msgid ""
+#~ "You must first create an LLM provider before you can create an agent."
+#~ msgstr ""
+#~ "You must first create an LLM provider before you can create an agent."
+
+#~ msgid "Go to LLM Providers panel"
+#~ msgstr "Go to LLM Providers panel"
+
+#~ msgid "Allow trace (langfuse)"
+#~ msgstr "Allow trace (langfuse)"
+
+#~ msgid "A secret key is already registered; leave empty to keep it."
+#~ msgstr "A secret key is already registered; leave empty to keep it."
+
+#~ msgid "Failed to create credential"
+#~ msgstr "Failed to create credential"
+
+#~ msgid "Success connecting - No tools found"
+#~ msgstr "Success connecting - No tools found"
+
+#, fuzzy, python-format
+#~| msgid "Success connecting  %(count)d tool found"
+#~| msgid_plural "Success connecting  %(count)d tools found"
+#~ msgid "Success connecting - %(count)d tool found"
+#~ msgid_plural "Success connecting - %(count)d tools found"
+#~ msgstr[0] "Success connecting  %(count)d tool found"
+#~ msgstr[1] "Success connecting  %(count)d tools found"
+
+#, python-format
+#~ msgid "MCP connection error: %(err)s"
+#~ msgstr "MCP connection error: %(err)s"
+
+#~ msgid "No test implemented for this tool type"
+#~ msgstr "No test implemented for this tool type"
 
 #~ msgid "Context"
 #~ msgstr "Context"
