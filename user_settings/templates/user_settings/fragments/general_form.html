@@ -1,24 +1,8 @@
 <!-- user_settings/templates/user_settings/fragments/general_form.html -->
 {% load crispy_forms_tags i18n %}
 
-<!-- Display Django messages -->
-{% if messages %}
-  {% for message in messages %}
-    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show" role="alert">
-      {% if 'safe' in message.tags %}
-        {{ message|safe }}
-      {% else %}
-        {{ message }}
-      {% endif %}
-      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    </div>
-  {% endfor %}
-{% endif %}
-
 <form hx-post="{% url 'user_settings:general' %}?partial=1"
-      hx-target="closest .htmx-pane"
-      hx-swap="innerHTML"
-      class="needs-validation" novalidate>
+      hx-swap="none" novalidate>
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
   
@@ -46,6 +30,7 @@
       <div class="d-flex gap-2 mt-3">
         <form method="post" action="{% url 'user_settings:api-token-generate' %}" class="d-inline">
           {% csrf_token %}
+          <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
           <button type="submit" class="btn btn-warning" 
                   onclick="return confirm('This will replace any existing token. Continue?')">
             {% trans "Generate New Token" %}
@@ -55,6 +40,7 @@
         {% if form.instance.has_api_token %}
           <form method="post" action="{% url 'user_settings:api-token-delete' %}" class="d-inline">
             {% csrf_token %}
+            <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
             <button type="submit" class="btn btn-outline-danger" 
                     onclick="return confirm('Are you sure you want to delete your API token?')">
               {% trans "Delete Token" %}

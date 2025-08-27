@@ -468,7 +468,6 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
         required=False,
         widget=forms.TextInput(attrs={'readonly': 'readonly', 'class': 'form-control-plaintext'}),
         label=_("API Token Status"),
-        help_text=_("Current status of your API token")
     )
 
     class Meta:
@@ -489,7 +488,7 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
     def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
         self.user = user
         super().__init__(*args, **kwargs)
-        
+
         # Set API token status
         if self.instance and self.instance.pk:
             if self.instance.has_api_token:
@@ -498,7 +497,7 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
                 self.fields['api_token_status'].initial = _("No token generated")
         else:
             self.fields['api_token_status'].initial = _("No token generated")
-        
+
         # Crispy forms helper for better layout
         self.helper = FormHelper()
         self.helper.form_tag = False
