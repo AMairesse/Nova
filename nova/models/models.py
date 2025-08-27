@@ -62,7 +62,8 @@ class LLMProvider(models.Model):
     additional_config = models.JSONField(default=dict, blank=True)
     max_context_tokens = models.PositiveIntegerField(
         default=4096,
-        help_text=_("Maximum tokens for this provider's context window (e.g., 4096 for small models, 100000 or more for large).")
+        help_text=_("""Maximum tokens for this provider's context window
+                       (e.g., 4096 for small models, 100000 or more for large).""")
     )
 
     # If the LLMProvider is not owned by a user, this will be null
@@ -123,8 +124,8 @@ class Tool(models.Model):
         STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
         SSE = "sse", _("SSE (Legacy)")
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, 
-                             on_delete=models.CASCADE, 
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.CASCADE,
                              related_name='tools',
                              verbose_name=_("Tools"))
 

@@ -10,7 +10,7 @@ from user_settings.forms import UserParametersForm
 from user_settings.mixins import DashboardRedirectMixin
 
 
-class GeneralSettingsView(  # type: ignore[misc]
+class GeneralSettingsView(
     DashboardRedirectMixin,
     LoginRequiredMixin,
     SuccessMessageMixin,

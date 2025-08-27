@@ -37,8 +37,9 @@ PROVIDER_NO_KEY = {"ollama", "lmstudio"}
 # ────────────────────────────────────────────────────────────────────────────
 #  LLM providers
 # ────────────────────────────────────────────────────────────────────────────
-class LLMProviderForm(forms.ModelForm):
+class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
     """Create and edit LLMProvider objects."""
+    secret_fields = ["api_key"]
 
     class Meta:
         model = LLMProvider
@@ -458,8 +459,9 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
 # ────────────────────────────────────────────────────────────────────────────
 #  User-level parameters
 # ────────────────────────────────────────────────────────────────────────────
-class UserParametersForm(forms.ModelForm):
+class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
     """Per-user extra parameters (Langfuse, etc.)."""
+    secret_fields = ('langfuse_secret_key',)
 
     class Meta:
         model = UserParameters
