@@ -4,7 +4,6 @@ Reusable mixins for the *user_settings* application.
 
 • All comments are in English (see contribution guidelines).
 """
-from django import forms
 from django.contrib import messages
 from django.http import Http404
 from django.urls import reverse
@@ -74,66 +73,41 @@ class OwnerDeleteView(OwnerAccessMixin, SuccessMessageMixin, DeleteView):
 # ---------------------------------------------------------------------------#
 #  Keep old secret if blank                                                  #
 # ---------------------------------------------------------------------------#
-class SecretPreserveMixin(forms.ModelForm):
-    """
-    Keeps the existing secret when the user submits an empty value.
-    Also shows a placeholder so the UI hints that a secret is already stored.
-
-    Usage:
-        class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
-            secret_fields = ("password",)           # REQUIRED
-            class Meta:
-                model = ToolCredential
-                fields = ("caldav_url", "username", "password")
-    """
-
-    #: tuple[str, ...] – names of ModelForm fields considered “secret”
+class SecretPreserveMixin:
+    """This mixin keeps old secrets in case the user leaves them blank.
+       It's usable with ModelForm or Form."""
     secret_fields: tuple[str, ...] = ()
+    _KEEP_MSG = _("Secret exists, leave blank to keep")
 
-    # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
-    _KEEP_MSG = _("A value exists, leave blank to keep")
-
-    def _decorate_secret_widget(self, field_name: str) -> None:
-        """
-        Adds the placeholder and makes sure real value is never rendered.
-        """
-        field = self.fields[field_name]
-        # Do not leak the real value in the HTML.
-        if hasattr(field.widget, "render_value"):
-            field.widget.render_value = False
-        field.widget.attrs.setdefault("placeholder", self._KEEP_MSG)
-        # Mark optional so an empty POST is accepted.
-        field.required = False
-
-    # ------------------------------------------------------------------ #
-    # Django hooks
-    # ------------------------------------------------------------------ #
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        if self.instance.pk:  # editing an existing row
-            for name in self.secret_fields:
-                # Field may be absent in a given subclass -> ignore silently.
-                if name in self.fields and getattr(self.instance, name):
-                    self._decorate_secret_widget(name)
+        # Instance/initial dict contenant les secrets déjà présents
+        self._existing_secrets = {}
+        if hasattr(self, "instance") and getattr(self.instance, "pk", None):
+            for f in self.secret_fields:
+                self._existing_secrets[f] = getattr(self.instance, f, "")
+        else:
+            initial = kwargs.get("initial", {})
+            for f in self.secret_fields:
+                if f in initial:
+                    self._existing_secrets[f] = initial[f]
+
+        # Adapter les champs
+        for f in self.secret_fields:
+            if f in self.fields and self._existing_secrets.get(f):
+                fld = self.fields[f]
+                fld.required = False
+                fld.widget.attrs.setdefault("placeholder", self._KEEP_MSG)
+                if hasattr(fld.widget, "render_value"):
+                    fld.widget.render_value = False
 
     def clean(self):
-        """
-        Centralised preservation logic.
-        """
-        cleaned = super().clean()
-
-        if self.instance.pk:  # only relevant in edit mode
-            for name in self.secret_fields:
-                if name not in cleaned:
-                    continue
-                # If user left the field blank, keep existing secret.
-                if cleaned[name] in ("", None, b""):
-                    cleaned[name] = getattr(self.instance, name)
-
-        return cleaned
+        data = super().clean()
+        for f in self.secret_fields:
+            if data.get(f) in ("", None) and f in self._existing_secrets:
+                data[f] = self._existing_secrets[f]
+        return data
 
 
 # ---------------------------------------------------------------------------#

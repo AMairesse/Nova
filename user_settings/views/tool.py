@@ -9,6 +9,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.forms import inlineformset_factory
 from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView, DeleteView, FormView
 from crispy_forms.helper import FormHelper
@@ -131,11 +132,17 @@ class ToolDeleteView(  # type: ignore[misc]
 # ---------------------------------------------------------------------------#
 #  Configure view                                                            #
 # ---------------------------------------------------------------------------#
-class _BuiltInConfigForm(forms.Form):
+class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
     """Dynamic form for built-in tools exposing *config_fields* metadata."""
-    def __init__(self, *args, meta: dict, initial=None, **kwargs):
-        kwargs.pop("user", None)          # strip extra kwarg
-        super().__init__(*args, initial=initial or {}, **kwargs)
+    secret_fields = ("password", "token", "client_secret", "refresh_token", "access_token")
+
+    def __init__(self, *args, meta: dict, initial=None, **kw):
+        # Store existing secrets
+        kw.pop("user", None)
+        self._existing_secrets = {k: v for k, v in (initial or {}).items()
+                                  if k in self.secret_fields}
+
+        super().__init__(*args, initial=initial or {}, **kw)
 
         # Crispy: no nested <form>
         self.helper = FormHelper()
@@ -143,33 +150,41 @@ class _BuiltInConfigForm(forms.Form):
         self.helper.disable_csrf = True
 
         # Build dynamic fields
-        for field in meta.get("config_fields", []):
-            ftype = field["type"]
-            required = field.get("required", False)
-            name = field["name"]
-            label = field["label"]
+        for cfg in meta.get("config_fields", []):
+            ftype = cfg["type"]
+            required = cfg.get("required", False)
+            name = cfg["name"]
+            label = cfg["label"]
 
             if ftype == "password":
+                widget = forms.PasswordInput(render_value=False)
                 self.fields[name] = forms.CharField(
-                    label=label,
-                    required=required,
-                    widget=forms.PasswordInput,
+                    label=label, required=required, widget=widget
                 )
             elif ftype == "url":
-                self.fields[name] = forms.URLField(
-                    label=label,
-                    required=required,
-                )
-            else:  # fallback to plain text
-                self.fields[name] = forms.CharField(
-                    label=label,
-                    required=required,
-                )
+                self.fields[name] = forms.URLField(label=label, required=required)
+            else:
+                self.fields[name] = forms.CharField(label=label, required=required)
+
+        # Preserve existing secrets
+        keep_msg = _("Password exists, leave blank to keep")
+        for f in self.secret_fields:
+            if f in self.fields and f in self._existing_secrets:
+                fld = self.fields[f]
+                fld.required = False
+                fld.widget.attrs.setdefault("placeholder", keep_msg)
+
+    def clean(self):
+        data = super().clean()
+        # Preserve existing secrets if the field is left blank
+        for f in self.secret_fields:
+            if data.get(f) in ("", None) and f in self._existing_secrets:
+                data[f] = self._existing_secrets[f]
+        return data
 
 
-class ToolConfigureView(SecretPreserveMixin, LoginRequiredMixin, FormView):
+class ToolConfigureView(LoginRequiredMixin, FormView):
     template_name = "user_settings/tool_configure.html"
-    secret_fields = ("password", "token", "client_secret", "refresh_token", "access_token")
 
     # ------------------------------------------------------------------ #
     #  Dispatch                                                          #

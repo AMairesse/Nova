@@ -26,6 +26,7 @@ from nova.models.models import (
     UserParameters,
 )
 
+from user_settings.mixins import SecretPreserveMixin
 
 # ────────────────────────────────────────────────────────────────────────────
 #  Helpers / constants
@@ -354,8 +355,11 @@ class ToolForm(forms.ModelForm):
 # ────────────────────────────────────────────────────────────────────────────
 #  Tool credentials
 # ────────────────────────────────────────────────────────────────────────────
-class ToolCredentialForm(forms.ModelForm):
+class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
     """Handle credentials for tools and store tool-specific config."""
+
+    secret_fields = ("password", "token", "client_secret",
+                     "refresh_token", "access_token")
 
     # Example of a tool-specific config field
     caldav_url = forms.URLField(
