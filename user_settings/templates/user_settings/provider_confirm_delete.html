@@ -1,0 +1,25 @@
+<!-- user_settings/templates/user_settings/provider_confirm_delete.html -->
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 540px;">
+  <h2 class="mb-4">{% trans "Delete provider" %}</h2>
+
+  <p class="lead">
+    {% blocktrans with name=object.name %}
+      Are you sure you want to delete “{{ name }}”?
+    {% endblocktrans %}
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger me-2">
+      <i class="bi bi-trash me-1"></i>{% trans "Yes, delete" %}
+    </button>
+    <a href="{% url 'user_settings:dashboard' %}" class="btn btn-secondary">
+      {% trans "Cancel" %}
+    </a>
+  </form>
+</div>
+{% endblock %}

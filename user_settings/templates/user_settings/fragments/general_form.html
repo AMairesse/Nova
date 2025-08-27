@@ -1,0 +1,14 @@
+<!-- user_settings/templates/user_settings/fragments/general_form.html -->
+{% load crispy_forms_tags %}
+<form hx-post="{% url 'user_settings:general' %}?partial=1"
+      hx-target="closest .htmx-pane"
+      hx-swap="innerHTML"
+      class="needs-validation" novalidate>
+  {% csrf_token %}
+  <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+  {{ form|crispy }}
+
+  <button type="submit" class="btn btn-primary">
+    Save
+  </button>
+</form>

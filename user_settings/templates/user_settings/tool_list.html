@@ -1,0 +1,17 @@
+<!-- user_settings/templates/user_settings/tool_list.html -->
+{% extends "base.html" %}
+{% load static i18n %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>{% trans "Tools" %}</h2>
+  </div>
+
+  {% if tools %}
+    {% include "user_settings/fragments/tool_table.html" %}
+  {% else %}
+    <p class="text-muted">{% trans "No tools found." %}</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+<!-- user_settings/templates/user_settings/agent_form.html -->
+{% extends "base.html" %}
+{% load crispy_forms_tags static i18n %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script src="{% static 'user_settings/agent.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 640px;">
+  <h2 class="mb-3">
+    {% if object.pk %}{% trans "Edit agent" %}{% else %}{% trans "Add agent" %}{% endif %}
+  </h2>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+    {% crispy form %}
+
+    <div class="mt-4">
+      <button class="btn btn-primary me-2" type="submit">
+        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+      </button>
+      {% if request.GET.from %}
+        <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
+          class="btn btn-secondary">
+          {% trans "Cancel" %}
+        </a>
+      {% else %}
+        <a href="{% url 'user_settings:agents' %}" class="btn btn-secondary">
+          {% trans "Cancel" %}
+        </a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

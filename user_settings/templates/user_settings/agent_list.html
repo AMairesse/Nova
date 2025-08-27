@@ -1,0 +1,17 @@
+<!-- user_settings/templates/user_settings/agent_list.html -->
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>{% trans "Agents" %}</h2>
+  </div>
+
+  {% if agents %}
+    {% include "user_settings/fragments/agent_table.html" %}
+  {% else %}
+    <p class="text-muted">{% trans "No agents found." %}</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -4,12 +4,12 @@ from django import forms as django_forms
 from django.db import models as django_models
 from unittest.mock import patch
 
-from nova.forms import (
-    UserParametersForm, UserProfileForm, LLMProviderForm,
+from user_settings.forms import (
+    UserParametersForm, LLMProviderForm,
     AgentForm, ToolForm, ToolCredentialForm
 )
 from nova.models.models import (
-    LLMProvider, UserParameters, UserProfile, Agent, Tool, ProviderType
+    LLMProvider, UserParameters, Agent, Tool, ProviderType
 )
 from .base import BaseTestCase
 
@@ -34,30 +34,6 @@ class UserParametersFormTest(BaseTestCase):
                               django_forms.TextInput)
         self.assertIsInstance(form.fields['langfuse_secret_key'].widget,
                               django_forms.PasswordInput)
-
-
-class UserProfileFormTest(BaseTestCase):
-    def setUp(self):
-        super().setUp()
-        self.agent = Agent.objects.create(
-            user=self.user,
-            name='Test Agent',
-            llm_provider=LLMProvider.objects.create(
-                user=self.user, name='Provider',
-                provider_type=ProviderType.OLLAMA, model='llama3'
-            ),
-            system_prompt='Prompt'
-        )
-
-    def test_valid_form(self):
-        # Utilise l'instance existante (auto-créée par signal) pour mise à jour
-        existing_profile = UserProfile.objects.get(user=self.user)
-        data = {'default_agent': self.agent.id}
-        form = UserProfileForm(user=self.user, data=data,
-                               instance=existing_profile)
-        self.assertTrue(form.is_valid())
-        profile = form.save()
-        self.assertEqual(profile.default_agent, self.agent)
 
 
 class LLMProviderFormTest(BaseTestCase):

@@ -1,0 +1,54 @@
+<!-- user_settings/templates/user_settings/provider_configure.html -->
+{% extends "base.html" %}
+{% load crispy_forms_tags static i18n %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script src="{% static 'user_settings/tool_configure.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 640px;">
+  <h2 class="mb-3">
+    {% blocktrans %}Configure {{ tool.name }}{% endblocktrans %}
+  </h2>
+  
+  <form id="configForm" method="post" class="mb-3">
+    {% csrf_token %}
+    {% if request.GET.from %}
+      <input type="hidden" name="from" value="{{ request.GET.from }}">
+    {% endif %}
+    {% crispy form %}
+
+    {% if tool.tool_type == 'builtin' and tool.tool_subtype == 'caldav' or tool.tool_type == 'mcp' %}
+      <button type="button" class="btn btn-outline-primary ms-2"
+              id="testBtn"
+              data-test-url="{% url 'user_settings:tool-test' tool.pk %}">
+        <i class="bi bi-check2-circle me-1"></i> {% trans "Test connection" %}
+      </button>
+    {% else %}
+      <p>{% trans "No configuration required for this tool." %}</p>
+    {% endif %}
+
+    <div class="mt-4">
+      {% if tool.tool_type == 'builtin' and tool.tool_subtype == 'caldav' or tool.tool_type == 'mcp' %}
+      <button class="btn btn-primary me-2" type="submit">
+        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+      </button>
+      {% endif %}
+      {% if request.GET.from %}
+        <a href="{% url 'user_settings:dashboard' %}#pane-{{ request.GET.from }}"
+          class="btn btn-secondary">
+          {% trans "Close" %}
+        </a>
+      {% else %}
+        <a href="{% url 'user_settings:tools' %}" class="btn btn-secondary">
+          {% trans "Close" %}
+        </a>
+      {% endif %}
+    </div>
+  </form>
+
+  <div id="testResult" class="alert d-none"></div>
+</div>
+{% endblock %}

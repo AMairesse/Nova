@@ -62,7 +62,8 @@ class LLMProvider(models.Model):
     additional_config = models.JSONField(default=dict, blank=True)
     max_context_tokens = models.PositiveIntegerField(
         default=4096,
-        help_text=_("Maximum tokens for this provider's context window (e.g., 4096 for small models, 100000 or more for large).")
+        help_text=_("""Maximum tokens for this provider's context window
+                       (e.g., 4096 for small models, 100000 or more for large).""")
     )
 
     # If the LLMProvider is not owned by a user, this will be null
@@ -123,8 +124,8 @@ class Tool(models.Model):
         STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
         SSE = "sse", _("SSE (Legacy)")
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, 
-                             on_delete=models.CASCADE, 
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.CASCADE,
                              related_name='tools',
                              verbose_name=_("Tools"))
 
@@ -199,15 +200,16 @@ class Agent(models.Model):
     llm_provider = models.ForeignKey(LLMProvider,
                                      on_delete=models.CASCADE,
                                      related_name='agents',
-                                     verbose_name=_("Agents"))
-    system_prompt = models.TextField()
-    recursion_limit = models.IntegerField(default=25)
+                                     verbose_name=_("Provider"))
+    system_prompt = models.TextField(verbose_name=_("Prompt"))
+    recursion_limit = models.IntegerField(default=25, verbose_name=_("Recursion limit"))
 
     # Tools
     tools = models.ManyToManyField(Tool, blank=True, related_name="agents",
-                                   verbose_name=_("Agents"))
+                                   verbose_name=_("Tools"))
     is_tool = models.BooleanField(
         default=False,
+        verbose_name=_("Is tool"),
         help_text=_("If true, this agent can be used as a tool by other agents.")
     )
 
@@ -217,7 +219,7 @@ class Agent(models.Model):
         blank=True,
         symmetrical=False,
         related_name='used_by_agents',
-        verbose_name=_("Used by agents"),
+        verbose_name=_("Agents to use as tools"),
         limit_choices_to={'is_tool': True}
     )
 
@@ -225,6 +227,7 @@ class Agent(models.Model):
     tool_description = models.TextField(
         blank=True,
         null=True,
+        verbose_name=_("Tool description"),
         help_text=_("Description of this agent when used as a tool (required if is_tool=True)")
     )
 

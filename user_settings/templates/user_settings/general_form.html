@@ -1,0 +1,10 @@
+<!-- user_settings/templates/user_settings/general_form.html -->
+{% extends "base.html" %}
+{% load crispy_forms_tags i18n %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 640px;">
+  <h2 class="mb-3">{% trans "General settings" %}</h2>
+  {% include "user_settings/fragments/general_form.html" %}
+</div>
+{% endblock %}

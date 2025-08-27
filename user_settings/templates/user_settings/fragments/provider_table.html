@@ -1,0 +1,39 @@
+<!-- user_settings/templates/user_settings/fragments/provider_table.html -->
+{% load i18n %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h5 class="mb-0"></h5>
+  <a href="{% url 'user_settings:provider-add' %}?from=providers"
+     class="btn btn-sm btn-primary">
+    <i class="bi bi-plus-lg me-1"></i>Add provider
+  </a>
+</div>
+<div class="table-responsive">
+  <table class="table table-hover align-middle">
+    <thead class="table-light">
+      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Model" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
+    </thead>
+    <tbody>
+      {% for provider in providers %}
+        <tr>
+          <td>{{ provider.name }}</td>
+          <td>{{ provider.get_provider_type_display }}</td>
+          <td>{{ provider.model }}</td>
+          <td class="text-end">
+            <a href="{% url 'user_settings:provider-edit' provider.pk %}?from=providers"
+               class="btn btn-sm btn-outline-primary me-1">
+              <i class="bi bi-pencil"></i>{% trans "Edit" %}
+            </a>
+            <a href="{% url 'user_settings:provider-delete' provider.pk %}?from=providers"
+               class="btn btn-sm btn-outline-danger">
+              <i class="bi bi-trash"></i>{% trans "Delete" %}
+            </a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if is_paginated %}
+  {% include "includes/pagination.html" %}
+{% endif %}

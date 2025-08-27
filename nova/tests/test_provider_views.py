@@ -19,7 +19,7 @@ class ProviderViewsTests(TestCase):
     # ------------------------- create_provider -------------------------
 
     def test_create_provider_requires_login(self):
-        url = reverse("create_provider")
+        url = reverse("user_settings:provider-add")
         resp = self.client.post(
             url,
             data={
@@ -33,7 +33,7 @@ class ProviderViewsTests(TestCase):
 
     def test_create_provider_creates_record_and_redirects(self):
         self.client.login(username="alice", password="pass")
-        url = reverse("create_provider")
+        url = reverse("user_settings:provider-add")
         resp = self.client.post(
             url,
             data={
@@ -46,7 +46,7 @@ class ProviderViewsTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=providers")
+        self.assertEqual(resp["Location"], reverse("user_settings:dashboard") + "#pane-providers")
 
         qs = LLMProvider.objects.filter(user=self.user, name="My Prov")
         self.assertTrue(qs.exists())
@@ -73,7 +73,7 @@ class ProviderViewsTests(TestCase):
 
     def test_edit_provider_requires_login(self):
         prov = self._create_provider()
-        url = reverse("edit_provider", args=[prov.id])
+        url = reverse("user_settings:provider-edit", args=[prov.id])
         resp = self.client.post(url, data={"name": "New name", "provider_type": ProviderType.OLLAMA})
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/accounts/login/", resp["Location"])
@@ -81,14 +81,14 @@ class ProviderViewsTests(TestCase):
     def test_edit_provider_404_for_non_owner(self):
         prov = self._create_provider()
         self.client.login(username="bob", password="pass")
-        url = reverse("edit_provider", args=[prov.id])
+        url = reverse("user_settings:provider-edit", args=[prov.id])
         resp = self.client.post(url, data={"name": "Hacked", "provider_type": ProviderType.OLLAMA})
         self.assertEqual(resp.status_code, 404)
 
     def test_edit_provider_partial_update_and_redirect(self):
         prov = self._create_provider()
         self.client.login(username="alice", password="pass")
-        url = reverse("edit_provider", args=[prov.id])
+        url = reverse("user_settings:provider-edit", args=[prov.id])
 
         # Post empty api_key so it should be preserved; base_url present but empty => cleared
         resp = self.client.post(
@@ -103,7 +103,7 @@ class ProviderViewsTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=providers")
+        self.assertEqual(resp["Location"], reverse("user_settings:dashboard") + "#pane-providers")
 
         prov.refresh_from_db()
         self.assertEqual(prov.name, "Renamed")
@@ -115,7 +115,7 @@ class ProviderViewsTests(TestCase):
     def test_edit_provider_updates_base_url_when_provided(self):
         prov = self._create_provider(base_url=None)
         self.client.login(username="alice", password="pass")
-        url = reverse("edit_provider", args=[prov.id])
+        url = reverse("user_settings:provider-edit", args=[prov.id])
 
         resp = self.client.post(
             url,
@@ -136,7 +136,7 @@ class ProviderViewsTests(TestCase):
 
     def test_delete_provider_requires_login(self):
         prov = self._create_provider()
-        url = reverse("delete_provider", args=[prov.id])
+        url = reverse("user_settings:provider-delete", args=[prov.id])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/accounts/login/", resp["Location"])
@@ -144,7 +144,7 @@ class ProviderViewsTests(TestCase):
     def test_delete_provider_404_for_non_owner(self):
         prov = self._create_provider()
         self.client.login(username="bob", password="pass")
-        url = reverse("delete_provider", args=[prov.id])
+        url = reverse("user_settings:provider-delete", args=[prov.id])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, 404)
 
@@ -156,10 +156,10 @@ class ProviderViewsTests(TestCase):
         self.assertEqual(Agent.objects.filter(llm_provider=prov).count(), 2)
 
         self.client.login(username="alice", password="pass")
-        url = reverse("delete_provider", args=[prov.id])
+        url = reverse("user_settings:provider-delete", args=[prov.id])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=providers")
+        self.assertEqual(resp["Location"], reverse("user_settings:dashboard") + "#pane-providers")
 
         # Agents removed first, then provider removed
         self.assertFalse(Agent.objects.filter(pk__in=[a1.pk, a2.pk]).exists())
