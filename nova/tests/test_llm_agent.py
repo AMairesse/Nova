@@ -1,4 +1,4 @@
-# nova/tests/test_llm_agent.py 
+# nova/tests/test_llm_agent.py
 import sys
 import types
 from types import SimpleNamespace
@@ -361,7 +361,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
 
         with patch.dict(sys.modules, fakes):
             # Prepare inputs for LLMAgent
-            builtin_tools = [SimpleNamespace(python_path="nova.tools.builtins.date", tool_subtype="date", is_active=True, tool_type="BUILTIN")]
+            builtin_tools = [SimpleNamespace(python_path="nova.tools.builtins.date", tool_subtype="date",
+                                             is_active=True, tool_type="BUILTIN")]
             mcp_tool_obj = SimpleNamespace(endpoint="https://mcp.example.com", transport_type=None)
             # (tool, cred, cached_func_metas, cred_user_id)
             mcp_tools_data = [(mcp_tool_obj, SimpleNamespace(user=SimpleNamespace(id=1)), None, 1)]
@@ -462,7 +463,10 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         with patch.dict(sys.modules, fakes):
             # Mock fetch_user_params_sync and fetch_agent_data_sync
             with patch.object(llm_agent_mod.LLMAgent, "fetch_user_params_sync", return_value=(False, None, None, None)):
-                with patch.object(llm_agent_mod.LLMAgent, "fetch_agent_data_sync", return_value=([], [], [], False, "prompt", 25, SimpleNamespace(provider_type=ProviderType.OPENAI, model="gpt-4", api_key="fake_key", base_url=None))):
+                with patch.object(llm_agent_mod.LLMAgent, "fetch_agent_data_sync",
+                                  return_value=([], [], [], False, "prompt", 25,
+                                                SimpleNamespace(provider_type=ProviderType.OPENAI, model="gpt-4",
+                                                                api_key="fake_key", base_url=None))):
                     # Mock load_tools to return fake tools
                     with patch("nova.llm.llm_agent.load_tools", AsyncMock(return_value=[{"tool": True}])):
                         # Mock get_checkpointer to return a fake checkpointer
@@ -471,7 +475,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                             with patch("nova.llm.llm_agent.create_react_agent", return_value=MagicMock()):
                                 # Mock CheckpointLink.objects.get_or_create directly
                                 mock_checkpoint_link = SimpleNamespace(checkpoint_id="fake_id")
-                                with patch.object(llm_agent_mod.CheckpointLink.objects, "get_or_create", return_value=(mock_checkpoint_link, True)):
+                                with patch.object(llm_agent_mod.CheckpointLink.objects, "get_or_create",
+                                                  return_value=(mock_checkpoint_link, True)):
                                     user = SimpleNamespace(id=1, userparameters=SimpleNamespace(allow_langfuse=False))
                                     thread = SimpleNamespace(id="t")
                                     agent = await llm_agent_mod.LLMAgent.create(user, thread, SimpleNamespace())

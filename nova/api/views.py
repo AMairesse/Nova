@@ -1,5 +1,4 @@
 # nova/api/views.py
-import uuid
 from typing import Any, Dict
 
 from rest_framework.permissions import IsAuthenticated
