@@ -19,6 +19,7 @@ from user_settings.mixins import (
     OwnerCreateView,
     OwnerUpdateView,
     OwnerAccessMixin,
+    SecretPreserveMixin,
     SuccessMessageMixin,
     DashboardRedirectMixin,
 )
@@ -166,8 +167,9 @@ class _BuiltInConfigForm(forms.Form):
                 )
 
 
-class ToolConfigureView(LoginRequiredMixin, FormView):
+class ToolConfigureView(SecretPreserveMixin, LoginRequiredMixin, FormView):
     template_name = "user_settings/tool_configure.html"
+    secret_fields = ("password", "token", "client_secret", "refresh_token", "access_token")
 
     # ------------------------------------------------------------------ #
     #  Dispatch                                                          #

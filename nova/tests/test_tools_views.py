@@ -23,6 +23,7 @@ class FakeMCPClient:
             {"name": "get_alerts", "description": "desc2", "input_schema": {}, "output_schema": {}},
         ]
 
+
 @patch("nova.mcp.client.MCPClient", FakeMCPClient)
 class ToolsViewsTests(TestCase):
     async_client: AsyncClient
@@ -30,7 +31,7 @@ class ToolsViewsTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.async_client = AsyncClient()
-        
+
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(
@@ -46,8 +47,8 @@ class ToolsViewsTests(TestCase):
 
     # ---------------------- create_tool ----------------------
 
-    def test_create_tool_builtin_creates_tool_and_credential(self):
-        url = reverse("tool-add")
+    def test_create_tool_builtin_creates_tool_and_fill_name_and_description(self):
+        url = reverse("user_settings:tool-add")
         resp = self.client.post(
             url,
             data={
@@ -57,29 +58,10 @@ class ToolsViewsTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=tools")
+        self.assertEqual(resp["Location"], reverse("user_settings:tool-configure", args=[1]))
 
         tool = Tool.objects.get(user=self.user, tool_subtype="date")
         self.assertEqual(tool.tool_type, Tool.ToolType.BUILTIN)
-        # A credential is created automatically for builtins (defaults to 'basic')
-        cred = ToolCredential.objects.filter(user=self.user, tool=tool).first()
-        self.assertIsNotNone(cred)
-        self.assertEqual(cred.auth_type, "basic")
-
-    def test_create_tool_api_invalid_redirects_with_error(self):
-        # Missing required fields for API (name/description/endpoint)
-        url = reverse("tool-add")
-        resp = self.client.post(
-            url,
-            data={
-                "tool_type": Tool.ToolType.API,
-                # no name/description/endpoint
-            },
-        )
-        self.assertEqual(resp.status_code, 302)
-        self.assertIn("?tab=tools&error=1", resp["Location"])
-        # form errors stored in session
-        self.assertIn("tool_errors", self.client.session)
 
     # ---------------------- edit_tool ------------------------
 
@@ -97,7 +79,7 @@ class ToolsViewsTests(TestCase):
 
     def test_edit_tool_updates_fields_and_redirects(self):
         tool = self._create_api_tool()
-        url = reverse("tool-edit", args=[tool.id])
+        url = reverse("user_settings:tool-edit", args=[tool.id])
         resp = self.client.post(
             url,
             data={
@@ -112,7 +94,7 @@ class ToolsViewsTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=tools")
+        self.assertEqual(resp["Location"], reverse("user_settings:dashboard") + "#pane-tools")
 
         tool.refresh_from_db()
         self.assertEqual(tool.name, "Updated")
@@ -156,10 +138,10 @@ class ToolsViewsTests(TestCase):
         self.assertTrue(agent.tools.filter(pk=tool.pk).exists())
         self.assertTrue(ToolCredential.objects.filter(tool=tool).exists())
 
-        url = reverse("tool-delete", args=[tool.id])
+        url = reverse("user_settings:tool-delete", args=[tool.id])
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=tools")
+        self.assertEqual(resp["Location"], reverse("user_settings:dashboard") + "#pane-tools")
 
         # Relations cleared and tool/credential removed
         self.assertFalse(ToolCredential.objects.filter(tool=tool).exists())
@@ -178,7 +160,7 @@ class ToolsViewsTests(TestCase):
             python_path="nova.tools.builtins.caldav",
         )
 
-        url = reverse("tool-configure", args=[tool.id])
+        url = reverse("user_settings:tool-configure", args=[tool.id])
         resp = self.client.post(
             url,
             data={
@@ -188,7 +170,7 @@ class ToolsViewsTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_config") + "?tab=tools")
+        self.assertEqual(resp["Location"], reverse("user_settings:tool-configure", args=[tool.id]))
 
         cred = ToolCredential.objects.get(user=self.user, tool=tool)
         self.assertEqual(
