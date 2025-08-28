@@ -5,6 +5,7 @@ services:
       service: web
     environment:
       - SEARNGX_SERVER_URL=http://searxng:8080
+      - SEARNGX_NUM_RESULTS=5
 
   searxng:
     image: docker.io/searxng/searxng:latest

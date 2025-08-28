@@ -217,3 +217,4 @@ OLLAMA_CONTEXT_LENGTH = os.getenv('OLLAMA_CONTEXT_LENGTH', None)
 
 # Get info about a Searxng server if configured
 SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)
+SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)

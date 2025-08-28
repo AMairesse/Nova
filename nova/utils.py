@@ -3,13 +3,14 @@ import logging
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
 from django.conf import settings
-from nova.models.models import LLMProvider, ProviderType, Tool
+from nova.models.models import LLMProvider, ProviderType, Tool, ToolCredential
 from langchain_core.messages import BaseMessage
 
 OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
 OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
 OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
 SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
+SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -121,20 +122,33 @@ def check_and_create_searxng_tool():
     tool = Tool.objects.filter(user=None,
                                tool_type=Tool.ToolType.BUILTIN,
                                tool_subtype='searxng').first()
-    if SEARNGX_SERVER_URL:
+
+    if SEARNGX_SERVER_URL and SEARNGX_NUM_RESULTS:
         # Create a "system tool" if it doesn't already exist
         if not tool:
-            Tool.objects.create(user=None,
-                                name='System - SearXNG',
-                                tool_type=Tool.ToolType.BUILTIN,
-                                tool_subtype='searxng',
-                                python_path='nova.tools.builtins.searxng',
-                                endpoint=SEARNGX_SERVER_URL)
+            tool = Tool.objects.create(user=None,
+                                       name='System - SearXNG',
+                                       tool_type=Tool.ToolType.BUILTIN,
+                                       tool_subtype='searxng',
+                                       python_path='nova.tools.builtins.searxng')
+            ToolCredential.objects.create(user=None,
+                                          tool=tool,
+                                          config={'searxng_url': SEARNGX_SERVER_URL,
+                                                  'num_results': SEARNGX_NUM_RESULTS})
         else:
-            # Update it if needed
-            if tool.endpoint != SEARNGX_SERVER_URL:
-                tool.endpoint = SEARNGX_SERVER_URL
-                tool.save()
+            cred = ToolCredential.objects.filter(tool=tool).first()
+            if not cred:
+                ToolCredential.objects.create(user=None,
+                                              tool=tool,
+                                              config={'searxng_url': SEARNGX_SERVER_URL,
+                                                      'num_results': SEARNGX_NUM_RESULTS})
+            else:
+                # Update it if needed
+                if cred.config.get('searxng_url') != SEARNGX_SERVER_URL or \
+                   cred.config.get('num_results') != SEARNGX_NUM_RESULTS:
+                    cred.config['searxng_url'] = SEARNGX_SERVER_URL
+                    cred.config['num_results'] = SEARNGX_NUM_RESULTS
+                    cred.save()
     else:
         if Tool.objects.filter(user=None,
                                tool_type=Tool.ToolType.BUILTIN,

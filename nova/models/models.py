@@ -332,8 +332,12 @@ class UserProfile(models.Model):
 class ToolCredential(models.Model):
     """Store credentials for tools."""
 
+    # If the ToolCredential is not owned by a user, this will be null
+    # it means the ToolCredential is linked to a public tool (available to all users)
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
+                             null=True,
+                             blank=True,
                              related_name='tool_credentials',
                              verbose_name=_("Tool credentials"))
     tool = models.ForeignKey(Tool,
