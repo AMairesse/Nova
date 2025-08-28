@@ -170,7 +170,7 @@ class ToolsViewsTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp["Location"], reverse("user_settings:tool-configure", args=[tool.id]))
+        self.assertEqual(resp["Location"], reverse("user_settings:dashboard"))
 
         cred = ToolCredential.objects.get(user=self.user, tool=tool)
         self.assertEqual(
