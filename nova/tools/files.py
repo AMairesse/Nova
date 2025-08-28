@@ -24,15 +24,16 @@ async def async_get_object_or_404(model, **kwargs):
 
 
 async def async_get_threadid_and_user(obj: LLMAgent | UserFile):
-    if obj.thread:
-        thread_id = await sync_to_async(lambda: obj.thread.id,
+    thread = await sync_to_async(lambda: obj.thread, thread_sensitive=False)()
+    if thread:
+        thread_id = await sync_to_async(lambda: thread.id,
                                         thread_sensitive=False)()
     else:
         thread_id = None
 
     user = await sync_to_async(lambda: obj.user, thread_sensitive=False)()
     return thread_id, user
-        
+
 
 async def async_get_user_id(user):
     return await sync_to_async(lambda: user.id, thread_sensitive=False)()
