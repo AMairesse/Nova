@@ -21,13 +21,14 @@ METADATA = {
 
 async def get_functions(tool: Tool, agent: LLMAgent):
     # Manage between user and system tools
-    user = tool.user
-    if user is not None and user != agent.user:
+    tool_user = await sync_to_async(lambda: tool.user, thread_sensitive=False)()
+    agent_user = await sync_to_async(lambda: agent.user, thread_sensitive=False)()
+    if tool_user is not None and tool_user != agent_user:
         raise ValueError(_("This tool is not owned by the current user."))
 
     # Get the config values
     cred = await sync_to_async(
-        ToolCredential.objects.filter(user=user, tool=tool).first,
+        ToolCredential.objects.filter(user=tool_user, tool=tool).first,
         thread_sensitive=False
     )()
     if not cred:
