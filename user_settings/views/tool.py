@@ -6,6 +6,7 @@ from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Q
 from django.forms import inlineformset_factory
 from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import reverse
@@ -19,6 +20,7 @@ from user_settings.mixins import (
     UserOwnedQuerySetMixin,
     OwnerCreateView,
     OwnerUpdateView,
+    SystemReadonlyMixin,
     OwnerAccessMixin,
     SecretPreserveMixin,
     SuccessMessageMixin,
@@ -27,6 +29,7 @@ from user_settings.mixins import (
 from user_settings.forms import ToolForm, ToolCredentialForm
 from nova.models.models import Tool, ToolCredential
 from nova.tools import get_metadata
+from nova.utils import check_and_create_searxng_tool
 from nova.mcp.client import MCPClient
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,14 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         if self.request.GET.get("partial") == "1":
             return ["user_settings/fragments/tool_table.html"]
         return super().get_template_names()
+
+    def get_queryset(self):
+        # Ensure the system tools exists
+        check_and_create_searxng_tool()
+        # Return the user's tools and the system's one
+        return Tool.objects.filter(
+            Q(user=self.request.user) | Q(user__isnull=True)
+        ).order_by('user', 'name')
 
 
 # ---------------------------------------------------------------------------#
@@ -113,13 +124,14 @@ class ToolCreateView(_ToolBaseMixin, OwnerCreateView):
     success_message = "Tool created successfully"
 
 
-class ToolUpdateView(_ToolBaseMixin, OwnerUpdateView):
+class ToolUpdateView(_ToolBaseMixin, SystemReadonlyMixin, OwnerUpdateView):
     success_message = "Tool updated successfully"
 
 
 class ToolDeleteView(
     DashboardRedirectMixin,
     LoginRequiredMixin,
+    SystemReadonlyMixin,
     OwnerAccessMixin,
     SuccessMessageMixin,
     DeleteView
@@ -183,7 +195,7 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
         return data
 
 
-class ToolConfigureView(LoginRequiredMixin, FormView):
+class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
     template_name = "user_settings/tool_configure.html"
 
     # ------------------------------------------------------------------ #
@@ -238,7 +250,7 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
             form.save()
 
         messages.success(self.request, "Configuration saved.")
-        return HttpResponseRedirect(self.request.path)
+        return HttpResponseRedirect(self.get_success_url())
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)

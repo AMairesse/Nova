@@ -2,7 +2,7 @@
 msgid "User"
 msgstr "User"
 
-#: nova/models/Message.py:10 nova/models/models.py:400
+#: nova/models/Message.py:10 nova/models/models.py:413
 msgid "Agent"
 msgstr "Agent"
 
@@ -67,145 +67,145 @@ msgstr "Streamable HTTP (Default)"
 msgid "SSE (Legacy)"
 msgstr "SSE (Legacy)"
 
-#: nova/models/models.py:136 nova/models/models.py:215
+#: nova/models/models.py:140 nova/models/models.py:224
 #: user_settings/templates/user_settings/dashboard.html:36
 #: user_settings/templates/user_settings/tool_list.html:8
 msgid "Tools"
 msgstr "Tools"
 
-#: nova/models/models.py:157
+#: nova/models/models.py:166
 msgid "Transport method for MCP servers"
 msgstr "Transport method for MCP servers"
 
-#: nova/models/models.py:169
+#: nova/models/models.py:178
 msgid "Available functions for this tool, if any."
 msgstr "Available functions for this tool, if any."
 
-#: nova/models/models.py:182
+#: nova/models/models.py:191
 msgid "A BUILTIN tool must select a subtype."
 msgstr "A BUILTIN tool must select a subtype."
 
-#: nova/models/models.py:187
+#: nova/models/models.py:196
 #, python-format
 msgid "Invalid builtin subtype: %s"
 msgstr "Invalid builtin subtype: %s"
 
-#: nova/models/models.py:194
+#: nova/models/models.py:203
 msgid "Endpoint is mandatory for API or MCP tools."
 msgstr "Endpoint is mandatory for API or MCP tools."
 
-#: nova/models/models.py:204
+#: nova/models/models.py:213
 msgid "User agents"
 msgstr "User agents"
 
-#: nova/models/models.py:209
+#: nova/models/models.py:218
 #: user_settings/templates/user_settings/fragments/agent_table.html:15
 msgid "Provider"
 msgstr "Providers"
 
-#: nova/models/models.py:210
+#: nova/models/models.py:219
 msgid "Prompt"
 msgstr "Prompt"
 
-#: nova/models/models.py:211
+#: nova/models/models.py:220
 msgid "Recursion limit"
 msgstr "Recursion limit"
 
-#: nova/models/models.py:218
+#: nova/models/models.py:227
 msgid "Is tool"
 msgstr "Is tool"
 
-#: nova/models/models.py:219
+#: nova/models/models.py:228
 msgid "If true, this agent can be used as a tool by other agents."
 msgstr "If true, this agent can be used as a tool by other agents."
 
-#: nova/models/models.py:228 user_settings/forms.py:122
+#: nova/models/models.py:237 user_settings/forms.py:122
 msgid "Agents to use as tools"
 msgstr "Agents to use as tools"
 
-#: nova/models/models.py:236
+#: nova/models/models.py:245
 msgid "Tool description"
 msgstr "Tool description"
 
-#: nova/models/models.py:237
+#: nova/models/models.py:246
 msgid ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 msgstr ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 
-#: nova/models/models.py:254
+#: nova/models/models.py:263
 msgid "Tool description is required when 'is_tool' is True."
 msgstr "Tool description is required when 'is_tool' is True."
 
-#: nova/models/models.py:263
+#: nova/models/models.py:272
 msgid "Found a cyclic dependency between agents."
 msgstr "Found a cyclic dependency between agents."
 
-#: nova/models/models.py:317
+#: nova/models/models.py:326
 msgid "Default agent must be a normal agent."
 msgstr "Default agent must be a normal agent."
 
-#: nova/models/models.py:320
+#: nova/models/models.py:329
 msgid "Default agent must belong to the user."
 msgstr "Default agent must belong to the user."
 
-#: nova/models/models.py:329
+#: nova/models/models.py:342
 msgid "Tool credentials"
 msgstr "Tool credentials"
 
-#: nova/models/models.py:333
+#: nova/models/models.py:346
 msgid "Credentials"
 msgstr "Credentials"
 
-#: nova/models/models.py:338
+#: nova/models/models.py:351
 msgid "No Authentication"
 msgstr "No Authentication"
 
-#: nova/models/models.py:339
+#: nova/models/models.py:352
 msgid "Basic Auth"
 msgstr "Basic Auth"
 
-#: nova/models/models.py:340
+#: nova/models/models.py:353
 msgid "Token Auth"
 msgstr "Token Auth"
 
-#: nova/models/models.py:341
+#: nova/models/models.py:354
 msgid "OAuth"
 msgstr "OAuth"
 
-#: nova/models/models.py:342
+#: nova/models/models.py:355
 msgid "API Key"
 msgstr "API Key"
 
-#: nova/models/models.py:343
+#: nova/models/models.py:356
 msgid "Custom"
 msgstr "Custom"
 
-#: nova/models/models.py:374
+#: nova/models/models.py:387
 msgid "{}'s credentials for {}"
 msgstr "{}'s credentials for {}"
 
-#: nova/models/models.py:380
+#: nova/models/models.py:393
 msgid "Pending"
 msgstr "Pending"
 
-#: nova/models/models.py:381
+#: nova/models/models.py:394
 msgid "Running"
 msgstr "Running"
 
-#: nova/models/models.py:382
+#: nova/models/models.py:395
 msgid "Completed"
 msgstr "Completed"
 
-#: nova/models/models.py:383
+#: nova/models/models.py:396
 msgid "Failed"
 msgstr "Failed"
 
-#: nova/models/models.py:390
+#: nova/models/models.py:403
 msgid "User tasks"
 msgstr "User tasks"
 
-#: nova/models/models.py:394
+#: nova/models/models.py:407
 msgid "Thread"
 msgstr "Thread"
 
@@ -362,8 +362,8 @@ msgstr "Incomplete CalDav configuration: missing URL, username, or password"
 msgid "No CalDav credential found for tool {tool_id}"
 msgstr "No CalDav credential found for tool {tool_id}"
 
-#: nova/tools/builtins/caldav.py:69 nova/tools/builtins/caldav.py:159
-#: nova/tools/builtins/caldav.py:209 nova/tools/builtins/caldav.py:239
+#: nova/tools/builtins/caldav.py:69 nova/tools/builtins/caldav.py:160
+#: nova/tools/builtins/caldav.py:210 nova/tools/builtins/caldav.py:240
 msgid "No calendars available."
 msgstr "No calendars available."
 
@@ -381,58 +381,78 @@ msgstr "CalDav error: {error}. Check credentials and server URL."
 msgid "Unexpected error when retrieving calendars: {error}"
 msgstr "Unexpected error when retrieving calendars: {error}"
 
-#: nova/tools/builtins/caldav.py:131 nova/tools/builtins/caldav.py:182
+#: nova/tools/builtins/caldav.py:132 nova/tools/builtins/caldav.py:183
 msgid "Error when retrieving events : {}"
 msgstr "Error when retrieving events : {}"
 
-#: nova/tools/builtins/caldav.py:154 nova/tools/builtins/caldav.py:204
+#: nova/tools/builtins/caldav.py:155 nova/tools/builtins/caldav.py:205
 #, python-brace-format
 msgid "Calendar '{calendar_name}' not found."
 msgstr "Calendar '{calendar_name}' not found."
 
-#: nova/tools/builtins/caldav.py:178
+#: nova/tools/builtins/caldav.py:179
 msgid "No events found"
 msgstr "No events found"
 
-#: nova/tools/builtins/caldav.py:215
+#: nova/tools/builtins/caldav.py:216
 msgid "Event not found."
 msgstr "Event not found."
 
-#: nova/tools/builtins/caldav.py:218
+#: nova/tools/builtins/caldav.py:219
 msgid "Error when retrieving event's details : {}"
 msgstr "Error when retrieving event's details : {}"
 
-#: nova/tools/builtins/caldav.py:255 nova/tools/builtins/caldav.py:260
+#: nova/tools/builtins/caldav.py:256 nova/tools/builtins/caldav.py:261
 msgid "Error when searching events : {}"
 msgstr "Error when searching events : {}"
 
-#: nova/tools/builtins/caldav.py:274
+#: nova/tools/builtins/caldav.py:275
 msgid "No calendars found"
 msgstr "No calendars found"
 
-#: nova/tools/builtins/caldav.py:279
+#: nova/tools/builtins/caldav.py:280
 #, python-format
 msgid "%(count)d calendar found"
 msgid_plural "%(count)d calendars found"
 msgstr[0] "%(count)d calendar found"
 msgstr[1] "%(count)d calendars found"
 
-#: nova/tools/builtins/caldav.py:287
+#: nova/tools/builtins/caldav.py:288
 #, python-format
 msgid "Connection error: %(err)s"
 msgstr "Connection error: %(err)s"
 
-#: nova/tools/builtins/caldav.py:296
+#: nova/tools/builtins/caldav.py:297
 msgid "URL CalDav"
 msgstr "URL CalDav"
 
-#: nova/tools/builtins/caldav.py:297
+#: nova/tools/builtins/caldav.py:298
 msgid "Username"
 msgstr "Username"
 
-#: nova/tools/builtins/caldav.py:298
+#: nova/tools/builtins/caldav.py:299
 msgid "Password"
 msgstr "Password"
+
+#: nova/tools/builtins/searxng.py:14
+msgid "URL SearXNG server"
+msgstr "URL SearXNG server"
+
+#: nova/tools/builtins/searxng.py:15
+msgid "Max results"
+msgstr "Max results"
+
+#: nova/tools/builtins/searxng.py:26
+msgid "This tool is not owned by the current user."
+msgstr "This tool is not owned by the current user."
+
+#: nova/tools/builtins/searxng.py:34
+msgid "No credential configured for this SearXNG tool."
+msgstr "No credential configured for this SearXNG tool."
+
+#: nova/tools/builtins/searxng.py:38
+msgid "Field searxng_url is missing from the configuration."
+msgstr "Field searxng_url is missing from the configuration."
 
 #: user_settings/forms.py:195
 msgid "Required when using an agent as a tool."
@@ -494,7 +514,7 @@ msgstr "Updated successfully"
 msgid "Deleted successfully"
 msgstr "Deleted successfully"
 
-#: user_settings/mixins.py:80 user_settings/views/tool.py:170
+#: user_settings/mixins.py:89 user_settings/views/tool.py:182
 msgid "Secret exists, leave blank to keep"
 msgstr "Secret exists, leave blank to keep"
 
@@ -614,7 +634,7 @@ msgid "Actions"
 msgstr "Actions"
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:25
-#: user_settings/templates/user_settings/fragments/provider_table.html:24
+#: user_settings/templates/user_settings/fragments/provider_table.html:25
 msgid "Edit"
 msgstr "Edit"
 
@@ -623,7 +643,7 @@ msgid "Make default"
 msgstr "Make default"
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:35
-#: user_settings/templates/user_settings/fragments/provider_table.html:28
+#: user_settings/templates/user_settings/fragments/provider_table.html:29
 msgid "Delete"
 msgstr "Delete"
 

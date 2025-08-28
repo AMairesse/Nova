@@ -3,12 +3,14 @@ import logging
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
 from django.conf import settings
-from nova.models.models import LLMProvider, ProviderType
+from nova.models.models import LLMProvider, ProviderType, Tool, ToolCredential
 from langchain_core.messages import BaseMessage
 
 OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
 OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
 OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
+SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
+SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +88,6 @@ def check_and_create_system_provider():
                                           name='System - Ollama',
                                           provider_type=ProviderType.OLLAMA).first()
     if OLLAMA_SERVER_URL and OLLAMA_MODEL_NAME:
-        # Check that Ollama is started
-        
         # Create a "system provider" if it doesn't already exist
         if not provider:
             LLMProvider.objects.create(user=None,
@@ -113,4 +113,50 @@ def check_and_create_system_provider():
                 provider.delete()
             else:
                 logger.warning(
-                    "WARNING: OLLAMA_SERVER_URL or OLLAMA_MODEL_NAME not set, but a system provider exists and is being used by at least one agent.")
+                    """WARNING: OLLAMA_SERVER_URL or OLLAMA_MODEL_NAME not set, but a system
+                       provider exists and is being used by at least one agent.""")
+
+
+def check_and_create_searxng_tool():
+    # Get the searxng's system tool if it exists
+    tool = Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='searxng').first()
+
+    if SEARNGX_SERVER_URL and SEARNGX_NUM_RESULTS:
+        # Create a "system tool" if it doesn't already exist
+        if not tool:
+            tool = Tool.objects.create(user=None,
+                                       name='System - SearXNG',
+                                       tool_type=Tool.ToolType.BUILTIN,
+                                       tool_subtype='searxng',
+                                       python_path='nova.tools.builtins.searxng')
+            ToolCredential.objects.create(user=None,
+                                          tool=tool,
+                                          config={'searxng_url': SEARNGX_SERVER_URL,
+                                                  'num_results': SEARNGX_NUM_RESULTS})
+        else:
+            cred = ToolCredential.objects.filter(tool=tool).first()
+            if not cred:
+                ToolCredential.objects.create(user=None,
+                                              tool=tool,
+                                              config={'searxng_url': SEARNGX_SERVER_URL,
+                                                      'num_results': SEARNGX_NUM_RESULTS})
+            else:
+                # Update it if needed
+                if cred.config.get('searxng_url') != SEARNGX_SERVER_URL or \
+                   cred.config.get('num_results') != SEARNGX_NUM_RESULTS:
+                    cred.config['searxng_url'] = SEARNGX_SERVER_URL
+                    cred.config['num_results'] = SEARNGX_NUM_RESULTS
+                    cred.save()
+    else:
+        if Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='searxng').exists():
+            # If the system tool is not used then delete it
+            if not tool.agents.exists():
+                tool.delete()
+            else:
+                logger.warning(
+                    """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent.""")

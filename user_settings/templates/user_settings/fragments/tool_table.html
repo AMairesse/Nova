@@ -20,13 +20,15 @@
           <td>{{ tool.get_tool_type_display }}</td>
           <td>{{ tool.is_active }}</td>
           <td class="text-end">
+            {% if tool.user == request.user %}
             <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"
               class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-pencil"></i> Edit</a>
             <a href="{% url 'user_settings:tool-configure' tool.pk %}?from=tools"
               class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-gear"></i> Configure</a>
             <a href="{% url 'user_settings:tool-delete' tool.pk %}?from=tools"
               class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> Delete</a>
-          </td>
+            {% endif %}
+            </td>
         </tr>
       {% endfor %}
     </tbody>

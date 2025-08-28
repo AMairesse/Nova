@@ -130,7 +130,11 @@ class Tool(models.Model):
         STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
         SSE = "sse", _("SSE (Legacy)")
 
+    # If the Tool is not owned by a user, this will be null
+    # it means the Tool is public (available to all users)
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             blank=True,
+                             null=True,
                              on_delete=models.CASCADE,
                              related_name='tools',
                              verbose_name=_("Tools"))
@@ -146,7 +150,12 @@ class Tool(models.Model):
     tool_subtype = models.CharField(max_length=50, blank=True, null=True)
 
     python_path = models.CharField(max_length=255, blank=True)
-    endpoint = models.URLField(blank=True)
+    endpoint = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        validators=[validate_relaxed_url],
+    )
 
     # Transport type for MCP servers
     transport_type = models.CharField(
@@ -323,8 +332,12 @@ class UserProfile(models.Model):
 class ToolCredential(models.Model):
     """Store credentials for tools."""
 
+    # If the ToolCredential is not owned by a user, this will be null
+    # it means the ToolCredential is linked to a public tool (available to all users)
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
+                             null=True,
+                             blank=True,
                              related_name='tool_credentials',
                              verbose_name=_("Tool credentials"))
     tool = models.ForeignKey(Tool,
