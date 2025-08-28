@@ -97,10 +97,10 @@ This setup include :
 
 ## Add SearXNG to your default setup
 
-1. Download the `docker-compose.add-searnxg.yml` file and the `searxng` directory:
+1. Download the `docker-compose.add-searxng.yml` file and the `searxng` directory:
 
    ```bash
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-searnxg.yml
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-searxng.yml
    mkdir -p searxng
    cd searxng
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/searxng/limiter.toml
