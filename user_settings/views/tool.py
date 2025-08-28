@@ -183,7 +183,7 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
         return data
 
 
-class ToolConfigureView(LoginRequiredMixin, FormView):
+class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
     template_name = "user_settings/tool_configure.html"
 
     # ------------------------------------------------------------------ #
@@ -238,7 +238,7 @@ class ToolConfigureView(LoginRequiredMixin, FormView):
             form.save()
 
         messages.success(self.request, "Configuration saved.")
-        return HttpResponseRedirect(self.request.path)
+        return HttpResponseRedirect(self.get_success_url())
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)

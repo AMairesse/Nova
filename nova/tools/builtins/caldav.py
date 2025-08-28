@@ -87,7 +87,7 @@ def describe_events(events: List[iCalEvent]) -> List[str]:
         for component in event.icalendar_instance.walk():
             if component.name != "VEVENT":
                 continue
-            try :
+            try:
                 event_str = "Event name :" + component.get("summary") + "\n"
                 description = component.get("description")
                 if description:
@@ -103,7 +103,8 @@ def describe_events(events: List[iCalEvent]) -> List[str]:
                 if component.get("UID"):
                     event_str += "UID : " + component.get("UID")
                 all_events.append(event_str)
-            except:
+            except Exception as e:
+                logger.error(f"Error when processing event: {str(e)}")
                 continue
 
     return all_events
@@ -223,7 +224,7 @@ async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
     """ Search for events containing the query.
     Args:
         user: the Django user
-        tool_id: ID of the CalDav tool 
+        tool_id: ID of the CalDav tool
         query: text to search
         days_range: number of days to search (past and future, default: 30)
 

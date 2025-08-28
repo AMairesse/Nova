@@ -24,6 +24,7 @@ This setup include :
    mkdir nova
    cd nova
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.yml
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.base.yml
    mkdir -p nginx
    cd nginx
    wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx/nginx.conf

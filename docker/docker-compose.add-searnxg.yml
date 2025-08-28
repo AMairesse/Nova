@@ -1,0 +1,26 @@
+services:
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    environment:
+      - SEARNGX_SERVER_URL=http://searxng:8080
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+      - searxng-data:/var/cache/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=https://${SEARXNG_HOSTNAME:-localhost}/
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+volumes:
+  searxng-data:
