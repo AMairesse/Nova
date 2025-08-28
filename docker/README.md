@@ -94,6 +94,28 @@ This setup include :
 
 5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
 
+
+## Add SearXNG to your default setup
+
+1. Download the `docker-compose.add-searnxg.yml` file and the `searxng` directory:
+
+   ```bash
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-searnxg.yml
+   mkdir -p searxng
+   cd searxng
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/searxng/limiter.toml
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/searxng/settings.yml
+   cd ..
+   ```
+
+2. Start containers:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.add-searnxg.yml up -d
+   ```
+
+3. Access the app at `http://localhost:80` (or your configured port). Log in and a system tool will be available for all users.
+
 ## Build from source
 
 This setup include :
