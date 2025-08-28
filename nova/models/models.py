@@ -146,7 +146,12 @@ class Tool(models.Model):
     tool_subtype = models.CharField(max_length=50, blank=True, null=True)
 
     python_path = models.CharField(max_length=255, blank=True)
-    endpoint = models.URLField(blank=True)
+    endpoint = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        validators=[validate_relaxed_url],
+    )
 
     # Transport type for MCP servers
     transport_type = models.CharField(

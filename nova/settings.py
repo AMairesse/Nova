@@ -214,3 +214,6 @@ for origin in CSRF_TRUSTED_ORIGINS:
 OLLAMA_SERVER_URL = os.getenv('OLLAMA_SERVER_URL', None)
 OLLAMA_MODEL_NAME = os.getenv('OLLAMA_MODEL_NAME', None)
 OLLAMA_CONTEXT_LENGTH = os.getenv('OLLAMA_CONTEXT_LENGTH', None)
+
+# Get info about a Searxng server if configured
+SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)

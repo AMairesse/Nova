@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Q
+from django.http import Http404
 from django.views.generic import ListView
 
 from nova.models.models import LLMProvider
+from nova.utils import check_and_create_system_provider
 from user_settings.forms import LLMProviderForm
 from user_settings.mixins import (
-    UserOwnedQuerySetMixin,
     OwnerCreateView,
     OwnerUpdateView,
     OwnerDeleteView,
@@ -15,10 +17,19 @@ from user_settings.mixins import (
 )
 
 
+class _SystemReadonlyMixin:
+    # No update or delete for the system provider
+    def dispatch(self, request, *args, **kwargs):
+        obj = self.get_object() if hasattr(self, "get_object") else None
+        if obj and obj.user is None:
+            raise Http404("System provider is read-only")
+        return super().dispatch(request, *args, **kwargs)
+
+
 # ---------------------------------------------------------------------------#
 #  List                                                                      #
 # ---------------------------------------------------------------------------#
-class ProviderListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
+class ProviderListView(LoginRequiredMixin, ListView):
     model = LLMProvider
     template_name = "user_settings/provider_list.html"
     context_object_name = "providers"
@@ -29,11 +40,19 @@ class ProviderListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
             return ["user_settings/fragments/provider_table.html"]
         return super().get_template_names()
 
+    def get_queryset(self):
+        # Ensure the system provider exists
+        check_and_create_system_provider()
+        # Return the user's providers and the system's one
+        return LLMProvider.objects.filter(
+            Q(user=self.request.user) | Q(user__isnull=True)
+        ).order_by('user', 'name')
+
 
 # ---------------------------------------------------------------------------#
 #  CRUD                                                                      #
 # ---------------------------------------------------------------------------#
-class ProviderCreateView(  # type: ignore[misc] – CBV signature
+class ProviderCreateView(
     DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView
 ):
     model = LLMProvider
@@ -43,7 +62,7 @@ class ProviderCreateView(  # type: ignore[misc] – CBV signature
 
 
 class ProviderUpdateView(  # type: ignore[misc]
-    DashboardRedirectMixin, LoginRequiredMixin, OwnerUpdateView
+    DashboardRedirectMixin, LoginRequiredMixin, OwnerUpdateView, _SystemReadonlyMixin
 ):
     model = LLMProvider
     form_class = LLMProviderForm
@@ -52,7 +71,7 @@ class ProviderUpdateView(  # type: ignore[misc]
 
 
 class ProviderDeleteView(  # type: ignore[misc]
-    DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView
+    DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView, _SystemReadonlyMixin
 ):
     model = LLMProvider
     template_name = "user_settings/provider_confirm_delete.html"

@@ -19,6 +19,7 @@
           <td>{{ provider.get_provider_type_display }}</td>
           <td>{{ provider.model }}</td>
           <td class="text-end">
+            {% if provider.user == request.user %}
             <a href="{% url 'user_settings:provider-edit' provider.pk %}?from=providers"
                class="btn btn-sm btn-outline-primary me-1">
               <i class="bi bi-pencil"></i>{% trans "Edit" %}
@@ -27,6 +28,7 @@
                class="btn btn-sm btn-outline-danger">
               <i class="bi bi-trash"></i>{% trans "Delete" %}
             </a>
+            {% endif %}
           </td>
         </tr>
       {% endfor %}
