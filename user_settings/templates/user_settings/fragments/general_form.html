@@ -1,14 +1,63 @@
 <!-- user_settings/templates/user_settings/fragments/general_form.html -->
-{% load crispy_forms_tags %}
+{% load crispy_forms_tags i18n %}
+
 <form hx-post="{% url 'user_settings:general' %}?partial=1"
-      hx-target="closest .htmx-pane"
-      hx-swap="innerHTML"
-      class="needs-validation" novalidate>
+      hx-swap="none" novalidate>
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
-  {{ form|crispy }}
+  
+  <!-- Langfuse Configuration Section -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">{% trans "Langfuse Configuration" %}</h5>
+    </div>
+    <div class="card-body">
+      {{ form.allow_langfuse|as_crispy_field }}
+      {{ form.langfuse_public_key|as_crispy_field }}
+      {{ form.langfuse_secret_key|as_crispy_field }}
+      {{ form.langfuse_host|as_crispy_field }}
+    </div>
+  </div>
+
+  <!-- API Token Management Section -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">{% trans "API Token Management" %}</h5>
+    </div>
+    <div class="card-body">
+      {{ form.api_token_status|as_crispy_field }}
+      
+      <div class="d-flex gap-2 mt-3">
+        <form method="post" action="{% url 'user_settings:api-token-generate' %}" class="d-inline">
+          {% csrf_token %}
+          <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+          <button type="submit" class="btn btn-warning" 
+                  onclick="return confirm('This will replace any existing token. Continue?')">
+            {% trans "Generate New Token" %}
+          </button>
+        </form>
+        
+        {% if form.instance.has_api_token %}
+          <form method="post" action="{% url 'user_settings:api-token-delete' %}" class="d-inline">
+            {% csrf_token %}
+            <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+            <button type="submit" class="btn btn-outline-danger" 
+                    onclick="return confirm('Are you sure you want to delete your API token?')">
+              {% trans "Delete Token" %}
+            </button>
+          </form>
+        {% endif %}
+      </div>
+      
+      <div class="mt-3">
+        <small class="text-muted">
+          {% trans "Use your API token to authenticate with the Nova API. The token will only be displayed once when generated." %}
+        </small>
+      </div>
+    </div>
+  </div>
 
   <button type="submit" class="btn btn-primary">
-    Save
+    {% trans "Save Settings" %}
   </button>
 </form>

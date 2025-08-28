@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'encrypted_model_fields',
     'channels',
     "crispy_forms",
@@ -97,6 +98,17 @@ CHANNEL_LAYERS = {
                       int(os.getenv('REDIS_PORT', '6379')))],
         },
     },
+}
+
+# REST authentification methods
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.TokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
 
 # Database

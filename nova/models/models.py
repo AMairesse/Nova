@@ -106,6 +106,12 @@ class UserParameters(models.Model):
         validators=[validate_relaxed_url],
     )
 
+    # API Token management
+    has_api_token = models.BooleanField(
+        default=False,
+        help_text=_("Whether user has generated an API token")
+    )
+
     def __str__(self):
         return f'Parameters for {self.user.username}'
 

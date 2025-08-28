@@ -54,6 +54,7 @@ Instead of sending every prompt to a remote model, Nova lets you decide – tran
 - **Pluggable tools** – Besides built-in utilities, Nova can talk to external micro-services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.
 - **Human-in-the-loop UI** – A lightweight web interface lets you chat with agents, watch their progress in real time, and manage providers / agents / tools without touching code.
 - **Asynchronous calls** – You can safely invoke agents from the UI, and they will run in the background so you can do other things at the same time.
+- **API available** – You can easily ask a question to your default agent using the API
 
 In short, Nova aims to make “agents with autonomy, privacy and extensibility” a reality for everyday users – giving you powerful automation while keeping your data yours.
 
@@ -71,6 +72,7 @@ In short, Nova aims to make “agents with autonomy, privacy and extensibility�
 - [Key Features](#key-features)
 - [Production Deployment (Docker)](#production-deployment-docker)
 - [Development Setup (Docker)](#development-setup-docker)
+- [API](#API)
 - [Project Layout](#project-layout)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
@@ -92,17 +94,67 @@ Development setup also use Docker given the number of components involved.
 See the [Docker README.md](docker/) for details.
 
 
+## API
+
+A simple API is available to ask a question to your default agent.
+
+### How to use:
+
+1. **Get your token** from the configuration screen.
+2. **Send a POST request** to the API endpoint with your question.
+
+#### Example using `curl`:
+
+```bash
+curl -H "Authorization: Token YOUR_TOKEN_HERE" \
+     -H "Content-Type: application/json" \
+     --data '{"question":"Who are you and what can you do?"}' \
+     http://localhost:8080/api/ask/
+```
+
+### API Details
+
+- **Method:** POST
+- **Endpoint:** `http://localhost:8080/api/ask/`
+- **Headers:**
+  - `Authorization: Token YOUR_TOKEN_HERE`
+  - `Content-Type: application/json`
+- **Request body:**
+  ```json
+  {
+    "question": "Your question here"
+  }
+  ```
+- **Response:**  
+  The API returns a JSON object containing the agent's answer.
+
+#### Example response:
+```json
+{
+  "question": "Who are you ?",
+  "answer": "I am your default agent. I can answer your questions and assist you with various tasks."
+}
+```
+
+**Notes:**
+- Replace `YOUR_TOKEN_HERE` with your actual token.
+- If your token is invalid or missing, the API will return a 401 Unauthorized error.
+
+
 ## Project Layout
 
 ```
-nova/
-├─ api/ # Minimal REST facade
-├─ mcp/ # Thin wrapper around FastMCP
-├─ migrations/ # Django model migration scripts
-├─ static/ # JS helpers (streaming, tool modal manager…)
-├─ templates/ # Django + Bootstrap 5 UI
-├─ tools/ # Built-in tool modules (CalDav, agent wrapper…)
-└─ views/ # Django views
+Nova
+├─ docker/ # Docker compose configuration for the project
+├─ nova/
+|  ├─ api/ # Minimal REST facade
+|  ├─ mcp/ # Thin wrapper around FastMCP
+|  ├─ migrations/ # Django model migration scripts
+|  ├─ static/ # JS helpers (streaming, tool modal manager…)
+|  ├─ templates/ # Django + Bootstrap 5 UI
+|  ├─ tools/ # Built-in tool modules (CalDav, agent wrapper…)
+|  └─ views/ # Django views
+├─ user_settings/ # Dedicated Django app for the user settings
 ```
 
 ## Roadmap

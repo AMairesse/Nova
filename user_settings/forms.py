@@ -463,6 +463,13 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
     """Per-user extra parameters (Langfuse, etc.)."""
     secret_fields = ('langfuse_secret_key',)
 
+    # Read-only field to display API token status
+    api_token_status = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'readonly': 'readonly', 'class': 'form-control-plaintext'}),
+        label=_("API Token Status"),
+    )
+
     class Meta:
         model = UserParameters
         fields = [
@@ -470,6 +477,7 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
             "langfuse_public_key",
             "langfuse_secret_key",
             "langfuse_host",
+            "api_token_status",
         ]
         widgets = {
             "langfuse_public_key": forms.TextInput(),
@@ -480,3 +488,30 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
     def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
         self.user = user
         super().__init__(*args, **kwargs)
+
+        # Set API token status
+        if self.instance and self.instance.pk:
+            if self.instance.has_api_token:
+                self.fields['api_token_status'].initial = _("Active - Token exists")
+            else:
+                self.fields['api_token_status'].initial = _("No token generated")
+        else:
+            self.fields['api_token_status'].initial = _("No token generated")
+
+        # Crispy forms helper for better layout
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+            Div(
+                Field("allow_langfuse"),
+                Field("langfuse_public_key"),
+                Field("langfuse_secret_key"),
+                Field("langfuse_host"),
+                css_class="mb-4"
+            ),
+            Div(
+                Field("api_token_status"),
+                css_class="mb-3"
+            )
+        )

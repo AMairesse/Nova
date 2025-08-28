@@ -117,7 +117,7 @@ class ToolUpdateView(_ToolBaseMixin, OwnerUpdateView):
     success_message = "Tool updated successfully"
 
 
-class ToolDeleteView(  # type: ignore[misc]
+class ToolDeleteView(
     DashboardRedirectMixin,
     LoginRequiredMixin,
     OwnerAccessMixin,
