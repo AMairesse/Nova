@@ -4,7 +4,7 @@ from langchain_community.agent_toolkits.load_tools import load_tools
 from asgiref.sync import sync_to_async
 
 from nova.llm.llm_agent import LLMAgent
-from nova.models.models import Tool, ToolCredential
+from nova.models.models import Tool
 
 METADATA = {
     'name': 'SearXNG',
@@ -20,20 +20,12 @@ METADATA = {
 
 
 async def get_functions(tool: Tool, agent: LLMAgent):
-    # Get the config values
-    cred = await sync_to_async(
-        ToolCredential.objects.filter(user=agent.user, tool=tool).first,
-        thread_sensitive=False
-    )()
-    if not cred:
-        raise ValueError(_("No credential configured for this SearXNG tool."))
+    endpoint = tool.endpoint
+    if not endpoint:
+        raise ValueError(_("No endpoint configured for this SearXNG tool."))
 
-    host = cred.config.get("searxng_url")
-    if not host:
-        raise ValueError(_("Field ‘searxng_url’ is missing from the configuration."))
-
-    num_results = int(cred.config.get("num_results", 5))
-    tools = await sync_to_async(load_tools, thread_sensitive=False)(["searx-search-results-json"], searx_host=host,
-                                                                    num_results=num_results)
+    tools = await sync_to_async(load_tools, thread_sensitive=False)(["searx-search-results-json"],
+                                                                    searx_host=endpoint,
+                                                                    num_results=5)
 
     return tools

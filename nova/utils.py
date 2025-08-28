@@ -119,15 +119,16 @@ def check_and_create_system_provider():
 def check_and_create_searxng_tool():
     # Get the searxng's system tool if it exists
     tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.MCP,
+                               tool_type=Tool.ToolType.BUILTIN,
                                tool_subtype='searxng').first()
     if SEARNGX_SERVER_URL:
         # Create a "system tool" if it doesn't already exist
         if not tool:
             Tool.objects.create(user=None,
                                 name='System - SearXNG',
-                                tool_type=Tool.ToolType.MCP,
+                                tool_type=Tool.ToolType.BUILTIN,
                                 tool_subtype='searxng',
+                                python_path='nova.tools.builtins.searxng',
                                 endpoint=SEARNGX_SERVER_URL)
         else:
             # Update it if needed
@@ -136,7 +137,7 @@ def check_and_create_searxng_tool():
                 tool.save()
     else:
         if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.MCP,
+                               tool_type=Tool.ToolType.BUILTIN,
                                tool_subtype='searxng').exists():
             # If the system tool is not used then delete it
             if not tool.agents.exists():

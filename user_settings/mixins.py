@@ -70,6 +70,15 @@ class OwnerDeleteView(OwnerAccessMixin, SuccessMessageMixin, DeleteView):
     success_message = _("Deleted successfully")
 
 
+class SystemReadonlyMixin:
+    # No update or delete for the system providers or tools
+    def dispatch(self, request, *args, **kwargs):
+        obj = self.get_object() if hasattr(self, "get_object") else None
+        if obj and obj.user is None:
+            raise Http404("System providers and tools are read-only")
+        return super().dispatch(request, *args, **kwargs)
+
+
 # ---------------------------------------------------------------------------#
 #  Keep old secret if blank                                                  #
 # ---------------------------------------------------------------------------#

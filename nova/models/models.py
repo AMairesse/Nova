@@ -130,7 +130,11 @@ class Tool(models.Model):
         STREAMABLE_HTTP = "streamable_http", _("Streamable HTTP (Default)")
         SSE = "sse", _("SSE (Legacy)")
 
+    # If the Tool is not owned by a user, this will be null
+    # it means the Tool is public (available to all users)
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             blank=True,
+                             null=True,
                              on_delete=models.CASCADE,
                              related_name='tools',
                              verbose_name=_("Tools"))

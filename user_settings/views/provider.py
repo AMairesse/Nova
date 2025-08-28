@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Q
-from django.http import Http404
 from django.views.generic import ListView
 
 from nova.models.models import LLMProvider
@@ -14,16 +13,8 @@ from user_settings.mixins import (
     OwnerUpdateView,
     OwnerDeleteView,
     DashboardRedirectMixin,
+    SystemReadonlyMixin,
 )
-
-
-class _SystemReadonlyMixin:
-    # No update or delete for the system provider
-    def dispatch(self, request, *args, **kwargs):
-        obj = self.get_object() if hasattr(self, "get_object") else None
-        if obj and obj.user is None:
-            raise Http404("System provider is read-only")
-        return super().dispatch(request, *args, **kwargs)
 
 
 # ---------------------------------------------------------------------------#
@@ -62,7 +53,7 @@ class ProviderCreateView(
 
 
 class ProviderUpdateView(  # type: ignore[misc]
-    DashboardRedirectMixin, LoginRequiredMixin, OwnerUpdateView, _SystemReadonlyMixin
+    DashboardRedirectMixin, LoginRequiredMixin, OwnerUpdateView, SystemReadonlyMixin
 ):
     model = LLMProvider
     form_class = LLMProviderForm
@@ -71,7 +62,7 @@ class ProviderUpdateView(  # type: ignore[misc]
 
 
 class ProviderDeleteView(  # type: ignore[misc]
-    DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView, _SystemReadonlyMixin
+    DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView, SystemReadonlyMixin
 ):
     model = LLMProvider
     template_name = "user_settings/provider_confirm_delete.html"
