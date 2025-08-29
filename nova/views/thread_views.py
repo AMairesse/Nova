@@ -21,6 +21,20 @@ from botocore.exceptions import ClientError
 import io  # For in-memory file handling
 import uuid  # For unique keys
 
+# Markdown configuration for better list handling
+MARKDOWN_EXTENSIONS = [
+    "extra",           # Basic extensions (tables, fenced code, etc.)
+    "toc",             # Table of contents (includes better list processing)
+    "sane_lists",      # Improved list handling
+    "md_in_html",      # Allow markdown inside HTML
+]
+
+MARKDOWN_EXTENSION_CONFIGS = {
+    'toc': {
+        'marker': ''  # Disable TOC markers to avoid conflicts
+    }
+}
+
 logger = logging.getLogger(__name__)
 
 ALLOWED_TAGS = [
@@ -58,9 +72,13 @@ def message_list(request):
                                             user=request.user)
         messages = selected_thread.get_messages()
         for m in messages:
-            raw_html = markdown(m.text, extensions=["extra"])
-            clean_html = bleach.clean(raw_html, tags=ALLOWED_TAGS,
-                                      attributes=ALLOWED_ATTRS, strip=True)
+            raw_html = markdown(m.text,
+                                extensions=MARKDOWN_EXTENSIONS,
+                                extension_configs=MARKDOWN_EXTENSION_CONFIGS)
+            clean_html = bleach.clean(raw_html,
+                                      tags=ALLOWED_TAGS,
+                                      attributes=ALLOWED_ATTRS,
+                                      strip=True)
             m.rendered_html = mark_safe(clean_html)
             if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
                 m.file_count = len(m.internal_data['file_ids'])
@@ -113,7 +131,8 @@ def add_message(request):
         thread_html = None
 
     uploaded_file_ids = []
-    s3_client = boto3.client('s3', endpoint_url=settings.MINIO_ENDPOINT_URL,
+    s3_client = boto3.client('s3',
+                             endpoint_url=settings.MINIO_ENDPOINT_URL,
                              aws_access_key_id=settings.MINIO_ACCESS_KEY,
                              aws_secret_access_key=settings.MINIO_SECRET_KEY)
     for file in uploaded_files:
@@ -124,10 +143,15 @@ def add_message(request):
         try:
             unique_id = uuid.uuid4().hex[:8]
             key = f"{request.user.id}/{thread.id}/{unique_id}_{file.name}"
-            s3_client.upload_fileobj(io.BytesIO(file.read()), settings.MINIO_BUCKET_NAME, key,
+            s3_client.upload_fileobj(io.BytesIO(file.read()),
+                                     settings.MINIO_BUCKET_NAME, key,
                                      ExtraArgs={'ContentType': file.content_type})
-            user_file = UserFile.objects.create(user=request.user, thread=thread, key=key,
-                                                original_filename=file.name, mime_type=file.content_type, size=file.size)
+            user_file = UserFile.objects.create(user=request.user,
+                                                thread=thread,
+                                                key=key,
+                                                original_filename=file.name,
+                                                mime_type=file.content_type,
+                                                size=file.size)
             uploaded_file_ids.append(user_file.id)
         except ClientError as e:
             logger.error(f"Upload failed: {e}")

@@ -14,6 +14,20 @@ from nova.llm.checkpoints import get_checkpointer
 from nova.llm.llm_agent import LLMAgent
 import logging
 
+# Markdown configuration for better list handling
+MARKDOWN_EXTENSIONS = [
+    "extra",           # Basic extensions (tables, fenced code, etc.)
+    "toc",             # Table of contents (includes better list processing)
+    "sane_lists",      # Improved list handling
+    "md_in_html",      # Allow markdown inside HTML
+]
+
+MARKDOWN_EXTENSION_CONFIGS = {
+    'toc': {
+        'marker': ''  # Disable TOC markers to avoid conflicts
+    }
+}
+
 logger = logging.getLogger(__name__)
 
 ALLOWED_TAGS = [
@@ -89,7 +103,9 @@ class TaskProgressHandler(AsyncCallbackHandler):
             if self.tool_depth == 0:
                 self.final_chunks.append(token)
                 full_response = ''.join(self.final_chunks)
-                raw_html = markdown(full_response, extensions=["extra"])
+                raw_html = markdown(full_response,
+                                    extensions=MARKDOWN_EXTENSIONS,
+                                    extension_configs=MARKDOWN_EXTENSION_CONFIGS)
                 clean_html = bleach.clean(
                     raw_html,
                     tags=ALLOWED_TAGS,
