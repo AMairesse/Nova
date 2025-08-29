@@ -62,7 +62,7 @@
   {% with nb_agents=user_agents|length %} {% if nb_agents == 0 %}
   <div class="alert alert-info text-center message-input-area m-0 rounded-0">
     {% trans "No agents configured yet." %}<br />
-    <a href="{% url 'user_config' %}?tab=agents" class="alert-link">
+    <a href="{% url 'user_settings:dashboard' %}#pane-agents" class="alert-link">
       {% trans "Create one now" %}
     </a>
   </div>
