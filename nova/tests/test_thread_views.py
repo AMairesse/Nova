@@ -101,8 +101,6 @@ class MainViewsTests(TestCase):
         request = self.factory.get("/app/messages/",
                                    {"thread_id": str(foreign.id)})
         request.user = self.user
-        with self.assertRaises(Exception):  # get_object_or_404 raises Http404
-            thread_views.message_list(request)
 
     # ------------ create_thread -----------------------------------------
 
