@@ -11,14 +11,31 @@
 <div class="table-responsive">
   <table class="table table-hover align-middle">
     <thead class="table-light">
-      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Active" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
+      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Active" %}</th><th>{% trans "Models Using" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
     </thead>
     <tbody>
       {% for tool in tools %}
         <tr>
           <td>{{ tool.name }}</td>
           <td>{{ tool.get_tool_type_display }}</td>
-          <td>{{ tool.is_active }}</td>
+          <td class="text-center">
+            {% if tool.is_active %}
+              <span class="badge bg-success">
+                <i class="bi bi-check-circle-fill me-1"></i>{% trans "Active" %}
+              </span>
+            {% else %}
+              <span class="badge bg-secondary">
+                <i class="bi bi-x-circle-fill me-1"></i>{% trans "Inactive" %}
+              </span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if tool.agent_count == 0 %}
+              <span class="badge bg-light text-dark">{{ tool.agent_count }}</span>
+            {% else %}
+              <span class="badge bg-info text-dark">{{ tool.agent_count }}</span>
+            {% endif %}
+          </td>
           <td class="text-end">
             {% if tool.user == request.user %}
             <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"

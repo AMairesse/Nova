@@ -6,7 +6,7 @@ from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.forms import inlineformset_factory
 from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import reverse
@@ -62,9 +62,11 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
     def get_queryset(self):
         # Ensure the system tools exists
         check_and_create_searxng_tool()
-        # Return the user's tools and the system's one
+        # Return the user's tools and the system's one with agent count annotation
         return Tool.objects.filter(
             Q(user=self.request.user) | Q(user__isnull=True)
+        ).annotate(
+            agent_count=Count('agents', distinct=True)
         ).order_by('user', 'name')
 
 
