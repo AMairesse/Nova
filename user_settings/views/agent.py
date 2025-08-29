@@ -3,12 +3,13 @@ from __future__ import annotations
 from django.contrib.auth.decorators import login_required
 
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, reverse, get_object_or_404
 from django.views.decorators.csrf import csrf_protect
 from django.views.generic import ListView
 
-from nova.models.models import Agent, UserProfile
+from nova.models.models import Agent, UserProfile, LLMProvider
 from user_settings.forms import AgentForm
 from user_settings.mixins import (
     UserOwnedQuerySetMixin,
@@ -41,6 +42,13 @@ class AgentListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         ctx["default_agent_id"] = (
             profile.default_agent_id if profile.default_agent_id else None
         )
+
+        # Check if user has access to any providers (including system providers)
+        has_providers = LLMProvider.objects.filter(
+            Q(user=self.request.user) | Q(user__isnull=True)
+        ).exists()
+        ctx["has_providers"] = has_providers
+
         return ctx
 
 

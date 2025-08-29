@@ -8,10 +8,6 @@
     <h2>{% trans "Agents" %}</h2>
   </div>
 
-  {% if agents %}
-    {% include "user_settings/fragments/agent_table.html" %}
-  {% else %}
-    <p class="text-muted">{% trans "No agents found." %}</p>
-  {% endif %}
+  % include "user_settings/fragments/agent_table.html" %}
 </div>
 {% endblock %}
