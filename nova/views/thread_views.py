@@ -68,20 +68,25 @@ def message_list(request):
     selected_thread_id = request.GET.get('thread_id')
     messages = None
     if selected_thread_id:
-        selected_thread = get_object_or_404(Thread, id=selected_thread_id,
-                                            user=request.user)
-        messages = selected_thread.get_messages()
-        for m in messages:
-            raw_html = markdown(m.text,
-                                extensions=MARKDOWN_EXTENSIONS,
-                                extension_configs=MARKDOWN_EXTENSION_CONFIGS)
-            clean_html = bleach.clean(raw_html,
-                                      tags=ALLOWED_TAGS,
-                                      attributes=ALLOWED_ATTRS,
-                                      strip=True)
-            m.rendered_html = mark_safe(clean_html)
-            if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
-                m.file_count = len(m.internal_data['file_ids'])
+        try:
+            selected_thread = get_object_or_404(Thread, id=selected_thread_id,
+                                                user=request.user)
+            messages = selected_thread.get_messages()
+            for m in messages:
+                raw_html = markdown(m.text,
+                                    extensions=MARKDOWN_EXTENSIONS,
+                                    extension_configs=MARKDOWN_EXTENSION_CONFIGS)
+                clean_html = bleach.clean(raw_html,
+                                          tags=ALLOWED_TAGS,
+                                          attributes=ALLOWED_ATTRS,
+                                          strip=True)
+                m.rendered_html = mark_safe(clean_html)
+                if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
+                    m.file_count = len(m.internal_data['file_ids'])
+        except Exception:
+            # Thread doesn't exist or user doesn't have access - return empty state
+            selected_thread_id = None
+            messages = None
     return render(request, 'nova/message_container.html', {
         'messages': messages,
         'thread_id': selected_thread_id or '',

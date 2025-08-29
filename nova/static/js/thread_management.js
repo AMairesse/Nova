@@ -89,6 +89,15 @@
       try {
         const params = threadId ? `?thread_id=${threadId}` : '';
         const response = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
+
+        if (response.status === 404 && threadId) {
+          // Thread doesn't exist - clear invalid thread ID and reload without it
+          console.warn(`Thread ${threadId} not found, clearing from localStorage`);
+          localStorage.removeItem('lastThreadId');
+          // Retry without thread ID
+          return this.loadMessages(null);
+        }
+
         const html = await response.text();
         document.getElementById('message-container').innerHTML = html;
         this.markActiveThread(threadId);
@@ -105,12 +114,25 @@
         }
       } catch (error) {
         console.error('Error loading messages:', error);
+        // If there's a network error and we have a threadId, try loading without it
+        if (threadId) {
+          console.warn('Network error, falling back to no thread');
+          localStorage.removeItem('lastThreadId');
+          return this.loadMessages(null);
+        }
       }
     },
 
     async handleRunningTasks(threadId) {
       try {
         const response = await fetch(`${window.NovaApp.urls.runningTasksBase}${threadId}/`, { headers: { 'X-AJAX': 'true' } });
+
+        if (response.status === 404) {
+          // Thread doesn't exist for running tasks - this is expected for new threads
+          console.debug(`No running tasks for thread ${threadId} (thread not found)`);
+          return;
+        }
+
         const data = await response.json();
         const runningTasks = data.running_task_ids || [];
         const storedTasks = window.StorageUtils.getStoredRunningTasks(threadId);
