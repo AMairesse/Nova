@@ -220,6 +220,14 @@
           const link = e.target.closest('.thread-link');
           const threadId = link.dataset.threadId;
           this.loadMessages(threadId);
+        } else if (e.target.matches('.create-thread-btn') || e.target.closest('.create-thread-btn')) {
+          e.preventDefault();
+          this.createThread();
+        } else if (e.target.matches('.delete-thread-btn') || e.target.closest('.delete-thread-btn')) {
+          e.preventDefault();
+          const btn = e.target.closest('.delete-thread-btn');
+          const threadId = btn.dataset.threadId;
+          this.deleteThread(threadId);
         }
       });
 
@@ -364,6 +372,47 @@
     initTextareaFocus() {
       const textarea = document.querySelector('#message-container textarea[name="new_message"]');
       if (textarea) textarea.focus();
+    }
+
+    async createThread() {
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.createThread, { method: 'POST' });
+        const data = await response.json();
+        const threadList = document.querySelector('.list-group');
+        if (threadList && data.threadHtml) {
+          threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
+        }
+        this.loadMessages(data.thread_id);
+      } catch (error) {
+        console.error('Error creating thread:', error);
+      }
+    }
+
+    async deleteThread(threadId) {
+      try {
+        await window.DOMUtils.csrfFetch(window.NovaApp.urls.deleteThread.replace('0', threadId), { method: 'POST' });
+        const threadElement = document.getElementById(`thread-item-${threadId}`);
+        if (threadElement) threadElement.remove();
+
+        // Handle file panel update for thread deletion
+        const currentThreadId = localStorage.getItem('lastThreadId');
+        if (currentThreadId === threadId.toString()) {
+          // If we're deleting the currently active thread, handle file panel appropriately
+          if (window.FileManager && typeof window.FileManager.handleThreadDeletion === 'function') {
+            window.FileManager.handleThreadDeletion();
+          }
+        }
+
+        const firstThread = document.querySelector('.thread-link');
+        const firstThreadId = firstThread?.dataset.threadId;
+        this.loadMessages(firstThreadId);
+        localStorage.removeItem(`runningTasks_${threadId}`);
+        if (localStorage.getItem('lastThreadId') === threadId.toString()) {
+          localStorage.removeItem('lastThreadId');
+        }
+      } catch (error) {
+        console.error('Error deleting thread:', error);
+      }
     }
 
     loadInitialThread() {
