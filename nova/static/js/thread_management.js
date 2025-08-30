@@ -10,16 +10,70 @@
   // ============================================================================
   class MessageRenderer {
     static markdownToHtml(text) {
-      // Use marked library if available, fallback to basic conversion
+      // Use marked library if available with same options as server
       if (typeof marked !== 'undefined') {
-        return marked.parse(text);
+        // Configure marked with same options as server
+        const renderer = new marked.Renderer();
+
+        // Configure extensions to match server
+        marked.setOptions({
+          renderer: renderer,
+          breaks: true, // Convert \n to <br>
+          gfm: true,    // GitHub Flavored Markdown
+        });
+
+        // Parse markdown
+        let html = marked.parse(text);
+
+        // Clean HTML with same rules as server (bleach equivalent)
+        html = this.cleanHtml(html);
+
+        return html;
       }
+
       // Fallback: basic HTML escaping + line breaks
       return text
         .replace(/&/g, '&')
         .replace(/</g, '<')
         .replace(/>/g, '>')
         .replace(/\n/g, '<br>');
+    }
+
+    static cleanHtml(html) {
+      // Create a temporary element to parse HTML
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = html;
+
+      // Remove disallowed tags and attributes (equivalent to bleach.clean)
+      const allowedTags = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'br', 'hr', 'a'];
+      const allowedAttrs = { 'a': ['href', 'title', 'rel'] };
+
+      function cleanNode(node) {
+        // Remove disallowed tags
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          const tagName = node.tagName.toLowerCase();
+          if (!allowedTags.includes(tagName)) {
+            // Replace with text content
+            const textNode = document.createTextNode(node.textContent);
+            node.parentNode.replaceChild(textNode, node);
+            return;
+          }
+
+          // Remove disallowed attributes
+          const allowedAttrsForTag = allowedAttrs[tagName] || [];
+          Array.from(node.attributes).forEach(attr => {
+            if (!allowedAttrsForTag.includes(attr.name)) {
+              node.removeAttribute(attr.name);
+            }
+          });
+        }
+
+        // Recursively clean child nodes
+        Array.from(node.childNodes).forEach(child => cleanNode(child));
+      }
+
+      cleanNode(tempDiv);
+      return tempDiv.innerHTML;
     }
 
     static createMessageElement(messageData) {
@@ -84,6 +138,12 @@
         currentText: '',
         lastUpdate: Date.now()
       });
+
+      // Show progress area when streaming starts
+      const progressDiv = document.getElementById('task-progress');
+      if (progressDiv) {
+        progressDiv.classList.remove('d-none');
+      }
 
       // Start WebSocket connection
       this.startWebSocket(taskId);
@@ -178,8 +238,26 @@
           return;
         }
 
-        if (data.type === 'response_chunk') {
+        if (data.type === 'progress_update') {
+          const progressLogs = document.getElementById('progress-logs');
+          const statusDiv = document.getElementById('task-status');
+          const log = data.progress_log || "undefined";
+          if (progressLogs) progressLogs.textContent = log;
+          if (statusDiv && data.error) {
+            statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
+          }
+        } else if (data.type === 'response_chunk') {
           this.onStreamChunk(taskId, data.chunk);
+        } else if (data.type === 'context_consumption') {
+          const streamingFooter = document.querySelector('.message.streaming .card-footer');
+          if (streamingFooter && data.max_context) {
+            streamingFooter.classList.remove('d-none');
+            if (data.real_tokens !== null) {
+              streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
+            } else {
+              streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
+            }
+          }
         } else if (data.type === 'task_complete') {
           this.onStreamComplete(taskId);
         }
