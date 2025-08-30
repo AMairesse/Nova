@@ -184,19 +184,16 @@
         stream.status = 'completed';
         this.saveStreamState(taskId, stream);
 
-        // Hide progress area
+        // Hide progress area after a delay (but keep context consumption visible)
         const progressDiv = document.getElementById('task-progress');
         if (progressDiv) {
-          progressDiv.classList.add('d-none');
+          setTimeout(() => {
+            progressDiv.classList.add('d-none');
+          }, 3000); // Hide progress after 3 seconds
         }
 
-        // Hide context consumption info after a delay
-        const streamingFooter = stream.element.querySelector('.card-footer');
-        if (streamingFooter) {
-          setTimeout(() => {
-            streamingFooter.classList.add('d-none');
-          }, 3000); // Hide after 3 seconds
-        }
+        // Keep context consumption info visible permanently
+        // (don't hide the streaming footer)
       }
       this.activeStreams.delete(taskId);
     }
