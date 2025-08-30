@@ -144,10 +144,15 @@
         lastUpdate: Date.now()
       });
 
-      // Show progress area when streaming starts
+      // Show progress area when streaming starts (ensure it's visible)
       const progressDiv = document.getElementById('task-progress');
       if (progressDiv) {
         progressDiv.classList.remove('d-none');
+        // Also ensure spinner is visible for new tasks
+        const spinner = progressDiv.querySelector('.spinner-border');
+        if (spinner) {
+          spinner.classList.remove('d-none');
+        }
       }
 
       // Start WebSocket connection
@@ -184,7 +189,13 @@
         stream.status = 'completed';
         this.saveStreamState(taskId, stream);
 
-        // Hide progress area after a delay (but keep context consumption visible)
+        // Immediately hide the spinner when task completes
+        const spinner = document.querySelector('#task-progress .spinner-border');
+        if (spinner) {
+          spinner.classList.add('d-none');
+        }
+
+        // Hide entire progress area after a delay
         const progressDiv = document.getElementById('task-progress');
         if (progressDiv) {
           setTimeout(() => {
