@@ -20,6 +20,8 @@
           renderer: renderer,
           breaks: true, // Convert \n to <br>
           gfm: true,    // GitHub Flavored Markdown
+          smartLists: true, // Better list handling
+          smartypants: false, // Disable smart quotes for consistency
         });
 
         // Parse markdown
@@ -130,6 +132,9 @@
         text: '' // Start with empty content
       });
 
+      // Add streaming class to the message container for proper CSS targeting
+      agentMessageEl.classList.add('streaming');
+
       this.messageManager.appendMessage(agentMessageEl);
 
       this.activeStreams.set(taskId, {
@@ -178,6 +183,20 @@
         // Mark as completed
         stream.status = 'completed';
         this.saveStreamState(taskId, stream);
+
+        // Hide progress area
+        const progressDiv = document.getElementById('task-progress');
+        if (progressDiv) {
+          progressDiv.classList.add('d-none');
+        }
+
+        // Hide context consumption info after a delay
+        const streamingFooter = stream.element.querySelector('.card-footer');
+        if (streamingFooter) {
+          setTimeout(() => {
+            streamingFooter.classList.add('d-none');
+          }, 3000); // Hide after 3 seconds
+        }
       }
       this.activeStreams.delete(taskId);
     }
