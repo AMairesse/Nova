@@ -11,8 +11,7 @@ from django.utils.safestring import mark_safe
 from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
-from nova.tasks import run_ai_task, run_ai_task_celery
-from nova.utils import schedule_in_event_loop
+from nova.tasks import run_ai_task_celery
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from django.conf import settings
 import logging
@@ -181,18 +180,7 @@ def add_message(request):
         agent=agent_config, status=TaskStatus.PENDING
     )
 
-    #schedule_in_event_loop(
-    #    run_ai_task(
-    #        task,
-    #        request.user,
-    #        thread,
-    #        agent_config if agent_config else None,
-    #        new_message
-    #    )
-    #)
-    print("Enqueueing run_ai_task…")
-    task_async_result = run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id, )
-    print("Task id:", task_async_result.id)
+    run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id)
 
     return JsonResponse({
         "status": "OK",
