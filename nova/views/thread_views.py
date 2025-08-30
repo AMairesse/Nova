@@ -182,8 +182,18 @@ def add_message(request):
 
     run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id)
 
+    # Prepare message data for JSON response
+    message_data = {
+        "id": message.id,
+        "text": new_message,  # Return raw text for client-side rendering
+        "actor": message.actor,
+        "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
+        "internal_data": message.internal_data or {}
+    }
+
     return JsonResponse({
         "status": "OK",
+        "message": message_data,
         "thread_id": thread.id,
         "task_id": task.id,
         "threadHtml": thread_html,

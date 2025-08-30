@@ -4,45 +4,51 @@
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
   <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
-    {% for message in messages %}
-    <div class="message mb-3">
-      {% if message.actor == Actor.USER %}
-      <div class="card border-primary">
-        <div class="card-body py-2">
-          <strong class="text-primary">{{ message.rendered_html }}</strong>
-          <!-- Affichage fichiers attachés -->
-          {% if message.file_count %}
-            <div class="mt-2 small text-muted">
-              {% blocktrans count file_count=message.file_count %}
-                {{ file_count }} file was shared with this message.
-              {% plural %}
-                {{ file_count }} files were shared with this message.
-              {% endblocktrans %}
-            </div>
-          {% endif %}
+    <!-- Messages list container -->
+    <div id="messages-list">
+      {% for message in messages %}
+      <div id="message-{{ message.id }}" class="message mb-3" data-message-id="{{ message.id }}">
+        {% if message.actor == Actor.USER %}
+        <div class="card border-primary">
+          <div class="card-body py-2">
+            <strong class="text-primary">{{ message.rendered_html }}</strong>
+            <!-- Affichage fichiers attachés -->
+            {% if message.file_count %}
+              <div class="mt-2 small text-muted">
+                {% blocktrans count file_count=message.file_count %}
+                  {{ file_count }} file was shared with this message.
+                {% plural %}
+                  {{ file_count }} files were shared with this message.
+                {% endblocktrans %}
+              </div>
+            {% endif %}
+          </div>
         </div>
-      </div>
-      {% elif message.actor == Actor.AGENT %}
-      <div class="card border-secondary">
-        <div class="card-body py-2">
-          {{ message.rendered_html }}
-        </div>
-        <!-- Context indication -->
-        {% if message.internal_data.max_context %}
-        <div class="card-footer py-1 text-muted small text-end">
-          {% if message.internal_data.real_tokens is not None %}
-            {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
-          {% elif message.internal_data.approx_tokens %}
-            {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
-          {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
-            {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+        {% elif message.actor == Actor.AGENT %}
+        <div class="card border-secondary">
+          <div class="card-body py-2">
+            {{ message.rendered_html }}
+          </div>
+          <!-- Context indication -->
+          {% if message.internal_data.max_context %}
+          <div class="card-footer py-1 text-muted small text-end">
+            {% if message.internal_data.real_tokens is not None %}
+              {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
+            {% elif message.internal_data.approx_tokens %}
+              {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+            {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
+              {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+            {% endif %}
+          </div>
           {% endif %}
         </div>
         {% endif %}
       </div>
-      {% endif %}
+      {% endfor %}
     </div>
-    {% endfor %}
+
+    <!-- Reserved space for scrolling -->
+    <div id="scroll-spacer" style="height: 200px;"></div>
   </div>
 
   <!-- Progress indicator - fixed position when visible -->
