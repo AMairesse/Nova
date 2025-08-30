@@ -4,11 +4,16 @@ from uuid import UUID
 from typing import Any, Dict, List, Optional
 from markdown import markdown
 import bleach
+from celery import shared_task
+import asyncio
 from channels.layers import get_channel_layer
+from django.contrib.auth.models import User
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
-from nova.models.models import TaskStatus
+from nova.models.models import Agent, Task, TaskStatus
+from nova.models.Thread import Thread
+from nova.models.Message import Message
 from nova.models.Message import Actor
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.llm_agent import LLMAgent
@@ -345,3 +350,15 @@ async def run_ai_task(task, user, thread, agent_config, new_message):
                 await llm.cleanup()
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup after error in task {task.id}: {cleanup_error}")
+
+
+@shared_task(bind=True, name="run_ai_task")
+def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
+    # Get objects from IDs
+    task = Task.objects.get(pk=task_pk)
+    user = User.objects.get(pk=user_pk)
+    thread = Thread.objects.get(pk=thread_pk)
+    if agent_pk:
+        agent_config = Agent.objects.get(pk=agent_pk)
+    message = Message.objects.get(pk=message_pk)
+    asyncio.run(run_ai_task(task, user, thread, agent_config, message))
