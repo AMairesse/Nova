@@ -27,6 +27,23 @@ services:
       file: docker-compose.base.yml
       service: minio-nova-init
 
+  celery-worker:
+    extends:
+      file: docker-compose.base.yml
+      service: celery-worker
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    command: >
+      celery -A nova.celery worker -l info --concurrency=1 --pool=solo
+    volumes:
+      - ../nova:/app/nova  # Hot-reload code app nova
+      - ../user_settings:/app/user_settings  # Hot-reload code app user_settings
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "5679:5678"  # Debug remote celery
+
   web:
     extends:
       file: docker-compose.base.yml

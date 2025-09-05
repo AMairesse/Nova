@@ -105,9 +105,23 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-nova_user}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}  # REQUIRED: no default for security
 
+  celery-worker:
+    image: amairesse/nova:latest
+    restart: unless-stopped
+    command: >
+      celery -A nova.celery worker -l info --concurrency=1 --queues=default
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+
   web:
     image: amairesse/nova:latest
     restart: unless-stopped
+    command: ./entrypoint.sh
     depends_on:
       db:
         condition: service_healthy

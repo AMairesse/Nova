@@ -99,7 +99,7 @@ msgid "User agents"
 msgstr "User agents"
 
 #: nova/models/models.py:218
-#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/agent_table.html:24
 msgid "Provider"
 msgstr "Providers"
 
@@ -248,16 +248,24 @@ msgstr "Messages"
 msgid "Files"
 msgstr "Files"
 
-#: nova/templates/nova/message_container.html:16
-#, python-format
+#: nova/templates/nova/message_container.html:18
+#, fuzzy, python-format
+#| msgid ""
+#| "\n"
+#| "                %(file_count)s file was shared with this message.\n"
+#| "              "
+#| msgid_plural ""
+#| "\n"
+#| "                %(file_count)s files were shared with this message.\n"
+#| "              "
 msgid ""
 "\n"
-"                %(file_count)s file was shared with this message.\n"
-"              "
+"                  %(file_count)s file was shared with this message.\n"
+"                "
 msgid_plural ""
 "\n"
-"                %(file_count)s files were shared with this message.\n"
-"              "
+"                  %(file_count)s files were shared with this message.\n"
+"                "
 msgstr[0] ""
 "\n"
 "                %(file_count)s file was shared with this message.\n"
@@ -267,46 +275,46 @@ msgstr[1] ""
 "                %(file_count)s files were shared with this message.\n"
 "              "
 
-#: nova/templates/nova/message_container.html:34
 #: nova/templates/nova/message_container.html:36
 #: nova/templates/nova/message_container.html:38
+#: nova/templates/nova/message_container.html:40
 msgid "Context consumption"
 msgstr "Context consumption"
 
-#: nova/templates/nova/message_container.html:34
+#: nova/templates/nova/message_container.html:36
 msgid "real"
 msgstr "real"
 
-#: nova/templates/nova/message_container.html:36
 #: nova/templates/nova/message_container.html:38
+#: nova/templates/nova/message_container.html:40
 msgid "approximated"
 msgstr "approximated"
 
-#: nova/templates/nova/message_container.html:52
+#: nova/templates/nova/message_container.html:58
 msgid "Working..."
 msgstr "Working..."
 
-#: nova/templates/nova/message_container.html:64
+#: nova/templates/nova/message_container.html:70
 msgid "No agents configured yet."
 msgstr "No agents configured yet."
 
-#: nova/templates/nova/message_container.html:66
+#: nova/templates/nova/message_container.html:72
 msgid "Create one now"
 msgstr "Create one now"
 
-#: nova/templates/nova/message_container.html:92
+#: nova/templates/nova/message_container.html:98
 msgid "Select an agent"
 msgstr "Select an agent"
 
-#: nova/templates/nova/message_container.html:106
+#: nova/templates/nova/message_container.html:112
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:129
+#: nova/templates/nova/message_container.html:135
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/templates/nova/message_container.html:140
+#: nova/templates/nova/message_container.html:146
 msgid "Send"
 msgstr "Send"
 
@@ -442,15 +450,17 @@ msgstr "URL SearXNG server"
 msgid "Max results"
 msgstr "Max results"
 
-#: nova/tools/builtins/searxng.py:26
+#: nova/tools/builtins/searxng.py:27
 msgid "This tool is not owned by the current user."
 msgstr "This tool is not owned by the current user."
 
-#: nova/tools/builtins/searxng.py:34
+#: nova/tools/builtins/searxng.py:35
 msgid "No credential configured for this SearXNG tool."
 msgstr "No credential configured for this SearXNG tool."
 
-#: nova/tools/builtins/searxng.py:38
+#: nova/tools/builtins/searxng.py:39
+#, fuzzy
+#| msgid "Field searxng_url is missing from the configuration."
 msgid "Field searxng_url is missing from the configuration."
 msgstr "Field searxng_url is missing from the configuration."
 
@@ -514,7 +524,7 @@ msgstr "Updated successfully"
 msgid "Deleted successfully"
 msgstr "Deleted successfully"
 
-#: user_settings/mixins.py:89 user_settings/views/tool.py:182
+#: user_settings/mixins.py:89 user_settings/views/tool.py:184
 msgid "Secret exists, leave blank to keep"
 msgstr "Secret exists, leave blank to keep"
 
@@ -576,10 +586,6 @@ msgstr "Save"
 msgid "Agents"
 msgstr "Agents"
 
-#: user_settings/templates/user_settings/agent_list.html:14
-msgid "No agents found."
-msgstr "No agents found."
-
 #: user_settings/templates/user_settings/dashboard.html:12
 msgid "User configuration"
 msgstr "User configuration"
@@ -594,58 +600,62 @@ msgid "General"
 msgstr "General"
 
 #: user_settings/templates/user_settings/dashboard.html:57
-#, fuzzy
-#| msgid "Loading providers"
 msgid "Loading providers"
 msgstr "Loading providers"
 
 #: user_settings/templates/user_settings/dashboard.html:67
-#, fuzzy
-#| msgid "Loading agents"
 msgid "Loading agents"
 msgstr "Loading agents"
 
 #: user_settings/templates/user_settings/dashboard.html:77
-#, fuzzy
-#| msgid "Loading tools"
 msgid "Loading tools"
 msgstr "Loading tools"
 
 #: user_settings/templates/user_settings/dashboard.html:87
-#, fuzzy
-#| msgid "Loading"
 msgid "Loading"
 msgstr "Loading"
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/agent_table.html:24
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Name"
 msgstr "Name"
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/agent_table.html:24
 msgid "Agent as tool"
 msgstr "Agent as a tool"
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/agent_table.html:24
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Actions"
 msgstr "Actions"
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:25
+#: user_settings/templates/user_settings/fragments/agent_table.html:34
 #: user_settings/templates/user_settings/fragments/provider_table.html:25
 msgid "Edit"
 msgstr "Edit"
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:31
+#: user_settings/templates/user_settings/fragments/agent_table.html:40
 msgid "Make default"
 msgstr "Make default"
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:35
+#: user_settings/templates/user_settings/fragments/agent_table.html:44
 #: user_settings/templates/user_settings/fragments/provider_table.html:29
 msgid "Delete"
 msgstr "Delete"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:51
+msgid "You need to create an LLM provider first before you can create agents."
+msgstr "You need to create an LLM provider first before you can create agents."
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:53
+msgid "Go to Providers"
+msgstr "Go to Providers"
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:59
+msgid "Click on \"Add Agent\" to create your first agent."
+msgstr "Click on \"Add Agent\" to create your first agent."
 
 #: user_settings/templates/user_settings/fragments/general_form.html:12
 msgid "Langfuse Configuration"
@@ -685,8 +695,17 @@ msgid "Model"
 msgstr "Model"
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
+#: user_settings/templates/user_settings/fragments/tool_table.html:24
 msgid "Active"
 msgstr "Active"
+
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Models Using"
+msgstr "Models Using"
+
+#: user_settings/templates/user_settings/fragments/tool_table.html:28
+msgid "Inactive"
+msgstr "Inactive"
 
 #: user_settings/templates/user_settings/general_form.html:7
 msgid "General settings"

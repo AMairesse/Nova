@@ -11,8 +11,7 @@ from django.utils.safestring import mark_safe
 from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
-from nova.tasks import run_ai_task
-from nova.utils import schedule_in_event_loop
+from nova.tasks import run_ai_task_celery
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from django.conf import settings
 import logging
@@ -40,6 +39,8 @@ logger = logging.getLogger(__name__)
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
     "br", "hr", "a",
+    # Table support
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
 ]
 ALLOWED_ATTRS = {
     "a": ["href", "title", "rel"],
@@ -181,18 +182,20 @@ def add_message(request):
         agent=agent_config, status=TaskStatus.PENDING
     )
 
-    schedule_in_event_loop(
-        run_ai_task(
-            task,
-            request.user,
-            thread,
-            agent_config if agent_config else None,
-            new_message
-        )
-    )
+    run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id)
+
+    # Prepare message data for JSON response
+    message_data = {
+        "id": message.id,
+        "text": new_message,  # Return raw text for client-side rendering
+        "actor": message.actor,
+        "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
+        "internal_data": message.internal_data or {}
+    }
 
     return JsonResponse({
         "status": "OK",
+        "message": message_data,
         "thread_id": thread.id,
         "task_id": task.id,
         "threadHtml": thread_html,

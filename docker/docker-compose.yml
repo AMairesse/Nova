@@ -24,6 +24,11 @@ services:
       file: docker-compose.base.yml
       service: minio-nova-init
 
+  celery-worker:
+    extends:
+      file: docker-compose.base.yml
+      service: celery-worker
+
   web:
     extends:
       file: docker-compose.base.yml

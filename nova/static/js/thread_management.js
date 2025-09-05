@@ -1,54 +1,342 @@
-/* nova/static/js/thread_management.js - Fusion of index.js and message_container.js */
+/* nova/static/js/thread_management.js - Modern chat architecture */
 (function() {
   'use strict';
 
   // Configuration object for URLs (will be populated from template)
   window.NovaApp = window.NovaApp || {};
-  
-  // Thread and message management functionality
-  const ThreadManager = {
+
+  // ============================================================================
+  // MARKDOWN RENDERER - Unified conversion for consistency
+  // ============================================================================
+  class MessageRenderer {
+    static markdownToHtml(text) {
+      // Use marked library if available with same options as server
+      if (typeof marked !== 'undefined') {
+        // Configure marked with same options as server
+        const renderer = new marked.Renderer();
+
+        // Configure extensions to match server
+        marked.setOptions({
+          renderer: renderer,
+          breaks: true, // Convert \n to <br>
+          gfm: true,    // GitHub Flavored Markdown
+          smartLists: true, // Better list handling
+          smartypants: false, // Disable smart quotes for consistency
+        });
+
+        // Parse markdown
+        let html = marked.parse(text);
+
+        // Clean HTML with same rules as server (bleach equivalent)
+        html = this.cleanHtml(html);
+
+        return html;
+      }
+
+      // Fallback: basic HTML escaping + line breaks
+      return text
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>')
+        .replace(/\n/g, '<br>');
+    }
+
+    static cleanHtml(html) {
+      // Create a temporary element to parse HTML
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = html;
+
+      // Remove disallowed tags and attributes (equivalent to bleach.clean)
+      const allowedTags = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'br', 'hr', 'a'];
+      const allowedAttrs = { 'a': ['href', 'title', 'rel'] };
+
+      function cleanNode(node) {
+        // Remove disallowed tags
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          const tagName = node.tagName.toLowerCase();
+          if (!allowedTags.includes(tagName)) {
+            // Replace with text content
+            const textNode = document.createTextNode(node.textContent);
+            node.parentNode.replaceChild(textNode, node);
+            return;
+          }
+
+          // Remove disallowed attributes
+          const allowedAttrsForTag = allowedAttrs[tagName] || [];
+          Array.from(node.attributes).forEach(attr => {
+            if (!allowedAttrsForTag.includes(attr.name)) {
+              node.removeAttribute(attr.name);
+            }
+          });
+        }
+
+        // Recursively clean child nodes
+        Array.from(node.childNodes).forEach(child => cleanNode(child));
+      }
+
+      cleanNode(tempDiv);
+      return tempDiv.innerHTML;
+    }
+
+    static createMessageElement(messageData) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message mb-3';
+      messageDiv.id = `message-${messageData.id}`;
+      messageDiv.setAttribute('data-message-id', messageData.id);
+
+      const html = this.markdownToHtml(messageData.text);
+
+      if (messageData.actor === 'user' || messageData.actor === 'USR') {
+        messageDiv.innerHTML = `
+          <div class="card border-primary">
+            <div class="card-body py-2">
+              <strong class="text-primary">${html}</strong>
+              ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
+            </div>
+          </div>
+        `;
+      } else if (messageData.actor === 'agent') {
+        // Agent message structure
+        messageDiv.innerHTML = `
+          <div class="card border-secondary">
+            <div class="card-body py-2">
+              <div class="streaming-content">${html}</div>
+            </div>
+            <div class="card-footer py-1 text-muted small text-end d-none">
+            </div>
+          </div>
+        `;
+      }
+
+      return messageDiv;
+    }
+  }
+
+  // ============================================================================
+  // STREAMING MANAGER - Coordinates WebSocket and message streaming
+  // ============================================================================
+  class StreamingManager {
+    constructor() {
+      this.activeStreams = new Map(); // taskId -> stream data
+      this.messageManager = null;
+    }
+
+    setMessageManager(manager) {
+      this.messageManager = manager;
+    }
+
+    registerStream(taskId, messageData) {
+      const agentMessageEl = MessageRenderer.createMessageElement({
+        ...messageData,
+        actor: 'agent',
+        text: '' // Start with empty content
+      });
+
+      // Add streaming class to the message container for proper CSS targeting
+      agentMessageEl.classList.add('streaming');
+
+      this.messageManager.appendMessage(agentMessageEl);
+
+      this.activeStreams.set(taskId, {
+        messageId: messageData.id,
+        element: agentMessageEl,
+        currentText: '',
+        lastUpdate: Date.now()
+      });
+
+      // Show progress area when streaming starts (ensure it's visible)
+      const progressDiv = document.getElementById('task-progress');
+      if (progressDiv) {
+        progressDiv.classList.remove('d-none');
+        // Also ensure spinner is visible for new tasks
+        const spinner = progressDiv.querySelector('.spinner-border');
+        if (spinner) {
+          spinner.classList.remove('d-none');
+        }
+      }
+
+      // Start WebSocket connection
+      this.startWebSocket(taskId);
+    }
+
+    onStreamChunk(taskId, chunk) {
+      const stream = this.activeStreams.get(taskId);
+      if (!stream) return;
+
+      // Skip duplicate chunks (server sometimes sends the same content multiple times)
+      // Also skip empty chunks
+      if (!chunk || chunk.trim() === '' || chunk === stream.lastChunk) {
+        return;
+      }
+
+      // The server is already sending HTML chunks, so we don't need to process them as Markdown
+      // Replace the entire content since server sends complete paragraph updates
+      const contentEl = stream.element.querySelector('.streaming-content');
+      if (contentEl) {
+        contentEl.innerHTML = chunk;
+      }
+
+      // Still accumulate text for state management
+      stream.currentText += chunk;
+      stream.lastChunk = chunk; // Track last chunk to detect duplicates
+      stream.lastUpdate = Date.now();
+    }
+
+    onStreamComplete(taskId) {
+      const stream = this.activeStreams.get(taskId);
+      if (stream) {
+        // Mark as completed
+        stream.status = 'completed';
+        this.saveStreamState(taskId, stream);
+
+        // Immediately hide the spinner when task completes
+        const spinner = document.querySelector('#task-progress .spinner-border');
+        if (spinner) {
+          spinner.classList.add('d-none');
+        }
+
+        // Hide entire progress area after a delay
+        const progressDiv = document.getElementById('task-progress');
+        if (progressDiv) {
+          setTimeout(() => {
+            progressDiv.classList.add('d-none');
+          }, 3000); // Hide progress after 3 seconds
+        }
+
+        // Keep context consumption info visible permanently
+        // (don't hide the streaming footer)
+      }
+      this.activeStreams.delete(taskId);
+    }
+
+    saveStreamState(taskId, stream) {
+      const state = {
+        messageId: stream.messageId,
+        currentText: stream.currentText,
+        lastUpdate: stream.lastUpdate,
+        status: stream.status || 'streaming'
+      };
+      localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
+    }
+
+    loadSavedStreams() {
+      const streams = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key.startsWith('stream_')) {
+          const taskId = key.replace('stream_', '');
+          try {
+            streams[taskId] = JSON.parse(localStorage.getItem(key));
+          } catch (e) {
+            console.warn('Invalid stream state:', key);
+          }
+        }
+      }
+      return streams;
+    }
+
+    startWebSocket(taskId) {
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const wsUrl = `${protocol}://${window.location.host}/ws/task/${taskId}/`;
+
+      const socket = new WebSocket(wsUrl);
+      let heartbeatInterval, heartbeatTimeout;
+
+      const startHeartbeat = () => {
+        clearInterval(heartbeatInterval);
+        clearTimeout(heartbeatTimeout);
+        heartbeatInterval = setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ping' }));
+            heartbeatTimeout = setTimeout(() => {
+              console.error('Heartbeat timeout: Closing WebSocket');
+              socket.close(1006, 'Heartbeat timeout');
+            }, 10000);
+          }
+        }, 30000);
+      };
+
+      socket.onopen = () => startHeartbeat();
+
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'pong') {
+          clearTimeout(heartbeatTimeout);
+          return;
+        }
+
+        if (data.type === 'progress_update') {
+          const progressLogs = document.getElementById('progress-logs');
+          const statusDiv = document.getElementById('task-status');
+          const log = data.progress_log || "undefined";
+          if (progressLogs) progressLogs.textContent = log;
+          if (statusDiv && data.error) {
+            statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
+          }
+        } else if (data.type === 'response_chunk') {
+          this.onStreamChunk(taskId, data.chunk);
+        } else if (data.type === 'context_consumption') {
+          const streamingFooter = document.querySelector('.message.streaming .card-footer');
+          if (streamingFooter && data.max_context) {
+            streamingFooter.classList.remove('d-none');
+            if (data.real_tokens !== null) {
+              streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
+            } else {
+              streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
+            }
+          }
+        } else if (data.type === 'task_complete') {
+          this.onStreamComplete(taskId);
+        }
+        // Handle other message types...
+      };
+
+      socket.onclose = () => {
+        clearInterval(heartbeatInterval);
+        clearTimeout(heartbeatTimeout);
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket error:', err);
+      };
+    }
+  }
+
+  // ============================================================================
+  // MESSAGE MANAGER - Handles dynamic message insertion and scroll
+  // ============================================================================
+  class MessageManager {
+    constructor() {
+      this.streamingManager = new StreamingManager();
+      this.streamingManager.setMessageManager(this);
+      this.currentThreadId = null;
+    }
+
     init() {
       this.attachEventHandlers();
       this.loadInitialThread();
-    },
-
-    markActiveThread(threadId) {
-      document.querySelectorAll('.thread-link.active').forEach(el => el.classList.remove('active'));
-      if (threadId) {
-        document.querySelector(`.thread-link[data-thread-id="${threadId}"]`)?.classList.add('active');
-      }
-    },
+    }
 
     attachEventHandlers() {
-      // Delegated event listeners for all interactions
+      // Thread navigation
       document.addEventListener('click', (e) => {
-        if (e.target.matches('.create-thread-btn') || e.target.closest('.create-thread-btn')) {
-          e.preventDefault();
-          const btn = e.target.closest('.create-thread-btn');
-          this.createThread();
-        } else if (e.target.matches('.thread-link') || e.target.closest('.thread-link')) {
+        if (e.target.matches('.thread-link') || e.target.closest('.thread-link')) {
           e.preventDefault();
           const link = e.target.closest('.thread-link');
           const threadId = link.dataset.threadId;
           this.loadMessages(threadId);
+        } else if (e.target.matches('.create-thread-btn') || e.target.closest('.create-thread-btn')) {
+          e.preventDefault();
+          this.createThread();
         } else if (e.target.matches('.delete-thread-btn') || e.target.closest('.delete-thread-btn')) {
           e.preventDefault();
           const btn = e.target.closest('.delete-thread-btn');
           const threadId = btn.dataset.threadId;
           this.deleteThread(threadId);
-        } else if (e.target.matches('.agent-dropdown-item') || e.target.closest('.agent-dropdown-item')) {
-          e.preventDefault();
-          const item = e.target.closest('.agent-dropdown-item');
-          const value = item.dataset.value;
-          const label = item.textContent;
-          const selectedAgentInput = document.getElementById('selectedAgentInput');
-          const dropdownButton = document.getElementById('dropdownMenuButton');
-          if (selectedAgentInput) selectedAgentInput.value = value;
-          if (dropdownButton) dropdownButton.textContent = label;
         }
       });
 
-      // Form submit
+      // Form submission
       document.addEventListener('submit', async (e) => {
         if (e.target.id === 'message-form') {
           e.preventDefault();
@@ -56,7 +344,7 @@
         }
       });
 
-      // Textarea keydown and auto-resize
+      // Textarea handling
       document.addEventListener('keydown', (e) => {
         if (e.target.matches('#message-container textarea[name="new_message"]') && e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
@@ -71,19 +359,7 @@
           e.target.style.height = `${e.target.scrollHeight}px`;
         }
       });
-    },
-
-    async createThread() {
-      try {
-        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.createThread, { method: 'POST' });
-        const data = await response.json();
-        const threadList = document.querySelector('.list-group');
-        if (threadList) threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
-        this.loadMessages(data.thread_id);
-      } catch (error) {
-        console.error('Error creating thread:', error);
-      }
-    },
+    }
 
     async loadMessages(threadId) {
       try {
@@ -91,69 +367,138 @@
         const response = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
 
         if (response.status === 404 && threadId) {
-          // Thread doesn't exist - clear invalid thread ID and reload without it
-          console.warn(`Thread ${threadId} not found, clearing from localStorage`);
           localStorage.removeItem('lastThreadId');
-          // Retry without thread ID
           return this.loadMessages(null);
         }
 
         const html = await response.text();
         document.getElementById('message-container').innerHTML = html;
-        this.markActiveThread(threadId);
-        this.initMessageContainer();  // Internal call
+        this.currentThreadId = threadId;
 
         if (threadId) {
-          await this.handleRunningTasks(threadId);
           localStorage.setItem('lastThreadId', threadId);
         }
 
-        // Update file panel for the new thread
-        if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
-          await window.FileManager.updateForThread(threadId);
-        }
+        this.initTextareaFocus();
       } catch (error) {
         console.error('Error loading messages:', error);
-        // If there's a network error and we have a threadId, try loading without it
-        if (threadId) {
-          console.warn('Network error, falling back to no thread');
-          localStorage.removeItem('lastThreadId');
-          return this.loadMessages(null);
-        }
       }
-    },
+    }
 
-    async handleRunningTasks(threadId) {
+    async handleFormSubmit(form) {
+      const textarea = form.querySelector('textarea[name="new_message"]');
+      const msg = textarea ? textarea.value.trim() : '';
+      if (!msg) return;
+
+      // Disable send button
+      const sendBtn = document.getElementById('send-btn');
+      if (sendBtn) {
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+      }
+
       try {
-        const response = await fetch(`${window.NovaApp.urls.runningTasksBase}${threadId}/`, { headers: { 'X-AJAX': 'true' } });
-
-        if (response.status === 404) {
-          // Thread doesn't exist for running tasks - this is expected for new threads
-          console.debug(`No running tasks for thread ${threadId} (thread not found)`);
-          return;
-        }
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
+          method: 'POST',
+          body: new FormData(form)
+        });
 
         const data = await response.json();
-        const runningTasks = data.running_task_ids || [];
-        const storedTasks = window.StorageUtils.getStoredRunningTasks(threadId);
-        const tasksToResume = runningTasks.length > 0 ? runningTasks : storedTasks;
+        if (data.status !== "OK") throw new Error(data.message || "Failed to send message");
 
-        if (tasksToResume.length > 0) {
-          const progressEl = document.getElementById('task-progress');
-          if (progressEl) progressEl.style.display = 'block';
-          tasksToResume.forEach(taskId => this.startTaskWebSocket(threadId, taskId));
-        }
+        // Update thread ID if new thread was created
+        const threadIdInput = document.querySelector('input[name="thread_id"]');
+        if (threadIdInput) threadIdInput.value = data.thread_id;
+        this.currentThreadId = data.thread_id;
+
+        // Add user message dynamically
+        const userMessageEl = MessageRenderer.createMessageElement(data.message);
+        this.appendMessage(userMessageEl);
+
+        // Scroll to position the message at the top
+        this.scrollToMessage(data.message.id);
+
+        // Register streaming for agent response
+        this.streamingManager.registerStream(data.task_id, {
+          id: data.task_id,
+          actor: 'agent',
+          text: ''
+        });
+
+        // Clear textarea
+        if (textarea) textarea.value = '';
+
       } catch (error) {
-        console.error('Error fetching running tasks:', error);
+        console.error("Error sending message:", error);
+      } finally {
+        // Re-enable send button
+        if (sendBtn) {
+          sendBtn.disabled = false;
+          sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
+        }
       }
-    },
+    }
+
+    appendMessage(messageElement) {
+      const messagesList = document.getElementById('messages-list');
+      if (messagesList) {
+        messagesList.appendChild(messageElement);
+      } else {
+        console.error('Messages list not found!');
+        // Fallback: try to find conversation container
+        const conversationContainer = document.getElementById('conversation-container');
+        if (conversationContainer) {
+          conversationContainer.appendChild(messageElement);
+        }
+      }
+    }
+
+    scrollToMessage(messageId) {
+      const messageEl = document.getElementById(`message-${messageId}`);
+      const container = document.getElementById('conversation-container');
+
+      if (!messageEl || !container) return;
+
+      // Calculate position to show message at upper part of screen
+      const inputArea = document.querySelector('.message-input-area');
+      const inputHeight = inputArea ? inputArea.offsetHeight : 0;
+      const containerRect = container.getBoundingClientRect();
+      const messageRect = messageEl.getBoundingClientRect();
+
+      // Position message at 20% from top for better UX
+      const targetTop = messageEl.offsetTop - (containerRect.height * 0.2);
+
+      container.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: 'smooth'
+      });
+    }
+
+    initTextareaFocus() {
+      const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+      if (textarea) textarea.focus();
+    }
+
+    async createThread() {
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.createThread, { method: 'POST' });
+        const data = await response.json();
+        const threadList = document.querySelector('.list-group');
+        if (threadList && data.threadHtml) {
+          threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
+        }
+        this.loadMessages(data.thread_id);
+      } catch (error) {
+        console.error('Error creating thread:', error);
+      }
+    }
 
     async deleteThread(threadId) {
       try {
         await window.DOMUtils.csrfFetch(window.NovaApp.urls.deleteThread.replace('0', threadId), { method: 'POST' });
         const threadElement = document.getElementById(`thread-item-${threadId}`);
         if (threadElement) threadElement.remove();
-        
+
         // Handle file panel update for thread deletion
         const currentThreadId = localStorage.getItem('lastThreadId');
         if (currentThreadId === threadId.toString()) {
@@ -162,7 +507,7 @@
             window.FileManager.handleThreadDeletion();
           }
         }
-        
+
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;
         this.loadMessages(firstThreadId);
@@ -173,313 +518,49 @@
       } catch (error) {
         console.error('Error deleting thread:', error);
       }
-    },
+    }
 
     loadInitialThread() {
       const lastThreadId = localStorage.getItem('lastThreadId');
       this.loadMessages(lastThreadId);
-    },
-
-    initMessageContainer() {
-      const textarea = document.querySelector('#message-container textarea[name="new_message"]');
-      if (textarea) textarea.focus();
-    },
-
-    async handleFormSubmit(form) {
-      const textarea = form.querySelector('textarea[name="new_message"]');
-      const msg = textarea ? textarea.value.trim() : '';
-      if (!msg) return;
-
-      const sendBtn = document.getElementById('send-btn');
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> <span class="visually-hidden">Uploading...</span>';
-      }
-
-      try {
-        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
-          method: 'POST',
-          body: new FormData(form)
-        });
-        const data = await response.json();
-        if (data.status !== "OK") throw new Error(data.message || "Upload failed");
-
-        const selectedAgentInput = document.getElementById('selectedAgentInput');
-        const currentAgentId = selectedAgentInput ? selectedAgentInput.value : '';
-
-        const threadIdInput = document.querySelector('input[name="thread_id"]');
-        if (threadIdInput) threadIdInput.value = data.thread_id;
-
-        if (data.threadHtml) {
-          const threadList = document.querySelector('.list-group');
-          if (threadList) threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
-        }
-
-        const params = new URLSearchParams({ thread_id: data.thread_id, agent_id: currentAgentId });
-        const messageResponse = await fetch(`${window.NovaApp.urls.messageList}?${params}`, { headers: { 'X-AJAX': 'true' } });
-        const html = await messageResponse.text();
-        const messageContainer = document.getElementById('message-container');
-        if (messageContainer) {
-          messageContainer.innerHTML = html;
-          this.initMessageContainer();
-
-          const conversationContainer = document.getElementById('conversation-container');
-          if (conversationContainer) {
-            const streamingDiv = document.createElement('div');
-            streamingDiv.className = 'message streaming mb-3';
-            streamingDiv.innerHTML = `
-              <div class="card border-secondary">
-                <div class="card-body py-2">
-                  <div class="streaming-content"></div>
-                </div>
-                <div class="card-footer py-1 text-muted small text-end d-none">
-                </div>
-              </div>
-            `;
-            conversationContainer.appendChild(streamingDiv);
-          }
-
-          window.StorageUtils.addStoredTask(data.thread_id, data.task_id);
-          this.startTaskWebSocket(data.thread_id, data.task_id);
-        }
-
-        if (sendBtn) sendBtn.innerHTML = '<i class="bi bi-send-fill"></i> <span class="visually-hidden">Send</span>';
-      } catch (error) {
-        console.error("Error adding message:", error);
-        if (sendBtn) {
-          sendBtn.disabled = false;
-          sendBtn.innerHTML = '<i class="bi bi-send-fill"></i> <span class="visually-hidden">Send</span>';
-        }
-      }
-    },
-
-    startTaskWebSocket(threadId, taskId) {
-      if (!taskId) return;
-
-      const progressDiv = document.getElementById('task-progress');
-      const progressLogs = document.getElementById('progress-logs');
-      const statusDiv = document.getElementById('task-status');
-      if (progressDiv) progressDiv.classList.remove('d-none');
-
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const wsUrl = `${protocol}://${window.location.host}/ws/task/${taskId}/`;
-      let socket = new WebSocket(wsUrl);
-      let reconnectAttempts = 0;
-      const maxReconnects = 5;
-
-      let heartbeatInterval = null;
-      let heartbeatTimeout = null;
-
-      function startHeartbeat() {
-        clearInterval(heartbeatInterval);
-        clearTimeout(heartbeatTimeout);
-        heartbeatInterval = setInterval(() => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'ping' }));
-            heartbeatTimeout = setTimeout(() => {
-              console.error('Heartbeat timeout: Closing WebSocket');
-              socket.close(1006, 'Heartbeat timeout');
-            }, 10000);
-          }
-        }, 30000);
-      }
-
-      function handlePong() {
-        clearTimeout(heartbeatTimeout);
-      }
-
-      socket.onopen = () => {
-        reconnectAttempts = 0;
-        startHeartbeat();
-      };
-
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'pong') {
-          handlePong();
-          return;
-        }
-        if (data.error) {
-          if (statusDiv) statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
-          return;
-        }
-
-        if (data.type === 'progress_update') {
-          const log = data.progress_log || "undefined";
-          if (progressLogs) progressLogs.textContent = log;
-          return;
-        }
-
-        if (data.type === 'response_chunk') {
-          if (progressDiv && !progressDiv.classList.contains('d-none') && data.chunk !== '') {
-            progressDiv.classList.add('d-none');
-          }
-          const streamingContent = document.querySelector(".message.streaming .streaming-content");
-          if (streamingContent) streamingContent.innerHTML = data.chunk;
-          return;
-        }
-
-        if (data.type === 'context_consumption') {
-          const streamingFooter = document.querySelector(".message.streaming .card-footer");
-          if (streamingFooter && data.max_context) {
-            if (data.real_tokens !== null) {
-              streamingFooter.classList.remove('d-none');
-              streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
-            }
-            else {
-              streamingFooter.classList.remove('d-none');
-              streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
-            }
-          }
-          return;
-        }
-
-        if (data.type === 'task_complete') {
-          const sendBtn = document.getElementById('send-btn');
-          if (sendBtn) sendBtn.disabled = false;
-          socket.close();
-          const timestamp = Date.now();
-          fetch(`${window.location.href}?t=${timestamp}`)
-            .then(response => response.text())
-            .then(fullHtml => {
-              const parser = new DOMParser();
-              const doc = parser.parseFromString(fullHtml, 'text/html');
-              const newThreadsHtml = doc.querySelector('.list-group');
-              const currentThreadList = document.querySelector('.list-group');
-              if (newThreadsHtml && currentThreadList) currentThreadList.innerHTML = newThreadsHtml.innerHTML;
-            })
-            .catch(error => console.error('Error refreshing thread list:', error));
-          window.StorageUtils.removeStoredTask(threadId, taskId);
-          return;
-        }
-      };
-
-      socket.onclose = (e) => {
-        clearInterval(heartbeatInterval);
-        clearTimeout(heartbeatTimeout);
-        if (reconnectAttempts < maxReconnects && !e.wasClean) {
-          reconnectAttempts++;
-          setTimeout(() => {
-            socket = new WebSocket(wsUrl);
-            // Reassign handlers...
-          }, 1000 * reconnectAttempts);
-        }
-      };
-
-      socket.onerror = (err) => {
-        if (statusDiv) statusDiv.innerHTML = '<p class="text-danger">WebSocket connection error.</p>';
-      };
     }
-  };
-
-  // Initialize when DOM is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => ThreadManager.init());
-  } else {
-    ThreadManager.init();
   }
 
-  // Scroll to bottom functionality
-  const ScrollManager = {
+  // ============================================================================
+  // LEGACY COMPATIBILITY - Keep existing interfaces working
+  // ============================================================================
+  const LegacyThreadManager = {
     init() {
-      this.attachScrollHandlers();
-      this.initScrollToBottomButton();
+      // Initialize new architecture
+      const messageManager = new MessageManager();
+      messageManager.init();
+
+      // Keep legacy interface for compatibility
+      this.messageManager = messageManager;
     },
 
-    attachScrollHandlers() {
-      // Monitor scroll in conversation container to show/hide scroll button
-      document.addEventListener('scroll', this.handleScroll.bind(this), true);
+    // Legacy methods that delegate to new architecture
+    loadMessages(threadId) {
+      return this.messageManager.loadMessages(threadId);
     },
 
-    handleScroll(e) {
-      if (e.target.id === 'conversation-container') {
-        const scrollButton = document.getElementById('scroll-to-bottom');
-        if (!scrollButton) return;
-
-        const container = e.target;
-        const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 100;
-        
-        if (isNearBottom) {
-          scrollButton.classList.add('d-none');
-        } else {
-          scrollButton.classList.remove('d-none');
-        }
-      }
-    },
-
-    initScrollToBottomButton() {
-      document.addEventListener('click', (e) => {
-        if (e.target.matches('#scroll-to-bottom') || e.target.closest('#scroll-to-bottom')) {
-          e.preventDefault();
-          this.scrollToBottom();
-        }
-      });
-    },
-
-    scrollToBottom() {
-      const conversationContainer = document.getElementById('conversation-container');
-      if (conversationContainer) {
-        conversationContainer.scrollTo({
-          top: conversationContainer.scrollHeight,
-          behavior: 'smooth'
-        });
-      }
+    handleFormSubmit(form) {
+      return this.messageManager.handleFormSubmit(form);
     }
   };
 
-  // Files toggle functionality
-  const FilesToggleManager = {
-    init() {
-      this.attachToggleHandler();
-      // Initialize files panel on page load
-      this.initializeFilesPanel();
-    },
+  // ============================================================================
+  // INITIALIZATION
+  // ============================================================================
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => LegacyThreadManager.init());
+  } else {
+    LegacyThreadManager.init();
+  }
 
-    attachToggleHandler() {
-      document.addEventListener('click', (e) => {
-        if (e.target.matches('#files-toggle-btn') || e.target.closest('#files-toggle-btn')) {
-          e.preventDefault();
-          window.FileManager.toggleSidebar();
-        }
-      });
-    },
+  // Expose for debugging
+  window.MessageManager = MessageManager;
+  window.StreamingManager = StreamingManager;
+  window.MessageRenderer = MessageRenderer;
 
-    async initializeFilesPanel() {
-      // Auto-load files panel content when page loads
-      const filesColumn = document.getElementById('files-column');
-      if (filesColumn && !filesColumn.classList.contains('d-none')) {
-        // Panel is visible by default, initialize it
-        setTimeout(async () => {
-          if (window.FileManager && typeof window.FileManager.toggleSidebar === 'function') {
-            // Just load content without toggling visibility
-            const currentThreadId = localStorage.getItem('lastThreadId');
-            if (currentThreadId) {
-              window.FileManager.currentThreadId = currentThreadId;
-              
-              const contentEl = document.getElementById('file-sidebar-content');
-              if (contentEl && !window.FileManager.sidebarContentLoaded) {
-                try {
-                  const response = await fetch('/files/sidebar-panel/');
-                  if (response.ok) {
-                    const html = await response.text();
-                    contentEl.innerHTML = html;
-                    window.FileManager.attachSidebarEventHandlers();
-                    window.FileManager.sidebarContentLoaded = true;
-                    await window.FileManager.loadTree();
-                    window.FileManager.connectWebSocket();
-                  }
-                } catch (error) {
-                  console.error('Error initializing files panel:', error);
-                }
-              }
-            }
-          }
-        }, 500);
-      }
-    }
-  };
-
-  // Initialize all managers
-  ScrollManager.init();
-  FilesToggleManager.init();
 })();
