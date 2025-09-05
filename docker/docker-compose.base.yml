@@ -109,7 +109,7 @@ services:
     image: amairesse/nova:latest
     restart: unless-stopped
     command: >
-      celery -A nova.celery worker -l info --concurrency=1 --queues=default
+      celery -A nova.celery worker -l info --concurrency=1
     depends_on:
       redis:
         condition: service_healthy
