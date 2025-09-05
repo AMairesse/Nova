@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
     "br", "hr", "a",
+    # Table support
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
 ]
 ALLOWED_ATTRS = {
     "a": ["href", "title", "rel"],
