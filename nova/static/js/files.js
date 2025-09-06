@@ -3,7 +3,7 @@
   'use strict';
 
   window.FileManager = {
-    currentThreadId: null,
+    currentThreadId: localStorage.getItem('lastThreadId') || null,
     ws: null,
     isUploading: false,
     sidebarContentLoaded: false,  // Cache flag to avoid reloading content
@@ -37,6 +37,29 @@
         directoryInput.addEventListener('change', (e) => {
           this.handleDirectoryUpload(e.target.files);
         });
+      }
+    },
+    
+    async loadSidebarContent() {
+      if (this.sidebarContentLoaded) return;
+
+      const contentEl = document.getElementById('file-sidebar-content');
+      if (!contentEl) {
+        console.error('Sidebar content element not found');
+        return;
+      }
+
+      try {
+        const response = await fetch('/files/sidebar-panel/');
+        if (!response.ok) throw new Error('Failed to load sidebar content');
+        const html = await response.text();
+        contentEl.innerHTML = html;
+        
+        this.attachSidebarEventHandlers();
+        this.sidebarContentLoaded = true;
+      } catch (error) {
+        console.error('Error loading sidebar:', error);
+        contentEl.innerHTML = '<p class="alert alert-danger">Error loading files panel.</p>';
       }
     },
     
@@ -75,30 +98,8 @@
       const icon = toggleBtn.querySelector('i');
       if (icon) icon.className = 'bi bi-x';
       
-      this.currentThreadId = localStorage.getItem('lastThreadId');
-      
-      const contentEl = document.getElementById('file-sidebar-content');
-      if (!contentEl) {
-        console.error('Sidebar content element not found');
-        return;
-      }
-      
-      // Load panel content only if not already loaded (cache)
-      if (!this.sidebarContentLoaded) {
-        try {
-          const response = await fetch('/files/sidebar-panel/');
-          if (!response.ok) throw new Error('Failed to load sidebar content');
-          const html = await response.text();
-          contentEl.innerHTML = html;
-          
-          this.attachSidebarEventHandlers();
-          this.sidebarContentLoaded = true;
-        } catch (error) {
-          console.error('Error loading sidebar:', error);
-          contentEl.innerHTML = '<p class="alert alert-danger">Error loading files panel.</p>';
-          return;
-        }
-      }
+      // Load if needed
+      await this.loadSidebarContent();
       
       if (!this.currentThreadId) {
         console.warn('No thread ID - cannot load files');
@@ -135,7 +136,7 @@
       }
       
       try {
-        const response = await window.DOMUtils.csrfFetch(`/files/list/${this.currentThreadId}/`);  // Fixed: Use csrfFetch (handles token internally)
+        const response = await window.DOMUtils.csrfFetch(`/files/list/${this.currentThreadId}/`);
         const data = await response.json();
         
         if (data.files) {
@@ -574,7 +575,7 @@
     async updateForThread(threadId) {
       // Update current thread ID
       this.currentThreadId = threadId;
-      
+
       // Check if files panel is visible
       const filesColumn = document.getElementById('files-column');
       if (!filesColumn || filesColumn.classList.contains('d-none')) {
@@ -582,11 +583,8 @@
         return;
       }
       
-      // Check if sidebar content is loaded
-      if (!this.sidebarContentLoaded) {
-        // Sidebar content not loaded yet, no need to update
-        return;
-      }
+      // Load if needed
+      await this.loadSidebarContent();
       
       // Close existing WebSocket connection
       if (this.ws) {

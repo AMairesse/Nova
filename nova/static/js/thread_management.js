@@ -300,6 +300,16 @@
         console.error('WebSocket error:', err);
       };
     }
+
+    resumeStreams() {
+      const savedStreams = this.loadSavedStreams();
+      Object.keys(savedStreams).forEach(taskId => {
+        if (savedStreams[taskId].status !== 'completed') {
+          this.startWebSocket(taskId);
+          // Optionnel : Re-créer l'élément message si nécessaire
+        }
+      });
+    }
   }
 
   // ============================================================================
@@ -333,6 +343,22 @@
           const btn = e.target.closest('.delete-thread-btn');
           const threadId = btn.dataset.threadId;
           this.deleteThread(threadId);
+        } else if (e.target.matches('.agent-dropdown-item') || e.target.closest('.agent-dropdown-item')) {
+          e.preventDefault();
+          const item = e.target.closest('.agent-dropdown-item');
+          const value = item.dataset.value;
+          const label = item.textContent.trim();
+          const selectedAgentInput = document.getElementById('selectedAgentInput');
+          const dropdownButton = document.getElementById('dropdownMenuButton');
+          if (selectedAgentInput) selectedAgentInput.value = value;
+          if (dropdownButton) dropdownButton.textContent = label;
+        } else if (e.target.matches('#files-toggle-btn') || e.target.closest('#files-toggle-btn')) {
+          e.preventDefault();
+          if (window.FileManager && typeof window.FileManager.toggleSidebar === 'function') {
+            window.FileManager.toggleSidebar();
+          } else {
+            console.warn('FileManager not available');
+          }
         }
       });
 
@@ -374,9 +400,14 @@
         const html = await response.text();
         document.getElementById('message-container').innerHTML = html;
         this.currentThreadId = threadId;
+        this.streamingManager.resumeStreams();
 
         if (threadId) {
           localStorage.setItem('lastThreadId', threadId);
+        }
+    
+        if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
+          await window.FileManager.updateForThread(threadId);
         }
 
         this.initTextareaFocus();
