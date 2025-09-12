@@ -237,12 +237,14 @@ class LLMAgent:
                 )
                 langfuse_handler = CallbackHandler()
 
-                langfuse.auth_check()
-                self.config = {"callbacks": [langfuse_handler],
-                               "metadata": {
-                                   "langfuse_session_id": str(langgraph_thread_id),
-                               },
-                               }
+                if langfuse.auth_check():
+                    self.config = {"callbacks": [langfuse_handler],
+                                   "metadata": {
+                                     "langfuse_session_id": str(langgraph_thread_id),
+                                  },
+                                  }
+                else:
+                    self.config = {}
             except Exception as e:
                 logger.error(f"Failed to create Langfuse client: {e}",
                              exc_info=e)  # Log error but continue without
