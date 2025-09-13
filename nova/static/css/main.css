@@ -146,8 +146,25 @@ body {
     transition: opacity 0.2s ease;
 }
 
-.file-item-content:hover .file-item-actions {
-    opacity: 1;
+/* Desktop with mouse: show actions on hover */
+@media (hover: hover) and (pointer: fine) {
+    .file-item-content:hover .file-item-actions {
+        opacity: 1;
+    }
+}
+
+/* Touch devices: always show actions for accessibility */
+@media (hover: none) and (pointer: coarse) {
+    .file-item-actions {
+        opacity: 1;
+    }
+
+    /* Make delete button more touch-friendly on mobile */
+    .file-delete-btn {
+        padding: 6px 8px;
+        min-height: 32px;
+        min-width: 32px;
+    }
 }
 
 .file-delete-btn {
