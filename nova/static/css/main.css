@@ -10,128 +10,19 @@ body {
     min-height: 0;
 }
 
-/* Responsive Layout Styles */
-.main-content-row {
-    height: calc(100vh - 76px);
-}
-
-/* Mobile Navigation Tabs */
-.mobile-nav-tabs {
-    background-color: var(--bs-light);
-    border-bottom: 1px solid var(--bs-border-color);
-    margin: 0;
-}
-
-.mobile-nav-tabs .nav-link {
-    border: none;
-    border-radius: 0;
-    color: var(--bs-secondary);
-    padding: 0.75rem 1rem;
-    font-size: 0.9rem;
-    transition: all 0.2s ease;
-}
-
-.mobile-nav-tabs .nav-link.active {
-    background-color: var(--bs-white);
-    color: var(--bs-primary);
-    border-bottom: 2px solid var(--bs-primary);
-}
-
-.mobile-nav-tabs .nav-link:hover {
-    color: var(--bs-primary);
-    background-color: var(--bs-gray-100);
-}
-
-/* Mobile Tab Content */
-.mobile-tab-content {
-    height: calc(100vh - 76px - 48px);
-    /* Subtract navbar and tab height */
-}
-
-.mobile-panel-header {
-    background-color: var(--bs-light);
-    min-height: 60px;
-}
-
-.mobile-panel-content {
-    height: calc(100% - 60px);
-    padding: 0.5rem;
-}
-
-/* Responsive adjustments for different screen sizes */
-@media (max-width: 575.98px) {
-
-    /* Extra small devices (phones) */
-    .mobile-nav-tabs .nav-link {
-        padding: 0.5rem 0.75rem;
-        font-size: 0.8rem;
-    }
-
-    .mobile-panel-header {
-        padding: 0.75rem !important;
-        min-height: 50px;
-    }
-
-    .mobile-panel-content {
-        height: calc(100% - 50px);
-        padding: 0.25rem;
-    }
-
-    /* Make buttons more touch-friendly */
-    .btn-sm {
-        padding: 0.5rem 0.75rem;
-        font-size: 0.9rem;
-    }
-
-    /* Improve message input area for mobile */
-    .message-input-area {
-        padding: 0.75rem !important;
-    }
-
-    .auto-resize-textarea {
-        font-size: 16px;
-        /* Prevents zoom on iOS */
-        min-height: 44px;
-        /* Better touch target */
+/* Mobile Navigation Height Adjustment */
+@media (max-width: 991.98px) {
+    .container-fluid>.row {
+        height: calc(100vh - 76px - 56px) !important;
+        /* Subtract main navbar + mobile nav */
     }
 }
 
-@media (min-width: 576px) and (max-width: 991.98px) {
-
-    /* Small to medium devices (tablets) */
-    .mobile-tab-content {
-        height: calc(100vh - 76px - 52px);
-    }
-}
-
-@media (min-width: 992px) {
-
-    /* Large devices and up (desktops) */
-    .threads-column,
-    .files-column {
-        height: calc(100vh - 76px);
-    }
-
-    .message-area {
-        height: calc(100vh - 76px);
-    }
-}
-
-/* Touch-friendly improvements */
+/* Touch-friendly improvements for mobile devices */
 @media (hover: none) and (pointer: coarse) {
-
-    /* Touch devices */
     .btn {
         min-height: 44px;
-        /* Apple's recommended minimum touch target */
         min-width: 44px;
-    }
-
-    .nav-link {
-        min-height: 44px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
     }
 
     .file-item-content {
@@ -139,11 +30,22 @@ body {
         min-height: 44px;
     }
 
-    .dropdown-item {
-        padding: 0.75rem 1rem;
+    .auto-resize-textarea {
+        font-size: 16px;
+        /* Prevents zoom on iOS */
         min-height: 44px;
-        display: flex;
-        align-items: center;
+    }
+}
+
+/* Small screen optimizations */
+@media (max-width: 575.98px) {
+    .btn-sm {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.9rem;
+    }
+
+    .message-input-area {
+        padding: 0.75rem !important;
     }
 }
 

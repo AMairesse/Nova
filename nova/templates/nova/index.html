@@ -3,41 +3,32 @@
 
 {% block content %}
 <div class="container-fluid h-100 p-0">
-  <!-- Mobile Navigation Tabs (visible on small screens) -->
-  <div class="d-lg-none">
-    <ul class="nav nav-tabs mobile-nav-tabs" id="mobile-nav" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="threads-tab" data-bs-toggle="tab" data-bs-target="#threads-panel" type="button" role="tab" aria-controls="threads-panel" aria-selected="true">
-          <i class="bi bi-chat-dots me-1"></i>
-          <span class="d-none d-sm-inline">{% trans "Threads" %}</span>
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="nav-link" id="messages-tab" data-bs-toggle="tab" data-bs-target="#messages-panel" type="button" role="tab" aria-controls="messages-panel" aria-selected="false">
-          <i class="bi bi-chat-text me-1"></i>
-          <span class="d-none d-sm-inline">{% trans "Chat" %}</span>
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="nav-link" id="files-tab" data-bs-toggle="tab" data-bs-target="#files-panel" type="button" role="tab" aria-controls="files-panel" aria-selected="false">
-          <i class="bi bi-files me-1"></i>
-          <span class="d-none d-sm-inline">{% trans "Files" %}</span>
-        </button>
-      </li>
-    </ul>
-  </div>
+  <!-- Mobile Navigation (visible on small screens only) -->
+  <nav class="navbar navbar-expand-lg d-lg-none bg-light border-bottom">
+    <div class="container-fluid">
+      <button class="btn btn-outline-secondary me-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#threadsOffcanvas" aria-controls="threadsOffcanvas">
+        <i class="bi bi-chat-dots"></i>
+        <span class="d-none d-sm-inline ms-1">{% trans "Threads" %}</span>
+      </button>
+      <span class="navbar-brand mb-0 h1 flex-grow-1 text-center">{% trans "Messages" %}</span>
+      <button class="btn btn-outline-secondary" type="button" data-bs-toggle="offcanvas" data-bs-target="#filesOffcanvas" aria-controls="filesOffcanvas">
+        <i class="bi bi-files"></i>
+        <span class="d-none d-sm-inline ms-1">{% trans "Files" %}</span>
+      </button>
+    </div>
+  </nav>
 
   <!-- Main Content Area -->
-  <div class="row g-0 h-100 main-content-row">
-    <!-- Thread list column (left) - Hidden on mobile, shown in tab -->
-    <div class="col-lg-2 d-none d-lg-flex flex-column border-end threads-column" id="threads-desktop">
-      <div class="d-flex justify-content-between align-items-center mb-3 p-2 border-bottom">
-        <h2 class="h6 mb-0">{% trans "Threads" %}</h2>
+  <div class="row g-0" style="height: calc(100vh - 76px);">
+    <!-- Threads Sidebar (Desktop) -->
+    <div class="col-lg-3 d-none d-lg-block border-end" id="threads-sidebar">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
+        <h5 class="mb-0">{% trans "Threads" %}</h5>
         <button class="btn btn-sm btn-outline-primary create-thread-btn">
-          <i class="bi bi-plus" title="{% trans 'Create a new thread' %}"></i>
+          <i class="bi bi-plus"></i>
         </button>
       </div>
-      <div class="flex-grow-1 overflow-auto">
+      <div class="overflow-auto" style="height: calc(100% - 73px);">
         <ul class="list-group list-group-flush">
           {% for thread in threads %}
             {% include 'nova/partials/_thread_item.html' with thread=thread %}
@@ -46,76 +37,73 @@
       </div>
     </div>
     
-    <!-- Message area (center) - Responsive width -->
-    <div id="message-column" class="col-12 col-lg-8 d-flex flex-column message-area">
-      <div class="p-3 pb-0 border-bottom d-none d-lg-block">
-        <h2 class="h4 mb-3">{% trans "Messages" %}</h2>
+    <!-- Message Area (Center) -->
+    <div class="col-12 col-lg-6 d-flex flex-column" id="message-area">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light d-none d-lg-flex">
+        <h5 class="mb-0">{% trans "Messages" %}</h5>
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#files-sidebar" aria-expanded="true" aria-controls="files-sidebar">
+          <i class="bi bi-layout-sidebar-inset-reverse"></i>
+        </button>
       </div>
       <div id="message-container" class="flex-grow-1 overflow-hidden"></div>
     </div>
     
-    <!-- Files panel (right) - Hidden on mobile, shown in tab -->
-    <div id="files-column" class="col-lg-2 d-none d-lg-flex flex-column border-start files-column">
-      <div class="d-flex justify-content-between align-items-center mb-3 p-2 border-bottom">
-        <h2 class="h6 mb-0">{% trans "Files" %}</h2>
-        <div class="file-actions">
-          <button id="upload-files-btn" class="btn btn-sm btn-primary" title="Upload files">
+    <!-- Files Sidebar (Desktop) -->
+    <div class="col-lg-3 d-none d-lg-block border-start collapse show" id="files-sidebar">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
+        <h5 class="mb-0">{% trans "Files" %}</h5>
+        <div>
+          <button id="upload-files-btn" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
             <i class="bi bi-upload"></i>
           </button>
-          <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="Upload directory">
+          <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
             <i class="bi bi-folder-plus"></i>
           </button>
         </div>
       </div>
-      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto">
+      <div id="file-sidebar-content" class="overflow-auto" style="height: calc(100% - 73px);">
         <!-- Content loaded dynamically -->
       </div>
     </div>
   </div>
 
-  <!-- Mobile Tab Content (visible on small screens) -->
-  <div class="tab-content d-lg-none mobile-tab-content" id="mobile-tab-content">
-    <!-- Threads Panel -->
-    <div class="tab-pane fade show active" id="threads-panel" role="tabpanel" aria-labelledby="threads-tab">
-      <div class="mobile-panel-header d-flex justify-content-between align-items-center p-3 border-bottom">
-        <h2 class="h5 mb-0">{% trans "Threads" %}</h2>
+  <!-- Mobile Threads Offcanvas -->
+  <div class="offcanvas offcanvas-start" tabindex="-1" id="threadsOffcanvas" aria-labelledby="threadsOffcanvasLabel">
+    <div class="offcanvas-header border-bottom">
+      <h5 class="offcanvas-title" id="threadsOffcanvasLabel">{% trans "Threads" %}</h5>
+      <div class="d-flex gap-2">
         <button class="btn btn-sm btn-outline-primary create-thread-btn">
-          <i class="bi bi-plus me-1"></i>{% trans "New" %}
+          <i class="bi bi-plus"></i>
         </button>
-      </div>
-      <div class="mobile-panel-content overflow-auto">
-        <ul class="list-group list-group-flush">
-          {% for thread in threads %}
-            {% include 'nova/partials/_thread_item.html' with thread=thread %}
-          {% endfor %}
-        </ul>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
       </div>
     </div>
+    <div class="offcanvas-body p-0">
+      <ul class="list-group list-group-flush">
+        {% for thread in threads %}
+          {% include 'nova/partials/_thread_item.html' with thread=thread %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
 
-    <!-- Messages Panel -->
-    <div class="tab-pane fade" id="messages-panel" role="tabpanel" aria-labelledby="messages-tab">
-      <div id="mobile-message-container" class="h-100">
-        <!-- Content loaded dynamically, same as desktop -->
+  <!-- Mobile Files Offcanvas -->
+  <div class="offcanvas offcanvas-end" tabindex="-1" id="filesOffcanvas" aria-labelledby="filesOffcanvasLabel">
+    <div class="offcanvas-header border-bottom">
+      <h5 class="offcanvas-title" id="filesOffcanvasLabel">{% trans "Files" %}</h5>
+      <div class="d-flex gap-2">
+        <button id="upload-files-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload files' %}">
+          <i class="bi bi-upload"></i>
+        </button>
+        <button id="upload-directory-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
+          <i class="bi bi-folder-plus"></i>
+        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
       </div>
     </div>
-
-    <!-- Files Panel -->
-    <div class="tab-pane fade" id="files-panel" role="tabpanel" aria-labelledby="files-tab">
-      <div class="mobile-panel-header d-flex justify-content-between align-items-center p-3 border-bottom">
-        <h2 class="h5 mb-0">{% trans "Files" %}</h2>
-        <div class="file-actions">
-          <button id="upload-files-btn-mobile" class="btn btn-sm btn-primary me-1" title="Upload files">
-            <i class="bi bi-upload"></i>
-          </button>
-          <button id="upload-directory-btn-mobile" class="btn btn-sm btn-primary" title="Upload directory">
-            <i class="bi bi-folder-plus"></i>
-          </button>
-        </div>
-      </div>
-      <div class="mobile-panel-content overflow-auto">
-        <div id="file-sidebar-content-mobile">
-          <!-- Content loaded dynamically -->
-        </div>
+    <div class="offcanvas-body p-0">
+      <div id="file-sidebar-content-mobile">
+        <!-- Content loaded dynamically -->
       </div>
     </div>
   </div>
