@@ -13,6 +13,8 @@
       this.setupEventListeners();
       this.syncMobileContent();
       this.setupFilesToggle();
+      this.setupBootstrapEventListeners();
+      this.setupMutationObserver();
     }
 
     setupEventListeners() {
@@ -147,6 +149,54 @@
           e.preventDefault();
           desktopDirBtn.click();
         };
+      }
+    }
+
+    syncThreadLists() {
+      const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
+      const mobileThreadList = document.querySelector('#threadsOffcanvas .list-group');
+      
+      if (desktopThreadList && mobileThreadList) {
+        mobileThreadList.innerHTML = desktopThreadList.innerHTML;
+      }
+    }
+
+    setupBootstrapEventListeners() {
+      // Sync content when offcanvas is shown
+      const threadsOffcanvas = document.getElementById('threadsOffcanvas');
+      const filesOffcanvas = document.getElementById('filesOffcanvas');
+      
+      if (threadsOffcanvas) {
+        threadsOffcanvas.addEventListener('show.bs.offcanvas', () => {
+          this.syncThreadLists();
+        });
+      }
+      
+      if (filesOffcanvas) {
+        filesOffcanvas.addEventListener('show.bs.offcanvas', () => {
+          this.syncFilesContent();
+        });
+      }
+      
+      // Auto-close threads offcanvas when thread is selected on mobile
+      document.addEventListener('click', (e) => {
+        if (e.target.closest('#threadsOffcanvas .thread-link') && !this.isDesktop) {
+          const offcanvasInstance = bootstrap.Offcanvas.getInstance(threadsOffcanvas);
+          if (offcanvasInstance) {
+            offcanvasInstance.hide();
+          }
+        }
+      });
+    }
+
+    setupMutationObserver() {
+      // Watch for changes in desktop thread list and sync to mobile
+      const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
+      if (desktopThreadList) {
+        const observer = new MutationObserver(() => {
+          this.syncThreadLists();
+        });
+        observer.observe(desktopThreadList, { childList: true, subtree: true });
       }
     }
 
