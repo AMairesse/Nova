@@ -219,6 +219,9 @@ OLLAMA_CONTEXT_LENGTH = os.getenv('OLLAMA_CONTEXT_LENGTH', None)
 SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)
 SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)
 
+# Get info about a judge0 server if configured
+JUDGE0_SERVER_URL = os.getenv('JUDGE0_SERVER_URL', None)
+
 # Celery config
 CELERY_BROKER_URL = "redis://redis:6379/0"
 CELERY_RESULT_BACKEND = None

@@ -153,11 +153,13 @@ async def get_language_id(host: str, language: Union[str, int]) -> int:
 async def get_execution_status(host: str, token: str) -> str:
     """Get status of a submission."""
     try:
-        response = await api_request('GET', f"{host}/submissions/{token}?base64_encoded=false")
+        response = await api_request('GET', f"{host}/submissions/{token}?base64_encoded=true")
         status = response.get('status', {}).get('description', 'Unknown')
         stdout = response.get('stdout', '')
+        decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
         stderr = response.get('stderr', '')
-        return f"Status: {status}\nStdout: {stdout}\nStderr: {stderr}"
+        decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
+        return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
     except Exception as e:
         logger.error(f"Error getting status: {str(e)}")
         return _("Error getting status: {error}").format(error=str(e))
@@ -167,13 +169,14 @@ async def compile_code(host: str, code: str, language: Union[str, int]) -> str:
     """Compile code without execution (for compiled languages)."""
     try:
         language_id = await get_language_id(host, language)
+        encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
         data = {
-            "source_code": code,
+            "source_code": encoded_code,
             "language_id": language_id,
             "compiler_options": "",
             "command_line_arguments": ""
         }
-        response = await api_request('POST', f"{host}/submissions?base64_encoded=false&wait=false", data=data)
+        response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=false", data=data)
         token = response.get('token')
 
         # Poll for completion
@@ -207,9 +210,9 @@ async def execute_code(host: str, code: str, language: Union[str, int] = "python
         }
         response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=true", data=data)
         stdout = response.get('stdout', '')
-        decoded_stdout = base64.b64decode(stdout).decode('utf-8')
+        decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
         stderr = response.get('stderr', '')
-        decoded_stderr = base64.b64decode(stderr).decode('utf-8')
+        decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
         status = response.get('status', {}).get('description', 'Unknown')
         return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
     except ValueError as ve:
@@ -226,20 +229,24 @@ async def run_code_with_input(host: str, code: str, language: Union[str, int] = 
         if inputs is None:
             inputs = []
         language_id = await get_language_id(host, language)
+        encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
         results = []
         for inp in inputs:
+            encoded_input_data = base64.b64encode(inp.encode('utf-8')).decode('utf-8') if inp else ""
             data = {
-                "source_code": code,
+                "source_code": encoded_code,
                 "language_id": language_id,
-                "stdin": inp,
+                "stdin": encoded_input_data,
                 "cpu_time_limit": 5,  # Use default timeout
                 "memory_limit": 128000
             }
-            response = await api_request('POST', f"{host}/submissions?base64_encoded=false&wait=true", data=data)
+            response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=true", data=data)
             stdout = response.get('stdout', '')
+            decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
             stderr = response.get('stderr', '')
+            decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
             status = response.get('status', {}).get('description', 'Unknown')
-            results.append(f"Input: {inp}\nStatus: {status}\nStdout: {stdout}\nStderr: {stderr}")
+            results.append(f"Input: {inp}\nStatus: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}")
         return "\n\n".join(results)
     except ValueError as ve:
         return str(ve)  # Return language not found error

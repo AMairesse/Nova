@@ -29,7 +29,7 @@ from user_settings.mixins import (
 from user_settings.forms import ToolForm, ToolCredentialForm
 from nova.models.models import Tool, ToolCredential
 from nova.tools import get_metadata
-from nova.utils import check_and_create_searxng_tool
+from nova.utils import check_and_create_searxng_tool, check_and_create_judge0_tool
 from nova.mcp.client import MCPClient
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
     def get_queryset(self):
         # Ensure the system tools exists
         check_and_create_searxng_tool()
+        check_and_create_judge0_tool()
         # Return the user's tools and the system's one with agent count annotation
         return Tool.objects.filter(
             Q(user=self.request.user) | Q(user__isnull=True)
