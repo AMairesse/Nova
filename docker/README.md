@@ -116,6 +116,28 @@ This setup include :
 
 3. Access the app at `http://localhost:80` (or your configured port). Log in and a system tool will be available for all users.
 
+
+## Add judge0 to your default setup
+
+1. Download the `docker-compose.add-judge0.yml` file and the `judge0` directory:
+
+   ```bash
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-judge0.yml
+   mkdir -p judge0
+   cd judge0
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/judge0/judge0.conf
+   cd ..
+   ```
+
+2. Start containers:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.add-judge0.yml up -d
+   ```
+
+3. Access the app at `http://localhost:80` (or your configured port). Log in and a system tool will be available for all users.
+
+
 ## Build from source
 
 This setup include :

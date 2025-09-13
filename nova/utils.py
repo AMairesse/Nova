@@ -11,6 +11,7 @@ OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
 OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
 SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
 SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
+JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
 
 logger = logging.getLogger(__name__)
 
@@ -159,4 +160,45 @@ def check_and_create_searxng_tool():
             else:
                 logger.warning(
                     """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent.""")
+
+
+def check_and_create_judge0_tool():
+    # Get the judge0's system tool if it exists
+    tool = Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='code_execution').first()
+
+    if JUDGE0_SERVER_URL:
+        # Create a "system tool" if it doesn't already exist
+        if not tool:
+            tool = Tool.objects.create(user=None,
+                                       name='System - Code Execution',
+                                       tool_type=Tool.ToolType.BUILTIN,
+                                       tool_subtype='code_execution',
+                                       python_path='nova.tools.builtins.code_execution')
+            ToolCredential.objects.create(user=None,
+                                          tool=tool,
+                                          config={'judge0_url': JUDGE0_SERVER_URL})
+        else:
+            cred = ToolCredential.objects.filter(tool=tool).first()
+            if not cred:
+                ToolCredential.objects.create(user=None,
+                                              tool=tool,
+                                              config={'judge0_url': JUDGE0_SERVER_URL})
+            else:
+                # Update it if needed
+                if cred.config.get('judge0_url') != JUDGE0_SERVER_URL:
+                    cred.config['judge0_url'] = JUDGE0_SERVER_URL
+                    cred.save()
+    else:
+        if Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='code_execution').exists():
+            # If the system tool is not used then delete it
+            if not tool.agents.exists():
+                tool.delete()
+            else:
+                logger.warning(
+                    """WARNING: JUDGE0_SERVER_URL not set, but a system
                        tool exists and is being used by at least one agent.""")

@@ -1,0 +1,60 @@
+x-logging:
+  &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: 100M
+
+services:
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    environment:
+      - JUDGE0_SERVER_URL=http://judge0-server:2358
+
+  judge0-server:
+    image: judge0/judge0:latest
+    volumes:
+      - ./judge0/judge0.conf:/judge0.conf:ro
+      - judge0-box:/box
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # Uncomment to access from host (for debugging purposes)
+    #ports:
+    #  - "2358:2358"
+    privileged: true
+    <<: *default-logging
+    restart: always
+
+  judge0-worker:
+    image: judge0/judge0:latest
+    command: ["./scripts/workers"]
+    volumes:
+      - ./judge0/judge0.conf:/judge0.conf:ro
+      - judge0-box:/box
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    privileged: true
+    <<: *default-logging
+    restart: always
+
+  judge0-db:
+    image: postgres:16.2
+    env_file: judge0/judge0.conf
+    volumes:
+      - judge0-data:/var/lib/postgresql/data/
+    <<: *default-logging
+    restart: always
+
+  judge0-redis:
+    image: redis:7.2.4
+    command: [
+      "bash", "-c",
+      'docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"'
+    ]
+    env_file: judge0/judge0.conf
+    <<: *default-logging
+    restart: always
+
+volumes:
+  judge0-data:
+  judge0-box:
