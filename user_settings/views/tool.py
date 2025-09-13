@@ -318,6 +318,12 @@ async def tool_test_connection(request, pk: int):
             result = await test_caldav_access(request.user, tool.id)
             return JsonResponse(result)
 
+        # Built-in Code_execution
+        if tool.tool_subtype == "code_execution":
+            from nova.tools.builtins.code_execution import test_judge0_access
+            result = await test_judge0_access(tool)
+            return JsonResponse(result)
+
         # MCP
         if tool.tool_type == Tool.ToolType.MCP:
             try:
