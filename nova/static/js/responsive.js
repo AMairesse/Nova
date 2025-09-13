@@ -117,6 +117,23 @@
       
       // Sync upload button functionality
       this.syncUploadButtons();
+      
+      // Initialize FileManager if not already done
+      this.initializeFileManager();
+    }
+
+    initializeFileManager() {
+      if (window.FileManager && !window.FileManager.initialized) {
+        // Load sidebar content and initialize FileManager
+        window.FileManager.loadSidebarContent().then(() => {
+          // Get current thread ID from localStorage or thread management
+          const currentThreadId = localStorage.getItem('lastThreadId');
+          if (currentThreadId) {
+            window.FileManager.updateForThread(currentThreadId);
+          }
+        });
+        window.FileManager.initialized = true;
+      }
     }
 
     syncFilesContent() {
@@ -234,6 +251,20 @@
     document.addEventListener('fileContentUpdated', () => {
       if (window.ResponsiveManager) {
         window.ResponsiveManager.syncContent();
+      }
+    });
+
+    // Listen for thread changes to update FileManager
+    document.addEventListener('click', (e) => {
+      const threadLink = e.target.closest('.thread-link');
+      if (threadLink) {
+        const threadId = threadLink.dataset.threadId;
+        if (threadId && window.FileManager) {
+          // Update FileManager for the new thread
+          setTimeout(() => {
+            window.FileManager.updateForThread(threadId);
+          }, 100); // Small delay to ensure thread is loaded
+        }
       }
     });
   });
