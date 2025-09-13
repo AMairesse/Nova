@@ -248,6 +248,11 @@
           // Reload the file tree to reflect changes
           await this.loadTree();
           
+          // Sync to mobile after tree update
+          if (window.ResponsiveManager) {
+            window.ResponsiveManager.syncFilesContent();
+          }
+
         } else {
           const errorData = await response.json().catch(() => ({}));
           const errorMessage = errorData.error || 'Failed to delete file';
@@ -305,6 +310,11 @@
         
         // Reload the file tree to reflect changes
         await this.loadTree();
+
+        // Sync to mobile after tree update
+        if (window.ResponsiveManager) {
+          window.ResponsiveManager.syncFilesContent();
+        }
         
         // Show result message
         if (failedCount > 0) {
