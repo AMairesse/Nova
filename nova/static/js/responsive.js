@@ -108,6 +108,13 @@
         }
         
         this.filesVisible = true;
+        
+        // When showing files panel, update FileManager for current thread
+        if (window.FileManager && window.FileManager.currentThreadId) {
+          setTimeout(() => {
+            window.FileManager.updateForThread(window.FileManager.currentThreadId);
+          }, 100);
+        }
       }
     }
 

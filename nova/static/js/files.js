@@ -513,13 +513,17 @@
 
     // New method to handle thread changes
     async updateForThread(threadId) {
-      // Update current thread ID
+      // Always update current thread ID
       this.currentThreadId = threadId;
 
       // Check if files panel is visible (using new structure)
       const filesColumn = document.getElementById('files-sidebar');
       if (!filesColumn || filesColumn.classList.contains('files-hidden')) {
-        // Files panel is not visible, no need to update
+        // Files panel is not visible, but still close WebSocket for old thread
+        if (this.ws) {
+          this.ws.close();
+          this.ws = null;
+        }
         return;
       }
       
