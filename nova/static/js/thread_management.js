@@ -352,13 +352,6 @@
           const dropdownButton = document.getElementById('dropdownMenuButton');
           if (selectedAgentInput) selectedAgentInput.value = value;
           if (dropdownButton) dropdownButton.textContent = label;
-        } else if (e.target.matches('#files-toggle-btn') || e.target.closest('#files-toggle-btn')) {
-          e.preventDefault();
-          if (window.FileManager && typeof window.FileManager.toggleSidebar === 'function') {
-            window.FileManager.toggleSidebar();
-          } else {
-            console.warn('FileManager not available');
-          }
         }
       });
 
@@ -406,10 +399,6 @@
           localStorage.setItem('lastThreadId', threadId);
         }
     
-        if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
-          await window.FileManager.updateForThread(threadId);
-        }
-
         this.initTextareaFocus();
       } catch (error) {
         console.error('Error loading messages:', error);
@@ -529,15 +518,6 @@
         await window.DOMUtils.csrfFetch(window.NovaApp.urls.deleteThread.replace('0', threadId), { method: 'POST' });
         const threadElement = document.getElementById(`thread-item-${threadId}`);
         if (threadElement) threadElement.remove();
-
-        // Handle file panel update for thread deletion
-        const currentThreadId = localStorage.getItem('lastThreadId');
-        if (currentThreadId === threadId.toString()) {
-          // If we're deleting the currently active thread, handle file panel appropriately
-          if (window.FileManager && typeof window.FileManager.handleThreadDeletion === 'function') {
-            window.FileManager.handleThreadDeletion();
-          }
-        }
 
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;

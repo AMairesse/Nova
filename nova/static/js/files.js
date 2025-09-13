@@ -63,19 +63,6 @@
       }
     },
     
-    async toggleSidebar() {
-      // This method is deprecated - toggle is now handled by ResponsiveManager
-      console.warn('FileManager.toggleSidebar() is deprecated. Use ResponsiveManager instead.');
-    },
-
-    closeSidebar() {
-      // Close WebSocket
-      if (this.ws) {
-        this.ws.close();
-        this.ws = null;
-      }
-    },
-
     async loadTree() {
       const treeContainer = document.getElementById('file-tree-container');
       if (!treeContainer) {
