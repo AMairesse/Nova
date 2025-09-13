@@ -119,6 +119,16 @@ This setup include :
 
 ## Add judge0 to your default setup
 
+### Requirements
+Judge0 need to access cgroups and use cgroups v1 and v2 simultaneously. See https://github.com/judge0/judge0/blob/master/CHANGELOG.md, deployment procedure for v1.13.1:
+
+    Use sudo to open file /etc/default/grub
+    Add systemd.unified_cgroup_hierarchy=0 in the value of GRUB_CMDLINE_LINUX variable.
+    Apply the changes: sudo update-grub
+    Restart your server: sudo reboot
+
+### Installation
+
 1. Download the `docker-compose.add-judge0.yml` file and the `judge0` directory:
 
    ```bash
