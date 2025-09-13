@@ -15,6 +15,16 @@
       this.setupFilesToggle();
       this.setupBootstrapEventListeners();
       this.setupMutationObserver();
+
+      // Listen for thread changes to update FileManager
+      document.addEventListener('threadChanged', (event) => {
+        const threadId = event.detail?.threadId;
+        if (threadId !== undefined && window.FileManager) {
+          setTimeout(() => {
+            window.FileManager.updateForThread(threadId);
+          }, 100); // Small delay to ensure thread is loaded
+        }
+      });
     }
 
     setupEventListeners() {

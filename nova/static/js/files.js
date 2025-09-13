@@ -552,8 +552,15 @@
         this.ws = null;
       }
             
-      // Load new file tree and reconnect WebSocket
+      // Load new file tree
       await this.loadTree();
+      
+      // Sync to mobile after tree update
+      if (window.ResponsiveManager) {
+        window.ResponsiveManager.syncFilesContent();
+      }
+
+      // Reconnect WebSocket
       this.connectWebSocket();
     },
 

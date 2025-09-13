@@ -508,6 +508,8 @@
           threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
         }
         this.loadMessages(data.thread_id);
+        // Dispatch custom event for thread change
+        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: data.thread_id } }));
       } catch (error) {
         console.error('Error creating thread:', error);
       }
@@ -526,6 +528,8 @@
         if (localStorage.getItem('lastThreadId') === threadId.toString()) {
           localStorage.removeItem('lastThreadId');
         }
+        // Dispatch custom event for thread change (null if no threads left)
+        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: firstThreadId || null } }));
       } catch (error) {
         console.error('Error deleting thread:', error);
       }
