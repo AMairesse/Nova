@@ -76,7 +76,13 @@ async def list_files(thread_id, user) -> str:
     files = await async_filter_files(thread)
     if files is None:
         return "No files in this thread."
-    return "\n".join([f"ID: {f.id}, Name: {f.original_filename}, Type : {f.mime_type}, Size: {f.size} bytes" for f in files])
+    return "\n".join([f"ID: {f.id}, Name: {f.original_filename}, Type : {f.mime_type}, \
+        Size: {f.size} bytes" for f in files])
+
+
+async def get_file_url(file_id: int) -> str:
+    file = await async_get_object_or_404(UserFile, id=file_id)
+    return file.get_download_url()
 
 
 async def read_file(agent: LLMAgent, file_id: int) -> str:
@@ -206,6 +212,12 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
             args_schema={"type": "object", "properties": {}, "required": []}
         ),
         StructuredTool.from_function(
+            coroutine=get_file_url,
+            name="get_file_url",
+            description="Get a public URL for a file.",
+            args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
+        ),
+        StructuredTool.from_function(
             coroutine=partial(read_file, agent),
             name="read_file",
             description="Read the full content of a text file. Checks context limit first.",
@@ -214,7 +226,8 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
         StructuredTool.from_function(
             coroutine=partial(read_file_chunk, agent),
             name="read_file_chunk",
-            description="Read a chunk of a file (for large/binary files). Params: start (byte offset, default 0), chunk_size (bytes, default 4096).",
+            description="Read a chunk of a file (for large/binary files). Params: start (byte offset, default 0), \
+                chunk_size (bytes, default 4096).",
             args_schema={"type": "object", "properties": {
                 "file_id": {"type": "integer"},
                 "start": {"type": "integer", "default": 0},
