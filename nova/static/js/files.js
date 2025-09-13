@@ -326,6 +326,12 @@
       // Wait for final updates and reload tree
       setTimeout(async () => {
         await this.loadTree();
+        
+        // Sync to mobile after tree update
+        if (window.ResponsiveManager) {
+          window.ResponsiveManager.syncFilesContent();
+        }
+        
         this.isUploading = false;
         const progressEl = document.getElementById('upload-progress');
         if (progressEl) {
