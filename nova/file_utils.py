@@ -4,20 +4,19 @@ import logging
 from collections import defaultdict
 from typing import List, Dict, Tuple
 from django.core.exceptions import PermissionDenied
-from django.utils import timezone
 from django.conf import settings
 from asgiref.sync import sync_to_async
 import aioboto3  # For async S3 operations
 import magic  # For MIME detection
 
 from nova.models.models import UserFile
-from nova.models.Message import Message
 from nova.models.Thread import Thread
 
 logger = logging.getLogger(__name__)
 
 # Constants
 ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html',
+                      'text/markdown', 'application/json', 'text/csv',
                       'text/x-script.python', 'application/pdf',
                       'application/msword']
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
