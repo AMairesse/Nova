@@ -5,12 +5,14 @@
   class ResponsiveManager {
     constructor() {
       this.isDesktop = window.innerWidth >= 992;
+      this.filesVisible = true;
       this.init();
     }
 
     init() {
       this.setupEventListeners();
       this.syncMobileContent();
+      this.setupFilesToggle();
     }
 
     setupEventListeners() {
@@ -21,6 +23,10 @@
         
         if (wasDesktop !== this.isDesktop) {
           this.syncMobileContent();
+          // Reset files visibility when switching between desktop/mobile
+          if (this.isDesktop) {
+            this.showFiles();
+          }
         }
       }, 250));
 
@@ -38,6 +44,69 @@
 
       // Sync mobile upload buttons with desktop ones
       this.syncUploadButtons();
+    }
+
+    setupFilesToggle() {
+      const toggleBtn = document.getElementById('files-toggle-btn');
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', () => {
+          if (this.isDesktop) {
+            this.toggleFiles();
+          }
+        });
+      }
+    }
+
+    toggleFiles() {
+      if (this.filesVisible) {
+        this.hideFiles();
+      } else {
+        this.showFiles();
+      }
+    }
+
+    hideFiles() {
+      const filesSidebar = document.getElementById('files-sidebar');
+      const messageArea = document.getElementById('message-area');
+      const toggleBtn = document.getElementById('files-toggle-btn');
+      const toggleIcon = document.getElementById('files-toggle-icon');
+
+      if (filesSidebar && messageArea) {
+        filesSidebar.classList.add('files-hidden');
+        messageArea.setAttribute('data-files-visible', 'false');
+        
+        if (toggleBtn) {
+          toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+        
+        if (toggleIcon) {
+          toggleIcon.className = 'bi bi-layout-sidebar-inset';
+        }
+        
+        this.filesVisible = false;
+      }
+    }
+
+    showFiles() {
+      const filesSidebar = document.getElementById('files-sidebar');
+      const messageArea = document.getElementById('message-area');
+      const toggleBtn = document.getElementById('files-toggle-btn');
+      const toggleIcon = document.getElementById('files-toggle-icon');
+
+      if (filesSidebar && messageArea) {
+        filesSidebar.classList.remove('files-hidden');
+        messageArea.setAttribute('data-files-visible', 'true');
+        
+        if (toggleBtn) {
+          toggleBtn.setAttribute('aria-expanded', 'true');
+        }
+        
+        if (toggleIcon) {
+          toggleIcon.className = 'bi bi-layout-sidebar-inset-reverse';
+        }
+        
+        this.filesVisible = true;
+      }
     }
 
     syncMobileContent() {

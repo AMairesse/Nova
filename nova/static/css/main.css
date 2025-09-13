@@ -49,6 +49,40 @@ body {
     }
 }
 
+/* Desktop Layout Responsive Columns */
+@media (min-width: 992px) {
+
+    /* Default state: threads (2 cols) + messages (8 cols) + files (2 cols) */
+    #message-area[data-files-visible="true"] {
+        flex: 0 0 66.666667%;
+        /* col-lg-8 equivalent */
+        max-width: 66.666667%;
+    }
+
+    /* Files hidden state: threads (2 cols) + messages (10 cols) */
+    #message-area[data-files-visible="false"] {
+        flex: 0 0 83.333333%;
+        /* col-lg-10 equivalent */
+        max-width: 83.333333%;
+    }
+
+    /* Smooth transition for layout changes */
+    #message-area {
+        transition: flex 0.3s ease, max-width 0.3s ease;
+    }
+
+    #files-sidebar {
+        transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    /* Hidden files sidebar */
+    #files-sidebar.files-hidden {
+        opacity: 0;
+        transform: translateX(100%);
+        pointer-events: none;
+    }
+}
+
 /* Message Area */
 .message-area {
     min-height: 0;
