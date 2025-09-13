@@ -3,16 +3,32 @@
 
 {% block content %}
 <div class="container-fluid h-100 p-0">
-  <div class="row g-0 h-100">
-    <!-- Thread list column (left) -->
-    <div class="col-2 d-flex flex-column border-end" style="height: calc(100vh - 76px);">
-      <div class="d-flex justify-content-between align-items-center mb-3 p-2 border-bottom">
-        <h2 class="h6 mb-0">{% trans "Threads" %}</h2>
+  <!-- Mobile Navigation (visible on small screens only) -->
+  <nav class="navbar navbar-expand-lg d-lg-none bg-light border-bottom">
+    <div class="container-fluid">
+      <button class="btn btn-outline-secondary me-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#threadsOffcanvas" aria-controls="threadsOffcanvas">
+        <i class="bi bi-chat-dots"></i>
+        <span class="d-none d-sm-inline ms-1">{% trans "Threads" %}</span>
+      </button>
+      <span class="navbar-brand mb-0 h1 flex-grow-1 text-center">{% trans "Messages" %}</span>
+      <button class="btn btn-outline-secondary" type="button" data-bs-toggle="offcanvas" data-bs-target="#filesOffcanvas" aria-controls="filesOffcanvas">
+        <i class="bi bi-files"></i>
+        <span class="d-none d-sm-inline ms-1">{% trans "Files" %}</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main Content Area -->
+  <div class="row g-0" style="height: calc(100vh - 76px);">
+    <!-- Threads Sidebar (Desktop) -->
+    <div class="col-lg-2 d-none d-lg-block border-end" id="threads-sidebar">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
+        <h5 class="mb-0">{% trans "Threads" %}</h5>
         <button class="btn btn-sm btn-outline-primary create-thread-btn">
-          <i class="bi bi-plus" title="{% trans 'Create a new thread' %}"></i>
+          <i class="bi bi-plus"></i>
         </button>
       </div>
-      <div class="flex-grow-1 overflow-auto">
+      <div class="overflow-auto" style="height: calc(100% - 73px);">
         <ul class="list-group list-group-flush">
           {% for thread in threads %}
             {% include 'nova/partials/_thread_item.html' with thread=thread %}
@@ -21,28 +37,84 @@
       </div>
     </div>
     
-    <!-- Message area (center) -->
-    <div id="message-column" class="col-8 d-flex flex-column message-area" style="height: calc(100vh - 76px);">
-      <div class="p-3 pb-0 border-bottom">
-        <h2 class="h4 mb-3">{% trans "Messages" %}</h2>
+    <!-- Message Area (Center) -->
+    <div class="col-12 d-flex flex-column" id="message-area" data-files-visible="true">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light d-none d-lg-flex">
+        <h5 class="mb-0">{% trans "Messages" %}</h5>
+        <button class="btn btn-sm btn-outline-secondary" type="button" id="files-toggle-btn" aria-expanded="true" aria-controls="files-sidebar">
+          <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
+        </button>
       </div>
       <div id="message-container" class="flex-grow-1 overflow-hidden"></div>
     </div>
     
-    <!-- Files panel (right) -->
-    <div id="files-column" class="col-2 d-flex flex-column border-start" style="height: calc(100vh - 76px);">
-      <div class="d-flex justify-content-between align-items-center mb-3 p-2 border-bottom">
-        <h2 class="h6 mb-0">{% trans "Files" %}</h2>
-        <div class="file-actions">
-          <button id="upload-files-btn" class="btn btn-sm btn-primary" title="Upload files">
+    <!-- Files Sidebar (Desktop) -->
+    <div class="col-lg-2 d-none d-lg-block border-start" id="files-sidebar">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
+        <h5 class="mb-0">{% trans "Files" %}</h5>
+        <div>
+          <button id="upload-files-btn" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
             <i class="bi bi-upload"></i>
           </button>
-          <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="Upload directory">
+          <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
             <i class="bi bi-folder-plus"></i>
           </button>
         </div>
       </div>
-      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto">
+      <div id="file-sidebar-content" class="overflow-auto" style="height: calc(100% - 73px);">
+        <!-- File tree container -->
+        <div id="file-tree-container">
+          <!-- Content loaded dynamically -->
+        </div>
+        <!-- Upload progress -->
+        <div id="upload-progress" style="display: none;">
+          <div class="progress">
+            <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+          </div>
+        </div>
+        <!-- Hidden file inputs -->
+        <input type="file" id="file-input" multiple style="display: none;">
+        <input type="file" id="directory-input" webkitdirectory style="display: none;">
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Threads Offcanvas -->
+  <div class="offcanvas offcanvas-start" tabindex="-1" id="threadsOffcanvas" aria-labelledby="threadsOffcanvasLabel">
+    <div class="offcanvas-header border-bottom d-flex justify-content-between align-items-center">
+      <h5 class="offcanvas-title" id="threadsOffcanvasLabel">{% trans "Threads" %}</h5>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-primary create-thread-btn">
+          <i class="bi bi-plus"></i>
+        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+    </div>
+    <div class="offcanvas-body p-0">
+      <ul class="list-group list-group-flush">
+        {% for thread in threads %}
+          {% include 'nova/partials/_thread_item.html' with thread=thread %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  <!-- Mobile Files Offcanvas -->
+  <div class="offcanvas offcanvas-end" tabindex="-1" id="filesOffcanvas" aria-labelledby="filesOffcanvasLabel">
+    <div class="offcanvas-header border-bottom d-flex justify-content-between align-items-center">
+      <h5 class="offcanvas-title" id="filesOffcanvasLabel">{% trans "Files" %}</h5>
+      <div class="d-flex gap-2">
+        <button id="upload-files-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload files' %}">
+          <i class="bi bi-upload"></i>
+        </button>
+        <button id="upload-directory-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
+          <i class="bi bi-folder-plus"></i>
+        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+    </div>
+    <div class="offcanvas-body p-0">
+      <div id="file-sidebar-content-mobile">
         <!-- Content loaded dynamically -->
       </div>
     </div>
@@ -70,6 +142,7 @@
     fileMove: "{% url 'file_move' 0 %}"
   };
 </script>
+<script src="{% static 'js/responsive.js' %}" defer></script>
 <script src="{% static 'js/thread_management.js' %}" defer></script>
 <script src="{% static 'js/files.js' %}" defer></script>
 {% endblock %}

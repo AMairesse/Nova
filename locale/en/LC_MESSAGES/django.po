@@ -232,21 +232,27 @@ msgstr "Logout"
 msgid "Close"
 msgstr "Close"
 
-#: nova/templates/nova/index.html:10
+#: nova/templates/nova/index.html:11 nova/templates/nova/index.html:26
+#: nova/templates/nova/index.html:85
 msgid "Threads"
 msgstr "Threads"
 
-#: nova/templates/nova/index.html:12
-msgid "Create a new thread"
-msgstr "Create a new thread"
-
-#: nova/templates/nova/index.html:27
+#: nova/templates/nova/index.html:13 nova/templates/nova/index.html:43
 msgid "Messages"
 msgstr "Messages"
 
-#: nova/templates/nova/index.html:35
+#: nova/templates/nova/index.html:16 nova/templates/nova/index.html:54
+#: nova/templates/nova/index.html:105
 msgid "Files"
 msgstr "Files"
+
+#: nova/templates/nova/index.html:56 nova/templates/nova/index.html:107
+msgid "Upload files"
+msgstr "Upload files"
+
+#: nova/templates/nova/index.html:59 nova/templates/nova/index.html:110
+msgid "Upload directory"
+msgstr "Upload directory"
 
 #: nova/templates/nova/message_container.html:18
 #, fuzzy, python-format
@@ -310,11 +316,11 @@ msgstr "Select an agent"
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:135
+#: nova/templates/nova/message_container.html:132
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/templates/nova/message_container.html:146
+#: nova/templates/nova/message_container.html:143
 msgid "Send"
 msgstr "Send"
 
@@ -600,6 +606,8 @@ msgid "General"
 msgstr "General"
 
 #: user_settings/templates/user_settings/dashboard.html:57
+#, fuzzy
+#| msgid "Loading providers"
 msgid "Loading providers"
 msgstr "Loading providers"
 

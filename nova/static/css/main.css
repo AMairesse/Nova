@@ -10,6 +10,79 @@ body {
     min-height: 0;
 }
 
+/* Mobile Navigation Height Adjustment */
+@media (max-width: 991.98px) {
+    .container-fluid>.row {
+        height: calc(100vh - 76px - 56px) !important;
+        /* Subtract main navbar + mobile nav */
+    }
+}
+
+/* Touch-friendly improvements for mobile devices */
+@media (hover: none) and (pointer: coarse) {
+    .btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .file-item-content {
+        padding: 0.75rem;
+        min-height: 44px;
+    }
+
+    .auto-resize-textarea {
+        font-size: 16px;
+        /* Prevents zoom on iOS */
+        min-height: 44px;
+    }
+}
+
+/* Small screen optimizations */
+@media (max-width: 575.98px) {
+    .btn-sm {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.9rem;
+    }
+
+    .message-input-area {
+        padding: 0.75rem !important;
+    }
+}
+
+/* Desktop Layout Responsive Columns */
+@media (min-width: 992px) {
+
+    /* Default state: threads (2 cols) + messages (8 cols) + files (2 cols) */
+    #message-area[data-files-visible="true"] {
+        flex: 0 0 66.666667%;
+        /* col-lg-8 equivalent */
+        max-width: 66.666667%;
+    }
+
+    /* Files hidden state: threads (2 cols) + messages (10 cols) */
+    #message-area[data-files-visible="false"] {
+        flex: 0 0 83.333333%;
+        /* col-lg-10 equivalent */
+        max-width: 83.333333%;
+    }
+
+    /* Smooth transition for layout changes */
+    #message-area {
+        transition: flex 0.3s ease, max-width 0.3s ease;
+    }
+
+    #files-sidebar {
+        transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    /* Hidden files sidebar */
+    #files-sidebar.files-hidden {
+        opacity: 0;
+        transform: translateX(100%);
+        pointer-events: none;
+    }
+}
+
 /* Message Area */
 .message-area {
     min-height: 0;
@@ -73,8 +146,25 @@ body {
     transition: opacity 0.2s ease;
 }
 
-.file-item-content:hover .file-item-actions {
-    opacity: 1;
+/* Desktop with mouse: show actions on hover */
+@media (hover: hover) and (pointer: fine) {
+    .file-item-content:hover .file-item-actions {
+        opacity: 1;
+    }
+}
+
+/* Touch devices: always show actions for accessibility */
+@media (hover: none) and (pointer: coarse) {
+    .file-item-actions {
+        opacity: 1;
+    }
+
+    /* Make delete button more touch-friendly on mobile */
+    .file-delete-btn {
+        padding: 6px 8px;
+        min-height: 32px;
+        min-width: 32px;
+    }
 }
 
 .file-delete-btn {

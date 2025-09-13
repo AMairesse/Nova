@@ -63,66 +63,6 @@
       }
     },
     
-    async toggleSidebar() {
-      const filesColumn = document.getElementById('files-column');
-      const messageColumn = document.getElementById('message-column');
-      const toggleBtn = document.getElementById('files-toggle-btn');
-      
-      if (!filesColumn || !messageColumn || !toggleBtn) {
-        console.error('Column elements not found');
-        return;
-      }
-      
-      const isVisible = !filesColumn.classList.contains('d-none');
-      
-      if (isVisible) {
-        // Hide files column
-        filesColumn.classList.add('d-none');
-        messageColumn.classList.remove('col-8');
-        messageColumn.classList.add('col-10');
-        
-        // Update button icon
-        const icon = toggleBtn.querySelector('i');
-        if (icon) icon.className = 'bi bi-files';
-        
-        this.closeSidebar();  // Clean up WS
-        return;
-      }
-      
-      // Show files column
-      filesColumn.classList.remove('d-none');
-      messageColumn.classList.remove('col-10');
-      messageColumn.classList.add('col-8');
-      
-      // Update button icon
-      const icon = toggleBtn.querySelector('i');
-      if (icon) icon.className = 'bi bi-x';
-      
-      // Load if needed
-      await this.loadSidebarContent();
-      
-      if (!this.currentThreadId) {
-        console.warn('No thread ID - cannot load files');
-        const treeContainer = document.getElementById('file-tree-container');
-        if (treeContainer) {
-          treeContainer.innerHTML = '<p class="alert alert-warning">Please select a thread first.</p>';
-        }
-        return;
-      }
-      
-      // Load tree and connect WebSocket
-      await this.loadTree();
-      this.connectWebSocket();
-    },
-
-    closeSidebar() {
-      // Close WebSocket
-      if (this.ws) {
-        this.ws.close();
-        this.ws = null;
-      }
-    },
-
     async loadTree() {
       const treeContainer = document.getElementById('file-tree-container');
       if (!treeContainer) {
@@ -308,6 +248,11 @@
           // Reload the file tree to reflect changes
           await this.loadTree();
           
+          // Sync to mobile after tree update
+          if (window.ResponsiveManager) {
+            window.ResponsiveManager.syncFilesContent();
+          }
+
         } else {
           const errorData = await response.json().catch(() => ({}));
           const errorMessage = errorData.error || 'Failed to delete file';
@@ -365,6 +310,11 @@
         
         // Reload the file tree to reflect changes
         await this.loadTree();
+
+        // Sync to mobile after tree update
+        if (window.ResponsiveManager) {
+          window.ResponsiveManager.syncFilesContent();
+        }
         
         // Show result message
         if (failedCount > 0) {
@@ -386,6 +336,12 @@
       // Wait for final updates and reload tree
       setTimeout(async () => {
         await this.loadTree();
+        
+        // Sync to mobile after tree update
+        if (window.ResponsiveManager) {
+          window.ResponsiveManager.syncFilesContent();
+        }
+        
         this.isUploading = false;
         const progressEl = document.getElementById('upload-progress');
         if (progressEl) {
@@ -573,13 +529,17 @@
 
     // New method to handle thread changes
     async updateForThread(threadId) {
-      // Update current thread ID
+      // Always update current thread ID
       this.currentThreadId = threadId;
 
-      // Check if files panel is visible
-      const filesColumn = document.getElementById('files-column');
-      if (!filesColumn || filesColumn.classList.contains('d-none')) {
-        // Files panel is not visible, no need to update
+      // Check if files panel is visible (using new structure)
+      const filesColumn = document.getElementById('files-sidebar');
+      if (!filesColumn || filesColumn.classList.contains('files-hidden')) {
+        // Files panel is not visible, but still close WebSocket for old thread
+        if (this.ws) {
+          this.ws.close();
+          this.ws = null;
+        }
         return;
       }
       
@@ -592,8 +552,15 @@
         this.ws = null;
       }
             
-      // Load new file tree and reconnect WebSocket
+      // Load new file tree
       await this.loadTree();
+      
+      // Sync to mobile after tree update
+      if (window.ResponsiveManager) {
+        window.ResponsiveManager.syncFilesContent();
+      }
+
+      // Reconnect WebSocket
       this.connectWebSocket();
     },
 
@@ -602,9 +569,9 @@
       // Clear current thread ID
       this.currentThreadId = null;
       
-      // Check if files panel is visible
-      const filesColumn = document.getElementById('files-column');
-      if (!filesColumn || filesColumn.classList.contains('d-none')) {
+      // Check if files panel is visible (using new structure)
+      const filesColumn = document.getElementById('files-sidebar');
+      if (!filesColumn || filesColumn.classList.contains('files-hidden')) {
         // Files panel is not visible, no need to update
         return;
       }

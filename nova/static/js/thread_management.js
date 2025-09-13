@@ -352,13 +352,6 @@
           const dropdownButton = document.getElementById('dropdownMenuButton');
           if (selectedAgentInput) selectedAgentInput.value = value;
           if (dropdownButton) dropdownButton.textContent = label;
-        } else if (e.target.matches('#files-toggle-btn') || e.target.closest('#files-toggle-btn')) {
-          e.preventDefault();
-          if (window.FileManager && typeof window.FileManager.toggleSidebar === 'function') {
-            window.FileManager.toggleSidebar();
-          } else {
-            console.warn('FileManager not available');
-          }
         }
       });
 
@@ -406,10 +399,6 @@
           localStorage.setItem('lastThreadId', threadId);
         }
     
-        if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
-          await window.FileManager.updateForThread(threadId);
-        }
-
         this.initTextareaFocus();
       } catch (error) {
         console.error('Error loading messages:', error);
@@ -519,6 +508,8 @@
           threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
         }
         this.loadMessages(data.thread_id);
+        // Dispatch custom event for thread change
+        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: data.thread_id } }));
       } catch (error) {
         console.error('Error creating thread:', error);
       }
@@ -530,15 +521,6 @@
         const threadElement = document.getElementById(`thread-item-${threadId}`);
         if (threadElement) threadElement.remove();
 
-        // Handle file panel update for thread deletion
-        const currentThreadId = localStorage.getItem('lastThreadId');
-        if (currentThreadId === threadId.toString()) {
-          // If we're deleting the currently active thread, handle file panel appropriately
-          if (window.FileManager && typeof window.FileManager.handleThreadDeletion === 'function') {
-            window.FileManager.handleThreadDeletion();
-          }
-        }
-
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;
         this.loadMessages(firstThreadId);
@@ -546,6 +528,8 @@
         if (localStorage.getItem('lastThreadId') === threadId.toString()) {
           localStorage.removeItem('lastThreadId');
         }
+        // Dispatch custom event for thread change (null if no threads left)
+        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: firstThreadId || null } }));
       } catch (error) {
         console.error('Error deleting thread:', error);
       }
