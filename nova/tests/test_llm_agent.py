@@ -452,9 +452,9 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 self.assertEqual(len(agent.langchain_agent.invocations), 1)
                 payload, used_config = agent.langchain_agent.invocations[0]
                 self.assertIs(used_config, agent.silent_config)
-                # Check file context added to prompt
-                full_question = payload["messages"][0].content
-                self.assertIn("Technical context: 2 attached files.", full_question)
+                # Check file context added to system prompt
+                system_prompt = await agent.build_system_prompt()
+                self.assertIn("There is 2 attached files. Use file tools if needed.", system_prompt)
 
     # ---------------- create (class method) ----------------
 
