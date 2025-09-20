@@ -84,7 +84,9 @@ body {
 }
 
 /* Message Area */
-.message-area {
+#message-area {
+    display: flex;
+    flex-direction: column;
     min-height: 0;
 }
 

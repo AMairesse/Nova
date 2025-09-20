@@ -21,14 +21,14 @@
   <!-- Main Content Area -->
   <div class="row g-0" style="height: calc(100vh - 76px);">
     <!-- Threads Sidebar (Desktop) -->
-    <div class="col-lg-2 d-none d-lg-block border-end" id="threads-sidebar">
+    <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100" id="threads-sidebar">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
         <h5 class="mb-0">{% trans "Threads" %}</h5>
         <button class="btn btn-sm btn-outline-primary create-thread-btn">
           <i class="bi bi-plus"></i>
         </button>
       </div>
-      <div class="overflow-auto" style="height: calc(100% - 73px);" id="threads-container">
+      <div class="flex-grow-1 overflow-auto" id="threads-container" style="min-height: 0;">
         {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
 
         {% if has_more_threads %}
@@ -43,18 +43,18 @@
     </div>
     
     <!-- Message Area (Center) -->
-    <div class="col-12 d-flex flex-column" id="message-area" data-files-visible="true">
+    <div class="col-12 d-flex flex-column h-100" id="message-area" data-files-visible="true">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light d-none d-lg-flex">
         <h5 class="mb-0">{% trans "Messages" %}</h5>
         <button class="btn btn-sm btn-outline-secondary" type="button" id="files-toggle-btn" aria-expanded="true" aria-controls="files-sidebar">
           <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
         </button>
       </div>
-      <div id="message-container" class="flex-grow-1"></div>
+      <div id="message-container" class="d-flex flex-column flex-grow-1" style="min-height: 0;"></div>
     </div>
     
     <!-- Files Sidebar (Desktop) -->
-    <div class="col-lg-2 d-none d-lg-block border-start" id="files-sidebar">
+    <div class="col-lg-2 d-none d-lg-block border-start d-flex flex-column h-100" id="files-sidebar">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
         <h5 class="mb-0">{% trans "Files" %}</h5>
         <div>
@@ -66,7 +66,7 @@
           </button>
         </div>
       </div>
-      <div id="file-sidebar-content" class="overflow-auto" style="height: calc(100% - 73px);">
+      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto" style="min-height: 0;">
         <!-- File tree container -->
         <div id="file-tree-container">
           <!-- Content loaded dynamically -->
@@ -96,7 +96,7 @@
       </div>
     </div>
     <div class="offcanvas-body p-0">
-      <div id="mobile-threads-container">
+      <div id="mobile-threads-container" class="overflow-auto" style="height: 100%;">
         {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
 
         {% if has_more_threads %}
