@@ -12,7 +12,7 @@ from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
-from nova.models.models import Agent, Tool, ProviderType, LLMProvider
+from nova.models.models import Agent, Tool, ProviderType, LLMProvider, UserInfo
 from nova.models.models import CheckpointLink, UserFile
 from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
@@ -185,7 +185,7 @@ class LLMAgent:
         tools = await load_tools(agent)
 
         llm = agent.create_llm_agent()
-        system_prompt = agent.build_system_prompt()
+        system_prompt = await agent.build_system_prompt()
 
         # Create the ReAct agent
         if checkpointer:
@@ -288,7 +288,7 @@ class LLMAgent:
             if hasattr(module, 'close'):
                 await module.close(self)
 
-    def build_system_prompt(self):
+    async def build_system_prompt(self):
         """
         Build the system prompt.
         """
@@ -314,8 +314,7 @@ class LLMAgent:
 
         if memory_tool_enabled:
             try:
-                from nova.models.models import UserInfo
-                user_info = UserInfo.objects.get(user=self.user)
+                user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
                 if user_info.markdown_content.strip():
                     memory_block = f"\n\nMemory:\n{user_info.markdown_content}"
                     base_prompt += memory_block
@@ -352,11 +351,11 @@ class LLMAgent:
         num_files = await sync_to_async(list_files.count,
                                         thread_sensitive=False)()
         if num_files > 0:
-            technical_context = f"Technical context: {num_files} attached files. Use file tools if needed."
+            technical_context = f"\nTechnical context: {num_files} attached files. Use file tools if needed."
         else:
-            technical_context = "Technical context: no attached files."
+            technical_context = "\nTechnical context: no attached files."
 
-        full_question = f"{question}\n{technical_context}"
+        full_question = f"{question}{technical_context}"
 
         result = await self.langchain_agent.ainvoke(
             {"messages": [HumanMessage(content=full_question)]},

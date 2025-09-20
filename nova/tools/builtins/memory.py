@@ -197,7 +197,7 @@ async def get_functions(tool, agent: LLMAgent):
     """
     return [
         StructuredTool.from_function(
-            func=lambda theme: get_info(theme, agent),
+            coroutine=lambda theme: get_info(theme, agent),
             name="get_info",
             description="Retrieve stored information for a specific theme",
             args_schema={
@@ -212,7 +212,7 @@ async def get_functions(tool, agent: LLMAgent):
             }
         ),
         StructuredTool.from_function(
-            func=lambda theme, content: set_info(theme, content, agent),
+            coroutine=lambda theme, content: set_info(theme, content, agent),
             name="set_info",
             description="Store or update information for a specific theme",
             args_schema={
@@ -231,7 +231,7 @@ async def get_functions(tool, agent: LLMAgent):
             }
         ),
         StructuredTool.from_function(
-            func=lambda theme: delete_info(theme, agent),
+            coroutine=lambda theme: delete_info(theme, agent),
             name="delete_info",
             description="Delete stored information for a specific theme",
             args_schema={
@@ -246,7 +246,7 @@ async def get_functions(tool, agent: LLMAgent):
             }
         ),
         StructuredTool.from_function(
-            func=lambda theme: create_theme(theme, agent),
+            coroutine=lambda theme: create_theme(theme, agent),
             name="create_theme",
             description="Create a new theme for storing information",
             args_schema={
@@ -261,7 +261,7 @@ async def get_functions(tool, agent: LLMAgent):
             }
         ),
         StructuredTool.from_function(
-            func=lambda: list_themes(agent),
+            coroutine=lambda: list_themes(agent),
             name="list_themes",
             description="List all available themes",
             args_schema={
