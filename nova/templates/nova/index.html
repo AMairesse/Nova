@@ -2,7 +2,7 @@
 {% load i18n %} {% load static %}
 
 {% block content %}
-<div class="container-fluid h-100 p-0">
+<div class="container-fluid h-100 p-0" style="overflow: hidden;">
   <!-- Mobile Navigation (visible on small screens only) -->
   <nav class="navbar navbar-expand-lg d-lg-none bg-light border-bottom">
     <div class="container-fluid">
@@ -28,12 +28,17 @@
           <i class="bi bi-plus"></i>
         </button>
       </div>
-      <div class="overflow-auto" style="height: calc(100% - 73px);">
-        <ul class="list-group list-group-flush">
-          {% for thread in threads %}
-            {% include 'nova/partials/_thread_item.html' with thread=thread %}
-          {% endfor %}
-        </ul>
+      <div class="overflow-auto" style="height: calc(100% - 73px);" id="threads-container">
+        {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
+
+        {% if has_more_threads %}
+          <div class="text-center p-3" id="load-more-container">
+            <button class="btn btn-outline-primary btn-sm" id="load-more-threads" data-offset="{{ next_offset }}">
+              <i class="bi bi-arrow-down-circle me-1"></i>
+              {% trans "Load More" %}
+            </button>
+          </div>
+        {% endif %}
       </div>
     </div>
     
@@ -45,7 +50,7 @@
           <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
         </button>
       </div>
-      <div id="message-container" class="flex-grow-1 overflow-hidden"></div>
+      <div id="message-container" class="flex-grow-1"></div>
     </div>
     
     <!-- Files Sidebar (Desktop) -->
@@ -91,11 +96,18 @@
       </div>
     </div>
     <div class="offcanvas-body p-0">
-      <ul class="list-group list-group-flush">
-        {% for thread in threads %}
-          {% include 'nova/partials/_thread_item.html' with thread=thread %}
-        {% endfor %}
-      </ul>
+      <div id="mobile-threads-container">
+        {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
+
+        {% if has_more_threads %}
+          <div class="text-center p-3" id="mobile-load-more-container">
+            <button class="btn btn-outline-primary btn-sm" id="mobile-load-more-threads" data-offset="{{ next_offset }}">
+              <i class="bi bi-arrow-down-circle me-1"></i>
+              {% trans "Load More" %}
+            </button>
+          </div>
+        {% endif %}
+      </div>
     </div>
   </div>
 
@@ -136,6 +148,7 @@
     runningTasksBase: "/running-tasks/",
     createThread: "{% url 'create_thread' %}",
     deleteThread: "{% url 'delete_thread' 0 %}",
+    loadMoreThreads: "{% url 'load_more_threads' %}",
     fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",

@@ -398,8 +398,10 @@
         if (threadId) {
           localStorage.setItem('lastThreadId', threadId);
         }
-    
+
         this.initTextareaFocus();
+        // Auto-scroll to bottom for new conversations
+        this.scrollToBottom();
       } catch (error) {
         console.error('Error loading messages:', error);
       }
@@ -471,6 +473,9 @@
           conversationContainer.appendChild(messageElement);
         }
       }
+
+      // Auto-scroll to bottom when new messages are added
+      this.scrollToBottom();
     }
 
     scrollToMessage(messageId) {
@@ -497,6 +502,19 @@
     initTextareaFocus() {
       const textarea = document.querySelector('#message-container textarea[name="new_message"]');
       if (textarea) textarea.focus();
+    }
+
+    scrollToBottom() {
+      const container = document.getElementById('conversation-container');
+      if (container) {
+        // Use setTimeout to ensure DOM is updated before scrolling
+        setTimeout(() => {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth'
+          });
+        }, 100);
+      }
     }
 
     async createThread() {
@@ -565,17 +583,109 @@
   };
 
   // ============================================================================
+  // THREAD LOADING MANAGER - Handles pagination and grouping
+  // ============================================================================
+  class ThreadLoadingManager {
+    constructor() {
+      this.isLoading = false;
+    }
+
+    init() {
+      this.attachLoadMoreHandlers();
+    }
+
+    attachLoadMoreHandlers() {
+      // Desktop load more button
+      document.addEventListener('click', (e) => {
+        if (e.target.matches('#load-more-threads') || e.target.closest('#load-more-threads')) {
+          e.preventDefault();
+          const btn = e.target.closest('#load-more-threads');
+          this.loadMoreThreads(btn, '#threads-container', '#load-more-container');
+        }
+        // Mobile load more button
+        else if (e.target.matches('#mobile-load-more-threads') || e.target.closest('#mobile-load-more-threads')) {
+          e.preventDefault();
+          const btn = e.target.closest('#mobile-load-more-threads');
+          this.loadMoreThreads(btn, '#mobile-threads-container', '#mobile-load-more-container');
+        }
+      });
+    }
+
+    async loadMoreThreads(button, containerSelector, buttonContainerSelector) {
+      if (this.isLoading) return;
+
+      this.isLoading = true;
+      const offset = parseInt(button.dataset.offset) || 0;
+
+      // Show loading state
+      button.disabled = true;
+      button.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>{% trans "Loading..." %}';
+
+      try {
+        const response = await fetch(`${window.NovaApp.urls.loadMoreThreads}?offset=${offset}&limit=20`);
+        const data = await response.json();
+
+        if (data.html) {
+          // Append new threads to container
+          const container = document.querySelector(containerSelector);
+          if (container) {
+            // Remove the load more button temporarily
+            const buttonContainer = document.querySelector(buttonContainerSelector);
+            if (buttonContainer) {
+              buttonContainer.remove();
+            }
+
+            // Append new HTML
+            container.insertAdjacentHTML('beforeend', data.html);
+
+            // Update button offset and re-add if more threads available
+            if (data.has_more) {
+              button.dataset.offset = data.next_offset;
+              button.disabled = false;
+              button.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>{% trans "Load More" %}';
+
+              // Re-add the button container
+              if (buttonContainer) {
+                container.appendChild(buttonContainer);
+              }
+            } else {
+              // No more threads, remove button permanently
+              if (buttonContainer) {
+                buttonContainer.remove();
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error loading more threads:', error);
+        // Reset button state on error
+        button.disabled = false;
+        button.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>{% trans "Load More" %}';
+      } finally {
+        this.isLoading = false;
+      }
+    }
+  }
+
+  // ============================================================================
   // INITIALIZATION
   // ============================================================================
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => LegacyThreadManager.init());
+    document.addEventListener('DOMContentLoaded', () => {
+      LegacyThreadManager.init();
+      const threadLoadingManager = new ThreadLoadingManager();
+      threadLoadingManager.init();
+    });
   } else {
     LegacyThreadManager.init();
+    const threadLoadingManager = new ThreadLoadingManager();
+    threadLoadingManager.init();
   }
 
   // Expose for debugging
   window.MessageManager = MessageManager;
   window.StreamingManager = StreamingManager;
   window.MessageRenderer = MessageRenderer;
+  window.ThreadLoadingManager = ThreadLoadingManager;
 
 })();

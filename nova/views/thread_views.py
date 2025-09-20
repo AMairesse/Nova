@@ -8,6 +8,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
+from django.utils import timezone
+from datetime import timedelta
 from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
@@ -47,11 +49,74 @@ ALLOWED_ATTRS = {
 }
 
 
+def group_threads_by_date(threads):
+    """Group threads by date ranges: Today, Yesterday, Last Week, Last Month, Older"""
+    now = timezone.now()
+    today = now.date()
+    yesterday = today - timedelta(days=1)
+    last_week = today - timedelta(days=7)
+    last_month = today - timedelta(days=30)
+
+    grouped = {
+        'today': [],
+        'yesterday': [],
+        'last_week': [],
+        'last_month': [],
+        'older': []
+    }
+
+    for thread in threads:
+        thread_date = thread.created_at.date()
+        if thread_date == today:
+            grouped['today'].append(thread)
+        elif thread_date == yesterday:
+            grouped['yesterday'].append(thread)
+        elif thread_date > last_week:
+            grouped['last_week'].append(thread)
+        elif thread_date > last_month:
+            grouped['last_month'].append(thread)
+        else:
+            grouped['older'].append(thread)
+
+    return grouped
+
+
 @ensure_csrf_cookie
 @login_required(login_url='login')
 def index(request):
-    threads = Thread.objects.filter(user=request.user).order_by('-created_at')
-    return render(request, 'nova/index.html', {'threads': threads})
+    # Get initial 20 threads
+    threads = Thread.objects.filter(user=request.user).order_by('-created_at')[:20]
+    grouped_threads = group_threads_by_date(threads)
+    total_count = Thread.objects.filter(user=request.user).count()
+
+    return render(request, 'nova/index.html', {
+        'grouped_threads': grouped_threads,
+        'threads': threads,  # Keep for backward compatibility
+        'has_more_threads': total_count > 20,
+        'next_offset': 20
+    })
+
+
+@login_required(login_url='login')
+def load_more_threads(request):
+    """AJAX endpoint to load more threads"""
+    offset = int(request.GET.get('offset', 0))
+    limit = int(request.GET.get('limit', 20))
+
+    threads = Thread.objects.filter(user=request.user).order_by('-created_at')[offset:offset + limit]
+    grouped_threads = group_threads_by_date(threads)
+    total_count = Thread.objects.filter(user=request.user).count()
+
+    # Render the grouped threads HTML
+    html = render_to_string('nova/partials/_thread_groups.html', {
+        'grouped_threads': grouped_threads
+    }, request=request)
+
+    return JsonResponse({
+        'html': html,
+        'has_more': (offset + limit) < total_count,
+        'next_offset': offset + limit
+    })
 
 
 @csrf_protect
