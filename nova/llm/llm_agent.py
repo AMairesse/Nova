@@ -294,17 +294,38 @@ class LLMAgent:
         """
         today = date.today().strftime("%A %d of %B, %Y")
 
+        base_prompt = ""
         if self._system_prompt:
-            sp = self._system_prompt
-            if "{today}" in sp:
-                sp = sp.format(today=today)
-            return sp
+            base_prompt = self._system_prompt
+            if "{today}" in base_prompt:
+                base_prompt = base_prompt.format(today=today)
+        else:
+            base_prompt = (
+                f"You are a helpful assistant. Today is {today}. "
+                "Be concise and direct. If you need to display "
+                "structured information, use markdown."
+            )
 
-        return (
-            f"You are a helpful assistant. Today is {today}. "
-            "Be concise and direct. If you need to display "
-            "structured information, use markdown."
+        # Check if memory tool is enabled and inject user memory
+        memory_tool_enabled = any(
+            tool.tool_subtype == 'memory' and tool.is_active
+            for tool in self.builtin_tools
         )
+
+        if memory_tool_enabled:
+            try:
+                from nova.models.models import UserInfo
+                user_info = UserInfo.objects.get(user=self.user)
+                if user_info.markdown_content.strip():
+                    memory_block = f"\n\nMemory:\n{user_info.markdown_content}"
+                    base_prompt += memory_block
+            except UserInfo.DoesNotExist:
+                # UserInfo should exist due to signal, but handle gracefully
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to load user memory: {e}")
+
+        return base_prompt
 
     def create_llm_agent(self):
         if not self._llm_provider:

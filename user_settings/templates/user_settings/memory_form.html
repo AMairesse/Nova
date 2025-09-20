@@ -1,0 +1,10 @@
+<!-- user_settings/templates/user_settings/memory_form.html -->
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 800px;">
+  <h2 class="mb-3">{% trans "Memory Settings" %}</h2>
+  {% include "user_settings/fragments/memory_form.html" %}
+</div>
+{% endblock %}

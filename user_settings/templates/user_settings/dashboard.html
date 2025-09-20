@@ -44,6 +44,16 @@
         {% trans "General" %}
       </button>
     </li>
+    {% if has_memory_tool %}
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="tab-memory"
+              data-bs-toggle="tab"
+              data-bs-target="#pane-memory"
+              type="button" role="tab">
+        {% trans "Memory" %}
+      </button>
+    </li>
+    {% endif %}
   </ul>
 
   <div class="tab-content pt-3">
@@ -86,6 +96,18 @@
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading…" %}</div>
     </div>
+
+    {% if has_memory_tool %}
+    <div class="tab-pane fade htmx-pane"
+        id="pane-memory"
+        role="tabpanel"
+        hx-get="{% url 'user_settings:memory' %}?partial=1"
+        hx-trigger="revealed"
+        hx-target="this"
+        hx-swap="innerHTML">
+      <div class="text-muted">{% trans "Loading memory…" %}</div>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
