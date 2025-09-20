@@ -7,7 +7,6 @@ from django.core.exceptions import ValidationError
 
 from nova.models.models import UserInfo
 from nova.tools.builtins.memory import (
-    _parse_markdown_themes,
     _get_theme_content,
     _set_theme_content,
     _delete_theme_content,
@@ -75,13 +74,6 @@ class MemoryToolTest(TestCase):
 - IDE: VSCode
 """
         self.user_info.save()
-
-    def test_parse_markdown_themes(self):
-        """Test parsing themes from markdown."""
-        content = self.user_info.markdown_content
-        themes = _parse_markdown_themes(content)
-        expected = ["Personal", "Work", "Preferences"]
-        self.assertEqual(themes, expected)
 
     def test_get_theme_content(self):
         """Test extracting content for a specific theme."""

@@ -1,7 +1,5 @@
 from datetime import datetime, date, timedelta, timezone
-
 from langchain_core.tools import StructuredTool
-
 from nova.llm.llm_agent import LLMAgent
 
 METADATA = {
@@ -13,11 +11,14 @@ METADATA = {
     'test_function_args': [],
 }
 
+
 def current_date() -> str:
     return date.today().strftime('%Y-%m-%d')
 
+
 def current_datetime() -> str:
     return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
 
 def add_days(date: str, days: int) -> str:
     start_date = datetime.strptime(date, '%Y-%m-%d')
@@ -25,17 +26,20 @@ def add_days(date: str, days: int) -> str:
     end_date_str = end_date.strftime('%Y-%m-%d')
     return end_date_str
 
+
 def add_weeks(date: str, weeks: int) -> str:
     start_date = datetime.strptime(date, '%Y-%m-%d')
     end_date = start_date + timedelta(weeks=weeks)
     end_date_str = end_date.strftime('%Y-%m-%d')
     return end_date_str
 
+
 def count_days(start_date: str, end_date: str) -> int:
     start_date = datetime.strptime(start_date, '%Y-%m-%d')
     end_date = datetime.strptime(end_date, '%Y-%m-%d')
     delta = end_date - start_date
     return delta.days
+
 
 async def get_functions(tool, agent: LLMAgent):
     """
@@ -46,7 +50,7 @@ async def get_functions(tool, agent: LLMAgent):
         StructuredTool.from_function(
             func=current_date,
             name="current_date",
-            description="Return the current date (format: YYYY-MM-DD)",
+            description="Return the current date for GMT (format: YYYY-MM-DD)",
             args_schema={
                 "type": "object",
                 "properties": {},
@@ -56,7 +60,7 @@ async def get_functions(tool, agent: LLMAgent):
         StructuredTool.from_function(
             func=current_datetime,
             name="current_datetime",
-            description="Return the current date and time (format: YYYY-MM-DD HH:MM:SS)",
+            description="Return the current date and time for GMT (format: YYYY-MM-DD HH:MM:SS)",
             args_schema={
                 "type": "object",
                 "properties": {},

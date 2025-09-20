@@ -315,8 +315,9 @@ class LLMAgent:
         if memory_tool_enabled:
             try:
                 user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
-                if user_info.markdown_content.strip():
-                    memory_block = f"\n\nMemory:\n{user_info.markdown_content}"
+                themes = await sync_to_async(user_info.get_themes)()
+                if themes:
+                    memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
                     base_prompt += memory_block
             except UserInfo.DoesNotExist:
                 # UserInfo should exist due to signal, but handle gracefully

@@ -1,6 +1,7 @@
 # nova/models/models.py
 import re
 import uuid
+from typing import List
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -358,6 +359,17 @@ class UserInfo(models.Model):
         # Check size limit
         if len(self.markdown_content) > 50000:
             raise ValidationError(_("Content exceeds maximum size of 50,000 characters."))
+
+    def get_themes(self) -> List[str]:
+        """Extract theme names from Markdown headings."""
+        themes = []
+        lines = self.markdown_content.split('\n')
+        for line in lines:
+            if line.strip().startswith('# '):
+                theme = line.strip()[2:].strip()
+                if theme:
+                    themes.append(theme)
+        return themes
 
 
 class ToolCredential(models.Model):

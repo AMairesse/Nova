@@ -1,5 +1,4 @@
 import re
-from typing import List
 from django.core.exceptions import ValidationError
 from langchain_core.tools import StructuredTool
 from nova.llm.llm_agent import LLMAgent
@@ -30,18 +29,6 @@ def _update_user_info(user, content):
     user_info.full_clean()  # Validate before saving
     user_info.save()
     return user_info
-
-
-def _parse_markdown_themes(content: str) -> List[str]:
-    """Extract theme names from Markdown headings."""
-    themes = []
-    lines = content.split('\n')
-    for line in lines:
-        if line.strip().startswith('# '):
-            theme = line.strip()[2:].strip()
-            if theme:
-                themes.append(theme)
-    return themes
 
 
 def _get_theme_content(content: str, theme: str) -> str:
@@ -166,7 +153,7 @@ async def create_theme(theme: str, agent: LLMAgent) -> str:
     current_content = user_info.markdown_content
 
     # Check if theme already exists
-    themes = _parse_markdown_themes(current_content)
+    themes = await sync_to_async(user_info.get_themes)()
     if theme in themes:
         return f"Theme '{theme}' already exists."
 
@@ -184,7 +171,7 @@ async def list_themes(agent: LLMAgent) -> str:
     if not content:
         return "No themes available."
 
-    themes = _parse_markdown_themes(content)
+    themes = await sync_to_async(user_info.get_themes)()
     if not themes:
         return "No themes available."
 
