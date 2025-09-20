@@ -1,7 +1,7 @@
 {% load i18n %}
 {% for group_name, threads in grouped_threads.items %}
   {% if threads %}
-    <div class="thread-group mb-3">
+    <div class="thread-group mb-3" data-group="{{ group_name }}">
       <h6 class="text-muted mb-2 px-3 pt-2 pb-1 border-bottom">
         {% if group_name == 'today' %}
           {% trans "Today" %}

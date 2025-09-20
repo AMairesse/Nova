@@ -90,6 +90,12 @@ body {
     min-height: 0;
 }
 
+/* Ensure sidebars allow inner overflow containers to scroll */
+#threads-sidebar,
+#files-sidebar {
+    min-height: 0;
+}
+
 .message-input-area {
     flex-shrink: 0;
     border-top: 1px solid var(--bs-border-color);

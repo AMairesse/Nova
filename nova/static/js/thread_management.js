@@ -521,9 +521,13 @@
       try {
         const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.createThread, { method: 'POST' });
         const data = await response.json();
-        const threadList = document.querySelector('.list-group');
-        if (threadList && data.threadHtml) {
-          threadList.insertAdjacentHTML('afterbegin', data.threadHtml);
+        if (data.threadHtml) {
+          const container = document.getElementById('threads-container');
+          const todayGroup = ensureGroupContainer('today', container);
+          const ul = todayGroup ? todayGroup.querySelector('ul.list-group') : null;
+          if (ul) {
+            ul.insertAdjacentHTML('afterbegin', data.threadHtml);
+          }
         }
         this.loadMessages(data.thread_id);
         // Dispatch custom event for thread change
@@ -582,6 +586,80 @@
     }
   };
 
+  // Thread UI helpers for grouping and DOM manipulation
+  function getGroupOrder() {
+    return ['today', 'yesterday', 'last_week', 'last_month', 'older'];
+  }
+  function getGroupTitle(key) {
+    const t = (typeof window.gettext === 'function') ? window.gettext : (s) => s;
+    switch (key) {
+      case 'today': return t('Today');
+      case 'yesterday': return t('Yesterday');
+      case 'last_week': return t('Last Week');
+      case 'last_month': return t('Last Month');
+      default: return t('Older');
+    }
+  }
+  function ensureGroupContainer(group, containerEl) {
+    const container = containerEl || document.getElementById('threads-container');
+    if (!container) return null;
+
+    let grp = container.querySelector(`.thread-group[data-group="${group}"]`);
+    if (!grp) {
+      grp = document.createElement('div');
+      grp.className = 'thread-group mb-3';
+      grp.setAttribute('data-group', group);
+
+      const h6 = document.createElement('h6');
+      h6.className = 'text-muted mb-2 px-3 pt-2 pb-1 border-bottom';
+      h6.textContent = getGroupTitle(group);
+
+      const ul = document.createElement('ul');
+      ul.className = 'list-group list-group-flush';
+
+      grp.appendChild(h6);
+      grp.appendChild(ul);
+
+      // Insert in correct order; keep load-more container as last element
+      const order = getGroupOrder();
+      const targetIndex = order.indexOf(group);
+      const groups = Array.from(container.querySelectorAll('.thread-group'));
+      let insertBefore = null;
+      for (const g of groups) {
+        const idx = order.indexOf(g.dataset.group || 'older');
+        if (idx > targetIndex) {
+          insertBefore = g;
+          break;
+        }
+      }
+      // If no later group, insert before load more button if it exists
+      if (!insertBefore) {
+        const loadMore = container.querySelector('#load-more-container, #mobile-load-more-container');
+        if (loadMore) insertBefore = loadMore;
+      }
+      container.insertBefore(grp, insertBefore);
+    }
+    return grp;
+  }
+  function mergeThreadGroupsFromHtml(html, containerEl) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const incomingGroups = tmp.querySelectorAll('.thread-group');
+    incomingGroups.forEach(incoming => {
+      const group = incoming.dataset.group || 'older';
+      const targetGroup = ensureGroupContainer(group, containerEl);
+      if (!targetGroup) return;
+
+      const incomingUl = incoming.querySelector('ul.list-group');
+      const targetUl = targetGroup.querySelector('ul.list-group');
+      if (!incomingUl || !targetUl) return;
+
+      while (incomingUl.firstElementChild) {
+        targetUl.appendChild(incomingUl.firstElementChild);
+      }
+    });
+  }
+
   // ============================================================================
   // THREAD LOADING MANAGER - Handles pagination and grouping
   // ============================================================================
@@ -626,33 +704,24 @@
         const data = await response.json();
 
         if (data.html) {
-          // Append new threads to container
           const container = document.querySelector(containerSelector);
           if (container) {
-            // Remove the load more button temporarily
+            // Merge incoming groups into existing ones instead of duplicating headers
+            mergeThreadGroupsFromHtml(data.html, container);
+
+            // Keep the load-more container at the bottom
             const buttonContainer = document.querySelector(buttonContainerSelector);
-            if (buttonContainer) {
-              buttonContainer.remove();
+            if (buttonContainer && buttonContainer.parentElement !== container) {
+              container.appendChild(buttonContainer);
             }
 
-            // Append new HTML
-            container.insertAdjacentHTML('beforeend', data.html);
-
-            // Update button offset and re-add if more threads available
             if (data.has_more) {
               button.dataset.offset = data.next_offset;
               button.disabled = false;
               button.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>{% trans "Load More" %}';
-
-              // Re-add the button container
-              if (buttonContainer) {
-                container.appendChild(buttonContainer);
-              }
-            } else {
-              // No more threads, remove button permanently
-              if (buttonContainer) {
-                buttonContainer.remove();
-              }
+            } else if (buttonContainer) {
+              // No more threads, remove the button container
+              buttonContainer.remove();
             }
           }
         }
