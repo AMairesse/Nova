@@ -286,9 +286,15 @@
             }
           }
         } else if (data.type === 'task_complete') {
+          // Update thread title in sidebars if backend provided it
+          if (data.thread_id && data.thread_subject) {
+            const links = document.querySelectorAll(`.thread-link[data-thread-id="${data.thread_id}"]`);
+            links.forEach(a => {
+              a.textContent = data.thread_subject;
+            });
+          }
           this.onStreamComplete(taskId);
         }
-        // Handle other message types...
       };
 
       socket.onclose = () => {

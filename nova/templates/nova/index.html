@@ -21,7 +21,7 @@
   <!-- Main Content Area -->
   <div class="row g-0" style="height: calc(100vh - 76px);">
     <!-- Threads Sidebar (Desktop) -->
-    <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100" id="threads-sidebar">
+    <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100 overflow-hidden" id="threads-sidebar">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
         <h5 class="mb-0">{% trans "Threads" %}</h5>
         <button class="btn btn-sm btn-outline-primary create-thread-btn">
@@ -54,7 +54,7 @@
     </div>
     
     <!-- Files Sidebar (Desktop) -->
-    <div class="col-lg-2 d-none d-lg-block border-start d-flex flex-column h-100" id="files-sidebar">
+    <div class="col-lg-2 d-none d-lg-block border-start d-flex flex-column h-100 overflow-hidden" id="files-sidebar">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
         <h5 class="mb-0">{% trans "Files" %}</h5>
         <div>
@@ -95,8 +95,8 @@
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
       </div>
     </div>
-    <div class="offcanvas-body p-0">
-      <div id="mobile-threads-container" class="overflow-auto" style="height: 100%;">
+    <div class="offcanvas-body p-0 d-flex flex-column" style="min-height: 0;">
+      <div id="mobile-threads-container" class="flex-grow-1 overflow-auto" style="min-height: 0%;">
         {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
 
         {% if has_more_threads %}
