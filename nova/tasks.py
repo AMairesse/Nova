@@ -398,7 +398,9 @@ class TaskExecutor:
         })
 
         await self.handler.publish_update('task_complete', {
-            'result': self.task.result
+            'result': self.task.result,
+            'thread_id': self.thread.id,
+            'thread_subject': self.thread.subject
         })
 
         self.task.status = TaskStatus.COMPLETED

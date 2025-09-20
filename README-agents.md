@@ -14,15 +14,15 @@ If using Docker, run `docker-compose up` for the required services after adding 
 
 ## 1. Create an LLM Provider
 
-You need at least one LLM provider to power your agents. For local setups, use efficient models like Qwen3 for tool usage and context management. Enable features like flash attention in your LLM server for better performance.
+You need at least one LLM provider to power your agents. For local setups, use efficient models like Magistral for tool usage and context management. Enable features like flash attention in your LLM server for better performance.
 
 Example for local provider:
 
 | Field | Value |
 | --- | --- |
-| Name | `LMStudio - Qwen3 30b` |
+| Name | `LMStudio - Magistral` |
 | Type | `LMStudio` |
-| Model | `qwen/qwen3-30b-a3b-2507` |
+| Model | `mistralai/magistral-small-2509` |
 | Base URL | `http://host.docker.internal:1234/v1` (if served on the host machine running Docker) |
 | Max context tokens | `50000` (enable flash attention in LM Studio) |
 
@@ -59,7 +59,7 @@ This agent handles web searches and browsing.
 | Field | Value |
 | --- | --- |
 | Name | `Internet Agent` |
-| Provider | `LMStudio - Qwen3 30b` (GPU preferred) or `OpenRouter - GPT-5-mini` |
+| Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
 | Prompt | `You are an AI Agent specialized in retrieving information from the internet. Use search tools first for efficiency. If a website is not responding or returns an error, stop and inform the user. Example: For "latest news on AI", search via SearXNG then browse if needed.` |
 | Recursion limit | `100` (allows multiple tool calls for browsing) |
 | Use as a tool | `Yes` |
@@ -73,7 +73,7 @@ This agent manages calendar queries with read-only access.
 | Field | Value |
 | --- | --- |
 | Name | `Calendar Agent` |
-| Provider | `LMStudio - Qwen3 30b` (GPU preferred) or `OpenRouter - GPT-5-mini` |
+| Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
 | Prompt | `You are an AI Agent specialized in managing the user's calendar. Use tools to fetch events. Unless specified, do not modify anything—access is read-only. Example: For "events next week", query CalDAV for the date range.` |
 | Recursion limit | `25` |
 | Use as a tool | `Yes` |
@@ -87,7 +87,7 @@ This agent writes and executes code in a sandboxed environment.
 | Field | Value |
 | --- | --- |
 | Name | `Code Agent` |
-| Provider | `LMStudio - Qwen3 30b` (GPU preferred) or `OpenRouter - GPT-5-mini` |
+| Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
 | Prompt | `You are an AI Agent specialized in coding. Your main task is to use code execution tools to answer user questions by writing and running code as needed. Key guidelines for handling files and data: - DO NOT attempt to access local files or the filesystem directly in your code (e.g., no using paths like '/path/to/file' or functions like open() for local reads). The code execution environment has NO direct access to any files. - Instead, ALWAYS use the get_file_url tool to generate a public HTTP URL for any file you need to access. Then, incorporate this URL into your code to fetch the file's content (e.g., via HTTP requests like urllib.request.urlopen() in Python). - The execution environment lacks optional modules like pandas, requests, and others—stick to Python's standard library only. - If you need to provide input data to your code, pass it directly via the program's input mechanisms. - Ensure your code outputs data in a capturable format (e.g., print to stdout). If you need to save output, use available file tools to dump it AFTER execution—never during code runtime. - To avoid overloading context, when inspecting file contents (e.g., for CSV headers to generate code), read only the first 1024 bytes and iterate if needed to access just the header and first few lines. - Example workflow: If a user asks to process a file, first call get_file_url to get its URL, then write code that downloads from that URL (using urllib.request), processes it, and outputs the result. Note: Do not provide a list of sources or bibliography at the end of your responses.` |
 | Recursion limit | `25` |
 | Use as a tool | `Yes` |
@@ -99,7 +99,7 @@ This agent writes and executes code in a sandboxed environment.
 | Field | Value |
 | --- | --- |
 | Name | `Nova` |
-| Provider | `LMStudio - Qwen3 30b` (GPU preferred) or `OpenRouter - GPT-5-mini` |
+| Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
 | Prompt | `You are an AI Agent named Nova. Use tools and sub-agents to answer user queries. Do not lie about your abilities or offer services beyond your tools. Respond in the user's language by default. Use Markdown for responses. Keep answers concise unless detailed explanation is requested.` |
 | Recursion limit | `25` |
 | Use as a tool | `No` |

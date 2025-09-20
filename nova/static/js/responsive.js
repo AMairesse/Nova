@@ -42,11 +42,10 @@
         }
       }, 250));
 
-      // Handle thread selection on mobile - close offcanvas and show message area
+      // Handle thread selection on mobile - close offcanvas ONLY when a thread link is clicked
       document.addEventListener('click', (e) => {
-        const threadItem = e.target.closest('.list-group-item');
-        if (threadItem && !this.isDesktop) {
-          // Close threads offcanvas when a thread is selected on mobile
+        const threadLink = e.target.closest('.thread-link');
+        if (threadLink && !this.isDesktop) {
           const threadsOffcanvas = bootstrap.Offcanvas.getInstance(document.getElementById('threadsOffcanvas'));
           if (threadsOffcanvas) {
             threadsOffcanvas.hide();
