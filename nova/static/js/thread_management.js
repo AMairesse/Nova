@@ -549,6 +549,7 @@
         const threadElement = document.getElementById(`thread-item-${threadId}`);
         if (threadElement) threadElement.remove();
 
+        // Determine next thread to show (if any) before removal
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;
         this.loadMessages(firstThreadId);
