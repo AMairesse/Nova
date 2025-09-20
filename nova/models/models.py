@@ -1,6 +1,7 @@
 # nova/models/models.py
 import re
 import uuid
+from typing import List
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -327,6 +328,48 @@ class UserProfile(models.Model):
 
         if self.default_agent and self.default_agent.user != self.user:
             raise ValidationError(_("Default agent must belong to the user."))
+
+
+class UserInfo(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL,
+                                on_delete=models.CASCADE,
+                                related_name='user_info')
+    markdown_content = models.TextField(
+        blank=True,
+        default="",
+        max_length=50000,
+        help_text=_("User information stored in Markdown format")
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("User Information")
+        verbose_name_plural = _("User Information")
+
+    def __str__(self):
+        return f"Info for {self.user.username}"
+
+    def clean(self):
+        super().clean()
+        # Basic Markdown validation - ensure it starts with # if not empty
+        if self.markdown_content and not self.markdown_content.strip().startswith('#'):
+            raise ValidationError(_("Markdown content should start with a heading (#)."))
+
+        # Check size limit
+        if len(self.markdown_content) > 50000:
+            raise ValidationError(_("Content exceeds maximum size of 50,000 characters."))
+
+    def get_themes(self) -> List[str]:
+        """Extract theme names from Markdown headings."""
+        themes = []
+        lines = self.markdown_content.split('\n')
+        for line in lines:
+            if line.strip().startswith('# '):
+                theme = line.strip()[2:].strip()
+                if theme:
+                    themes.append(theme)
+        return themes
 
 
 class ToolCredential(models.Model):

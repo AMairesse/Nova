@@ -179,7 +179,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
 
     # ---------------- build_system_prompt ----------------
 
-    def test_build_system_prompt_default_and_template(self):
+    async def test_build_system_prompt_default_and_template(self):
         fakes = self._get_fake_third_party_modules()
         with patch.dict(sys.modules, fakes):
             agent = llm_agent_mod.LLMAgent(
@@ -188,7 +188,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 langgraph_thread_id="fake_id",
                 agent_config=None,
             )
-            default_prompt = agent.build_system_prompt()
+            default_prompt = await agent.build_system_prompt()
             self.assertIn("You are a helpful assistant", default_prompt)
 
             # With a template using {today}
@@ -199,7 +199,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 agent_config=None,
                 system_prompt="Today is {today}.",
             )
-            templated = agent2.build_system_prompt()
+            templated = await agent2.build_system_prompt()
             self.assertNotIn("{today}", templated)
             self.assertTrue(templated.startswith("Today is "))
 
@@ -452,9 +452,9 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 self.assertEqual(len(agent.langchain_agent.invocations), 1)
                 payload, used_config = agent.langchain_agent.invocations[0]
                 self.assertIs(used_config, agent.silent_config)
-                # Check file context added to prompt
-                full_question = payload["messages"][0].content
-                self.assertIn("Technical context: 2 attached files.", full_question)
+                # Check file context added to system prompt
+                system_prompt = await agent.build_system_prompt()
+                self.assertIn("There is 2 attached files. Use file tools if needed.", system_prompt)
 
     # ---------------- create (class method) ----------------
 

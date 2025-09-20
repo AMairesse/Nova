@@ -1,0 +1,34 @@
+<!-- user_settings/templates/user_settings/fragments/memory_form.html -->
+{% load crispy_forms_tags i18n %}
+
+<form hx-post="{% url 'user_settings:memory' %}?partial=1"
+      hx-swap="none" novalidate>
+  {% csrf_token %}
+  <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+
+  <!-- Memory Information Section -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">{% trans "Personal Memory" %}</h5>
+    </div>
+    <div class="card-body">
+      <div class="mb-3">
+        {{ form.markdown_content|as_crispy_field }}
+        <div class="form-text">
+          {{ help_text }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <small class="text-muted">
+        {% trans "Maximum 50,000 characters. Use headings (# Theme) to organize your information." %}
+      </small>
+    </div>
+    <button type="submit" class="btn btn-primary">
+      {% trans "Save Memory" %}
+    </button>
+  </div>
+</form>

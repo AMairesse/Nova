@@ -12,7 +12,7 @@ from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
-from nova.models.models import Agent, Tool, ProviderType, LLMProvider
+from nova.models.models import Agent, Tool, ProviderType, LLMProvider, UserInfo
 from nova.models.models import CheckpointLink, UserFile
 from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
@@ -185,7 +185,7 @@ class LLMAgent:
         tools = await load_tools(agent)
 
         llm = agent.create_llm_agent()
-        system_prompt = agent.build_system_prompt()
+        system_prompt = await agent.build_system_prompt()
 
         # Create the ReAct agent
         if checkpointer:
@@ -288,23 +288,55 @@ class LLMAgent:
             if hasattr(module, 'close'):
                 await module.close(self)
 
-    def build_system_prompt(self):
+    async def build_system_prompt(self):
         """
         Build the system prompt.
         """
         today = date.today().strftime("%A %d of %B, %Y")
 
+        base_prompt = ""
         if self._system_prompt:
-            sp = self._system_prompt
-            if "{today}" in sp:
-                sp = sp.format(today=today)
-            return sp
+            base_prompt = self._system_prompt
+            if "{today}" in base_prompt:
+                base_prompt = base_prompt.format(today=today)
+        else:
+            base_prompt = (
+                f"You are a helpful assistant. Today is {today}. "
+                "Be concise and direct. If you need to display "
+                "structured information, use markdown."
+            )
 
-        return (
-            f"You are a helpful assistant. Today is {today}. "
-            "Be concise and direct. If you need to display "
-            "structured information, use markdown."
+        # Check if memory tool is enabled and inject user memory
+        memory_tool_enabled = any(
+            tool.tool_subtype == 'memory' and tool.is_active
+            for tool in self.builtin_tools
         )
+
+        if memory_tool_enabled:
+            try:
+                user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
+                themes = await sync_to_async(user_info.get_themes)()
+                if themes:
+                    memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
+                    base_prompt += memory_block
+            except UserInfo.DoesNotExist:
+                # UserInfo should exist due to signal, but handle gracefully
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to load user memory: {e}")
+
+        # Add information about files available in disussion
+        list_files = await sync_to_async(UserFile.objects.filter,
+                                         thread_sensitive=False)(thread=self.thread)
+        num_files = await sync_to_async(list_files.count,
+                                        thread_sensitive=False)()
+        if num_files > 0:
+            files_context = f"\nThere is {num_files} attached files. Use file tools if needed."
+        else:
+            files_context = "\nNo attached files available."
+        base_prompt += files_context
+
+        return base_prompt
 
     def create_llm_agent(self):
         if not self._llm_provider:
@@ -324,18 +356,7 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
-        # If the current thread as some files, alert the
-        # agent by adding a message to the prompt
-        list_files = await sync_to_async(UserFile.objects.filter,
-                                         thread_sensitive=False)(thread=self.thread)
-        num_files = await sync_to_async(list_files.count,
-                                        thread_sensitive=False)()
-        if num_files > 0:
-            technical_context = f"Technical context: {num_files} attached files. Use file tools if needed."
-        else:
-            technical_context = "Technical context: no attached files."
-
-        full_question = f"{question}\n{technical_context}"
+        full_question = f"{question}"
 
         result = await self.langchain_agent.ainvoke(
             {"messages": [HumanMessage(content=full_question)]},

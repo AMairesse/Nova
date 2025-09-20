@@ -24,6 +24,7 @@ from user_settings.views.tool import (
     tool_test_connection
 )
 from user_settings.views.general import GeneralSettingsView
+from user_settings.views.memory import MemorySettingsView
 from user_settings.views.api_token import GenerateAPITokenView, DeleteAPITokenView
 
 app_name = "user_settings"
@@ -64,4 +65,9 @@ urlpatterns += [
     path("general/", GeneralSettingsView.as_view(), name="general"),
     path("general/api-token/generate/", GenerateAPITokenView.as_view(), name="api-token-generate"),
     path("general/api-token/delete/", DeleteAPITokenView.as_view(), name="api-token-delete"),
+]
+
+urlpatterns += [
+    # Memory
+    path("memory/", MemorySettingsView.as_view(), name="memory"),
 ]

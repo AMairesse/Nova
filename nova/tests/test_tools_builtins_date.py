@@ -88,13 +88,13 @@ class DateBuiltinTests(SimpleTestCase):
 
         # current_date
         t = by_name["current_date"]
-        self.assertEqual(t["description"], "Return the current date (format: YYYY-MM-DD)")
+        self.assertEqual(t["description"], "Return the current date for GMT (format: YYYY-MM-DD)")
         self.assertEqual(t["args_schema"], {"type": "object", "properties": {}, "required": []})
         self.assertIs(t["func"], self.mod.current_date)
 
         # current_datetime
         t = by_name["current_datetime"]
-        self.assertEqual(t["description"], "Return the current date and time (format: YYYY-MM-DD HH:MM:SS)")
+        self.assertEqual(t["description"], "Return the current date and time for GMT (format: YYYY-MM-DD HH:MM:SS)")
         self.assertEqual(t["args_schema"], {"type": "object", "properties": {}, "required": []})
         self.assertIs(t["func"], self.mod.current_datetime)
 
