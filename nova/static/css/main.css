@@ -96,6 +96,54 @@ body {
     min-height: 0;
 }
 
+/* Fix threads container scrolling on desktop */
+#threads-container {
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 100%;
+    /* Ensure proper scrolling behavior */
+    -webkit-overflow-scrolling: touch;
+    /* Smooth scrolling for better UX */
+    scroll-behavior: smooth;
+}
+
+/* Mobile threads container - ensure it also scrolls properly */
+#mobile-threads-container {
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 100%;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+}
+
+/* Ensure thread groups don't interfere with scrolling */
+.thread-group {
+    flex-shrink: 0;
+}
+
+/* Ensure load more button is properly positioned and doesn't interfere with scrolling */
+#load-more-container,
+#mobile-load-more-container {
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+
+/* Ensure proper spacing and layout for thread items */
+.thread-group .list-group-item {
+    border-left: none;
+    border-right: none;
+    border-radius: 0;
+}
+
+.thread-group:first-child .list-group-item:first-child {
+    border-top: none;
+}
+
+.thread-group:last-child .list-group-item:last-child {
+    border-bottom: none;
+}
+
 .message-input-area {
     flex-shrink: 0;
     border-top: 1px solid var(--bs-border-color);
