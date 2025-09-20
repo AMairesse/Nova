@@ -88,7 +88,7 @@ server:
   base_url: false  # "http://example.com/location"
   # rate limit the number of request on the instance, block some bots.
   # Is overwritten by ${SEARXNG_LIMITER}
-  limiter: true
+  limiter: false
   # enable features designed only for public instances.
   # Is overwritten by ${SEARXNG_PUBLIC_INSTANCE}
   public_instance: false
@@ -237,6 +237,9 @@ plugins:
     active: true
 
   searx.plugins.hostnames.SXNGPlugin:
+    active: true
+
+  searx.plugins.time_zone.SXNGPlugin:
     active: true
 
   searx.plugins.oa_doi_rewrite.SXNGPlugin:
@@ -405,13 +408,12 @@ engines:
       require_api_key: false
       results: JSON
 
-  # - name: astrophysics data system
-  #   engine: astrophysics_data_system
-  #   sort: asc
-  #   weight: 5
-  #   categories: [science]
-  #   api_key: your-new-key
-  #   shortcut: ads
+  - name: astrophysics data system
+    engine: astrophysics_data_system
+    shortcut: ads
+    # read https://docs.searxng.org/dev/engines/online/astrophysics_data_system.html
+    api_key: ""
+    inactive: true
 
   - name: alpine linux packages
     engine: alpinelinux
@@ -422,6 +424,7 @@ engines:
     engine: annas_archive
     disabled: true
     shortcut: aa
+    timeout: 5
 
   - name: ansa
     engine: ansa
@@ -488,7 +491,6 @@ engines:
   - name: arxiv
     engine: arxiv
     shortcut: arx
-    timeout: 4.0
 
   - name: ask
     engine: ask
@@ -657,12 +659,12 @@ engines:
     timeout: 30
     disabled: true
 
-  # - name: core.ac.uk
-  #   engine: core
-  #   categories: science
-  #   shortcut: cor
-  #   # get your API key from: https://core.ac.uk/api-keys/register/
-  #   api_key: 'unset'
+  - name: core.ac.uk
+    engine: core
+    shortcut: cor
+    # read https://docs.searxng.org/dev/engines/online/core.html
+    api_key: ""
+    inactive: true
 
   - name: cppreference
     engine: cppreference
@@ -716,7 +718,6 @@ engines:
 
   - name: currency
     engine: currency_convert
-    categories: general
     shortcut: cc
 
   - name: deezer
@@ -1253,9 +1254,10 @@ engines:
   - name: z-library
     engine: zlibrary
     shortcut: zlib
-    categories: files
     timeout: 7.0
     disabled: true
+    # https://github.com/searxng/searxng/issues/3610
+    inactive: true
 
   - name: library of congress
     engine: loc
@@ -1516,7 +1518,7 @@ engines:
   - name: openlibrary
     engine: openlibrary
     shortcut: ol
-    timeout: 5
+    timeout: 10
     disabled: true
 
   - name: openmeteo
@@ -1734,7 +1736,6 @@ engines:
   - name: pubmed
     engine: pubmed
     shortcut: pub
-    timeout: 3.0
 
   - name: pypi
     shortcut: pypi
@@ -1964,7 +1965,6 @@ engines:
 
   - name: semantic scholar
     engine: semantic_scholar
-    disabled: true
     shortcut: se
 
   # Spotify needs API credentials
@@ -1985,13 +1985,13 @@ engines:
   #   query_fields: '' # query fields
   #   enable_http: true
 
-  # - name: springer nature
-  #   engine: springer
-  #   # get your API key from: https://dev.springernature.com/signup
-  #   # working API key, for test & debug: "a69685087d07eca9f13db62f65b8f601"
-  #   api_key: 'unset'
-  #   shortcut: springer
-  #   timeout: 15.0
+  - name: springer nature
+    engine: springer
+    shortcut: springer
+    timeout: 5
+    # read https://docs.searxng.org/dev/engines/online/springer.html
+    api_key: ""
+    inactive: true
 
   - name: startpage
     engine: startpage
