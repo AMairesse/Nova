@@ -325,6 +325,17 @@ class LLMAgent:
             except Exception as e:
                 logger.warning(f"Failed to load user memory: {e}")
 
+        # Add information about files available in disussion
+        list_files = await sync_to_async(UserFile.objects.filter,
+                                         thread_sensitive=False)(thread=self.thread)
+        num_files = await sync_to_async(list_files.count,
+                                        thread_sensitive=False)()
+        if num_files > 0:
+            files_context = f"\nThere is {num_files} attached files. Use file tools if needed."
+        else:
+            files_context = "\nNo attached files available."
+        base_prompt += files_context
+
         return base_prompt
 
     def create_llm_agent(self):
@@ -345,18 +356,7 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
-        # If the current thread as some files, alert the
-        # agent by adding a message to the prompt
-        list_files = await sync_to_async(UserFile.objects.filter,
-                                         thread_sensitive=False)(thread=self.thread)
-        num_files = await sync_to_async(list_files.count,
-                                        thread_sensitive=False)()
-        if num_files > 0:
-            technical_context = f"\nTechnical context: {num_files} attached files. Use file tools if needed."
-        else:
-            technical_context = "\nTechnical context: no attached files."
-
-        full_question = f"{question}{technical_context}"
+        full_question = f"{question}"
 
         result = await self.langchain_agent.ainvoke(
             {"messages": [HumanMessage(content=full_question)]},
