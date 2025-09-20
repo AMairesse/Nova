@@ -96,7 +96,7 @@
         return level === 0 ? '<p class="text-muted p-3">' + gettext('No files in this thread.') + '</p>' : '';
       }
       
-      let html = `<ul class="file-tree-list ${level === 0 ? 'root' : ''}" style="padding-left: ${level * 20}px;">`;
+      let html = `<ul class="file-tree-list ${level === 0 ? 'root' : ''}" style="padding-left: ${level * 12}px;">`;
       
       nodes.forEach(node => {
         const isFolder = node.type === 'dir' || node.type === 'folder';

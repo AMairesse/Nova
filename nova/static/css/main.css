@@ -96,6 +96,32 @@ body {
     min-height: 0;
 }
 
+/* Fix file sidebar content scrolling on desktop */
+#file-sidebar-content {
+    overflow-y: auto;
+    overflow-x: auto;
+    height: 100%;
+    /* Ensure proper scrolling behavior */
+    -webkit-overflow-scrolling: touch;
+    /* Smooth scrolling for better UX */
+    scroll-behavior: smooth;
+}
+
+/* Ensure file tree container allows proper scrolling */
+#file-tree-container {
+    min-height: 0;
+    height: 100%;
+}
+
+/* Mobile file sidebar content - ensure it also scrolls properly */
+#file-sidebar-content-mobile {
+    overflow-y: auto;
+    overflow-x: auto;
+    height: 100%;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+}
+
 /* Fix threads container scrolling on desktop */
 #threads-container {
     overflow-y: auto;
@@ -179,6 +205,10 @@ body {
     padding: 4px 8px;
     border-radius: 4px;
     transition: background-color 0.2s ease;
+    /* Prevent wrapping of file names */
+    white-space: nowrap;
+    /* Ensure minimum width for deeply nested items */
+    min-width: max-content;
 }
 
 .file-item-content:hover {
@@ -246,6 +276,40 @@ body {
     list-style: none;
     margin: 0;
     padding: 0;
+    /* Ensure horizontal scrolling when content is too wide */
+    min-width: max-content;
+}
+
+/* Ensure file tree root container handles overflow properly */
+.file-tree-list.root {
+    /* Allow horizontal scrolling for deeply nested directories */
+    overflow-x: auto;
+    /* Maintain vertical flow */
+    overflow-y: visible;
+}
+
+
+/* Ensure file names don't break on long paths */
+.file-item-name,
+.file-download-link {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+    /* Reasonable max width before ellipsis */
+}
+
+/* On hover, show full name */
+.file-item-name:hover,
+.file-download-link:hover {
+    overflow: visible;
+    max-width: none;
+    background-color: var(--bs-dark);
+    color: white;
+    padding: 2px 4px;
+    border-radius: 3px;
+    position: relative;
+    z-index: 10;
 }
 
 .file-tree-item.selected .file-item-content {
