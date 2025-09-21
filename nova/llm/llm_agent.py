@@ -357,38 +357,34 @@ class LLMAgent:
             config.update({"recursion_limit": self.recursion_limit})
 
         full_question = f"{question}"
+        message = HumanMessage(content=full_question)
 
-        result = await self.langchain_agent.ainvoke(
-            {"messages": [HumanMessage(content=full_question)]},
-            config=config
-        )
-
-        messages = result.get('messages', [])
-        last_message = messages[-1]
-        # If the result contains an artefact, call again the agent with it
-        if isinstance(last_message, ToolMessage) and last_message.name == "read_image" and hasattr(last_message, 'artifact') and last_message.artifact:
-            artifact = last_message.artifact
-
-            base64_image = artifact["base64"]
-            mime_type = artifact["mime_type"]
-
-            # Créez un message "humain" fictif avec l'image (format compatible avec modèles multimodaux)
-            image_message = HumanMessage(
-                content=[
-                    {"type": "text", "text": "Here is the image."},
-                    {
-                        "type": "image",
-                        "source_type": "base64",
-                        "data": base64_image,
-                        "mime_type": mime_type,
-                    }
-                ]
-            )
-
+        while True:
             result = await self.langchain_agent.ainvoke(
-                {"messages": [image_message]},
+                {"messages": message},
                 config=config
             )
 
-        final_msg = extract_final_answer(result)
-        return final_msg
+            messages = result.get('messages', [])
+            last_message = messages[-1]
+            # If the result is the specific "read_image" tool then we need to add an image
+            if isinstance(last_message, ToolMessage) and last_message.name == "read_image":
+                artifact = last_message.artifact
+
+                base64_image = artifact["base64"]
+                mime_type = artifact["mime_type"]
+
+                # Generate a new multimodal message
+                message = HumanMessage(content=[
+                        {"type": "text", "text": "Here is the image."},
+                        {
+                            "type": "image",
+                            "source_type": "base64",
+                            "data": base64_image,
+                            "mime_type": mime_type,
+                        }
+                    ])
+            else:
+                # Agent has finished, extract final answer
+                final_msg = extract_final_answer(result)
+                return final_msg

@@ -223,7 +223,9 @@ async def read_image(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
             b64image = base64.b64encode(content).decode('utf-8')
             return 'Image loaded successfully. Ready for analysis.', {
                 "base64": b64image,
-                "mime_type": file.mime_type
+                "mime_type": file.mime_type,
+                "file_id": file_id,
+                "filename": file.original_filename
             }
         except ClientError as e:
             logger.error(f"Failed to read image {file_id}: {e}")
