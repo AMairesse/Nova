@@ -48,6 +48,8 @@ ALLOWED_ATTRS = {
     "a": ["href", "title", "rel"],
 }
 
+MAX_THREADS_DISPLAYED = 10
+
 
 def group_threads_by_date(threads):
     """Group threads by date ranges: Today, Yesterday, Last Week, Last Month, Older"""
@@ -84,16 +86,16 @@ def group_threads_by_date(threads):
 @ensure_csrf_cookie
 @login_required(login_url='login')
 def index(request):
-    # Get initial 20 threads
-    threads = Thread.objects.filter(user=request.user).order_by('-created_at')[:20]
+    # Get initial MAX_THREADS_DISPLAYED threads
+    threads = Thread.objects.filter(user=request.user).order_by('-created_at')[:MAX_THREADS_DISPLAYED]
     grouped_threads = group_threads_by_date(threads)
     total_count = Thread.objects.filter(user=request.user).count()
 
     return render(request, 'nova/index.html', {
         'grouped_threads': grouped_threads,
         'threads': threads,  # Keep for backward compatibility
-        'has_more_threads': total_count > 20,
-        'next_offset': 20
+        'has_more_threads': total_count > MAX_THREADS_DISPLAYED,
+        'next_offset': MAX_THREADS_DISPLAYED
     })
 
 
@@ -101,7 +103,7 @@ def index(request):
 def load_more_threads(request):
     """AJAX endpoint to load more threads"""
     offset = int(request.GET.get('offset', 0))
-    limit = int(request.GET.get('limit', 20))
+    limit = int(request.GET.get('limit', MAX_THREADS_DISPLAYED))
 
     threads = Thread.objects.filter(user=request.user).order_by('-created_at')[offset:offset + limit]
     grouped_threads = group_threads_by_date(threads)
