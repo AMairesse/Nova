@@ -584,7 +584,8 @@
         const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.createThread, { method: 'POST' });
         const data = await response.json();
         if (data.threadHtml) {
-          const container = document.getElementById('threads-container');
+          // Use the threads-list container instead of threads-container
+          const container = document.getElementById('threads-list');
           const todayGroup = ensureGroupContainer('today', container);
           const ul = todayGroup ? todayGroup.querySelector('ul.list-group') : null;
           if (ul) {
@@ -645,7 +646,8 @@
     }
   }
   function ensureGroupContainer(group, containerEl) {
-    const container = containerEl || document.getElementById('threads-container');
+    // Use the threads-list container instead of threads-container
+    const container = containerEl || document.getElementById('threads-list');
     if (!container) return null;
 
     let grp = container.querySelector(`.thread-group[data-group="${group}"]`);
@@ -664,7 +666,7 @@
       grp.appendChild(h6);
       grp.appendChild(ul);
 
-      // Insert in correct order; keep load-more container as last element
+      // Insert in correct order
       const order = getGroupOrder();
       const targetIndex = order.indexOf(group);
       const groups = Array.from(container.querySelectorAll('.thread-group'));
@@ -676,11 +678,6 @@
           break;
         }
       }
-      // If no later group, insert before load more button if it exists
-      if (!insertBefore) {
-        const loadMore = container.querySelector('#load-more-container, #mobile-load-more-container');
-        if (loadMore) insertBefore = loadMore;
-      }
       container.insertBefore(grp, insertBefore);
     }
     return grp;
@@ -691,13 +688,22 @@
     const incomingGroups = tmp.querySelectorAll('.thread-group');
     incomingGroups.forEach(incoming => {
       const group = incoming.dataset.group || 'older';
-      const targetGroup = ensureGroupContainer(group, containerEl);
+      
+      // First, try to find existing group in the container
+      let targetGroup = containerEl.querySelector(`.thread-group[data-group="${group}"]`);
+      
+      // If group doesn't exist, create it using ensureGroupContainer
+      if (!targetGroup) {
+        targetGroup = ensureGroupContainer(group, containerEl);
+      }
+      
       if (!targetGroup) return;
 
       const incomingUl = incoming.querySelector('ul.list-group');
       const targetUl = targetGroup.querySelector('ul.list-group');
       if (!incomingUl || !targetUl) return;
 
+      // Append all new threads to the existing group
       while (incomingUl.firstElementChild) {
         targetUl.appendChild(incomingUl.firstElementChild);
       }
@@ -722,13 +728,13 @@
         if (e.target.matches('#load-more-threads') || e.target.closest('#load-more-threads')) {
           e.preventDefault();
           const btn = e.target.closest('#load-more-threads');
-          this.loadMoreThreads(btn, '#threads-container', '#load-more-container');
+          this.loadMoreThreads(btn, '#threads-list', '#load-more-container');
         }
         // Mobile load more button
         else if (e.target.matches('#mobile-load-more-threads') || e.target.closest('#mobile-load-more-threads')) {
           e.preventDefault();
           const btn = e.target.closest('#mobile-load-more-threads');
-          this.loadMoreThreads(btn, '#mobile-threads-container', '#mobile-load-more-container');
+          this.loadMoreThreads(btn, '#mobile-threads-list', '#mobile-load-more-container');
         }
       });
     }
@@ -741,10 +747,11 @@
 
       // Show loading state
       button.disabled = true;
-      button.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>{% trans "Loading..." %}';
+      const icon = button.querySelector('i');
+      if (icon) icon.className = 'bi bi-hourglass-split me-1';
 
       try {
-        const response = await fetch(`${window.NovaApp.urls.loadMoreThreads}?offset=${offset}&limit=20`);
+        const response = await fetch(`${window.NovaApp.urls.loadMoreThreads}?offset=${offset}&limit=10`);
         const data = await response.json();
 
         if (data.html) {
@@ -753,19 +760,17 @@
             // Merge incoming groups into existing ones instead of duplicating headers
             mergeThreadGroupsFromHtml(data.html, container);
 
-            // Keep the load-more container at the bottom
-            const buttonContainer = document.querySelector(buttonContainerSelector);
-            if (buttonContainer && buttonContainer.parentElement !== container) {
-              container.appendChild(buttonContainer);
-            }
-
             if (data.has_more) {
               button.dataset.offset = data.next_offset;
               button.disabled = false;
-              button.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>{% trans "Load More" %}';
-            } else if (buttonContainer) {
-              // No more threads, remove the button container
-              buttonContainer.remove();
+              const icon = button.querySelector('i');
+              if (icon) icon.className = 'bi bi-arrow-down-circle me-1';
+            } else {
+              const buttonContainer = document.querySelector(buttonContainerSelector);
+              if (buttonContainer) {
+                // No more threads, remove the button container
+                buttonContainer.remove();
+              }
             }
           }
         }
@@ -773,7 +778,8 @@
         console.error('Error loading more threads:', error);
         // Reset button state on error
         button.disabled = false;
-        button.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>{% trans "Load More" %}';
+        const icon = button.querySelector('i');
+        if (icon) icon.className = 'bi bi-arrow-down-circle me-1';
       } finally {
         this.isLoading = false;
       }
