@@ -17,12 +17,14 @@
     <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.6/dist/htmx.min.js"
             integrity="sha384-Akqfrbj/HpNVo8k11SXBb6TlBWmXXlYQrCSqEWmyKJe+hDm3Z/B2WVG4smwBkRVm" crossorigin="anonymous"></script>
     <script src="{% url 'javascript-catalog' %}"></script>
+    <link rel="icon" href="{% static 'favicon.ico' %}" type="image/x-icon">
   </head>
   <body>
     <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
       <div class="container-fluid">
         <a class="navbar-brand fw-bold" href="{% url 'index' %}">
-          <i class="bi bi-stars me-2"></i>Nova
+          <img src="{% static 'images/nova_logo.png' %}" alt="Nova Logo" height="24" class="d-inline-block align-text-top">
+          <i class="me-2"></i>Nova
         </a>
         
         {% if user.is_authenticated %}
