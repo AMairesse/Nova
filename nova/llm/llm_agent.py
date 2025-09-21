@@ -9,7 +9,7 @@ from django.conf import settings
 from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_ollama.chat_models import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.models import Agent, Tool, ProviderType, LLMProvider, UserInfo
@@ -362,5 +362,33 @@ class LLMAgent:
             {"messages": [HumanMessage(content=full_question)]},
             config=config
         )
+
+        messages = result.get('messages', [])
+        last_message = messages[-1]
+        # If the result contains an artefact, call again the agent with it
+        if isinstance(last_message, ToolMessage) and last_message.name == "read_image" and hasattr(last_message, 'artifact') and last_message.artifact:
+            artifact = last_message.artifact
+
+            base64_image = artifact["base64"]
+            mime_type = artifact["mime_type"]
+
+            # Créez un message "humain" fictif avec l'image (format compatible avec modèles multimodaux)
+            image_message = HumanMessage(
+                content=[
+                    {"type": "text", "text": "Here is the image."},
+                    {
+                        "type": "image",
+                        "source_type": "base64",
+                        "data": base64_image,
+                        "mime_type": mime_type,
+                    }
+                ]
+            )
+
+            result = await self.langchain_agent.ainvoke(
+                {"messages": [image_message]},
+                config=config
+            )
+
         final_msg = extract_final_answer(result)
         return final_msg
