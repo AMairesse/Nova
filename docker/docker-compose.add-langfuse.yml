@@ -33,8 +33,6 @@ services:
         condition: service_healthy
       db-init-langfuse:
         condition: service_completed_successfully
-    ports:
-      - "3030:3030"  # API worker
     environment: &langfuse-worker-env
       DATABASE_URL: postgresql://${LANGFUSE_DB_USER:-langfuse_user}:${LANGFUSE_DB_PASSWORD:-langfuse_secret}@db:5432/langfuse
       SALT: "mysalt"
@@ -99,9 +97,6 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
-    ports:
-      - "8123:8123"
-      - "9440:9000"
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
       interval: 5s
