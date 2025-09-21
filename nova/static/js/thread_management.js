@@ -187,7 +187,8 @@
       if (stream) {
         // Mark as completed
         stream.status = 'completed';
-        this.saveStreamState(taskId, stream);
+        // Remove completed stream from localStorage instead of saving
+        localStorage.removeItem(`stream_${taskId}`);
 
         // Immediately hide the spinner when task completes
         const spinner = document.querySelector('#task-progress .spinner-border');
@@ -210,13 +211,38 @@
     }
 
     saveStreamState(taskId, stream) {
+      // Limit currentText to last 50KB to prevent large individual entries
+      const maxTextLength = 50 * 1024; // 50KB
+      const currentText = stream.currentText.length > maxTextLength
+        ? stream.currentText.slice(-maxTextLength)
+        : stream.currentText;
+
       const state = {
         messageId: stream.messageId,
-        currentText: stream.currentText,
+        currentText: currentText,
         lastUpdate: stream.lastUpdate,
         status: stream.status || 'streaming'
       };
-      localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
+
+      try {
+        localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
+      } catch (e) {
+        if (e.name === 'QuotaExceededError') {
+          console.warn('localStorage quota exceeded, running cleanup and retrying...');
+          // Run cleanup to free up space
+          this.cleanupStreams();
+          try {
+            // Retry after cleanup
+            localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
+            console.log('Successfully saved stream state after cleanup');
+          } catch (retryError) {
+            console.error('Failed to save stream state even after cleanup:', retryError);
+            // Continue execution - streaming will still work, just won't resume on page reload
+          }
+        } else {
+          console.error('Error saving stream state:', e);
+        }
+      }
     }
 
     loadSavedStreams() {
@@ -233,6 +259,34 @@
         }
       }
       return streams;
+    }
+
+    cleanupStreams() {
+      const now = Date.now();
+      const twoDaysMs = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
+      const keysToRemove = [];
+
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key.startsWith('stream_')) {
+          try {
+            const state = JSON.parse(localStorage.getItem(key));
+            // Remove completed streams or streams older than 2 days
+            if (state.status === 'completed' || (state.lastUpdate && now - state.lastUpdate > twoDaysMs)) {
+              keysToRemove.push(key);
+            }
+          } catch (e) {
+            // Remove invalid entries
+            keysToRemove.push(key);
+          }
+        }
+      }
+
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+
+      if (keysToRemove.length > 0) {
+        console.log(`Cleaned up ${keysToRemove.length} old stream entries from localStorage`);
+      }
     }
 
     startWebSocket(taskId) {
@@ -329,6 +383,8 @@
     }
 
     init() {
+      // Clean up old localStorage entries on startup
+      this.streamingManager.cleanupStreams();
       this.attachEventHandlers();
       this.loadInitialThread();
     }
@@ -571,27 +627,8 @@
   }
 
   // ============================================================================
-  // LEGACY COMPATIBILITY - Keep existing interfaces working
+  // MAIN INITIALIZATION
   // ============================================================================
-  const LegacyThreadManager = {
-    init() {
-      // Initialize new architecture
-      const messageManager = new MessageManager();
-      messageManager.init();
-
-      // Keep legacy interface for compatibility
-      this.messageManager = messageManager;
-    },
-
-    // Legacy methods that delegate to new architecture
-    loadMessages(threadId) {
-      return this.messageManager.loadMessages(threadId);
-    },
-
-    handleFormSubmit(form) {
-      return this.messageManager.handleFormSubmit(form);
-    }
-  };
 
   // Thread UI helpers for grouping and DOM manipulation
   function getGroupOrder() {
@@ -748,12 +785,14 @@
   // ============================================================================
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-      LegacyThreadManager.init();
+      const messageManager = new MessageManager();
+      messageManager.init();
       const threadLoadingManager = new ThreadLoadingManager();
       threadLoadingManager.init();
     });
   } else {
-    LegacyThreadManager.init();
+    const messageManager = new MessageManager();
+    messageManager.init();
     const threadLoadingManager = new ThreadLoadingManager();
     threadLoadingManager.init();
   }
