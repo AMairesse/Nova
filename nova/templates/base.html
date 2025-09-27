@@ -18,6 +18,14 @@
             integrity="sha384-Akqfrbj/HpNVo8k11SXBb6TlBWmXXlYQrCSqEWmyKJe+hDm3Z/B2WVG4smwBkRVm" crossorigin="anonymous"></script>
     <script src="{% url 'javascript-catalog' %}"></script>
     <link rel="icon" href="{% static 'favicon.ico' %}" type="image/x-icon">
+
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="{% static 'manifest.json' %}">
+    <meta name="theme-color" content="#007bff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Nova">
+    <link rel="apple-touch-icon" href="{% static 'images/icon-192x192.png' %}">
   </head>
   <body>
     <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
@@ -72,5 +80,20 @@
       {% block content %}{% endblock %}
     </div>
     {% block extra_js %}{% endblock extra_js %}
+
+    <!-- Service Worker Registration -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function() {
+          navigator.serviceWorker.register('{% static "sw.js" %}')
+            .then(function(registration) {
+              console.log('SW registered: ', registration);
+            })
+            .catch(function(registrationError) {
+              console.log('SW registration failed: ', registrationError);
+            });
+        });
+      }
+    </script>
   </body>
 </html>
