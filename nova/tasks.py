@@ -508,12 +508,29 @@ class ContextConsumptionTracker:
     @staticmethod
     def _approximate_tokens(memory):
         """Approximate token count from message content."""
-        byte_size = sum(
-            len(msg.content.encode("utf-8", "ignore"))
-            for msg in memory
-            if isinstance(msg, BaseMessage)
-        )
-        return byte_size // 4 + 1
+        total_bytes = 0
+
+        for msg in memory:
+            if not isinstance(msg, BaseMessage):
+                continue
+
+            content = msg.content
+            if isinstance(content, str):
+                # Handle string content
+                total_bytes += len(content.encode("utf-8", "ignore"))
+            elif isinstance(content, list):
+                # Handle list content - iterate through each item
+                for item in content:
+                    if isinstance(item, str):
+                        total_bytes += len(item.encode("utf-8", "ignore"))
+                    else:
+                        # Convert non-string items to string representation
+                        total_bytes += len(str(item).encode("utf-8", "ignore"))
+            else:
+                # Handle other content types by converting to string
+                total_bytes += len(str(content).encode("utf-8", "ignore"))
+
+        return total_bytes // 4 + 1
 
 
 @shared_task(bind=True, name="run_ai_task")

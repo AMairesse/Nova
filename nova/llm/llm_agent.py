@@ -367,23 +367,49 @@ class LLMAgent:
 
             messages = result.get('messages', [])
             last_message = messages[-1]
+
             # If the result is the specific "read_image" tool then we need to add an image
+            # message. The agent can call the tool multiple times in one turn so we need
+            # to loop through the last messages
             if isinstance(last_message, ToolMessage) and last_message.name == "read_image":
-                artifact = last_message.artifact
+                # Loop through messages in reverse order to find all "read_image" tool calls
+                # since the last HumanMessage
+                image_artifacts = []
+                for msg in reversed(messages):
+                    if isinstance(msg, HumanMessage):
+                        # Found the last HumanMessage, stop looking
+                        break
+                    elif isinstance(msg, ToolMessage) and msg.name == "read_image":
+                        # Collect all "read_image" tool artifacts
+                        artifact = msg.artifact
+                        if artifact and "base64" in artifact and "mime_type" in artifact:
+                            image_artifacts.append(artifact)
 
-                base64_image = artifact["base64"]
-                mime_type = artifact["mime_type"]
+                # If we found any image artifacts, create a multimodal message with all images
+                if image_artifacts:
+                    # List all images in order to help the agent because not all LLM can read the
+                    # file name in the image type response
+                    text_response = "Here are the images:\n".join(
+                        [artifact["filename"] + "\n" for artifact in image_artifacts]
+                    )
+                    content_parts = [{"type": "text", "text": text_response}]
 
-                # Generate a new multimodal message
-                message = HumanMessage(content=[
-                        {"type": "text", "text": "Here is the image."},
-                        {
+                    # Add all images to the content
+                    for artifact in image_artifacts:
+                        content_parts.append({
                             "type": "image",
                             "source_type": "base64",
-                            "data": base64_image,
-                            "mime_type": mime_type,
-                        }
-                    ])
+                            "data": artifact["base64"],
+                            "mime_type": artifact["mime_type"],
+                            "filename": artifact["filename"],
+                        })
+
+                    # Generate a new multimodal message with all images
+                    message = HumanMessage(content=content_parts)
+                else:
+                    # No valid image artifacts found, continue with normal flow
+                    final_msg = extract_final_answer(result)
+                    return final_msg
             else:
                 # Agent has finished, extract final answer
                 final_msg = extract_final_answer(result)
