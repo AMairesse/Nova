@@ -2,6 +2,7 @@ import re
 from django.core.exceptions import ValidationError
 from langchain_core.tools import StructuredTool
 from nova.llm.llm_agent import LLMAgent
+from nova.utils import get_theme_content
 from asgiref.sync import sync_to_async
 
 METADATA = {
@@ -29,24 +30,6 @@ def _update_user_info(user, content):
     user_info.full_clean()  # Validate before saving
     user_info.save()
     return user_info
-
-
-def _get_theme_content(content: str, theme: str) -> str:
-    """Extract content for a specific theme."""
-    lines = content.split('\n')
-    theme_content = []
-    in_theme = False
-
-    for line in lines:
-        if line.strip().startswith('# ') and line.strip()[2:].strip() == theme:
-            in_theme = True
-            theme_content.append(line)
-        elif line.strip().startswith('# ') and in_theme:
-            break
-        elif in_theme:
-            theme_content.append(line)
-
-    return '\n'.join(theme_content).strip()
 
 
 def _set_theme_content(content: str, theme: str, new_content: str) -> str:
@@ -107,7 +90,7 @@ async def get_info(theme: str, agent: LLMAgent) -> str:
     if not content:
         return f"No information stored for theme '{theme}'."
 
-    theme_content = _get_theme_content(content, theme)
+    theme_content = get_theme_content(content, theme)
     if not theme_content:
         return f"No information stored for theme '{theme}'."
 
@@ -131,13 +114,16 @@ async def set_info(theme: str, content: str, agent: LLMAgent) -> str:
 
 async def delete_info(theme: str, agent: LLMAgent) -> str:
     """Delete information for a specific theme."""
+    if theme == "global_user_preferences":
+        return "The 'global_user_preferences' theme cannot be deleted as it is required."
+
     user_info = await sync_to_async(_get_user_info)(agent.user)
     current_content = user_info.markdown_content
 
     if not current_content:
         return f"No information stored for theme '{theme}'."
 
-    theme_content = _get_theme_content(current_content, theme)
+    theme_content = get_theme_content(current_content, theme)
     if not theme_content:
         return f"No information stored for theme '{theme}'."
 

@@ -60,6 +60,26 @@ def extract_final_answer(output):
     return str(output)
 
 
+def get_theme_content(content: str, theme: str) -> str:
+    """
+    Extract content for a specific theme from Markdown content.
+    Looks for headers starting with '# ' followed by the theme name.
+    """
+    lines = content.split('\n')
+    theme_content = []
+    in_theme = False
+
+    for line in lines:
+        if line.strip().startswith('# ') and line.strip()[2:].strip() == theme:
+            in_theme = True
+        elif line.strip().startswith('# ') and in_theme:
+            break
+        elif in_theme:
+            theme_content.append(line)
+
+    return '\n'.join(theme_content).strip()
+
+
 def estimate_tokens(text: str = None, input_size: int = None) -> int:
     """Simple token estimation: approx 1 token per 4 chars."""
     if input_size:

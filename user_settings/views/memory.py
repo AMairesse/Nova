@@ -52,6 +52,8 @@ class MemorySettingsView(
         context['help_text'] = _(
             "Store your personal information in Markdown format. "
             "Use headings (# Theme Name) to organize different topics. "
-            "This information will be available to agents when the memory tool is enabled."
+            "Note: '# global_user_preferences' is a special theme that is always available "
+            "and cannot be deleted - it contains your essential preferences that are "
+            "automatically shared with agents when the memory tool is enabled."
         )
         return context

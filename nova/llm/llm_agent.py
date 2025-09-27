@@ -16,7 +16,7 @@ from nova.models.models import Agent, Tool, ProviderType, LLMProvider, UserInfo
 from nova.models.models import CheckpointLink, UserFile
 from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
-from nova.utils import extract_final_answer
+from nova.utils import extract_final_answer, get_theme_content
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 
@@ -316,9 +316,17 @@ class LLMAgent:
             try:
                 user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
                 themes = await sync_to_async(user_info.get_themes)()
+
+                # Always include global_user_preferences content if it exists
+                global_content = ""
+                if themes and "global_user_preferences" in themes:
+                    global_content = get_theme_content(user_info.markdown_content, "global_user_preferences")
+                    if global_content.strip():
+                        global_content = f"\n\nGlobal user's preferences:\n{global_content}"
+
                 if themes:
                     memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
-                    base_prompt += memory_block
+                    base_prompt += global_content + memory_block
             except UserInfo.DoesNotExist:
                 # UserInfo should exist due to signal, but handle gracefully
                 pass
