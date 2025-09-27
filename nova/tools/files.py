@@ -1,5 +1,7 @@
 # nova/tools/files.py
+import base64
 import aioboto3
+from typing import Tuple, Any
 from botocore.exceptions import ClientError
 from django.conf import settings
 from django.shortcuts import get_object_or_404
@@ -194,6 +196,42 @@ async def create_file(thread_id, user, filename: str, content: str) -> str:
             return f"Error creating file: {str(e)}"
 
 
+async def read_image(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
+    """Read an image file and return its content as base64-encoded string."""
+    file = await async_get_object_or_404(UserFile, id=file_id)
+    thread_id, user = await async_get_threadid_and_user(agent)
+    file_thread_id, file_user = await async_get_threadid_and_user(file)
+    if file_thread_id != thread_id or file_user != user:
+        return "Permission denied: File does not belong to current thread/user.", None
+
+    if not file.mime_type.startswith('image/'):
+        return "File is not an image. Use read_file or read_file_chunk for other types.", None
+
+    session = aioboto3.Session()
+    async with session.client(
+        's3',
+        endpoint_url=settings.MINIO_ENDPOINT_URL,
+        aws_access_key_id=settings.MINIO_ACCESS_KEY,
+        aws_secret_access_key=settings.MINIO_SECRET_KEY
+    ) as s3_client:
+        try:
+            response = await s3_client.get_object(
+                Bucket=settings.MINIO_BUCKET_NAME,
+                Key=file.key
+            )
+            content = await response['Body'].read()
+            b64image = base64.b64encode(content).decode('utf-8')
+            return 'Image loaded successfully. Ready for analysis.', {
+                "base64": b64image,
+                "mime_type": file.mime_type,
+                "file_id": file_id,
+                "filename": file.original_filename
+            }
+        except ClientError as e:
+            logger.error(f"Failed to read image {file_id}: {e}")
+            return f"Error reading image: {str(e)}", None
+
+
 async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     """Return a list of StructuredTool instances
        with agent bound via partial."""
@@ -248,5 +286,13 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
             name="delete_file",
             description="Delete a file from the current thread",
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
+        ),
+        StructuredTool.from_function(
+            coroutine=partial(read_image, agent),
+            name="read_image",
+            description="Read an image file and return base64-encoded content for processing.",
+            args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]},
+            return_direct=True,
+            response_format="content_and_artifact"
         )
     ]

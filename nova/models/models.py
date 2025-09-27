@@ -369,6 +369,11 @@ class UserInfo(models.Model):
                 theme = line.strip()[2:].strip()
                 if theme:
                     themes.append(theme)
+
+        # Ensure global_user_preferences theme is always present
+        if "global_user_preferences" not in themes:
+            themes.insert(0, "global_user_preferences")
+
         return themes
 
 

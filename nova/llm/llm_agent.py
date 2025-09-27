@@ -9,14 +9,14 @@ from django.conf import settings
 from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_ollama.chat_models import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.models import Agent, Tool, ProviderType, LLMProvider, UserInfo
 from nova.models.models import CheckpointLink, UserFile
 from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
-from nova.utils import extract_final_answer
+from nova.utils import extract_final_answer, get_theme_content
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 
@@ -316,9 +316,17 @@ class LLMAgent:
             try:
                 user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
                 themes = await sync_to_async(user_info.get_themes)()
+
+                # Always include global_user_preferences content if it exists
+                global_content = ""
+                if themes and "global_user_preferences" in themes:
+                    global_content = get_theme_content(user_info.markdown_content, "global_user_preferences")
+                    if global_content.strip():
+                        global_content = f"\n\nGlobal user's preferences:\n{global_content}"
+
                 if themes:
                     memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
-                    base_prompt += memory_block
+                    base_prompt += global_content + memory_block
             except UserInfo.DoesNotExist:
                 # UserInfo should exist due to signal, but handle gracefully
                 pass
@@ -357,10 +365,64 @@ class LLMAgent:
             config.update({"recursion_limit": self.recursion_limit})
 
         full_question = f"{question}"
+        message = HumanMessage(content=full_question)
 
-        result = await self.langchain_agent.ainvoke(
-            {"messages": [HumanMessage(content=full_question)]},
-            config=config
-        )
-        final_msg = extract_final_answer(result)
-        return final_msg
+        while True:
+            result = await self.langchain_agent.ainvoke(
+                {"messages": message},
+                config=config
+            )
+
+            messages = result.get('messages', [])
+            last_message = messages[-1]
+
+            # If the result is the specific "read_image" tool then we need to add an image
+            # message. The agent can call the tool multiple times in one turn so we need
+            # to loop through the last messages
+            if isinstance(last_message, ToolMessage) and last_message.name == "read_image":
+                # Loop through messages in reverse order to find all "read_image" tool calls
+                # since the last HumanMessage
+                image_artifacts = []
+                for msg in reversed(messages):
+                    if isinstance(msg, HumanMessage):
+                        # Found the last HumanMessage, stop looking
+                        break
+                    elif isinstance(msg, ToolMessage) and msg.name == "read_image":
+                        # Collect all "read_image" tool artifacts
+                        artifact = msg.artifact
+                        if artifact and "base64" in artifact and "mime_type" in artifact:
+                            image_artifacts.append(artifact)
+
+                # If we found any image artifacts, create a multimodal message with all images
+                if image_artifacts:
+                    # Reverse the order of the images to match the order of the tool calls
+                    image_artifacts = image_artifacts[::-1]
+
+                    # List all images in order to help the agent because not all LLM can read the
+                    # file name in the image type response
+                    text_response = "Here are the images:\n"
+                    text_response += "".join(
+                        [artifact["filename"] + "\n" for artifact in image_artifacts]
+                    )
+                    content_parts = [{"type": "text", "text": text_response}]
+
+                    # Add all images to the content
+                    for artifact in image_artifacts:
+                        content_parts.append({
+                            "type": "image",
+                            "source_type": "base64",
+                            "data": artifact["base64"],
+                            "mime_type": artifact["mime_type"],
+                            "filename": artifact["filename"],
+                        })
+
+                    # Generate a new multimodal message with all images
+                    message = HumanMessage(content=content_parts)
+                else:
+                    # No valid image artifacts found, continue with normal flow
+                    final_msg = extract_final_answer(result)
+                    return final_msg
+            else:
+                # Agent has finished, extract final answer
+                final_msg = extract_final_answer(result)
+                return final_msg
