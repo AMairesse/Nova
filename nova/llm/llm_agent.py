@@ -387,9 +387,13 @@ class LLMAgent:
 
                 # If we found any image artifacts, create a multimodal message with all images
                 if image_artifacts:
+                    # Reverse the order of the images to match the order of the tool calls
+                    image_artifacts = image_artifacts[::-1]
+
                     # List all images in order to help the agent because not all LLM can read the
                     # file name in the image type response
-                    text_response = "Here are the images:\n".join(
+                    text_response = "Here are the images:\n"
+                    text_response += "".join(
                         [artifact["filename"] + "\n" for artifact in image_artifacts]
                     )
                     content_parts = [{"type": "text", "text": text_response}]
