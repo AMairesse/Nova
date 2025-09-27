@@ -32,6 +32,11 @@ def _update_user_info(user, content):
     return user_info
 
 
+def _get_theme_content(content: str, theme: str) -> str:
+    """Get content for a specific theme."""
+    return get_theme_content(content, theme)
+
+
 def _set_theme_content(content: str, theme: str, new_content: str) -> str:
     """Update or add content for a specific theme."""
     lines = content.split('\n')
@@ -90,7 +95,7 @@ async def get_info(theme: str, agent: LLMAgent) -> str:
     if not content:
         return f"No information stored for theme '{theme}'."
 
-    theme_content = get_theme_content(content, theme)
+    theme_content = _get_theme_content(content, theme)
     if not theme_content:
         return f"No information stored for theme '{theme}'."
 
@@ -123,7 +128,7 @@ async def delete_info(theme: str, agent: LLMAgent) -> str:
     if not current_content:
         return f"No information stored for theme '{theme}'."
 
-    theme_content = get_theme_content(current_content, theme)
+    theme_content = _get_theme_content(current_content, theme)
     if not theme_content:
         return f"No information stored for theme '{theme}'."
 
