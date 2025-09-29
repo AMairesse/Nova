@@ -425,6 +425,16 @@
         }
       });
 
+      // Compact thread button
+      document.addEventListener('click', (e) => {
+        if (e.target.matches('.compact-thread-btn') || e.target.closest('.compact-thread-btn')) {
+          e.preventDefault();
+          const btn = e.target.closest('.compact-thread-btn');
+          const threadId = btn.dataset.threadId;
+          this.compactThread(threadId);
+        }
+      });
+
       // Textarea handling
       document.addEventListener('keydown', (e) => {
         if (e.target.matches('#message-container textarea[name="new_message"]') && e.key === "Enter" && !e.shiftKey) {
@@ -466,6 +476,14 @@
         this.scrollToBottom();
       } catch (error) {
         console.error('Error loading messages:', error);
+      }
+    }
+
+    async compactThread(threadId) {
+      try {
+        await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
+      } catch (error) {
+        console.error('Error compacting thread:', error);
       }
     }
 

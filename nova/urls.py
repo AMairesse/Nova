@@ -3,7 +3,8 @@ from django.contrib import admin
 from django.urls import include, path
 from django.views.i18n import JavaScriptCatalog
 from .views.thread_views import (
-    index, message_list, create_thread, delete_thread, add_message, load_more_threads
+    index, message_list, create_thread, delete_thread,
+    add_message, load_more_threads, compact_thread
 )
 from .views.task_views import running_tasks
 from .views.files_views import (
@@ -21,6 +22,7 @@ urlpatterns = [
     path("create-thread/", create_thread, name="create_thread"),
     path("delete-thread/<int:thread_id>/", delete_thread, name="delete_thread"),
     path("add-message/", add_message, name="add_message"),
+    path("compact-thread/<int:thread_id>/", compact_thread, name="compact_thread"),
     path("load-more-threads/", load_more_threads, name="load_more_threads"),
     path("running-tasks/<int:thread_id>/", running_tasks, name="running_tasks"),
     # API
