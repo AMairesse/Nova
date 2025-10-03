@@ -645,6 +645,18 @@ class CompactTaskExecutor (TaskExecutor):
         }
         await sync_to_async(system_message.save, thread_sensitive=False)()
 
+        # Broadcast the new message to all connected WebSocket clients for real-time UI updates
+        await self.handler.publish_update('new_message', {
+            'message': {
+                'id': system_message.id,
+                'text': system_message.text,
+                'actor': system_message.actor,
+                'internal_data': system_message.internal_data,
+                'created_at': system_message.created_at.isoformat() if hasattr(system_message.created_at, 'isoformat')
+                else str(system_message.created_at)
+            }
+        })
+
     async def _finalize_task(self):
         """Finalize the task as completed."""
         self.task.progress_logs.append({

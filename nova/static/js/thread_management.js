@@ -339,6 +339,9 @@
               streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
             }
           }
+        } else if (data.type === 'new_message') {
+          // Handle real-time message updates (e.g., system messages from completed tasks)
+          this.onNewMessage(data.message);
         } else if (data.type === 'task_complete') {
           // Update thread title in sidebars if backend provided it
           if (data.thread_id && data.thread_subject) {
@@ -480,10 +483,36 @@
     }
 
     async compactThread(threadId) {
+      // Get the button that was clicked to show loading state
+      const clickedBtn = event.target.closest('.compact-thread-btn');
+      if (!clickedBtn) return;
+
+      // Check if button is already processing (prevent double-clicks)
+      if (clickedBtn.disabled) return;
+
+      // Show loading state on compact button immediately
+      const originalIcon = clickedBtn.querySelector('i');
+      const originalText = clickedBtn.querySelector('.ms-1') ? clickedBtn.querySelector('.ms-1').textContent : '';
+      clickedBtn.disabled = true;
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Processing...';
+
       try {
-        await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
+
+        if (!response.ok) {
+          throw new Error('Server error');
+        }
+
+        const data = await response.json();
+        if (data.task_id) {
+          // Register background task to show progress and handle completion
+          this.streamingManager.registerBackgroundTask(data.task_id);
+        }
       } catch (error) {
         console.error('Error compacting thread:', error);
+        // Reset button on error
+        clickedBtn.disabled = false;
+        clickedBtn.innerHTML = originalIcon ? originalIcon.outerHTML + originalText : 'Compact';
       }
     }
 
@@ -644,6 +673,124 @@
       this.loadMessages(lastThreadId);
     }
   }
+
+  // ============================================================================
+  // STREAMING MANAGER - Continued (add to existing class)
+  // ============================================================================
+
+  // Register background task (non-streaming operations like compact, delete)
+  StreamingManager.prototype.registerBackgroundTask = function(taskId) {
+    // Don't add visual message element, just track the task and show progress
+    this.activeStreams.set(taskId, {
+      taskId: taskId,
+      isBackground: true,
+      lastUpdate: Date.now(),
+      status: 'running'
+    });
+
+    // Show progress area for background tasks
+    const progressDiv = document.getElementById('task-progress');
+    if (progressDiv) {
+      progressDiv.classList.remove('d-none');
+      const spinner = progressDiv.querySelector('.spinner-border');
+      if (spinner) {
+        spinner.classList.remove('d-none');
+      }
+      // Set initial progress message
+      const progressLogs = document.getElementById('progress-logs');
+      if (progressLogs) {
+        progressLogs.textContent = "Processing...";
+      }
+    }
+
+    // Start WebSocket connection for progress updates
+    this.startWebSocket(taskId);
+  };
+
+  // Handle real-time message updates like system messages
+  StreamingManager.prototype.onNewMessage = function(messageData) {
+    // Create message element for the new message
+    const messageElement = MessageRenderer.createMessageElement(messageData);
+
+    // Add to message container
+    const messagesList = document.getElementById('messages-list');
+    if (messagesList) {
+      messagesList.appendChild(messageElement);
+    } else {
+      console.error('Messages list not found for new message');
+    }
+
+    // Scroll to bottom to show new message
+    const container = document.getElementById('conversation-container');
+    if (container) {
+      setTimeout(() => {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth'
+        });
+      }, 100);
+    }
+  };
+
+  // ============================================================================
+  // MESSAGE RENDERER - Continued (extend for system messages)
+  // ============================================================================
+  MessageRenderer.createSystemMessageElement = function(messageData) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message mb-3';
+    messageDiv.id = `message-${messageData.id}`;
+    messageDiv.setAttribute('data-message-id', messageData.id);
+
+    const html = this.markdownToHtml(messageData.text);
+
+    // System message rendering
+    if (messageData.internal_data && messageData.internal_data.type === 'compact_complete') {
+      messageDiv.innerHTML = `
+        <div class="card border-light">
+          <div class="card-body py-2">
+            <div class="text-muted small">
+              ${html}
+              <button
+                class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
+                type="button"
+                onclick="toggleCompactDetails(this)"
+                data-collapsed="true"
+                title="Show summary details"
+              >
+                <small>[+ details]</small>
+              </button>
+            </div>
+            <div class="compact-details mt-2 d-none">
+              <div class="border-start border-secondary ps-2">
+                <small class="text-muted">${this.markdownToHtml(messageData.internal_data.summary || '')}</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      // Fallback for other system messages
+      messageDiv.innerHTML = `
+        <div class="card border-light">
+          <div class="card-body py-2">
+            <div class="text-muted small">${html}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    return messageDiv;
+  };
+
+  // Update main createMessageElement to handle system messages
+  const originalCreateMessageElement = MessageRenderer.createMessageElement;
+  MessageRenderer.createMessageElement = function(messageData) {
+    if (messageData.actor === 'SYS' || messageData.actor === 'system') {
+      return this.createSystemMessageElement(messageData);
+    } else {
+      return originalCreateMessageElement.call(this, messageData);
+    }
+  };
 
   // ============================================================================
   // SYSTEM MESSAGE HANDLERS
