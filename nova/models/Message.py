@@ -8,6 +8,7 @@ from django.db.models import JSONField
 class Actor(models.TextChoices):
     USER = "USR", _("User")
     AGENT = "AGT", _("Agent")
+    SYSTEM = "SYS", _("System")
 
 
 class Message(models.Model):

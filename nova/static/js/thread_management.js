@@ -646,6 +646,32 @@
   }
 
   // ============================================================================
+  // SYSTEM MESSAGE HANDLERS
+  // ============================================================================
+
+  // Helper function to toggle compact details visibility
+  function toggleCompactDetails(button) {
+    const isCollapsed = button.dataset.collapsed === 'true';
+    const messageDiv = button.closest('.message');
+    const detailsDiv = messageDiv.querySelector('.compact-details');
+
+    if (isCollapsed) {
+      detailsDiv.classList.remove('d-none');
+      button.querySelector('small').textContent = '[- details]';
+      button.title = 'Hide summary details';
+      button.dataset.collapsed = 'false';
+    } else {
+      detailsDiv.classList.add('d-none');
+      button.querySelector('small').textContent = '[+ details]';
+      button.title = 'Show summary details';
+      button.dataset.collapsed = 'true';
+    }
+  }
+
+  // Make function globally available for template onclick handlers
+  window.toggleCompactDetails = toggleCompactDetails;
+
+  // ============================================================================
   // MAIN INITIALIZATION
   // ============================================================================
 

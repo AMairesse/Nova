@@ -562,6 +562,10 @@ class CompactTaskExecutor (TaskExecutor):
     """
 
     async def _create_prompt(self):
+        # Emit progress update for analysis phase
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Analyzing conversation..."})
+
         # Retrieve context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
             self.agent_config, self.llm
@@ -575,8 +579,27 @@ class CompactTaskExecutor (TaskExecutor):
                      capturing key points, user intent, and outcomes without adding new information"""
         return prompt
 
+    async def _run_agent(self):
+        """Execute the LLM agent and return result."""
+        self.task.progress_logs.append({
+            "step": "Generating summary...",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+            "severity": "info"
+        })
+        await sync_to_async(self.task.save, thread_sensitive=False)()
+
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Generating summary..."})
+
+        return await self.llm.ainvoke(self.prompt)
+
     async def _process_result(self, result):
         super()._process_result(result)
+
+        # Emit progress update for checkpoint update
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Updating context..."})
+
         config = self.llm.config
 
         # Update checkpoint
@@ -610,6 +633,34 @@ class CompactTaskExecutor (TaskExecutor):
 
         # Put new checkpoint
         await checkpointer.aput(config, new_checkpoint, new_metadata, state['channel_versions'])
+
+        # Add system message with summary details
+        system_message_text = "ℹ️ Conversation compacted"
+        system_message = await sync_to_async(self.thread.add_message, thread_sensitive=False)(
+            system_message_text, actor=Actor.SYSTEM
+        )
+        system_message.internal_data = {
+            'type': 'compact_complete',
+            'summary': result
+        }
+        await sync_to_async(system_message.save, thread_sensitive=False)()
+
+    async def _finalize_task(self):
+        """Finalize the task as completed."""
+        self.task.progress_logs.append({
+            "step": "Summary complete, context updated",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+            "severity": "success"
+        })
+
+        await self.handler.publish_update('task_complete', {
+            'result': self.task.result,
+            'thread_id': self.thread.id,
+            'thread_subject': self.thread.subject
+        })
+
+        self.task.status = TaskStatus.COMPLETED
+        await sync_to_async(self.task.save, thread_sensitive=False)()
 
 
 @shared_task(bind=True, name="compact_conversation")

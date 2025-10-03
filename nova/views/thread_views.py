@@ -291,18 +291,12 @@ def compact_thread(request, thread_id):
         status=TaskStatus.PENDING
     )
 
-    # Add compact action message immediately
-    compact_msg = thread.add_message("Compacting conversation to reduce context...", Actor.USER)
-    compact_msg.internal_data = {'type': 'compact_action'}
-    compact_msg.save()
-
-    # Queue task
+    # Queue task (system message will be added by CompactTaskExecutor after completion)
     compact_conversation_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None)
 
     return JsonResponse({
         'status': 'queued',
-        'task_id': task.id,
-        'message_id': compact_msg.id
+        'task_id': task.id
     })
 
 

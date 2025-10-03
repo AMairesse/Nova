@@ -24,6 +24,30 @@
             {% endif %}
           </div>
         </div>
+        {% elif message.actor == Actor.SYSTEM %}
+        {% if message.internal_data.type == 'compact_complete' %}
+        <div class="card border-light">
+          <div class="card-body py-2">
+            <div class="text-muted small">
+              {{ message.rendered_html }}
+              <button
+                class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
+                type="button"
+                onclick="toggleCompactDetails(this)"
+                data-collapsed="true"
+                title="{% trans 'Show summary details' %}"
+              >
+                <small>[+ details]</small>
+              </button>
+            </div>
+            <div class="compact-details mt-2 d-none">
+              <div class="border-start border-secondary ps-2">
+                <small class="text-muted">{{ message.internal_data.summary }}</small>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         {% elif message.actor == Actor.AGENT %}
         <div class="card border-secondary">
           <div class="card-body py-2">
