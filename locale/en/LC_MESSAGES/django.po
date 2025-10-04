@@ -532,6 +532,8 @@ msgid "No credential configured for this Code Execution tool."
 msgstr "No credential configured for this Code Execution tool."
 
 #: nova/tools/builtins/code_execution.py:70
+#, fuzzy
+#| msgid "Field judge0_url is missing from the configuration."
 msgid "Field judge0_url is missing from the configuration."
 msgstr "Field judge0_url is missing from the configuration."
 
@@ -598,6 +600,8 @@ msgid "No credential configured for this SearXNG tool."
 msgstr "No credential configured for this SearXNG tool."
 
 #: nova/tools/builtins/searxng.py:39
+#, fuzzy
+#| msgid "Field searxng_url is missing from the configuration."
 msgid "Field searxng_url is missing from the configuration."
 msgstr "Field searxng_url is missing from the configuration."
 
@@ -747,18 +751,26 @@ msgid "Loading providers"
 msgstr "Loading providers"
 
 #: user_settings/templates/user_settings/dashboard.html:77
+#, fuzzy
+#| msgid "Loading agents"
 msgid "Loading agents"
 msgstr "Loading agents"
 
 #: user_settings/templates/user_settings/dashboard.html:87
+#, fuzzy
+#| msgid "Loading tools"
 msgid "Loading tools"
 msgstr "Loading tools"
 
 #: user_settings/templates/user_settings/dashboard.html:97
+#, fuzzy
+#| msgid "Loading"
 msgid "Loading"
 msgstr "Loading"
 
 #: user_settings/templates/user_settings/dashboard.html:108
+#, fuzzy
+#| msgid "Loading memory"
 msgid "Loading memory"
 msgstr "Loading memory"
 
