@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-09-13 12:16+0000\n"
+"POT-Creation-Date: 2025-10-04 18:54+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -22,55 +22,6 @@ msgstr ""
 msgid "No files in this thread."
 msgstr "No files in this thread."
 
-#~ msgid "Invalid JSON: "
-#~ msgstr "Invalid JSON: "
-
-#~ msgid "Testing…"
-#~ msgstr "Testing…"
-
-#~ msgid "Available calendars:"
-#~ msgstr "Available calendars:"
-
-#~ msgid "MCP tools available:"
-#~ msgstr "MCP tools available:"
-
-#~ msgid "input_schema"
-#~ msgstr "input_schema"
-
-#~ msgid "output_schema"
-#~ msgstr "output_schema"
-
-#~ msgid "Error"
-#~ msgstr "Error"
-
-#~ msgid "Unknown error"
-#~ msgstr "Unknown error"
-
-#~ msgid "Network error: "
-#~ msgstr "Network error: "
-
-#~ msgid "Max context tokens"
-#~ msgstr "Max context tokens"
-
-#~ msgid ""
-#~ "Max tokens for this provider's context (e.g., 4096 for small models)."
-#~ msgstr ""
-#~ "Max tokens for this provider's context (e.g., 4096 for small models)."
-
-#~ msgid "Model"
-#~ msgstr "Model"
-
-#~ msgid "API key"
-#~ msgstr "API key"
-
-#~ msgid "A key is already registered ; leave empty to keep it."
-#~ msgstr "A key is already registered ; leave empty to keep it."
-
-#~ msgid "Base URL (optional)"
-#~ msgstr "Base URL (optional)"
-
-#~ msgid "Base URL"
-#~ msgstr "Base URL"
-
-#~ msgid "Tool description is required when using as tool."
-#~ msgstr "Tool description is required when using as tool."
+#: nova/static/js/thread_management.js:49
+msgid "Compact"
+msgstr "Compact"
