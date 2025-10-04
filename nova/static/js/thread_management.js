@@ -9,7 +9,7 @@
   // MESSAGE RENDERER - Unified conversion for consistency
   // ============================================================================
   class MessageRenderer {
-    static createMessageElement(messageData) {
+    static createMessageElement(messageData, thread_id) {
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message mb-3';
       messageDiv.id = `message-${messageData.id}`;
@@ -27,13 +27,27 @@
           </div>
         `;
       } else if (messageData.actor === 'agent') {
+        // Remove "compact" button from previous message footer
+        const button_to_remove = document.querySelector('.compact-thread-btn');
+        if (button_to_remove) {
+          button_to_remove.remove();
+        }
         // Agent message structure
         messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
               <div class="streaming-content">${messageData.text}</div>
             </div>
-            <div class="card-footer py-1 text-muted small text-end d-none">
+            <div class="card-footer py-1 text-muted small text-end d-none d-flex justify-content-end align-items-center">
+              <div class="card-footer-consumption">
+              </div>
+              <button
+                type="button"
+                class="btn btn-link btn-sm text-decoration-none compact-thread-btn"
+                data-thread-id="`+ thread_id + `"
+              >
+                <i class="bi bi-filter-circle me-1"></i>` + gettext('Compact') + `
+              </button>
             </div>
           </div>
         `;
@@ -101,12 +115,12 @@
       this.messageManager = manager;
     }
 
-    registerStream(taskId, messageData) {
+    registerStream(taskId, messageData, thread_id) {
       const agentMessageEl = MessageRenderer.createMessageElement({
         ...messageData,
         actor: 'agent',
         text: '' // Start with empty content
-      });
+      }, thread_id);
 
       // Add streaming class to the message container for proper CSS targeting
       agentMessageEl.classList.add('streaming');
@@ -179,9 +193,6 @@
             progressDiv.classList.add('d-none');
           }, 3000); // Hide progress after 3 seconds
         }
-
-        // Keep context consumption info visible permanently
-        // (don't hide the streaming footer)
       }
       this.activeStreams.delete(taskId);
     }
@@ -306,18 +317,24 @@
         } else if (data.type === 'response_chunk') {
           this.onStreamChunk(taskId, data.chunk);
         } else if (data.type === 'context_consumption') {
-          const streamingFooter = document.querySelector('.message.streaming .card-footer');
+          // Get the card for this message
+          const stream = this.activeStreams.get(taskId);
+          if (!stream) return;
+          // Get the footer in the card
+          const streamingFooter = stream.element.querySelector('.card-footer-consumption');
           if (streamingFooter && data.max_context) {
-            streamingFooter.classList.remove('d-none');
+            // Add the context consumption data
             if (data.real_tokens !== null) {
               streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
             } else {
               streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
             }
+            // Display the footer
+            streamingFooter.parentElement.classList.remove('d-none');
           }
         } else if (data.type === 'new_message') {
           // Handle real-time message updates (e.g., system messages from completed tasks)
-          this.onNewMessage(data.message);
+          this.onNewMessage(data.messagen, data.thread_id);
         } else if (data.type === 'task_complete') {
           // Update thread title in sidebars if backend provided it
           if (data.thread_id && data.thread_subject) {
@@ -345,7 +362,6 @@
       Object.keys(savedStreams).forEach(taskId => {
         if (savedStreams[taskId].status !== 'completed') {
           this.startWebSocket(taskId);
-          // Optionnel : Re-créer l'élément message si nécessaire
         }
       });
     }
@@ -519,7 +535,7 @@
         this.currentThreadId = data.thread_id;
 
         // Add user message dynamically
-        const userMessageEl = MessageRenderer.createMessageElement(data.message);
+        const userMessageEl = MessageRenderer.createMessageElement(data.message, '');
         this.appendMessage(userMessageEl);
 
         // Scroll to position the message at the top
@@ -530,7 +546,7 @@
           id: data.task_id,
           actor: 'agent',
           text: ''
-        });
+        }, data.thread_id);
 
         // Clear textarea
         if (textarea) textarea.value = '';
@@ -552,11 +568,6 @@
         messagesList.appendChild(messageElement);
       } else {
         console.error('Messages list not found!');
-        // Fallback: try to find conversation container
-        const conversationContainer = document.getElementById('conversation-container');
-        if (conversationContainer) {
-          conversationContainer.appendChild(messageElement);
-        }
       }
 
       // Auto-scroll to bottom when new messages are added
@@ -684,9 +695,9 @@
   };
 
   // Handle real-time message updates like system messages
-  StreamingManager.prototype.onNewMessage = function(messageData) {
+  StreamingManager.prototype.onNewMessage = function(messageData, thread_id) {
     // Create message element for the new message
-    const messageElement = MessageRenderer.createMessageElement(messageData);
+    const messageElement = MessageRenderer.createMessageElement(messageData, thread_id);
 
     // Add to message container
     const messagesList = document.getElementById('messages-list');
