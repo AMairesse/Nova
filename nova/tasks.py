@@ -9,7 +9,7 @@ from django.contrib.auth.models import User
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
-from nova.models.models import Agent, Task, TaskStatus
+from nova.models.models import Agent, Task, TaskStatus, CheckpointLink
 from nova.models.Thread import Thread
 from nova.models.Message import Message
 from nova.models.Message import Actor
@@ -303,6 +303,9 @@ class TaskExecutor:
         })
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Running AI agent"})
+
         return await self.llm.ainvoke(self.prompt)
 
     async def _finalize_task(self):
@@ -547,32 +550,17 @@ class CompactTaskExecutor (TaskExecutor):
                      Use the same language as the conversation's language and reply in Markdown."""
         return prompt
 
-    async def _run_agent(self):
-        """Execute the LLM agent and return result."""
-        self.task.progress_logs.append({
-            "step": "Generating summary...",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        })
-        await sync_to_async(self.task.save, thread_sensitive=False)()
-
-        await self.handler.publish_update('progress_update',
-                                          {'progress_log': "Generating summary..."})
-
-        return await self.llm.ainvoke(self.prompt)
-
     async def _process_result(self, result):
         await super()._process_result(result)
 
         # Emit progress update for checkpoint update
         await self.handler.publish_update('progress_update',
-                                          {'progress_log': "Updating context..."})
+                                          {'progress_log': "Updating context"})
 
         config = self.llm.config
 
         # Remove old checkpoints
         thread_id = config['configurable']['thread_id']
-        # thread_id = config['metadata']['thread_id']
         checkpointer = await get_checkpointer()
         await checkpointer.adelete_thread(thread_id)
 
@@ -609,22 +597,10 @@ class CompactTaskExecutor (TaskExecutor):
             }
         })
 
-    async def _finalize_task(self):
-        """Finalize the task as completed."""
-        self.task.progress_logs.append({
-            "step": "Summary complete, context updated",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "success"
-        })
 
-        await self.handler.publish_update('task_complete', {
-            'result': self.task.result,
-            'thread_id': self.thread.id,
-            'thread_subject': self.thread.subject
-        })
-
-        self.task.status = TaskStatus.COMPLETED
-        await sync_to_async(self.task.save, thread_sensitive=False)()
+async def delete_checkpoints(ckp_id):
+    checkpointer = await get_checkpointer()
+    await checkpointer.adelete_thread(ckp_id)
 
 
 @shared_task(bind=True, name="compact_conversation")
@@ -642,6 +618,16 @@ def compact_conversation_celery(self, task_pk, user_pk, thread_pk, agent_pk):
         # Call the agent
         executor = CompactTaskExecutor(task, user, thread, agent_config, "")
         asyncio.run(executor.execute())
+
+        # Find and delete sub-agents' checkpoints
+        other_agents_ckp = CheckpointLink.objects.filter(thread=thread).exclude(agent=agent_config)
+        for ckp in other_agents_ckp:
+            # Get the checkpoint_id
+            checkpoint_id = ckp.checkpoint_id
+            # Delete the checkpoint
+            logger.info(f"Deleting checkpoint {checkpoint_id}")
+            asyncio.run(delete_checkpoints(checkpoint_id))
+            ckp.delete()
 
     except Exception as e:
         logger.error(f"Celery task {task_pk} failed: {e}")
