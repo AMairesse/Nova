@@ -594,7 +594,7 @@ class CompactTaskExecutor (TaskExecutor):
         return await self.llm.ainvoke(self.prompt)
 
     async def _process_result(self, result):
-        super()._process_result(result)
+        await super()._process_result(result)
 
         # Emit progress update for checkpoint update
         await self.handler.publish_update('progress_update',
@@ -617,14 +617,14 @@ class CompactTaskExecutor (TaskExecutor):
             'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
             'channel_values': {},
             'channel_versions': {'__start__': '1.0'},
-            'versions_seen': {},
+            'versions_seen': {"__input__": {}},
             'updated_channels': ['__start__']
         }
 
         initial_metadata = {
             'step': -1,
             'source': 'input',
-            'parents': []
+            'parents': {}
         }
 
         # Add checkpoint_ns to config
@@ -640,22 +640,22 @@ class CompactTaskExecutor (TaskExecutor):
         # Create a second checkpoint with the summary
         checkpoint_tuple = await checkpointer.aget_tuple(config)
         state = checkpoint_tuple.checkpoint
-        new_channel_values = state['channel_values'].copy()
-        new_channel_values['messages'] = [AIMessage(content=result, additional_kwargs={'summary': True})]
 
         summary_checkpoint = {
             'v': state['v'],
             'id': str(uuid4()),
             'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
-            'channel_values': new_channel_values,
+            'channel_values': {
+                'messages': [AIMessage(content=result, additional_kwargs={'summary': True})]
+            },
             'channel_versions': {'__start__': '1.0', 'messages': '1.0'},
-            'versions_seen': {},
+            'versions_seen': {"__input__": {}, '__start__': {'__start__': '1.0'}},
             'updated_channels': ['messages']
         }
         summary_metadata = {
             'step': 0,
             'source': 'loop',
-            'parents': [initial_id]
+            'parents': {}
         }
         config = await checkpointer.aput(config, summary_checkpoint, summary_metadata,
                                          summary_checkpoint['channel_versions'])
