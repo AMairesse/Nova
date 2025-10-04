@@ -17,6 +17,7 @@ from nova.models.Message import Message
 from nova.models.Message import Actor
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.llm_agent import LLMAgent
+from nova.utils import markdown_to_html
 import logging
 import functools
 from enum import Enum
@@ -575,7 +576,7 @@ class CompactTaskExecutor (TaskExecutor):
         target_words = int(target_tokens / 0.75)
 
         # Prompt for summary (partie sync, inchangée)
-        prompt = f"""Summarize the conversation to approximately {target_words} words,
+        prompt = f"""Summarize the conversation to a maximum of {target_words} words,
                      Capture key points, user intent, and outcomes without adding new information.
                      Default to the conversation's language and reply in Markdown."""
         return prompt
@@ -626,6 +627,9 @@ class CompactTaskExecutor (TaskExecutor):
             'summary': result
         }
         await sync_to_async(system_message.save, thread_sensitive=False)()
+        
+        # Process markdown to HTML server-side before sending the message
+        system_message.internal_data['summary'] = markdown_to_html(system_message.internal_data['summary'])
 
         # Broadcast the new message to all connected WebSocket clients for real-time UI updates
         await self.handler.publish_update('new_message', {
