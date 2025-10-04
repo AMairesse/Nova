@@ -334,7 +334,7 @@
           }
         } else if (data.type === 'new_message') {
           // Handle real-time message updates (e.g., system messages from completed tasks)
-          this.onNewMessage(data.messagen, data.thread_id);
+          this.onNewMessage(data.message, data.thread_id);
         } else if (data.type === 'task_complete') {
           // Update thread title in sidebars if backend provided it
           if (data.thread_id && data.thread_subject) {
