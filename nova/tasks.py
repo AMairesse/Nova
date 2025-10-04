@@ -608,22 +608,24 @@ class CompactTaskExecutor (TaskExecutor):
         checkpoint_tuple = await checkpointer.aget_tuple(config)
         state = checkpoint_tuple.checkpoint
 
-        new_channel_values = state['channel_values'].copy()
-        new_channel_values['messages'] = [AIMessage(content=result, additional_kwargs={'summary': True})]
-
-        new_checkpoint = {
+        initial_id = str(uuid4())
+        initial_checkpoint = {
+            # Keep version number
             'v': state['v'],
-            'id': str(uuid4()),
+            # Set a new id for the checkpoint
+            'id': initial_id,
             'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
-            'channel_values': new_channel_values,
-            'channel_versions': state['channel_versions'],
-            'versions_seen': state['versions_seen'],
-            'updated_channels': ['messages']
+            'channel_values': {},
+            'channel_versions': {'__start__': '1.0'},
+            'versions_seen': {},
+            'updated_channels': ['__start__']
         }
 
-        new_metadata = checkpoint_tuple.metadata.copy()
-        new_metadata['step'] += 1
-        new_metadata['source'] = 'update'
+        initial_metadata = {
+            'step': -1,
+            'source': 'input',
+            'parents': []
+        }
 
         # Add checkpoint_ns to config
         config['configurable']['checkpoint_ns'] = ""
@@ -631,8 +633,32 @@ class CompactTaskExecutor (TaskExecutor):
         # Remove old checkpoints
         await checkpointer.adelete_thread(config['metadata']['thread_id'])
 
-        # Put new checkpoint
-        await checkpointer.aput(config, new_checkpoint, new_metadata, state['channel_versions'])
+        # Put a new "start checkpoint"
+        config = await checkpointer.aput(config, initial_checkpoint, initial_metadata,
+                                         initial_checkpoint['channel_versions'])
+
+        # Create a second checkpoint with the summary
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+        state = checkpoint_tuple.checkpoint
+        new_channel_values = state['channel_values'].copy()
+        new_channel_values['messages'] = [AIMessage(content=result, additional_kwargs={'summary': True})]
+
+        summary_checkpoint = {
+            'v': state['v'],
+            'id': str(uuid4()),
+            'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'channel_values': new_channel_values,
+            'channel_versions': {'__start__': '1.0', 'messages': '1.0'},
+            'versions_seen': {},
+            'updated_channels': ['messages']
+        }
+        summary_metadata = {
+            'step': 0,
+            'source': 'loop',
+            'parents': [initial_id]
+        }
+        config = await checkpointer.aput(config, summary_checkpoint, summary_metadata,
+                                         summary_checkpoint['channel_versions'])
 
         # Add system message with summary details
         system_message_text = "ℹ️ Conversation compacted"
