@@ -2,11 +2,15 @@
 msgid "User"
 msgstr "User"
 
-#: nova/models/Message.py:10 nova/models/models.py:413
+#: nova/models/Message.py:10 nova/models/models.py:461
 msgid "Agent"
 msgstr "Agent"
 
-#: nova/models/Message.py:17
+#: nova/models/Message.py:11
+msgid "System"
+msgstr "System"
+
+#: nova/models/Message.py:18
 msgid "User messages"
 msgstr "User messages"
 
@@ -18,11 +22,11 @@ msgstr "User threads"
 msgid "Invalid actor: {}"
 msgstr "Invalid actor: {}"
 
-#: nova/models/models.py:36
+#: nova/models/models.py:37
 msgid "Enter a valid URL."
 msgstr "Enter a valid URL."
 
-#: nova/models/models.py:65
+#: nova/models/models.py:66
 #, fuzzy
 #| msgid ""
 #| "Maximum tokens for this provider's context window (e.g., 4096 for small "
@@ -35,177 +39,193 @@ msgstr ""
 "Maximum tokens for this provider's context window (e.g., 4096 for small "
 "models, 100000 or more for large)."
 
-#: nova/models/models.py:76
+#: nova/models/models.py:77
 msgid "LLM providers"
 msgstr "LLM providers"
 
-#: nova/models/models.py:89 user_settings/forms.py:103
+#: nova/models/models.py:90 user_settings/forms.py:104
 msgid "Max context tokens must be at least 512."
 msgstr "Max context tokens must be at least 512."
 
-#: nova/models/models.py:112
+#: nova/models/models.py:113
 msgid "Whether user has generated an API token"
 msgstr "Whether user has generated an API token"
 
-#: nova/models/models.py:125
+#: nova/models/models.py:126
 msgid "Builtin"
 msgstr "Builtin"
 
-#: nova/models/models.py:126
+#: nova/models/models.py:127
 msgid "API HTTP/REST"
 msgstr "API HTTP/REST"
 
-#: nova/models/models.py:127
+#: nova/models/models.py:128
 msgid "MCP Server"
 msgstr "MCP Server"
 
-#: nova/models/models.py:130
+#: nova/models/models.py:131
 msgid "Streamable HTTP (Default)"
 msgstr "Streamable HTTP (Default)"
 
-#: nova/models/models.py:131
+#: nova/models/models.py:132
 msgid "SSE (Legacy)"
 msgstr "SSE (Legacy)"
 
-#: nova/models/models.py:140 nova/models/models.py:224
+#: nova/models/models.py:141 nova/models/models.py:225
 #: user_settings/templates/user_settings/dashboard.html:36
 #: user_settings/templates/user_settings/tool_list.html:8
 msgid "Tools"
 msgstr "Tools"
 
-#: nova/models/models.py:166
+#: nova/models/models.py:167
 msgid "Transport method for MCP servers"
 msgstr "Transport method for MCP servers"
 
-#: nova/models/models.py:178
+#: nova/models/models.py:179
 msgid "Available functions for this tool, if any."
 msgstr "Available functions for this tool, if any."
 
-#: nova/models/models.py:191
+#: nova/models/models.py:192
 msgid "A BUILTIN tool must select a subtype."
 msgstr "A BUILTIN tool must select a subtype."
 
-#: nova/models/models.py:196
+#: nova/models/models.py:197
 #, python-format
 msgid "Invalid builtin subtype: %s"
 msgstr "Invalid builtin subtype: %s"
 
-#: nova/models/models.py:203
+#: nova/models/models.py:204
 msgid "Endpoint is mandatory for API or MCP tools."
 msgstr "Endpoint is mandatory for API or MCP tools."
 
-#: nova/models/models.py:213
+#: nova/models/models.py:214
 msgid "User agents"
 msgstr "User agents"
 
-#: nova/models/models.py:218
+#: nova/models/models.py:219
 #: user_settings/templates/user_settings/fragments/agent_table.html:24
 msgid "Provider"
 msgstr "Providers"
 
-#: nova/models/models.py:219
+#: nova/models/models.py:220
 msgid "Prompt"
 msgstr "Prompt"
 
-#: nova/models/models.py:220
+#: nova/models/models.py:221
 msgid "Recursion limit"
 msgstr "Recursion limit"
 
-#: nova/models/models.py:227
+#: nova/models/models.py:228
 msgid "Is tool"
 msgstr "Is tool"
 
-#: nova/models/models.py:228
+#: nova/models/models.py:229
 msgid "If true, this agent can be used as a tool by other agents."
 msgstr "If true, this agent can be used as a tool by other agents."
 
-#: nova/models/models.py:237 user_settings/forms.py:122
+#: nova/models/models.py:238 user_settings/forms.py:123
 msgid "Agents to use as tools"
 msgstr "Agents to use as tools"
 
-#: nova/models/models.py:245
+#: nova/models/models.py:246
 msgid "Tool description"
 msgstr "Tool description"
 
-#: nova/models/models.py:246
+#: nova/models/models.py:247
 msgid ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 msgstr ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 
-#: nova/models/models.py:263
+#: nova/models/models.py:264
 msgid "Tool description is required when 'is_tool' is True."
 msgstr "Tool description is required when 'is_tool' is True."
 
-#: nova/models/models.py:272
+#: nova/models/models.py:273
 msgid "Found a cyclic dependency between agents."
 msgstr "Found a cyclic dependency between agents."
 
-#: nova/models/models.py:326
+#: nova/models/models.py:327
 msgid "Default agent must be a normal agent."
 msgstr "Default agent must be a normal agent."
 
-#: nova/models/models.py:329
+#: nova/models/models.py:330
 msgid "Default agent must belong to the user."
 msgstr "Default agent must belong to the user."
 
-#: nova/models/models.py:342
+#: nova/models/models.py:341
+msgid "User information stored in Markdown format"
+msgstr "User information stored in Markdown format"
+
+#: nova/models/models.py:347 nova/models/models.py:348
+msgid "User Information"
+msgstr "User Information"
+
+#: nova/models/models.py:357
+msgid "Markdown content should start with a heading (#)."
+msgstr "Markdown content should start with a heading (#)."
+
+#: nova/models/models.py:361
+msgid "Content exceeds maximum size of 50,000 characters."
+msgstr "Content exceeds maximum size of 50,000 characters."
+
+#: nova/models/models.py:390
 msgid "Tool credentials"
 msgstr "Tool credentials"
 
-#: nova/models/models.py:346
+#: nova/models/models.py:394
 msgid "Credentials"
 msgstr "Credentials"
 
-#: nova/models/models.py:351
+#: nova/models/models.py:399
 msgid "No Authentication"
 msgstr "No Authentication"
 
-#: nova/models/models.py:352
+#: nova/models/models.py:400
 msgid "Basic Auth"
 msgstr "Basic Auth"
 
-#: nova/models/models.py:353
+#: nova/models/models.py:401
 msgid "Token Auth"
 msgstr "Token Auth"
 
-#: nova/models/models.py:354
+#: nova/models/models.py:402
 msgid "OAuth"
 msgstr "OAuth"
 
-#: nova/models/models.py:355
+#: nova/models/models.py:403
 msgid "API Key"
 msgstr "API Key"
 
-#: nova/models/models.py:356
+#: nova/models/models.py:404
 msgid "Custom"
 msgstr "Custom"
 
-#: nova/models/models.py:387
+#: nova/models/models.py:435
 msgid "{}'s credentials for {}"
 msgstr "{}'s credentials for {}"
 
-#: nova/models/models.py:393
+#: nova/models/models.py:441
 msgid "Pending"
 msgstr "Pending"
 
-#: nova/models/models.py:394
+#: nova/models/models.py:442
 msgid "Running"
 msgstr "Running"
 
-#: nova/models/models.py:395
+#: nova/models/models.py:443
 msgid "Completed"
 msgstr "Completed"
 
-#: nova/models/models.py:396
+#: nova/models/models.py:444
 msgid "Failed"
 msgstr "Failed"
 
-#: nova/models/models.py:403
+#: nova/models/models.py:451
 msgid "User tasks"
 msgstr "User tasks"
 
-#: nova/models/models.py:407
+#: nova/models/models.py:455
 msgid "Thread"
 msgstr "Thread"
 
@@ -213,15 +233,15 @@ msgstr "Thread"
 msgid "Nova Application"
 msgstr "Nova Application"
 
-#: nova/templates/base.html:42
+#: nova/templates/base.html:52
 msgid "Settings"
 msgstr "Settings"
 
-#: nova/templates/base.html:48
+#: nova/templates/base.html:58
 msgid "Admin"
 msgstr "Admin"
 
-#: nova/templates/base.html:57
+#: nova/templates/base.html:67
 msgid "Logout"
 msgstr "Logout"
 
@@ -233,24 +253,28 @@ msgid "Close"
 msgstr "Close"
 
 #: nova/templates/nova/index.html:11 nova/templates/nova/index.html:26
-#: nova/templates/nova/index.html:85
+#: nova/templates/nova/index.html:92
 msgid "Threads"
 msgstr "Threads"
 
-#: nova/templates/nova/index.html:13 nova/templates/nova/index.html:43
+#: nova/templates/nova/index.html:13 nova/templates/nova/index.html:50
 msgid "Messages"
 msgstr "Messages"
 
-#: nova/templates/nova/index.html:16 nova/templates/nova/index.html:54
-#: nova/templates/nova/index.html:105
+#: nova/templates/nova/index.html:16 nova/templates/nova/index.html:61
+#: nova/templates/nova/index.html:121
 msgid "Files"
 msgstr "Files"
 
-#: nova/templates/nova/index.html:56 nova/templates/nova/index.html:107
+#: nova/templates/nova/index.html:40 nova/templates/nova/index.html:110
+msgid "Load More"
+msgstr "Load More"
+
+#: nova/templates/nova/index.html:63 nova/templates/nova/index.html:123
 msgid "Upload files"
 msgstr "Upload files"
 
-#: nova/templates/nova/index.html:59 nova/templates/nova/index.html:110
+#: nova/templates/nova/index.html:66 nova/templates/nova/index.html:126
 msgid "Upload directory"
 msgstr "Upload directory"
 
@@ -281,48 +305,76 @@ msgstr[1] ""
 "                %(file_count)s files were shared with this message.\n"
 "              "
 
-#: nova/templates/nova/message_container.html:36
 #: nova/templates/nova/message_container.html:38
-#: nova/templates/nova/message_container.html:40
+msgid "Show summary details"
+msgstr "Show summary details"
+
+#: nova/templates/nova/message_container.html:61
+#: nova/templates/nova/message_container.html:63
+#: nova/templates/nova/message_container.html:65
 msgid "Context consumption"
 msgstr "Context consumption"
 
-#: nova/templates/nova/message_container.html:36
+#: nova/templates/nova/message_container.html:61
 msgid "real"
 msgstr "real"
 
-#: nova/templates/nova/message_container.html:38
-#: nova/templates/nova/message_container.html:40
+#: nova/templates/nova/message_container.html:63
+#: nova/templates/nova/message_container.html:65
 msgid "approximated"
 msgstr "approximated"
 
-#: nova/templates/nova/message_container.html:58
+#: nova/templates/nova/message_container.html:74
+msgid "Compact"
+msgstr "Compact"
+
+#: nova/templates/nova/message_container.html:91
 msgid "Working..."
 msgstr "Working..."
 
-#: nova/templates/nova/message_container.html:70
+#: nova/templates/nova/message_container.html:103
 msgid "No agents configured yet."
 msgstr "No agents configured yet."
 
-#: nova/templates/nova/message_container.html:72
+#: nova/templates/nova/message_container.html:105
 msgid "Create one now"
 msgstr "Create one now"
 
-#: nova/templates/nova/message_container.html:98
+#: nova/templates/nova/message_container.html:131
 msgid "Select an agent"
 msgstr "Select an agent"
 
-#: nova/templates/nova/message_container.html:112
+#: nova/templates/nova/message_container.html:145
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:132
+#: nova/templates/nova/message_container.html:165
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/templates/nova/message_container.html:143
+#: nova/templates/nova/message_container.html:176
 msgid "Send"
 msgstr "Send"
+
+#: nova/templates/nova/partials/_thread_groups.html:7
+msgid "Today"
+msgstr "Today"
+
+#: nova/templates/nova/partials/_thread_groups.html:9
+msgid "Yesterday"
+msgstr "Yesterday"
+
+#: nova/templates/nova/partials/_thread_groups.html:11
+msgid "Last Week"
+msgstr "Last Week"
+
+#: nova/templates/nova/partials/_thread_groups.html:13
+msgid "Last Month"
+msgstr "Last Month"
+
+#: nova/templates/nova/partials/_thread_groups.html:15
+msgid "Older"
+msgstr "Older"
 
 #: nova/templates/nova/partials/_thread_item.html:14
 msgid "Delete Thread"
@@ -448,6 +500,89 @@ msgstr "Username"
 msgid "Password"
 msgstr "Password"
 
+#: nova/tools/builtins/code_execution.py:24
+msgid "Judge0 Server URL"
+msgstr "Judge0 Server URL"
+
+#: nova/tools/builtins/code_execution.py:25
+msgid "Judge0 API Key (optional)"
+msgstr "Judge0 API Key (optional)"
+
+#: nova/tools/builtins/code_execution.py:26
+msgid "Default execution timeout (seconds)"
+msgstr "Default execution timeout (seconds)"
+
+#: nova/tools/builtins/code_execution.py:43
+#, python-brace-format
+msgid "{count} supported languages found"
+msgstr "{count} supported languages found"
+
+#: nova/tools/builtins/code_execution.py:48
+msgid "No languages found - check server configuration"
+msgstr "No languages found - check server configuration"
+
+#: nova/tools/builtins/code_execution.py:53
+#, python-brace-format
+msgid "Connection error: {err}"
+msgstr "Connection error: {err}"
+
+#: nova/tools/builtins/code_execution.py:66
+#: nova/tools/builtins/code_execution.py:83
+msgid "No credential configured for this Code Execution tool."
+msgstr "No credential configured for this Code Execution tool."
+
+#: nova/tools/builtins/code_execution.py:70
+#, fuzzy
+#| msgid "Field judge0_url is missing from the configuration."
+msgid "Field judge0_url is missing from the configuration."
+msgstr "Field judge0_url is missing from the configuration."
+
+#: nova/tools/builtins/code_execution.py:121
+msgid "No languages available."
+msgstr "No languages available."
+
+#: nova/tools/builtins/code_execution.py:126
+#, python-brace-format
+msgid "Error listing languages: {error}"
+msgstr "Error listing languages: {error}"
+
+#: nova/tools/builtins/code_execution.py:139
+msgid "No languages available. Please check server configuration."
+msgstr "No languages available. Please check server configuration."
+
+#: nova/tools/builtins/code_execution.py:146
+#, python-brace-format
+msgid ""
+"Language '{lang}' not found.            Use list_supported_languages to see "
+"available options."
+msgstr ""
+"Language '{lang}' not found.            Use list_supported_languages to see "
+"available options."
+
+#: nova/tools/builtins/code_execution.py:165
+#, python-brace-format
+msgid "Error getting status: {error}"
+msgstr "Error getting status: {error}"
+
+#: nova/tools/builtins/code_execution.py:189
+msgid "Compilation timeout"
+msgstr "Compilation timeout"
+
+#: nova/tools/builtins/code_execution.py:194
+#, python-brace-format
+msgid "Error compiling code: {error}"
+msgstr "Error compiling code: {error}"
+
+#: nova/tools/builtins/code_execution.py:222
+#, python-brace-format
+msgid "Error executing code: {error}"
+msgstr "Error executing code: {error}"
+
+#: nova/tools/builtins/code_execution.py:255
+#, python-brace-format
+msgid "Error running code with inputs: {error}"
+msgstr "Error running code with inputs: {error}"
+
 #: nova/tools/builtins/searxng.py:14
 msgid "URL SearXNG server"
 msgstr "URL SearXNG server"
@@ -470,47 +605,47 @@ msgstr "No credential configured for this SearXNG tool."
 msgid "Field searxng_url is missing from the configuration."
 msgstr "Field searxng_url is missing from the configuration."
 
-#: user_settings/forms.py:195
+#: user_settings/forms.py:196
 msgid "Required when using an agent as a tool."
 msgstr "Required when using an agent as a tool."
 
-#: user_settings/forms.py:214
+#: user_settings/forms.py:215
 msgid "Builtin tool subtype"
 msgstr "Builtin tool subtype"
 
-#: user_settings/forms.py:215
+#: user_settings/forms.py:216
 msgid "Select a builtin tool subtype"
 msgstr "Select a builtin tool subtype"
 
-#: user_settings/forms.py:222
+#: user_settings/forms.py:223
 msgid "JSON schema describing the tool inputs"
 msgstr "JSON schema describing the tool inputs"
 
-#: user_settings/forms.py:229
+#: user_settings/forms.py:230
 msgid "JSON schema describing the tool outputs"
 msgstr "JSON schema describing the tool outputs"
 
-#: user_settings/forms.py:316
+#: user_settings/forms.py:317
 msgid "A BUILTIN tool must have a subtype defined."
 msgstr "A BUILTIN tool must have a subtype defined."
 
-#: user_settings/forms.py:335
+#: user_settings/forms.py:336
 msgid "This field is required."
 msgstr "This field is required."
 
-#: user_settings/forms.py:368
+#: user_settings/forms.py:369
 msgid "CalDav server URL"
 msgstr "CalDav server URL"
 
-#: user_settings/forms.py:470
+#: user_settings/forms.py:471
 msgid "API Token Status"
 msgstr "API Token Status"
 
-#: user_settings/forms.py:495
+#: user_settings/forms.py:496
 msgid "Active - Token exists"
 msgstr "Active - Token exists"
 
-#: user_settings/forms.py:497 user_settings/forms.py:499
+#: user_settings/forms.py:498 user_settings/forms.py:500
 msgid "No token generated"
 msgstr "No token generated"
 
@@ -530,7 +665,7 @@ msgstr "Updated successfully"
 msgid "Deleted successfully"
 msgstr "Deleted successfully"
 
-#: user_settings/mixins.py:89 user_settings/views/tool.py:184
+#: user_settings/mixins.py:89 user_settings/views/tool.py:185
 msgid "Secret exists, leave blank to keep"
 msgstr "Secret exists, leave blank to keep"
 
@@ -605,23 +740,39 @@ msgstr "LLM Providers"
 msgid "General"
 msgstr "General"
 
-#: user_settings/templates/user_settings/dashboard.html:57
+#: user_settings/templates/user_settings/dashboard.html:53
+msgid "Memory"
+msgstr "Memory"
+
+#: user_settings/templates/user_settings/dashboard.html:67
 #, fuzzy
 #| msgid "Loading providers"
 msgid "Loading providers"
 msgstr "Loading providers"
 
-#: user_settings/templates/user_settings/dashboard.html:67
+#: user_settings/templates/user_settings/dashboard.html:77
+#, fuzzy
+#| msgid "Loading agents"
 msgid "Loading agents"
 msgstr "Loading agents"
 
-#: user_settings/templates/user_settings/dashboard.html:77
+#: user_settings/templates/user_settings/dashboard.html:87
+#, fuzzy
+#| msgid "Loading tools"
 msgid "Loading tools"
 msgstr "Loading tools"
 
-#: user_settings/templates/user_settings/dashboard.html:87
+#: user_settings/templates/user_settings/dashboard.html:97
+#, fuzzy
+#| msgid "Loading"
 msgid "Loading"
 msgstr "Loading"
+
+#: user_settings/templates/user_settings/dashboard.html:108
+#, fuzzy
+#| msgid "Loading memory"
+msgid "Loading memory"
+msgstr "Loading memory"
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:24
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
@@ -693,6 +844,38 @@ msgstr ""
 msgid "Save Settings"
 msgstr "Save Settings"
 
+#: user_settings/templates/user_settings/fragments/memory_form.html:12
+msgid "Personal Memory"
+msgstr "Personal Memory"
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:27
+msgid "Info"
+msgstr "Info"
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:27
+msgid "The theme"
+msgstr "The theme"
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:28
+msgid ""
+"is mandatory and cannot be deleted. It contains your essential preferences "
+"that are automatically shared with agents."
+msgstr ""
+"is mandatory and cannot be deleted. It contains your essential preferences "
+"that are automatically shared with agents."
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:35
+msgid ""
+"Maximum 50,000 characters. Use headings (# Theme) to organize your "
+"information."
+msgstr ""
+"Maximum 50,000 characters. Use headings (# Theme) to organize your "
+"information."
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:39
+msgid "Save Memory"
+msgstr "Save Memory"
+
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Type"
@@ -718,6 +901,10 @@ msgstr "Inactive"
 #: user_settings/templates/user_settings/general_form.html:7
 msgid "General settings"
 msgstr "General settings"
+
+#: user_settings/templates/user_settings/memory_form.html:7
+msgid "Memory Settings"
+msgstr "Memory Settings"
 
 #: user_settings/templates/user_settings/provider_confirm_delete.html:7
 msgid "Delete provider"
@@ -780,3 +967,21 @@ msgstr "API token has been deleted successfully."
 #: user_settings/views/api_token.py:56
 msgid "No API token was found to delete."
 msgstr "No API token was found to delete."
+
+#: user_settings/views/memory.py:25
+msgid "Memory updated successfully"
+msgstr "Memory updated successfully"
+
+#: user_settings/views/memory.py:53
+msgid ""
+"Store your personal information in Markdown format. Use headings (# Theme "
+"Name) to organize different topics. Note: '# global_user_preferences' is a "
+"special theme that is always available and cannot be deleted - it contains "
+"your essential preferences that are automatically shared with agents when "
+"the memory tool is enabled."
+msgstr ""
+"Store your personal information in Markdown format. Use headings (# Theme "
+"Name) to organize different topics. Note: '# global_user_preferences' is a "
+"special theme that is always available and cannot be deleted - it contains "
+"your essential preferences that are automatically shared with agents when "
+"the memory tool is enabled."

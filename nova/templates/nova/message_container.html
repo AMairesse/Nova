@@ -24,6 +24,30 @@
             {% endif %}
           </div>
         </div>
+        {% elif message.actor == Actor.SYSTEM %}
+        {% if message.internal_data.type == 'compact_complete' %}
+        <div class="card border-light">
+          <div class="card-body py-2">
+            <div class="text-muted small">
+              {{ message.rendered_html }}
+              <button
+                class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
+                type="button"
+                onclick="toggleCompactDetails(this)"
+                data-collapsed="true"
+                title="{% trans 'Show summary details' %}"
+              >
+                <small>[+ details]</small>
+              </button>
+            </div>
+            <div class="compact-details mt-2 d-none">
+              <div class="border-start border-secondary ps-2">
+                <small class="text-muted">{{ message.internal_data.summary }}</small>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         {% elif message.actor == Actor.AGENT %}
         <div class="card border-secondary">
           <div class="card-body py-2">
@@ -31,13 +55,24 @@
           </div>
           <!-- Context indication -->
           {% if message.internal_data.max_context %}
-          <div class="card-footer py-1 text-muted small text-end">
-            {% if message.internal_data.real_tokens is not None %}
-              {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
-            {% elif message.internal_data.approx_tokens %}
-              {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
-            {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
-              {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+          <div class="card-footer py-1 text-muted small text-end d-flex justify-content-end align-items-center">
+            <div class="card-footer-consumption me-2">
+              {% if message.internal_data.real_tokens is not None %}
+                {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
+              {% elif message.internal_data.approx_tokens %}
+                {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+              {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
+                {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+              {% endif %}
+            </div>
+            {% if forloop.last %}
+              <button
+                type="button"
+                class="btn btn-link btn-sm text-decoration-none compact-thread-btn"
+                data-thread-id="{{ thread_id|default_if_none:'' }}"
+              >
+                <i class="bi bi-filter-circle me-1"></i>{% trans "Compact" %}
+              </button>
             {% endif %}
           </div>
           {% endif %}

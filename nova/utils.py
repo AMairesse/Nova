@@ -1,8 +1,11 @@
 import asyncio
 import logging
+import bleach
+from markdown import markdown
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
 from django.conf import settings
+from django.utils.safestring import mark_safe
 from nova.models.models import LLMProvider, ProviderType, Tool, ToolCredential
 from langchain_core.messages import BaseMessage
 
@@ -12,6 +15,30 @@ OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
 SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
 SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
 JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
+
+# Markdown configuration for better list handling
+MARKDOWN_EXTENSIONS = [
+    "extra",           # Basic extensions (tables, fenced code, etc.)
+    "toc",             # Table of contents (includes better list processing)
+    "sane_lists",      # Improved list handling
+    "md_in_html",      # Allow markdown inside HTML
+]
+
+MARKDOWN_EXTENSION_CONFIGS = {
+    'toc': {
+        'marker': ''  # Disable TOC markers to avoid conflicts
+    }
+}
+
+ALLOWED_TAGS = [
+    "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
+    "br", "hr", "a",
+    # Table support
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
+]
+ALLOWED_ATTRS = {
+    "a": ["href", "title", "rel"],
+}
 
 logger = logging.getLogger(__name__)
 
@@ -222,3 +249,14 @@ def check_and_create_judge0_tool():
                 logger.warning(
                     """WARNING: JUDGE0_SERVER_URL not set, but a system
                        tool exists and is being used by at least one agent.""")
+
+
+def markdown_to_html(markdown_text: str) -> str:
+    raw_html = markdown(markdown_text,
+                        extensions=MARKDOWN_EXTENSIONS,
+                        extension_configs=MARKDOWN_EXTENSION_CONFIGS)
+    clean_html = bleach.clean(raw_html,
+                              tags=ALLOWED_TAGS,
+                              attributes=ALLOWED_ATTRS,
+                              strip=True)
+    return mark_safe(clean_html)

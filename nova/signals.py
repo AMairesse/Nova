@@ -92,7 +92,7 @@ async def _delete_checkpoints_async(checkpoint_links):
 
     for cp in checkpoint_links:
         try:
-            await saver.delete_thread(cp.checkpoint_id)
+            await saver.adelete_thread(cp.checkpoint_id)
             deleted.append(cp)
         except Exception as exc:
             failed.append((cp, str(exc)))

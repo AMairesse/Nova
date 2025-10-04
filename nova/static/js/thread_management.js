@@ -6,103 +6,93 @@
   window.NovaApp = window.NovaApp || {};
 
   // ============================================================================
-  // MARKDOWN RENDERER - Unified conversion for consistency
+  // MESSAGE RENDERER - Unified conversion for consistency
   // ============================================================================
   class MessageRenderer {
-    static markdownToHtml(text) {
-      // Use marked library if available with same options as server
-      if (typeof marked !== 'undefined') {
-        // Configure marked with same options as server
-        const renderer = new marked.Renderer();
-
-        // Configure extensions to match server
-        marked.setOptions({
-          renderer: renderer,
-          breaks: true, // Convert \n to <br>
-          gfm: true,    // GitHub Flavored Markdown
-          smartLists: true, // Better list handling
-          smartypants: false, // Disable smart quotes for consistency
-        });
-
-        // Parse markdown
-        let html = marked.parse(text);
-
-        // Clean HTML with same rules as server (bleach equivalent)
-        html = this.cleanHtml(html);
-
-        return html;
-      }
-
-      // Fallback: basic HTML escaping + line breaks
-      return text
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>')
-        .replace(/\n/g, '<br>');
-    }
-
-    static cleanHtml(html) {
-      // Create a temporary element to parse HTML
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = html;
-
-      // Remove disallowed tags and attributes (equivalent to bleach.clean)
-      const allowedTags = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'br', 'hr', 'a'];
-      const allowedAttrs = { 'a': ['href', 'title', 'rel'] };
-
-      function cleanNode(node) {
-        // Remove disallowed tags
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          const tagName = node.tagName.toLowerCase();
-          if (!allowedTags.includes(tagName)) {
-            // Replace with text content
-            const textNode = document.createTextNode(node.textContent);
-            node.parentNode.replaceChild(textNode, node);
-            return;
-          }
-
-          // Remove disallowed attributes
-          const allowedAttrsForTag = allowedAttrs[tagName] || [];
-          Array.from(node.attributes).forEach(attr => {
-            if (!allowedAttrsForTag.includes(attr.name)) {
-              node.removeAttribute(attr.name);
-            }
-          });
-        }
-
-        // Recursively clean child nodes
-        Array.from(node.childNodes).forEach(child => cleanNode(child));
-      }
-
-      cleanNode(tempDiv);
-      return tempDiv.innerHTML;
-    }
-
-    static createMessageElement(messageData) {
+    static createMessageElement(messageData, thread_id) {
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message mb-3';
       messageDiv.id = `message-${messageData.id}`;
       messageDiv.setAttribute('data-message-id', messageData.id);
 
-      const html = this.markdownToHtml(messageData.text);
-
-      if (messageData.actor === 'user' || messageData.actor === 'USR') {
+      if (messageData.actor === 'SYS' || messageData.actor === 'system') {
+        return this.createSystemMessageElement(messageData);
+      } else if (messageData.actor === 'user' || messageData.actor === 'USR') {
         messageDiv.innerHTML = `
           <div class="card border-primary">
             <div class="card-body py-2">
-              <strong class="text-primary">${html}</strong>
+              <strong class="text-primary">${messageData.text}</strong>
               ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
             </div>
           </div>
         `;
       } else if (messageData.actor === 'agent') {
+        // Remove "compact" button from previous message footer
+        const button_to_remove = document.querySelector('.compact-thread-btn');
+        if (button_to_remove) {
+          button_to_remove.remove();
+        }
         // Agent message structure
         messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
-              <div class="streaming-content">${html}</div>
+              <div class="streaming-content">${messageData.text}</div>
             </div>
-            <div class="card-footer py-1 text-muted small text-end d-none">
+            <div class="card-footer py-1 text-muted small text-end d-none d-flex justify-content-end align-items-center">
+              <div class="card-footer-consumption">
+              </div>
+              <button
+                type="button"
+                class="btn btn-link btn-sm text-decoration-none compact-thread-btn"
+                data-thread-id="`+ thread_id + `"
+              >
+                <i class="bi bi-filter-circle me-1"></i>` + gettext('Compact') + `
+              </button>
+            </div>
+          </div>
+        `;
+      }
+
+      return messageDiv;
+    }
+
+    static createSystemMessageElement(messageData) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message mb-3';
+      messageDiv.id = `message-${messageData.id}`;
+      messageDiv.setAttribute('data-message-id', messageData.id);
+
+      // System message rendering
+      if (messageData.internal_data && messageData.internal_data.type === 'compact_complete') {
+        messageDiv.innerHTML = `
+          <div class="card border-light">
+            <div class="card-body py-2">
+              <div class="text-muted small">
+                ${messageData.text}
+                <button
+                  class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
+                  type="button"
+                  onclick="toggleCompactDetails(this)"
+                  data-collapsed="true"
+                  title="Show summary details"
+                >
+                  <small>[+ details]</small>
+                </button>
+              </div>
+              <div class="compact-details mt-2 d-none">
+                <div class="border-start border-secondary ps-2">
+                  <small class="text-muted">${messageData.internal_data.summary || ''}</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        // Fallback for other system messages
+        messageDiv.innerHTML = `
+          <div class="card border-light">
+            <div class="card-body py-2">
+              <div class="text-muted small">${messageData.text}</div>
             </div>
           </div>
         `;
@@ -125,12 +115,12 @@
       this.messageManager = manager;
     }
 
-    registerStream(taskId, messageData) {
+    registerStream(taskId, messageData, thread_id) {
       const agentMessageEl = MessageRenderer.createMessageElement({
         ...messageData,
         actor: 'agent',
         text: '' // Start with empty content
-      });
+      }, thread_id);
 
       // Add streaming class to the message container for proper CSS targeting
       agentMessageEl.classList.add('streaming');
@@ -169,6 +159,11 @@
         return;
       }
 
+      // Warning :for system action (eg. "compact"), there is no element for streaming
+      if (!stream.element) {
+        return
+      }
+
       // The server is already sending HTML chunks, so we don't need to process them as Markdown
       // Replace the entire content since server sends complete paragraph updates
       const contentEl = stream.element.querySelector('.streaming-content');
@@ -203,9 +198,6 @@
             progressDiv.classList.add('d-none');
           }, 3000); // Hide progress after 3 seconds
         }
-
-        // Keep context consumption info visible permanently
-        // (don't hide the streaming footer)
       }
       this.activeStreams.delete(taskId);
     }
@@ -330,15 +322,24 @@
         } else if (data.type === 'response_chunk') {
           this.onStreamChunk(taskId, data.chunk);
         } else if (data.type === 'context_consumption') {
-          const streamingFooter = document.querySelector('.message.streaming .card-footer');
+          // Get the card for this message
+          const stream = this.activeStreams.get(taskId);
+          if (!stream) return;
+          // Get the footer in the card
+          const streamingFooter = stream.element.querySelector('.card-footer-consumption');
           if (streamingFooter && data.max_context) {
-            streamingFooter.classList.remove('d-none');
+            // Add the context consumption data
             if (data.real_tokens !== null) {
               streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
             } else {
               streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
             }
+            // Display the footer
+            streamingFooter.parentElement.classList.remove('d-none');
           }
+        } else if (data.type === 'new_message') {
+          // Handle real-time message updates (e.g., system messages from completed tasks)
+          this.onNewMessage(data.message, data.thread_id);
         } else if (data.type === 'task_complete') {
           // Update thread title in sidebars if backend provided it
           if (data.thread_id && data.thread_subject) {
@@ -366,7 +367,6 @@
       Object.keys(savedStreams).forEach(taskId => {
         if (savedStreams[taskId].status !== 'completed') {
           this.startWebSocket(taskId);
-          // Optionnel : Re-créer l'élément message si nécessaire
         }
       });
     }
@@ -425,6 +425,16 @@
         }
       });
 
+      // Compact thread button
+      document.addEventListener('click', (e) => {
+        if (e.target.matches('.compact-thread-btn') || e.target.closest('.compact-thread-btn')) {
+          e.preventDefault();
+          const btn = e.target.closest('.compact-thread-btn');
+          const threadId = btn.dataset.threadId;
+          this.compactThread(threadId);
+        }
+      });
+
       // Textarea handling
       document.addEventListener('keydown', (e) => {
         if (e.target.matches('#message-container textarea[name="new_message"]') && e.key === "Enter" && !e.shiftKey) {
@@ -469,6 +479,40 @@
       }
     }
 
+    async compactThread(threadId) {
+      // Get the button that was clicked to show loading state
+      const clickedBtn = event.target.closest('.compact-thread-btn');
+      if (!clickedBtn) return;
+
+      // Check if button is already processing (prevent double-clicks)
+      if (clickedBtn.disabled) return;
+
+      // Show loading state on compact button immediately
+      const originalIcon = clickedBtn.querySelector('i');
+      const originalText = clickedBtn.querySelector('.ms-1') ? clickedBtn.querySelector('.ms-1').textContent : '';
+      clickedBtn.disabled = true;
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Processing...';
+
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
+
+        if (!response.ok) {
+          throw new Error('Server error');
+        }
+
+        const data = await response.json();
+        if (data.task_id) {
+          // Register background task to show progress and handle completion
+          this.streamingManager.registerBackgroundTask(data.task_id);
+        }
+      } catch (error) {
+        console.error('Error compacting thread:', error);
+        // Reset button on error
+        clickedBtn.disabled = false;
+        clickedBtn.innerHTML = originalIcon ? originalIcon.outerHTML + originalText : 'Compact';
+      }
+    }
+
     async handleFormSubmit(form) {
       const textarea = form.querySelector('textarea[name="new_message"]');
       const msg = textarea ? textarea.value.trim() : '';
@@ -496,7 +540,7 @@
         this.currentThreadId = data.thread_id;
 
         // Add user message dynamically
-        const userMessageEl = MessageRenderer.createMessageElement(data.message);
+        const userMessageEl = MessageRenderer.createMessageElement(data.message, '');
         this.appendMessage(userMessageEl);
 
         // Scroll to position the message at the top
@@ -507,7 +551,7 @@
           id: data.task_id,
           actor: 'agent',
           text: ''
-        });
+        }, data.thread_id);
 
         // Clear textarea
         if (textarea) textarea.value = '';
@@ -529,11 +573,6 @@
         messagesList.appendChild(messageElement);
       } else {
         console.error('Messages list not found!');
-        // Fallback: try to find conversation container
-        const conversationContainer = document.getElementById('conversation-container');
-        if (conversationContainer) {
-          conversationContainer.appendChild(messageElement);
-        }
       }
 
       // Auto-scroll to bottom when new messages are added
@@ -626,6 +665,90 @@
       this.loadMessages(lastThreadId);
     }
   }
+
+  // ============================================================================
+  // STREAMING MANAGER - Continued (add to existing class)
+  // ============================================================================
+
+  // Register background task (non-streaming operations like compact, delete)
+  StreamingManager.prototype.registerBackgroundTask = function(taskId) {
+    // Don't add visual message element, just track the task and show progress
+    this.activeStreams.set(taskId, {
+      taskId: taskId,
+      isBackground: true,
+      lastUpdate: Date.now(),
+      status: 'running'
+    });
+
+    // Show progress area for background tasks
+    const progressDiv = document.getElementById('task-progress');
+    if (progressDiv) {
+      progressDiv.classList.remove('d-none');
+      const spinner = progressDiv.querySelector('.spinner-border');
+      if (spinner) {
+        spinner.classList.remove('d-none');
+      }
+      // Set initial progress message
+      const progressLogs = document.getElementById('progress-logs');
+      if (progressLogs) {
+        progressLogs.textContent = "Processing...";
+      }
+    }
+
+    // Start WebSocket connection for progress updates
+    this.startWebSocket(taskId);
+  };
+
+  // Handle real-time message updates like system messages
+  StreamingManager.prototype.onNewMessage = function(messageData, thread_id) {
+    // Create message element for the new message
+    const messageElement = MessageRenderer.createMessageElement(messageData, thread_id);
+
+    // Add to message container
+    const messagesList = document.getElementById('messages-list');
+    if (messagesList) {
+      messagesList.appendChild(messageElement);
+    } else {
+      console.error('Messages list not found for new message');
+    }
+
+    // Scroll to bottom to show new message
+    const container = document.getElementById('conversation-container');
+    if (container) {
+      setTimeout(() => {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth'
+        });
+      }, 100);
+    }
+  };
+
+  // ============================================================================
+  // SYSTEM MESSAGE HANDLERS
+  // ============================================================================
+
+  // Helper function to toggle compact details visibility
+  function toggleCompactDetails(button) {
+    const isCollapsed = button.dataset.collapsed === 'true';
+    const messageDiv = button.closest('.message');
+    const detailsDiv = messageDiv.querySelector('.compact-details');
+
+    if (isCollapsed) {
+      detailsDiv.classList.remove('d-none');
+      button.querySelector('small').textContent = '[- details]';
+      button.title = 'Hide summary details';
+      button.dataset.collapsed = 'false';
+    } else {
+      detailsDiv.classList.add('d-none');
+      button.querySelector('small').textContent = '[+ details]';
+      button.title = 'Show summary details';
+      button.dataset.collapsed = 'true';
+    }
+  }
+
+  // Make function globally available for template onclick handlers
+  window.toggleCompactDetails = toggleCompactDetails;
 
   // ============================================================================
   // MAIN INITIALIZATION

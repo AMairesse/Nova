@@ -2,8 +2,6 @@
 import datetime as dt
 from uuid import UUID
 from typing import Any, Dict, List, Optional
-from markdown import markdown
-import bleach
 from celery import shared_task
 import asyncio
 from channels.layers import get_channel_layer
@@ -11,12 +9,13 @@ from django.contrib.auth.models import User
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
-from nova.models.models import Agent, Task, TaskStatus
+from nova.models.models import Agent, Task, TaskStatus, CheckpointLink
 from nova.models.Thread import Thread
 from nova.models.Message import Message
 from nova.models.Message import Actor
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.llm_agent import LLMAgent
+from nova.utils import markdown_to_html
 import logging
 import functools
 from enum import Enum
@@ -98,31 +97,7 @@ async def _handle_task_error(task, error_msg, category):
         logger.error(f"Failed to save task error state: {save_error}")
 
 
-# Markdown configuration for better list handling
-MARKDOWN_EXTENSIONS = [
-    "extra",           # Basic extensions (tables, fenced code, etc.)
-    "toc",             # Table of contents (includes better list processing)
-    "sane_lists",      # Improved list handling
-    "md_in_html",      # Allow markdown inside HTML
-]
-
-MARKDOWN_EXTENSION_CONFIGS = {
-    'toc': {
-        'marker': ''  # Disable TOC markers to avoid conflicts
-    }
-}
-
 logger = logging.getLogger(__name__)
-
-ALLOWED_TAGS = [
-    "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
-    "br", "hr", "a",
-    # Table support
-    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
-]
-ALLOWED_ATTRS = {
-    "a": ["href", "title", "rel"],
-}
 
 
 # Custom callback handler for synthesis and streaming
@@ -176,15 +151,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             if self.tool_depth == 0:
                 self.final_chunks.append(token)
                 full_response = ''.join(self.final_chunks)
-                raw_html = markdown(full_response,
-                                    extensions=MARKDOWN_EXTENSIONS,
-                                    extension_configs=MARKDOWN_EXTENSION_CONFIGS)
-                clean_html = bleach.clean(
-                    raw_html,
-                    tags=ALLOWED_TAGS,
-                    attributes=ALLOWED_ATTRS,
-                    strip=True,
-                )
+                clean_html = markdown_to_html(full_response)
                 await self.publish_update('response_chunk',
                                           {'chunk': clean_html})
             else:
@@ -260,17 +227,26 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
 
 class TaskExecutor:
-    """
-    Encapsulates the execution of AI tasks with proper error handling,
-    progress tracking, and state management.
-    """
+    """Base class for task execution of a agent call.
 
-    def __init__(self, task, user, thread, agent_config, new_message):
+    Args:
+        task: The task object.
+        user: The user object.
+        thread: The thread object.
+        agent_config: The agent configuration.
+        prompt: The prompt to be used for the agent.
+
+    Recommanded methods to super-class:
+        _create_prompt() : to dynamically create the prompt instead of providing it on initialization
+        _process_result(result) : to process the result of the agent and do any necessary updates
+
+    """
+    def __init__(self, task, user, thread, agent_config, prompt):
         self.task = task
         self.user = user
         self.thread = thread
         self.agent_config = agent_config
-        self.new_message = new_message
+        self.prompt = prompt
         self.handler = None
         self.llm = None
         self.channel_layer = get_channel_layer()
@@ -280,6 +256,7 @@ class TaskExecutor:
         try:
             await self._initialize_task()
             await self._create_llm_agent()
+            self.prompt = await self._create_prompt()
             result = await self._run_agent()
             await self._process_result(result)
             await self._finalize_task()
@@ -314,6 +291,9 @@ class TaskExecutor:
             callbacks=[self.handler]
         )
 
+    async def _create_prompt(self):
+        return self.prompt
+
     async def _run_agent(self):
         """Execute the LLM agent and return result."""
         self.task.progress_logs.append({
@@ -323,71 +303,10 @@ class TaskExecutor:
         })
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
-        return await self.llm.ainvoke(self.new_message)
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Running AI agent"})
 
-    async def _process_result(self, result):
-        """Process the agent result and update related data."""
-        self.task.progress_logs.append({
-            "step": "Processing agent result",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        })
-        await sync_to_async(self.task.save, thread_sensitive=False)()
-
-        # Save result
-        self.task.result = result
-
-        # Add message to thread
-        message = await sync_to_async(
-            self.thread.add_message, thread_sensitive=False
-        )(result, actor=Actor.AGENT)
-
-        # Calculate and store context consumption
-        real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
-            self.agent_config, self.llm
-        )
-
-        # Update progress logs with consumption info
-        self.task.progress_logs.append({
-            "step": f"Context consumption: {real_tokens or approx_tokens} tokens",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info",
-            "context_info": {
-                "real_tokens": real_tokens,
-                "approx_tokens": approx_tokens,
-                "max_context": max_context
-            }
-        })
-
-        # Publish context consumption
-        await self.handler.publish_update('context_consumption', {
-            'real_tokens': real_tokens,
-            'approx_tokens': approx_tokens,
-            'max_context': max_context
-        })
-
-        # Store in message
-        message.internal_data.update({
-            'real_tokens': real_tokens,
-            'approx_tokens': approx_tokens,
-            'max_context': max_context
-        })
-        await sync_to_async(message.save, thread_sensitive=False)()
-
-        # Update thread subject if needed
-        await self._update_thread_subject()
-
-    async def _update_thread_subject(self):
-        """Update thread subject if it's a default title."""
-        if self.thread.subject.startswith("thread n°"):
-            title = await self.llm.ainvoke(
-                "Give a short title for this conversation (1–3 words). "
-                "Use the same language as the conversation. "
-                "Answer by giving only the title, nothing else.",
-                silent_mode=True
-            )
-            self.thread.subject = title.strip()
-            await sync_to_async(self.thread.save, thread_sensitive=False)()
+        return await self.llm.ainvoke(self.prompt)
 
     async def _finalize_task(self):
         """Finalize the task as completed."""
@@ -465,6 +384,80 @@ class TaskExecutor:
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup LLM: {cleanup_error}")
 
+    async def _process_result(self, result):
+        """Process the agent result and update related data."""
+        self.task.progress_logs.append({
+            "step": "Processing agent result",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+            "severity": "info"
+        })
+        await sync_to_async(self.task.save, thread_sensitive=False)()
+
+        # Save result
+        self.task.result = result
+
+
+class AgentTaskExecutor (TaskExecutor):
+    """
+    Encapsulates the execution of AI tasks with proper error handling,
+    progress tracking, and state management.
+    """
+
+    async def _process_result(self, result):
+        super()._process_result(result)
+
+        # Add message to thread
+        message = await sync_to_async(
+            self.thread.add_message, thread_sensitive=False
+        )(result, actor=Actor.AGENT)
+
+        # Calculate and store context consumption
+        real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
+            self.agent_config, self.llm
+        )
+
+        # Update progress logs with consumption info
+        self.task.progress_logs.append({
+            "step": f"Context consumption: {real_tokens or approx_tokens} tokens",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+            "severity": "info",
+            "context_info": {
+                "real_tokens": real_tokens,
+                "approx_tokens": approx_tokens,
+                "max_context": max_context
+            }
+        })
+
+        # Publish context consumption
+        await self.handler.publish_update('context_consumption', {
+            'real_tokens': real_tokens,
+            'approx_tokens': approx_tokens,
+            'max_context': max_context
+        })
+
+        # Store in message
+        message.internal_data.update({
+            'real_tokens': real_tokens,
+            'approx_tokens': approx_tokens,
+            'max_context': max_context
+        })
+        await sync_to_async(message.save, thread_sensitive=False)()
+
+        # Update thread subject if needed
+        await self._update_thread_subject()
+
+    async def _update_thread_subject(self):
+        """Update thread subject if it's a default title."""
+        if self.thread.subject.startswith("thread n°"):
+            title = await self.llm.ainvoke(
+                "Give a short title for this conversation (1–3 words). "
+                "Use the same language as the conversation. "
+                "Answer by giving only the title, nothing else.",
+                silent_mode=True
+            )
+            self.thread.subject = title.strip()
+            await sync_to_async(self.thread.save, thread_sensitive=False)()
+
 
 class ContextConsumptionTracker:
     """Utility class for tracking and calculating context consumption."""
@@ -533,10 +526,119 @@ class ContextConsumptionTracker:
         return total_bytes // 4 + 1
 
 
+class CompactTaskExecutor (TaskExecutor):
+    """
+    Encapsulates the execution of a compact task
+    """
+
+    async def _create_prompt(self):
+        # Emit progress update for analysis phase
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Analyzing conversation..."})
+
+        # Retrieve context consumption
+        real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
+            self.agent_config, self.llm
+        )
+
+        target_tokens = int(real_tokens or approx_tokens * 0.3)
+        target_words = int(target_tokens / 0.75)
+
+        # Prompt for summary (partie sync, inchangée)
+        prompt = f"""Summarize the conversation to a maximum of {target_words} words,
+                     Capture key points, user intent, and outcomes without adding new information.
+                     Use the same language as the conversation's language and reply in Markdown."""
+        return prompt
+
+    async def _process_result(self, result):
+        await super()._process_result(result)
+
+        # Emit progress update for checkpoint update
+        await self.handler.publish_update('progress_update',
+                                          {'progress_log': "Updating context"})
+
+        config = self.llm.config
+
+        # Remove old checkpoints
+        thread_id = config['configurable']['thread_id']
+        checkpointer = await get_checkpointer()
+        await checkpointer.adelete_thread(thread_id)
+
+        # Inject the summary
+        from langchain_core.messages import AIMessage
+        dummy_input = {"messages": [AIMessage(content=result, additional_kwargs={'summary': True})]}
+
+        graph = self.llm.langchain_agent
+        await graph.ainvoke(dummy_input, config=config)
+
+        # Add system message with summary details
+        system_message_text = "ℹ️ Conversation compacted"
+        system_message = await sync_to_async(self.thread.add_message, thread_sensitive=False)(
+            system_message_text, actor=Actor.SYSTEM
+        )
+        system_message.internal_data = {
+            'type': 'compact_complete',
+            'summary': result
+        }
+        await sync_to_async(system_message.save, thread_sensitive=False)()
+
+        # Process markdown to HTML server-side before sending the message
+        system_message.internal_data['summary'] = markdown_to_html(system_message.internal_data['summary'])
+
+        # Broadcast the new message to all connected WebSocket clients for real-time UI updates
+        await self.handler.publish_update('new_message', {
+            'message': {
+                'id': system_message.id,
+                'text': system_message.text,
+                'actor': system_message.actor,
+                'internal_data': system_message.internal_data,
+                'created_at': system_message.created_at.isoformat() if hasattr(system_message.created_at, 'isoformat')
+                else str(system_message.created_at)
+            }
+        })
+
+
+async def delete_checkpoints(ckp_id):
+    checkpointer = await get_checkpointer()
+    await checkpointer.adelete_thread(ckp_id)
+
+
+@shared_task(bind=True, name="compact_conversation")
+def compact_conversation_celery(self, task_pk, user_pk, thread_pk, agent_pk):
+    """
+    Celery task to summarize conversation and update checkpoint.
+    """
+    try:
+        # Fetch objects
+        task = Task.objects.select_related('user', 'thread').get(pk=task_pk)
+        user = User.objects.get(pk=user_pk)
+        thread = Thread.objects.select_related('user').get(pk=thread_pk)
+        agent_config = Agent.objects.select_related('llm_provider').get(pk=agent_pk) if agent_pk else None
+
+        # Call the agent
+        executor = CompactTaskExecutor(task, user, thread, agent_config, "")
+        asyncio.run(executor.execute())
+
+        # Find and delete sub-agents' checkpoints
+        other_agents_ckp = CheckpointLink.objects.filter(thread=thread).exclude(agent=agent_config)
+        for ckp in other_agents_ckp:
+            # Get the checkpoint_id
+            checkpoint_id = ckp.checkpoint_id
+            # Delete the checkpoint
+            logger.info(f"Deleting checkpoint {checkpoint_id}")
+            asyncio.run(delete_checkpoints(checkpoint_id))
+            ckp.delete()
+
+    except Exception as e:
+        logger.error(f"Celery task {task_pk} failed: {e}")
+        # Let Celery handle retry logic
+        raise self.retry(countdown=60, exc=e)
+
+
 @shared_task(bind=True, name="run_ai_task")
 def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
     """
-    Optimized Celery task with batched database queries and TaskExecutor.
+    Optimized Celery task with batched database queries and AgentTaskExecutor.
     """
     try:
         # Optimized database queries with select_related
@@ -550,8 +652,8 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
 
         message = Message.objects.select_related('thread', 'user').get(pk=message_pk)
 
-        # Use the new TaskExecutor for cleaner execution
-        executor = TaskExecutor(task, user, thread, agent_config, message)
+        # Use the AgentTaskExecutor for cleaner execution
+        executor = AgentTaskExecutor(task, user, thread, agent_config, message)
         asyncio.run(executor.execute())
 
     except Exception as e:

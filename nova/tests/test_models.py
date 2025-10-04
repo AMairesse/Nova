@@ -355,14 +355,16 @@ class ThreadModelTest(BaseTestCase):
         self.assertEqual(UserFile.objects.filter(key=filename).count(), 0)
 
     @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    @patch("nova.signals._delete_checkpoints_async", new_callable=AsyncMock)
     def test_thread_deletion_cleans_up_checkpoints(
         self,
-        mock_get_checkpointer,
+        mock_delete_checkpoints_async,
+        mock_get_checkpointer
     ):
         """Deleting a thread also deletes associated checkpoints."""
         mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
         mock_get_checkpointer.return_value = mock_saver
+        mock_delete_checkpoints_async.return_value = ([], [])
 
         thread1 = Thread.objects.create(user=self.user, subject="T1")
         thread2 = Thread.objects.create(user=self.user, subject="T2")
@@ -389,7 +391,7 @@ class ThreadModelTest(BaseTestCase):
             CheckpointLink.objects.filter(checkpoint_id__in=[chk1, chk2]).count(),
             0,
         )
-        self.assertEqual(mock_saver.delete_thread.call_count, 2)
+        self.assertEqual(mock_delete_checkpoints_async.call_count, 2)
 
     @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
     def test_thread_deletion_handles_checkpoint_errors(

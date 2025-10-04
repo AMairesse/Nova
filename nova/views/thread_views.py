@@ -1,19 +1,19 @@
 # nova/views/thread_views.py
-import bleach
-from markdown import markdown
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
-from django.utils.safestring import mark_safe
 from django.utils import timezone
 from datetime import timedelta
 from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
-from nova.tasks import run_ai_task_celery
+from nova.tasks import run_ai_task_celery, compact_conversation_celery, ContextConsumptionTracker
+from nova.utils import markdown_to_html
+import asyncio
+from nova.llm.checkpoints import get_checkpointer
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from django.conf import settings
 import logging
@@ -22,31 +22,7 @@ from botocore.exceptions import ClientError
 import io  # For in-memory file handling
 import uuid  # For unique keys
 
-# Markdown configuration for better list handling
-MARKDOWN_EXTENSIONS = [
-    "extra",           # Basic extensions (tables, fenced code, etc.)
-    "toc",             # Table of contents (includes better list processing)
-    "sane_lists",      # Improved list handling
-    "md_in_html",      # Allow markdown inside HTML
-]
-
-MARKDOWN_EXTENSION_CONFIGS = {
-    'toc': {
-        'marker': ''  # Disable TOC markers to avoid conflicts
-    }
-}
-
 logger = logging.getLogger(__name__)
-
-ALLOWED_TAGS = [
-    "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
-    "br", "hr", "a",
-    # Table support
-    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
-]
-ALLOWED_ATTRS = {
-    "a": ["href", "title", "rel"],
-}
 
 MAX_THREADS_DISPLAYED = 10
 
@@ -141,16 +117,13 @@ def message_list(request):
                                                 user=request.user)
             messages = selected_thread.get_messages()
             for m in messages:
-                raw_html = markdown(m.text,
-                                    extensions=MARKDOWN_EXTENSIONS,
-                                    extension_configs=MARKDOWN_EXTENSION_CONFIGS)
-                clean_html = bleach.clean(raw_html,
-                                          tags=ALLOWED_TAGS,
-                                          attributes=ALLOWED_ATTRS,
-                                          strip=True)
-                m.rendered_html = mark_safe(clean_html)
+                m.rendered_html = markdown_to_html(m.text)
+                # Add info about files used
                 if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
                     m.file_count = len(m.internal_data['file_ids'])
+                # Process summary from markdown to HTML
+                if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
+                    m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
         except Exception:
             # Thread doesn't exist or user doesn't have access - return empty state
             selected_thread_id = None
@@ -267,4 +240,65 @@ def add_message(request):
         "task_id": task.id,
         "threadHtml": thread_html,
         "uploaded_file_ids": uploaded_file_ids
+    })
+
+
+@require_POST
+@login_required(login_url='login')
+def compact_thread(request, thread_id):
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+
+    # Get agent (default or from profile)
+    try:
+        agent_config = request.user.userprofile.default_agent
+    except UserProfile.DoesNotExist:
+        agent_config = None
+
+    # Create task
+    task = Task.objects.create(
+        user=request.user,
+        thread=thread,
+        agent=agent_config,
+        status=TaskStatus.PENDING
+    )
+
+    # Queue task (system message will be added by CompactTaskExecutor after completion)
+    compact_conversation_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None)
+
+    return JsonResponse({
+        'status': 'queued',
+        'task_id': task.id
+    })
+
+
+@login_required(login_url='login')
+def get_context_size(request, thread_id):
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+
+    # Get agent for max_context
+    try:
+        agent_config = request.user.userprofile.default_agent
+        max_context = agent_config.llm_provider.max_context_tokens if agent_config else 4096
+    except (UserProfile.DoesNotExist, AttributeError):
+        max_context = 4096
+
+    # Get checkpoint tokens (sync)
+    checkpointer = get_checkpointer()
+    config = {"configurable": {"thread_id": str(thread.id)}}
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    checkpoint_tuple = loop.run_until_complete(checkpointer.aget_tuple(config))
+    loop.close()
+
+    approx_tokens = 0
+    if checkpoint_tuple:
+        state = checkpoint_tuple.checkpoint
+        messages = state.get('channel_values', {}).get('messages', [])
+        approx_tokens = ContextConsumptionTracker._approximate_tokens(messages)
+
+    return JsonResponse({
+        'tokens': approx_tokens,
+        'max_tokens': max_context,
+        'percentage': (approx_tokens / max_context * 100) if max_context else 0
     })
