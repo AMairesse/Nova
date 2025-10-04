@@ -544,7 +544,7 @@ class CompactTaskExecutor (TaskExecutor):
         # Prompt for summary (partie sync, inchangée)
         prompt = f"""Summarize the conversation to a maximum of {target_words} words,
                      Capture key points, user intent, and outcomes without adding new information.
-                     Default to the conversation's language and reply in Markdown."""
+                     Use the same language as the conversation's language and reply in Markdown."""
         return prompt
 
     async def _run_agent(self):
@@ -578,7 +578,7 @@ class CompactTaskExecutor (TaskExecutor):
 
         # Inject the summary
         from langchain_core.messages import AIMessage
-        dummy_input = {"messages": [AIMessage(content=result, additional_kwargs={'summary': True})]} 
+        dummy_input = {"messages": [AIMessage(content=result, additional_kwargs={'summary': True})]}
 
         graph = self.llm.langchain_agent
         await graph.ainvoke(dummy_input, config=config)
@@ -593,7 +593,7 @@ class CompactTaskExecutor (TaskExecutor):
             'summary': result
         }
         await sync_to_async(system_message.save, thread_sensitive=False)()
-        
+
         # Process markdown to HTML server-side before sending the message
         system_message.internal_data['summary'] = markdown_to_html(system_message.internal_data['summary'])
 
