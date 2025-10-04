@@ -159,6 +159,11 @@
         return;
       }
 
+      // Warning :for system action (eg. "compact"), there is no element for streaming
+      if (!stream.element) {
+        return
+      }
+
       // The server is already sending HTML chunks, so we don't need to process them as Markdown
       // Replace the entire content since server sends complete paragraph updates
       const contentEl = stream.element.querySelector('.streaming-content');
