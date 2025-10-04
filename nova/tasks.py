@@ -1,6 +1,6 @@
 # nova/tasks.py
 import datetime as dt
-from uuid import UUID, uuid4
+from uuid import UUID
 from typing import Any, Dict, List, Optional
 from markdown import markdown
 import bleach
@@ -602,63 +602,18 @@ class CompactTaskExecutor (TaskExecutor):
 
         config = self.llm.config
 
-        # Update checkpoint
-        from langchain_core.messages import AIMessage
-        checkpointer = await get_checkpointer()
-        checkpoint_tuple = await checkpointer.aget_tuple(config)
-        state = checkpoint_tuple.checkpoint
-
-        initial_id = str(uuid4())
-        initial_checkpoint = {
-            # Keep version number
-            'v': state['v'],
-            # Set a new id for the checkpoint
-            'id': initial_id,
-            'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
-            'channel_values': {},
-            'channel_versions': {'__start__': '1.0'},
-            'versions_seen': {'__input__': {}},
-            'updated_channels': ['__start__']
-        }
-
-        initial_metadata = {
-            'step': -1,
-            'source': 'input',
-            'parents': {}
-        }
-
-        # Add checkpoint_ns to config
-        config['configurable']['checkpoint_ns'] = ""
-
         # Remove old checkpoints
-        await checkpointer.adelete_thread(config['metadata']['thread_id'])
+        thread_id = config['configurable']['thread_id']
+        # thread_id = config['metadata']['thread_id']
+        checkpointer = await get_checkpointer()
+        await checkpointer.adelete_thread(thread_id)
 
-        # Put a new "start checkpoint"
-        config = await checkpointer.aput(config, initial_checkpoint, initial_metadata,
-                                         initial_checkpoint['channel_versions'])
+        # Inject the summary
+        from langchain_core.messages import AIMessage
+        dummy_input = {"messages": [AIMessage(content=result, additional_kwargs={'summary': True})]} 
 
-        # Create a second checkpoint with the summary
-        checkpoint_tuple = await checkpointer.aget_tuple(config)
-        state = checkpoint_tuple.checkpoint
-
-        summary_checkpoint = {
-            'v': state['v'],
-            'id': str(uuid4()),
-            'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
-            'channel_values': {
-                'messages': [AIMessage(content=result, additional_kwargs={'summary': True})]
-            },
-            'channel_versions': {'__start__': '2.0', 'messages': '2.0'},
-            'versions_seen': {'__input__': {}, '__start__': {'__start__': '1.0'}},
-            'updated_channels': ['__start__', 'messages']
-        }
-        summary_metadata = {
-            'step': 0,
-            'source': 'loop',
-            'parents': {}
-        }
-        config = await checkpointer.aput(config, summary_checkpoint, summary_metadata,
-                                         summary_checkpoint['channel_versions'])
+        graph = self.llm.langchain_agent
+        await graph.ainvoke(dummy_input, config=config)
 
         # Add system message with summary details
         system_message_text = "ℹ️ Conversation compacted"
