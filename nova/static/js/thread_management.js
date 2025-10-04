@@ -6,91 +6,22 @@
   window.NovaApp = window.NovaApp || {};
 
   // ============================================================================
-  // MARKDOWN RENDERER - Unified conversion for consistency
+  // MESSAGE RENDERER - Unified conversion for consistency
   // ============================================================================
   class MessageRenderer {
-    static markdownToHtml(text) {
-      // Use marked library if available with same options as server
-      if (typeof marked !== 'undefined') {
-        // Configure marked with same options as server
-        const renderer = new marked.Renderer();
-
-        // Configure extensions to match server
-        marked.setOptions({
-          renderer: renderer,
-          breaks: true, // Convert \n to <br>
-          gfm: true,    // GitHub Flavored Markdown
-          smartLists: true, // Better list handling
-          smartypants: false, // Disable smart quotes for consistency
-        });
-
-        // Parse markdown
-        let html = marked.parse(text);
-
-        // Clean HTML with same rules as server (bleach equivalent)
-        html = this.cleanHtml(html);
-
-        return html;
-      }
-
-      // Fallback: basic HTML escaping + line breaks
-      return text
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>')
-        .replace(/\n/g, '<br>');
-    }
-
-    static cleanHtml(html) {
-      // Create a temporary element to parse HTML
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = html;
-
-      // Remove disallowed tags and attributes (equivalent to bleach.clean)
-      const allowedTags = ['p', 'strong', 'em', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'br', 'hr', 'a'];
-      const allowedAttrs = { 'a': ['href', 'title', 'rel'] };
-
-      function cleanNode(node) {
-        // Remove disallowed tags
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          const tagName = node.tagName.toLowerCase();
-          if (!allowedTags.includes(tagName)) {
-            // Replace with text content
-            const textNode = document.createTextNode(node.textContent);
-            node.parentNode.replaceChild(textNode, node);
-            return;
-          }
-
-          // Remove disallowed attributes
-          const allowedAttrsForTag = allowedAttrs[tagName] || [];
-          Array.from(node.attributes).forEach(attr => {
-            if (!allowedAttrsForTag.includes(attr.name)) {
-              node.removeAttribute(attr.name);
-            }
-          });
-        }
-
-        // Recursively clean child nodes
-        Array.from(node.childNodes).forEach(child => cleanNode(child));
-      }
-
-      cleanNode(tempDiv);
-      return tempDiv.innerHTML;
-    }
-
     static createMessageElement(messageData) {
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message mb-3';
       messageDiv.id = `message-${messageData.id}`;
       messageDiv.setAttribute('data-message-id', messageData.id);
 
-      const html = this.markdownToHtml(messageData.text);
-
-      if (messageData.actor === 'user' || messageData.actor === 'USR') {
+      if (messageData.actor === 'SYS' || messageData.actor === 'system') {
+        return this.createSystemMessageElement(messageData);
+      } else if (messageData.actor === 'user' || messageData.actor === 'USR') {
         messageDiv.innerHTML = `
           <div class="card border-primary">
             <div class="card-body py-2">
-              <strong class="text-primary">${html}</strong>
+              <strong class="text-primary">${messageData.text}</strong>
               ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
             </div>
           </div>
@@ -100,9 +31,54 @@
         messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
-              <div class="streaming-content">${html}</div>
+              <div class="streaming-content">${messageData.text}</div>
             </div>
             <div class="card-footer py-1 text-muted small text-end d-none">
+            </div>
+          </div>
+        `;
+      }
+
+      return messageDiv;
+    }
+
+    static createSystemMessageElement(messageData) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message mb-3';
+      messageDiv.id = `message-${messageData.id}`;
+      messageDiv.setAttribute('data-message-id', messageData.id);
+
+      // System message rendering
+      if (messageData.internal_data && messageData.internal_data.type === 'compact_complete') {
+        messageDiv.innerHTML = `
+          <div class="card border-light">
+            <div class="card-body py-2">
+              <div class="text-muted small">
+                ${messageData.text}
+                <button
+                  class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
+                  type="button"
+                  onclick="toggleCompactDetails(this)"
+                  data-collapsed="true"
+                  title="Show summary details"
+                >
+                  <small>[+ details]</small>
+                </button>
+              </div>
+              <div class="compact-details mt-2 d-none">
+                <div class="border-start border-secondary ps-2">
+                  <small class="text-muted">${messageData.internal_data.summary || ''}</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        // Fallback for other system messages
+        messageDiv.innerHTML = `
+          <div class="card border-light">
+            <div class="card-body py-2">
+              <div class="text-muted small">${messageData.text}</div>
             </div>
           </div>
         `;
@@ -729,66 +705,6 @@
           behavior: 'smooth'
         });
       }, 100);
-    }
-  };
-
-  // ============================================================================
-  // MESSAGE RENDERER - Continued (extend for system messages)
-  // ============================================================================
-  MessageRenderer.createSystemMessageElement = function(messageData) {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'message mb-3';
-    messageDiv.id = `message-${messageData.id}`;
-    messageDiv.setAttribute('data-message-id', messageData.id);
-
-    const html = this.markdownToHtml(messageData.text);
-
-    // System message rendering
-    if (messageData.internal_data && messageData.internal_data.type === 'compact_complete') {
-      messageDiv.innerHTML = `
-        <div class="card border-light">
-          <div class="card-body py-2">
-            <div class="text-muted small">
-              ${html}
-              <button
-                class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
-                type="button"
-                onclick="toggleCompactDetails(this)"
-                data-collapsed="true"
-                title="Show summary details"
-              >
-                <small>[+ details]</small>
-              </button>
-            </div>
-            <div class="compact-details mt-2 d-none">
-              <div class="border-start border-secondary ps-2">
-                <small class="text-muted">${this.markdownToHtml(messageData.internal_data.summary || '')}</small>
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
-    } else {
-      // Fallback for other system messages
-      messageDiv.innerHTML = `
-        <div class="card border-light">
-          <div class="card-body py-2">
-            <div class="text-muted small">${html}</div>
-          </div>
-        </div>
-      `;
-    }
-
-    return messageDiv;
-  };
-
-  // Update main createMessageElement to handle system messages
-  const originalCreateMessageElement = MessageRenderer.createMessageElement;
-  MessageRenderer.createMessageElement = function(messageData) {
-    if (messageData.actor === 'SYS' || messageData.actor === 'system') {
-      return this.createSystemMessageElement(messageData);
-    } else {
-      return originalCreateMessageElement.call(this, messageData);
     }
   };
 

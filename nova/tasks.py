@@ -2,8 +2,6 @@
 import datetime as dt
 from uuid import UUID
 from typing import Any, Dict, List, Optional
-from markdown import markdown
-import bleach
 from celery import shared_task
 import asyncio
 from channels.layers import get_channel_layer
@@ -99,31 +97,7 @@ async def _handle_task_error(task, error_msg, category):
         logger.error(f"Failed to save task error state: {save_error}")
 
 
-# Markdown configuration for better list handling
-MARKDOWN_EXTENSIONS = [
-    "extra",           # Basic extensions (tables, fenced code, etc.)
-    "toc",             # Table of contents (includes better list processing)
-    "sane_lists",      # Improved list handling
-    "md_in_html",      # Allow markdown inside HTML
-]
-
-MARKDOWN_EXTENSION_CONFIGS = {
-    'toc': {
-        'marker': ''  # Disable TOC markers to avoid conflicts
-    }
-}
-
 logger = logging.getLogger(__name__)
-
-ALLOWED_TAGS = [
-    "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
-    "br", "hr", "a",
-    # Table support
-    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
-]
-ALLOWED_ATTRS = {
-    "a": ["href", "title", "rel"],
-}
 
 
 # Custom callback handler for synthesis and streaming
@@ -177,15 +151,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             if self.tool_depth == 0:
                 self.final_chunks.append(token)
                 full_response = ''.join(self.final_chunks)
-                raw_html = markdown(full_response,
-                                    extensions=MARKDOWN_EXTENSIONS,
-                                    extension_configs=MARKDOWN_EXTENSION_CONFIGS)
-                clean_html = bleach.clean(
-                    raw_html,
-                    tags=ALLOWED_TAGS,
-                    attributes=ALLOWED_ATTRS,
-                    strip=True,
-                )
+                clean_html = markdown_to_html(full_response)
                 await self.publish_update('response_chunk',
                                           {'chunk': clean_html})
             else:
