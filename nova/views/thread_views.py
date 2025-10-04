@@ -1,19 +1,17 @@
 # nova/views/thread_views.py
-import bleach
-from markdown import markdown
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
-from django.utils.safestring import mark_safe
 from django.utils import timezone
 from datetime import timedelta
 from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
 from nova.tasks import run_ai_task_celery, compact_conversation_celery, ContextConsumptionTracker
+from nova.utils import markdown_to_html
 import asyncio
 from nova.llm.checkpoints import get_checkpointer
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
@@ -24,31 +22,7 @@ from botocore.exceptions import ClientError
 import io  # For in-memory file handling
 import uuid  # For unique keys
 
-# Markdown configuration for better list handling
-MARKDOWN_EXTENSIONS = [
-    "extra",           # Basic extensions (tables, fenced code, etc.)
-    "toc",             # Table of contents (includes better list processing)
-    "sane_lists",      # Improved list handling
-    "md_in_html",      # Allow markdown inside HTML
-]
-
-MARKDOWN_EXTENSION_CONFIGS = {
-    'toc': {
-        'marker': ''  # Disable TOC markers to avoid conflicts
-    }
-}
-
 logger = logging.getLogger(__name__)
-
-ALLOWED_TAGS = [
-    "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
-    "br", "hr", "a",
-    # Table support
-    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
-]
-ALLOWED_ATTRS = {
-    "a": ["href", "title", "rel"],
-}
 
 MAX_THREADS_DISPLAYED = 10
 
@@ -143,16 +117,13 @@ def message_list(request):
                                                 user=request.user)
             messages = selected_thread.get_messages()
             for m in messages:
-                raw_html = markdown(m.text,
-                                    extensions=MARKDOWN_EXTENSIONS,
-                                    extension_configs=MARKDOWN_EXTENSION_CONFIGS)
-                clean_html = bleach.clean(raw_html,
-                                          tags=ALLOWED_TAGS,
-                                          attributes=ALLOWED_ATTRS,
-                                          strip=True)
-                m.rendered_html = mark_safe(clean_html)
+                m.rendered_html = markdown_to_html(m.text)
+                # Add info about files used
                 if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
                     m.file_count = len(m.internal_data['file_ids'])
+                # Process summary from markdown to HTML
+                if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
+                    m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
         except Exception:
             # Thread doesn't exist or user doesn't have access - return empty state
             selected_thread_id = None
