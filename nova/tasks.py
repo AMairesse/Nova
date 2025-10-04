@@ -576,7 +576,8 @@ class CompactTaskExecutor (TaskExecutor):
 
         # Prompt for summary (partie sync, inchangée)
         prompt = f"""Summarize the conversation to approximately {target_words} words,
-                     capturing key points, user intent, and outcomes without adding new information"""
+                     Capture key points, user intent, and outcomes without adding new information.
+                     Default to the conversation's language and reply in Markdown."""
         return prompt
 
     async def _run_agent(self):
