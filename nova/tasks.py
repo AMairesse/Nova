@@ -617,7 +617,7 @@ class CompactTaskExecutor (TaskExecutor):
             'ts': dt.datetime.now(dt.timezone.utc).isoformat(),
             'channel_values': {},
             'channel_versions': {'__start__': '1.0'},
-            'versions_seen': {"__input__": {}},
+            'versions_seen': {'__input__': {}},
             'updated_channels': ['__start__']
         }
 
@@ -648,9 +648,9 @@ class CompactTaskExecutor (TaskExecutor):
             'channel_values': {
                 'messages': [AIMessage(content=result, additional_kwargs={'summary': True})]
             },
-            'channel_versions': {'__start__': '1.0', 'messages': '1.0'},
-            'versions_seen': {"__input__": {}, '__start__': {'__start__': '1.0'}},
-            'updated_channels': ['messages']
+            'channel_versions': {'__start__': '2.0', 'messages': '2.0'},
+            'versions_seen': {'__input__': {}, '__start__': {'__start__': '1.0'}},
+            'updated_channels': ['__start__', 'messages']
         }
         summary_metadata = {
             'step': 0,
