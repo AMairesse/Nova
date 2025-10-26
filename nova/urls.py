@@ -2,17 +2,18 @@
 from django.contrib import admin
 from django.urls import include, path
 from django.views.i18n import JavaScriptCatalog
-from .views.thread_views import (
+from nova.views.thread_views import (
     index, message_list, create_thread, delete_thread,
     add_message, load_more_threads, compact_thread
 )
-from .views.task_views import running_tasks
-from .views.files_views import (
+from nova.views.task_views import running_tasks
+from nova.views.files_views import (
     sidebar_panel_view, file_list,
     file_download_url, file_upload, FileDeleteView
 )
-from .views.security_views import csrf_token
-from .views.health import healthz
+from nova.views.pwa_views import service_worker
+from nova.views.security_views import csrf_token
+from nova.views.health import healthz
 from django.conf import settings
 
 urlpatterns = [
@@ -31,6 +32,8 @@ urlpatterns = [
     path("accounts/", include("django.contrib.auth.urls")),
     # Admin
     path('admin/', admin.site.urls),
+    # Service worker
+    path('sw.js', service_worker, name='service_worker'),
     # i18n
     path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("api/csrf/", csrf_token, name="api-csrf"),

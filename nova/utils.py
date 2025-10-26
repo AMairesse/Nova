@@ -148,8 +148,9 @@ def check_and_create_system_provider():
                 provider.max_context_tokens = OLLAMA_CONTEXT_LENGTH
                 provider.save()
     else:
-        if LLMProvider.objects.filter(user=None,
-                                      provider_type=ProviderType.OLLAMA).exists():
+        existing = LLMProvider.objects.filter(user=None, provider_type=ProviderType.OLLAMA)
+        provider = provider or existing.first()
+        if provider:
             # If the system provider is not used then delete it
             if not provider.agents.exists():
                 provider.delete()

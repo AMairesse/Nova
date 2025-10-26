@@ -15,11 +15,13 @@ from nova.models.Thread import Thread
 from nova.file_utils import (
     build_virtual_tree,
     batch_upload_files,
+    MAX_FILE_SIZE
 )
 
 logger = logging.getLogger(__name__)
 
 
+@login_required(login_url='login')
 def sidebar_panel_view(request):
     return render(request, 'nova/files/sidebar_panel.html')
 
@@ -99,6 +101,9 @@ async def file_upload(request, thread_id):
         tasks = []
         for i, file in enumerate(files_list):
             proposed_path = paths[i] if i < len(paths) else f"/{file.name}"
+            if file.size > MAX_FILE_SIZE:
+                return JsonResponse({'success': False,
+                                     'error': f'File too large: {file.name}'}, status=400)
             tasks.append(process_file(i, file, proposed_path))
 
         file_data = await asyncio.gather(*tasks)  # Run in parallel

@@ -651,9 +651,10 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
             agent_config = Agent.objects.select_related('llm_provider').get(pk=agent_pk)
 
         message = Message.objects.select_related('thread', 'user').get(pk=message_pk)
+        prompt_text = message.text or ""
 
         # Use the AgentTaskExecutor for cleaner execution
-        executor = AgentTaskExecutor(task, user, thread, agent_config, message)
+        executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text)
         asyncio.run(executor.execute())
 
     except Exception as e:
