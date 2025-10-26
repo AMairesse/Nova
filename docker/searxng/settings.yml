@@ -24,7 +24,6 @@ brand:
   wiki_url: https://github.com/searxng/searxng/wiki
   issue_url: https://github.com/searxng/searxng/issues
   # custom:
-  #   maintainer: "Jon Doe"
   #   # Custom entries in the footer: [title]: [link]
   #   links:
   #     Uptime: https://uptime.searxng.org/history/darmarit-org
@@ -140,7 +139,7 @@ ui:
   # Open result links in a new tab by default
   # results_on_new_tab: false
   theme_args:
-    # style of simple theme: auto, light, dark
+    # style of simple theme: auto, light, dark, black
     simple_style: auto
   # Perform search immediately if a category selected.
   # Disable to select multiple categories at once and start the search manually.
@@ -497,6 +496,15 @@ engines:
     shortcut: ask
     disabled: true
 
+  # - name: azure
+  #   engine: azure
+  #   shortcut: az
+  #   categories: [it, cloud]
+  #   azure_tenant_id: "your_tenant_id"
+  #   azure_client_id: "your_client_id"
+  #   azure_client_secret: "your_client_secret"
+  #   disabled: true
+
   # tmp suspended:  dh key too small
   # - name: base
   #   engine: base
@@ -665,12 +673,6 @@ engines:
     # read https://docs.searxng.org/dev/engines/online/core.html
     api_key: ""
     inactive: true
-
-  - name: cppreference
-    engine: cppreference
-    shortcut: cpp
-    paging: false
-    disabled: true
 
   - name: crossref
     engine: crossref
@@ -2297,31 +2299,27 @@ engines:
 
   - name: wikicommons.images
     engine: wikicommons
-    shortcut: wc
+    shortcut: wci
     categories: images
-    search_type: images
-    number_of_results: 10
+    wc_search_type: image
 
   - name: wikicommons.videos
     engine: wikicommons
     shortcut: wcv
     categories: videos
-    search_type: videos
-    number_of_results: 10
+    wc_search_type: video
 
   - name: wikicommons.audio
     engine: wikicommons
     shortcut: wca
     categories: music
-    search_type: audio
-    number_of_results: 10
+    wc_search_type: audio
 
   - name: wikicommons.files
     engine: wikicommons
     shortcut: wcf
     categories: files
-    search_type: files
-    number_of_results: 10
+    wc_search_type: file
 
   - name: wolframalpha
     shortcut: wa
