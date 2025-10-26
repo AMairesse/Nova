@@ -118,15 +118,9 @@ def estimate_tokens(text: str = None, input_size: int = None) -> int:
 
 
 def schedule_in_event_loop(coro):
-    """
-    Planifie la coroutine `coro` dans la boucle ASGI principale
-    sans bloquer la vue synchrone.
-    """
     async def _runner():
-        # on est DÉJÀ dans la boucle ASGI → create_task fonctionne
         asyncio.create_task(coro)
 
-    # async_to_sync exécute _runner dans la boucle principale
     async_to_sync(_runner)()
 
 

@@ -89,10 +89,14 @@ async def get_judge0_config(tool: Tool) -> Dict[str, any]:
     }
 
 
-async def api_request(method: str, url: str, headers: Optional[Dict] = None, data: Optional[Dict] = None) -> Dict:
+async def api_request(method: str, url: str, headers: Optional[Dict] = None,
+                      data: Optional[Dict] = None, api_key=None) -> Dict:
     """Async HTTP request helper for Judge0 API."""
+    hdrs = dict(headers or {})
+    if api_key:
+        hdrs['X-Auth-Token'] = api_key
     async with aiohttp.ClientSession() as session:
-        kwargs = {'headers': headers or {}, 'json': data} if data else {'headers': headers or {}}
+        kwargs = {'headers': hdrs, 'json': data} if data else {'headers': hdrs}
         async with session.request(method, url, **kwargs) as response:
             if response.status != 200 and response.status != 201:
                 error_text = await response.text()

@@ -465,6 +465,11 @@
         const html = await response.text();
         document.getElementById('message-container').innerHTML = html;
         this.currentThreadId = threadId;
+
+        document.querySelectorAll('.thread-link').forEach(a => a.classList.remove('active'));
+        const active = document.querySelector(`.thread-link[data-thread-id="${this.currentThreadId}"]`);
+        if (active) active.classList.add('active');
+
         this.streamingManager.resumeStreams();
 
         if (threadId) {

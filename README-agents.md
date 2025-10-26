@@ -16,7 +16,7 @@ If using Docker, run `docker-compose up` for the required services after adding 
 
 You need at least one LLM provider to power your agents. For local setups, use efficient models like Magistral for tool usage and context management. Enable features like flash attention in your LLM server for better performance.
 
-Example for local provider:
+### Example for Local Provider:
 
 | Field | Value |
 | --- | --- |
@@ -26,7 +26,7 @@ Example for local provider:
 | Base URL | `http://host.docker.internal:1234/v1` (if served on the host machine running Docker) |
 | Max context tokens | `50000` (enable flash attention in LM Studio) |
 
-For remote providers, OpenRouter.ai allows flexible model selection:
+### Example for Remote Provider:
 
 | Field | Value |
 | --- | --- |
@@ -94,7 +94,9 @@ This agent writes and executes code in a sandboxed environment.
 | Tool description | `Use this agent to create and execute code, process file data, or solve problems via quick code runs. The agent generates the code itself.` |
 | Associated tools | `Judge0` |
 
-### 3.4 Main Agent The central agent that delegates to sub-agents.
+### 3.4 Main Agent
+
+The central agent that delegates to sub-agents.
 
 | Field | Value |
 | --- | --- |
@@ -105,7 +107,6 @@ This agent writes and executes code in a sandboxed environment.
 | Use as a tool | `No` |
 | Associated tools | `Date / Time` |
 | Agents as tools | `Internet Agent`, `Calendar Agent`, `Code Agent` |
-
 
 ## 4. Run Your Agent
 

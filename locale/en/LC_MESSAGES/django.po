@@ -253,7 +253,7 @@ msgid "Close"
 msgstr "Close"
 
 #: nova/templates/nova/index.html:11 nova/templates/nova/index.html:26
-#: nova/templates/nova/index.html:92
+#: nova/templates/nova/index.html:78
 msgid "Threads"
 msgstr "Threads"
 
@@ -262,23 +262,23 @@ msgid "Messages"
 msgstr "Messages"
 
 #: nova/templates/nova/index.html:16 nova/templates/nova/index.html:61
-#: nova/templates/nova/index.html:121
+#: nova/templates/nova/index.html:107
 msgid "Files"
 msgstr "Files"
 
-#: nova/templates/nova/index.html:40 nova/templates/nova/index.html:110
+#: nova/templates/nova/index.html:40 nova/templates/nova/index.html:96
 msgid "Load More"
 msgstr "Load More"
 
-#: nova/templates/nova/index.html:63 nova/templates/nova/index.html:123
+#: nova/templates/nova/index.html:63 nova/templates/nova/index.html:109
 msgid "Upload files"
 msgstr "Upload files"
 
-#: nova/templates/nova/index.html:66 nova/templates/nova/index.html:126
+#: nova/templates/nova/index.html:66 nova/templates/nova/index.html:112
 msgid "Upload directory"
 msgstr "Upload directory"
 
-#: nova/templates/nova/message_container.html:18
+#: nova/templates/nova/message_container.html:17
 #, fuzzy, python-format
 #| msgid ""
 #| "\n"
@@ -305,54 +305,54 @@ msgstr[1] ""
 "                %(file_count)s files were shared with this message.\n"
 "              "
 
-#: nova/templates/nova/message_container.html:38
+#: nova/templates/nova/message_container.html:37
 msgid "Show summary details"
 msgstr "Show summary details"
 
-#: nova/templates/nova/message_container.html:61
-#: nova/templates/nova/message_container.html:63
-#: nova/templates/nova/message_container.html:65
+#: nova/templates/nova/message_container.html:60
+#: nova/templates/nova/message_container.html:62
+#: nova/templates/nova/message_container.html:64
 msgid "Context consumption"
 msgstr "Context consumption"
 
-#: nova/templates/nova/message_container.html:61
+#: nova/templates/nova/message_container.html:60
 msgid "real"
 msgstr "real"
 
-#: nova/templates/nova/message_container.html:63
-#: nova/templates/nova/message_container.html:65
+#: nova/templates/nova/message_container.html:62
+#: nova/templates/nova/message_container.html:64
 msgid "approximated"
 msgstr "approximated"
 
-#: nova/templates/nova/message_container.html:74
+#: nova/templates/nova/message_container.html:73
 msgid "Compact"
 msgstr "Compact"
 
-#: nova/templates/nova/message_container.html:91
+#: nova/templates/nova/message_container.html:90
 msgid "Working..."
 msgstr "Working..."
 
-#: nova/templates/nova/message_container.html:103
+#: nova/templates/nova/message_container.html:102
 msgid "No agents configured yet."
 msgstr "No agents configured yet."
 
-#: nova/templates/nova/message_container.html:105
+#: nova/templates/nova/message_container.html:104
 msgid "Create one now"
 msgstr "Create one now"
 
-#: nova/templates/nova/message_container.html:131
+#: nova/templates/nova/message_container.html:130
 msgid "Select an agent"
 msgstr "Select an agent"
 
-#: nova/templates/nova/message_container.html:145
+#: nova/templates/nova/message_container.html:144
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:165
+#: nova/templates/nova/message_container.html:164
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/templates/nova/message_container.html:176
+#: nova/templates/nova/message_container.html:175
 msgid "Send"
 msgstr "Send"
 
@@ -376,7 +376,7 @@ msgstr "Last Month"
 msgid "Older"
 msgstr "Older"
 
-#: nova/templates/nova/partials/_thread_item.html:14
+#: nova/templates/nova/partials/_thread_item.html:12
 msgid "Delete Thread"
 msgstr "Delete Thread"
 
@@ -537,20 +537,20 @@ msgstr "No credential configured for this Code Execution tool."
 msgid "Field judge0_url is missing from the configuration."
 msgstr "Field judge0_url is missing from the configuration."
 
-#: nova/tools/builtins/code_execution.py:121
+#: nova/tools/builtins/code_execution.py:125
 msgid "No languages available."
 msgstr "No languages available."
 
-#: nova/tools/builtins/code_execution.py:126
+#: nova/tools/builtins/code_execution.py:130
 #, python-brace-format
 msgid "Error listing languages: {error}"
 msgstr "Error listing languages: {error}"
 
-#: nova/tools/builtins/code_execution.py:139
+#: nova/tools/builtins/code_execution.py:143
 msgid "No languages available. Please check server configuration."
 msgstr "No languages available. Please check server configuration."
 
-#: nova/tools/builtins/code_execution.py:146
+#: nova/tools/builtins/code_execution.py:150
 #, python-brace-format
 msgid ""
 "Language '{lang}' not found.            Use list_supported_languages to see "
@@ -559,26 +559,26 @@ msgstr ""
 "Language '{lang}' not found.            Use list_supported_languages to see "
 "available options."
 
-#: nova/tools/builtins/code_execution.py:165
+#: nova/tools/builtins/code_execution.py:169
 #, python-brace-format
 msgid "Error getting status: {error}"
 msgstr "Error getting status: {error}"
 
-#: nova/tools/builtins/code_execution.py:189
+#: nova/tools/builtins/code_execution.py:193
 msgid "Compilation timeout"
 msgstr "Compilation timeout"
 
-#: nova/tools/builtins/code_execution.py:194
+#: nova/tools/builtins/code_execution.py:198
 #, python-brace-format
 msgid "Error compiling code: {error}"
 msgstr "Error compiling code: {error}"
 
-#: nova/tools/builtins/code_execution.py:222
+#: nova/tools/builtins/code_execution.py:226
 #, python-brace-format
 msgid "Error executing code: {error}"
 msgstr "Error executing code: {error}"
 
-#: nova/tools/builtins/code_execution.py:255
+#: nova/tools/builtins/code_execution.py:259
 #, python-brace-format
 msgid "Error running code with inputs: {error}"
 msgstr "Error running code with inputs: {error}"
@@ -712,6 +712,8 @@ msgid "Edit agent"
 msgstr "Edit agent"
 
 #: user_settings/templates/user_settings/agent_form.html:13
+#: user_settings/templates/user_settings/fragments/agent_table.html:9
+#: user_settings/templates/user_settings/fragments/agent_table.html:16
 msgid "Add agent"
 msgstr "Add agent"
 
@@ -792,6 +794,7 @@ msgstr "Actions"
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:34
 #: user_settings/templates/user_settings/fragments/provider_table.html:25
+#: user_settings/templates/user_settings/fragments/tool_table.html:42
 msgid "Edit"
 msgstr "Edit"
 
@@ -801,6 +804,7 @@ msgstr "Make default"
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:44
 #: user_settings/templates/user_settings/fragments/provider_table.html:29
+#: user_settings/templates/user_settings/fragments/tool_table.html:46
 msgid "Delete"
 msgstr "Delete"
 
@@ -824,15 +828,23 @@ msgstr "Langfuse configuration"
 msgid "API Token Management"
 msgstr "API Token Management"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:36
+#: user_settings/templates/user_settings/fragments/general_form.html:31
+msgid "This will replace any existing token. Continue?"
+msgstr "This will replace any existing token. Continue?"
+
+#: user_settings/templates/user_settings/fragments/general_form.html:32
+msgid "Are you sure you want to delete your API token?"
+msgstr "Are you sure you want to delete your API token?"
+
+#: user_settings/templates/user_settings/fragments/general_form.html:41
 msgid "Generate New Token"
 msgstr "Generate New Token"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:46
+#: user_settings/templates/user_settings/fragments/general_form.html:51
 msgid "Delete Token"
 msgstr "Delete Token"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:54
+#: user_settings/templates/user_settings/fragments/general_form.html:58
 msgid ""
 "Use your API token to authenticate with the Nova API. The token will only be "
 "displayed once when generated."
@@ -840,7 +852,7 @@ msgstr ""
 "Use your API token to authenticate with the Nova API. The token will only be "
 "displayed once when generated."
 
-#: user_settings/templates/user_settings/fragments/general_form.html:61
+#: user_settings/templates/user_settings/fragments/general_form.html:65
 msgid "Save Settings"
 msgstr "Save Settings"
 
@@ -876,6 +888,11 @@ msgstr ""
 msgid "Save Memory"
 msgstr "Save Memory"
 
+#: user_settings/templates/user_settings/fragments/provider_table.html:7
+#: user_settings/templates/user_settings/provider_form.html:16
+msgid "Add provider"
+msgstr "Add provider"
+
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Type"
@@ -884,6 +901,11 @@ msgstr "Type"
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 msgid "Model"
 msgstr "Model"
+
+#: user_settings/templates/user_settings/fragments/tool_table.html:7
+#: user_settings/templates/user_settings/tool_form.html:13
+msgid "Add tool"
+msgstr "Add tools"
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 #: user_settings/templates/user_settings/fragments/tool_table.html:24
@@ -897,6 +919,10 @@ msgstr "Models Using"
 #: user_settings/templates/user_settings/fragments/tool_table.html:28
 msgid "Inactive"
 msgstr "Inactive"
+
+#: user_settings/templates/user_settings/fragments/tool_table.html:44
+msgid "Configure"
+msgstr "Configure"
 
 #: user_settings/templates/user_settings/general_form.html:7
 msgid "General settings"
@@ -913,10 +939,6 @@ msgstr "Delete provider"
 #: user_settings/templates/user_settings/provider_form.html:14
 msgid "Edit provider"
 msgstr "Edit provider"
-
-#: user_settings/templates/user_settings/provider_form.html:16
-msgid "Add provider"
-msgstr "Add provider"
 
 #: user_settings/templates/user_settings/provider_list.html:25
 msgid "No providers found."
@@ -942,10 +964,6 @@ msgstr "Delete tool"
 #: user_settings/templates/user_settings/tool_form.html:13
 msgid "Edit tool"
 msgstr "Edit tool"
-
-#: user_settings/templates/user_settings/tool_form.html:13
-msgid "Add tool"
-msgstr "Add tools"
 
 #: user_settings/templates/user_settings/tool_list.html:14
 msgid "No tools found."
