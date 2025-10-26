@@ -15,12 +15,13 @@ from nova.models.Thread import Thread
 from nova.file_utils import (
     build_virtual_tree,
     batch_upload_files,
-    auto_rename_path
+    MAX_FILE_SIZE
 )
 
 logger = logging.getLogger(__name__)
 
 
+@login_required(login_url='login')
 def sidebar_panel_view(request):
     return render(request, 'nova/files/sidebar_panel.html')
 
@@ -100,6 +101,9 @@ async def file_upload(request, thread_id):
         tasks = []
         for i, file in enumerate(files_list):
             proposed_path = paths[i] if i < len(paths) else f"/{file.name}"
+            if file.size > MAX_FILE_SIZE:
+                return JsonResponse({'success': False,
+                                     'error': f'File too large: {file.name}'}, status=400)
             tasks.append(process_file(i, file, proposed_path))
 
         file_data = await asyncio.gather(*tasks)  # Run in parallel
@@ -132,21 +136,3 @@ class FileDeleteView(LoginRequiredMixin, View):
 
         file.delete()  # Uses model's delete for MinIO/DB
         return JsonResponse({'success': True})
-
-
-class FileMoveView(LoginRequiredMixin, View):
-    def patch(self, request, file_id):
-        file = UserFile.objects.filter(id=file_id, user=request.user).first()
-        if not file:
-            return JsonResponse({'error': 'File not found or unauthorized'},
-                                status=403)
-
-        new_path = request.POST.get('new_path')
-        if not new_path:
-            return JsonResponse({'error': 'New path required'}, status=400)
-
-        renamed_path = auto_rename_path(file.thread, new_path)
-        file.original_filename = renamed_path
-        file.save()  # Updates key via model's save()
-
-        return JsonResponse({'success': True, 'new_path': renamed_path})

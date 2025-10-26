@@ -414,6 +414,11 @@
           const dropdownButton = document.getElementById('dropdownMenuButton');
           if (selectedAgentInput) selectedAgentInput.value = value;
           if (dropdownButton) dropdownButton.textContent = label;
+        } else if (e.target.matches('.compact-thread-btn') || e.target.closest('.compact-thread-btn')) {
+          e.preventDefault();
+          const btn = e.target.closest('.compact-thread-btn');
+          const threadId = btn.dataset.threadId;
+          this.compactThread(threadId, btn);
         }
       });
 
@@ -422,16 +427,6 @@
         if (e.target.id === 'message-form') {
           e.preventDefault();
           await this.handleFormSubmit(e.target);
-        }
-      });
-
-      // Compact thread button
-      document.addEventListener('click', (e) => {
-        if (e.target.matches('.compact-thread-btn') || e.target.closest('.compact-thread-btn')) {
-          e.preventDefault();
-          const btn = e.target.closest('.compact-thread-btn');
-          const threadId = btn.dataset.threadId;
-          this.compactThread(threadId);
         }
       });
 
@@ -465,6 +460,11 @@
         const html = await response.text();
         document.getElementById('message-container').innerHTML = html;
         this.currentThreadId = threadId;
+
+        document.querySelectorAll('.thread-link').forEach(a => a.classList.remove('active'));
+        const active = document.querySelector(`.thread-link[data-thread-id="${this.currentThreadId}"]`);
+        if (active) active.classList.add('active');
+
         this.streamingManager.resumeStreams();
 
         if (threadId) {
@@ -479,37 +479,21 @@
       }
     }
 
-    async compactThread(threadId) {
-      // Get the button that was clicked to show loading state
-      const clickedBtn = event.target.closest('.compact-thread-btn');
-      if (!clickedBtn) return;
-
-      // Check if button is already processing (prevent double-clicks)
-      if (clickedBtn.disabled) return;
-
-      // Show loading state on compact button immediately
-      const originalIcon = clickedBtn.querySelector('i');
-      const originalText = clickedBtn.querySelector('.ms-1') ? clickedBtn.querySelector('.ms-1').textContent : '';
+    async compactThread(threadId, btnEl) {
+      const clickedBtn = btnEl || document.querySelector(`.compact-thread-btn[data-thread-id="${threadId}"]`);
+      if (!clickedBtn || clickedBtn.disabled) return;
+      const originalHtml = clickedBtn.innerHTML;
       clickedBtn.disabled = true;
-      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Processing...';
-
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
       try {
         const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
-
-        if (!response.ok) {
-          throw new Error('Server error');
-        }
-
+        if (!response.ok) throw new Error('Server error');
         const data = await response.json();
-        if (data.task_id) {
-          // Register background task to show progress and handle completion
-          this.streamingManager.registerBackgroundTask(data.task_id);
-        }
+        if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
       } catch (error) {
         console.error('Error compacting thread:', error);
-        // Reset button on error
         clickedBtn.disabled = false;
-        clickedBtn.innerHTML = originalIcon ? originalIcon.outerHTML + originalText : 'Compact';
+        clickedBtn.innerHTML = originalHtml;
       }
     }
 

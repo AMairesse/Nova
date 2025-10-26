@@ -27,25 +27,29 @@
     <div class="card-body">
       {{ form.api_token_status|as_crispy_field }}
       
+      {# Pre-translate messages and escape for safe JS interpolation #}
+      {% translate "This will replace any existing token. Continue?" as confirm_generate %}
+      {% translate "Are you sure you want to delete your API token?" as confirm_delete %}
+
       <div class="d-flex gap-2 mt-3">
-        <form method="post" action="{% url 'user_settings:api-token-generate' %}" class="d-inline">
-          {% csrf_token %}
-          <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
-          <button type="submit" class="btn btn-warning" 
-                  onclick="return confirm('This will replace any existing token. Continue?')">
-            {% trans "Generate New Token" %}
-          </button>
-        </form>
-        
+        <button type="submit"
+                class="btn btn-warning"
+                formaction="{% url 'user_settings:api-token-generate' %}"
+                formmethod="post"
+                formnovalidate
+                onclick="return confirm('{{ confirm_generate|escapejs }}')">
+          {% trans "Generate New Token" %}
+        </button>
+
         {% if form.instance.has_api_token %}
-          <form method="post" action="{% url 'user_settings:api-token-delete' %}" class="d-inline">
-            {% csrf_token %}
-            <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
-            <button type="submit" class="btn btn-outline-danger" 
-                    onclick="return confirm('Are you sure you want to delete your API token?')">
-              {% trans "Delete Token" %}
-            </button>
-          </form>
+        <button type="submit"
+                class="btn btn-outline-danger"
+                formaction="{% url 'user_settings:api-token-delete' %}"
+                formmethod="post"
+                formnovalidate
+                onclick="return confirm('{{ confirm_delete|escapejs }}')">
+          {% trans "Delete Token" %}
+        </button>
         {% endif %}
       </div>
       

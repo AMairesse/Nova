@@ -118,15 +118,9 @@ def estimate_tokens(text: str = None, input_size: int = None) -> int:
 
 
 def schedule_in_event_loop(coro):
-    """
-    Planifie la coroutine `coro` dans la boucle ASGI principale
-    sans bloquer la vue synchrone.
-    """
     async def _runner():
-        # on est DÉJÀ dans la boucle ASGI → create_task fonctionne
         asyncio.create_task(coro)
 
-    # async_to_sync exécute _runner dans la boucle principale
     async_to_sync(_runner)()
 
 
@@ -154,8 +148,9 @@ def check_and_create_system_provider():
                 provider.max_context_tokens = OLLAMA_CONTEXT_LENGTH
                 provider.save()
     else:
-        if LLMProvider.objects.filter(user=None,
-                                      provider_type=ProviderType.OLLAMA).exists():
+        existing = LLMProvider.objects.filter(user=None, provider_type=ProviderType.OLLAMA)
+        provider = provider or existing.first()
+        if provider:
             # If the system provider is not used then delete it
             if not provider.agents.exists():
                 provider.delete()
@@ -184,7 +179,7 @@ def check_and_create_searxng_tool():
                                           config={'searxng_url': SEARNGX_SERVER_URL,
                                                   'num_results': SEARNGX_NUM_RESULTS})
         else:
-            cred = ToolCredential.objects.filter(tool=tool).first()
+            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
             if not cred:
                 ToolCredential.objects.create(user=None,
                                               tool=tool,
@@ -228,7 +223,7 @@ def check_and_create_judge0_tool():
                                           tool=tool,
                                           config={'judge0_url': JUDGE0_SERVER_URL})
         else:
-            cred = ToolCredential.objects.filter(tool=tool).first()
+            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
             if not cred:
                 ToolCredential.objects.create(user=None,
                                               tool=tool,

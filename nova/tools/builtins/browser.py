@@ -18,8 +18,7 @@ METADATA = {
 
 async def init(agent: LLMAgent) -> None:
     """
-    Initialise le navigateur async et le stocke dans agent._resources.
-    Appelé avant la création du LLM pour persistance.
+    Init the browser and store it in agent._resources.
     """
     if 'browser' in agent._resources:
         return
@@ -32,8 +31,7 @@ async def init(agent: LLMAgent) -> None:
 
 async def close(agent: LLMAgent) -> None:
     """
-    Ferme le navigateur et nettoie agent._resources.
-    Appelé en fin d'usage de l'agent.
+    Close the browser and clean agent._resources.
     """
     browser = agent._resources.get('browser')
     playwright = agent._resources.get('playwright_async')
@@ -51,12 +49,6 @@ async def close(agent: LLMAgent) -> None:
 
 
 async def get_functions(tool: Tool, agent: LLMAgent) -> List:
-    """
-    Retourne les tools PlayWright (list of BaseTool), utilisant le navigateur persistant de agent._resources.
-    Ignores 'tool' as this builtin doesn't need config/user-specific data.
-    """
-    _ = tool  # Ignore 'tool'
-
     browser = agent._resources.get('browser')
     if not browser:
         raise ValueError("Browser not initialized. Ensure init() was called.")
