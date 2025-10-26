@@ -1,6 +1,7 @@
 # nova/utils/file_utils.py
 import os
 import logging
+import posixpath
 from collections import defaultdict
 from typing import List, Dict, Tuple
 from django.core.exceptions import PermissionDenied
@@ -32,10 +33,23 @@ def detect_mime(content: bytes) -> str:
         return 'application/octet-stream'  # Fallback
 
 
+def sanitize_user_path(raw: str) -> str:
+    # Ensure POSIX-style, enforce leading slash, collapse .. safely
+    if raw is None:
+        raw = ''
+    norm = posixpath.normpath('/' + raw.lstrip('/'))
+    # Reject attempts to escape
+    parts = [p for p in norm.split('/') if p]
+    if '..' in parts:
+        raise PermissionError("Invalid path")
+    return '/' + '/'.join(parts)
+
+
 async def upload_file_to_minio(content: bytes, path: str, mime: str,
                                thread: Thread, user) -> str:
     """Async upload content to MinIO and return key."""
-    key = f"users/{user.id}/threads/{thread.id}{os.path.normpath(path)}"  # Normalize path
+    safe_path = sanitize_user_path(path)  # e.g. "/dir/file.txt"
+    key = f"users/{user.id}/threads/{thread.id}{safe_path}"
     session = aioboto3.Session()
     async with session.client(
         's3', endpoint_url=settings.MINIO_ENDPOINT_URL,
@@ -85,17 +99,27 @@ async def get_existing_count(thread: Thread, parent_dir: str, base: str) -> int:
 
 
 async def auto_rename_path(thread: Thread, proposed_path: str) -> str:
-    """Auto-rename if path exists, appending (1), (2), etc.
-       Optimized with async-safe count."""
-    norm_path = os.path.normpath(proposed_path)
-    parent_dir = os.path.dirname(norm_path) + '/' if os.path.dirname(norm_path) else ''
-    base_name = os.path.basename(norm_path)
-    base, ext = base_name.rsplit('.', 1) if '.' in base_name else (base_name, '')
-    existing_count = await get_existing_count(thread, parent_dir, base)
-    if existing_count == 0:
-        return norm_path
-    new_base = f"{base} ({existing_count + 1})"
-    return os.path.join(parent_dir, f"{new_base}.{ext}" if ext else new_base)
+    norm = sanitize_user_path(proposed_path)
+    parent = posixpath.dirname(norm)
+    base = posixpath.basename(norm)
+    name, ext = (base.rsplit('.', 1) + [''])[:2] if '.' in base else (base, '')
+
+    # Count existing exact matches and “ (n)” siblings
+    @sync_to_async
+    def existing_names():
+        qs = UserFile.objects.filter(thread=thread, original_filename__startswith=parent)
+        return set(f.original_filename for f in qs)
+
+    names = await existing_names()
+    if norm not in names:
+        return norm
+    i = 2
+    while True:
+        candidate = f"{name} ({i}).{ext}" if ext else f"{name} ({i})"
+        full = posixpath.join(parent, candidate)
+        if full not in names:
+            return full
+        i += 1
 
 
 def build_virtual_tree(files: List[UserFile]) -> List[Dict]:

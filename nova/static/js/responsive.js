@@ -155,10 +155,14 @@
     syncFilesContent() {
       const desktopFilesContent = document.getElementById('file-sidebar-content');
       const mobileFilesContent = document.getElementById('file-sidebar-content-mobile');
-      
-      if (desktopFilesContent && mobileFilesContent) {
-        // Clone content from desktop to mobile
-        mobileFilesContent.innerHTML = desktopFilesContent.innerHTML;
+      if (!desktopFilesContent || !mobileFilesContent) return;
+      const tree = desktopFilesContent.querySelector('#file-tree-container');
+      mobileFilesContent.innerHTML = '';
+      if (tree) {
+        const clone = tree.cloneNode(true);
+        // Use a distinct id to avoid duplicates
+        clone.id = 'file-tree-container-mobile';
+        mobileFilesContent.appendChild(clone);
       }
     }
 

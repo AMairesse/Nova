@@ -288,6 +288,11 @@ class LLMAgent:
             if hasattr(module, 'close'):
                 await module.close(self)
 
+    @sync_to_async
+    def _get_thread_file_count(self, thread_id: int) -> int:
+        # Single DB round-trip
+        return UserFile.objects.filter(thread_id=thread_id).count()
+
     async def build_system_prompt(self):
         """
         Build the system prompt.
@@ -334,12 +339,9 @@ class LLMAgent:
                 logger.warning(f"Failed to load user memory: {e}")
 
         # Add information about files available in disussion
-        list_files = await sync_to_async(UserFile.objects.filter,
-                                         thread_sensitive=False)(thread=self.thread)
-        num_files = await sync_to_async(list_files.count,
-                                        thread_sensitive=False)()
-        if num_files > 0:
-            files_context = f"\nThere is {num_files} attached files. Use file tools if needed."
+        file_count = await self._get_thread_file_count(self.thread.id)
+        if file_count:
+            files_context = f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
         else:
             files_context = "\nNo attached files available."
         base_prompt += files_context

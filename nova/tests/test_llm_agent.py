@@ -454,7 +454,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                 self.assertIs(used_config, agent.silent_config)
                 # Check file context added to system prompt
                 system_prompt = await agent.build_system_prompt()
-                self.assertIn("There is 2 attached files. Use file tools if needed.", system_prompt)
+                self.assertIn("2 file(s) are attached to this thread. Use file tools if needed.", system_prompt)
 
     # ---------------- create (class method) ----------------
 

@@ -179,7 +179,7 @@ def check_and_create_searxng_tool():
                                           config={'searxng_url': SEARNGX_SERVER_URL,
                                                   'num_results': SEARNGX_NUM_RESULTS})
         else:
-            cred = ToolCredential.objects.filter(tool=tool).first()
+            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
             if not cred:
                 ToolCredential.objects.create(user=None,
                                               tool=tool,
@@ -223,7 +223,7 @@ def check_and_create_judge0_tool():
                                           tool=tool,
                                           config={'judge0_url': JUDGE0_SERVER_URL})
         else:
-            cred = ToolCredential.objects.filter(tool=tool).first()
+            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
             if not cred:
                 ToolCredential.objects.create(user=None,
                                               tool=tool,

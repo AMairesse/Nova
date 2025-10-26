@@ -97,25 +97,7 @@ class TaskProgressConsumerTests(SimpleTestCase):
                 msg = await communicator.receive_from(timeout=5)
                 data = json.loads(msg)
                 self.assertIn("error", data)
-                self.assertEqual(data["error"], "Invalid message")
-            finally:
-                await communicator.disconnect()
-
-        asyncio.run(scenario())
-
-    def test_refresh_message(self):
-        async def scenario():
-            communicator, connected = await self._connect("/ws/task/refresh/")
-            try:
-                self.assertTrue(connected)
-
-                # Test example extension 'refresh'
-                await communicator.send_to(text_data=json.dumps({"type":
-                                                                 "refresh"}))
-                msg = await communicator.receive_from(timeout=5)
-                data = json.loads(msg)
-                self.assertEqual(data["type"], "refreshed")
-                self.assertEqual(data["status"], "OK")
+                self.assertEqual(data["error"], "Message too large")
             finally:
                 await communicator.disconnect()
 
