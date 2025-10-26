@@ -404,7 +404,7 @@ class AgentTaskExecutor (TaskExecutor):
     """
 
     async def _process_result(self, result):
-        super()._process_result(result)
+        await super()._process_result(result)
 
         # Add message to thread
         message = await sync_to_async(

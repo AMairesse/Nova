@@ -10,10 +10,8 @@ from datetime import timedelta
 from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
-from nova.tasks import run_ai_task_celery, compact_conversation_celery, ContextConsumptionTracker
+from nova.tasks import run_ai_task_celery, compact_conversation_celery
 from nova.utils import markdown_to_html
-import asyncio
-from nova.llm.checkpoints import get_checkpointer
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from django.conf import settings
 import logging
@@ -268,37 +266,4 @@ def compact_thread(request, thread_id):
     return JsonResponse({
         'status': 'queued',
         'task_id': task.id
-    })
-
-
-@login_required(login_url='login')
-def get_context_size(request, thread_id):
-    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-
-    # Get agent for max_context
-    try:
-        agent_config = request.user.userprofile.default_agent
-        max_context = agent_config.llm_provider.max_context_tokens if agent_config else 4096
-    except (UserProfile.DoesNotExist, AttributeError):
-        max_context = 4096
-
-    # Get checkpoint tokens (sync)
-    checkpointer = get_checkpointer()
-    config = {"configurable": {"thread_id": str(thread.id)}}
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    checkpoint_tuple = loop.run_until_complete(checkpointer.aget_tuple(config))
-    loop.close()
-
-    approx_tokens = 0
-    if checkpoint_tuple:
-        state = checkpoint_tuple.checkpoint
-        messages = state.get('channel_values', {}).get('messages', [])
-        approx_tokens = ContextConsumptionTracker._approximate_tokens(messages)
-
-    return JsonResponse({
-        'tokens': approx_tokens,
-        'max_tokens': max_context,
-        'percentage': (approx_tokens / max_context * 100) if max_context else 0
     })

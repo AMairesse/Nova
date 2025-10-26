@@ -68,21 +68,7 @@
           </button>
         </div>
       </div>
-      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto" style="min-height: 0;">
-        <!-- File tree container -->
-        <div id="file-tree-container">
-          <!-- Content loaded dynamically -->
-        </div>
-        <!-- Upload progress -->
-        <div id="upload-progress" style="display: none;">
-          <div class="progress">
-            <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
-          </div>
-        </div>
-        <!-- Hidden file inputs -->
-        <input type="file" id="file-input" multiple style="display: none;">
-        <input type="file" id="directory-input" webkitdirectory style="display: none;">
-      </div>
+      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto" style="min-height: 0;"></div>
     </div>
   </div>
 
@@ -157,7 +143,6 @@
     fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",
-    fileMove: "{% url 'file_move' 0 %}"
   };
 </script>
 <script src="{% static 'js/responsive.js' %}" defer></script>

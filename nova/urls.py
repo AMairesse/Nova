@@ -9,7 +9,7 @@ from .views.thread_views import (
 from .views.task_views import running_tasks
 from .views.files_views import (
     sidebar_panel_view, file_list,
-    file_download_url, file_upload, FileDeleteView, FileMoveView
+    file_download_url, file_upload, FileDeleteView
 )
 from .views.security_views import csrf_token
 from .views.health import healthz
@@ -43,7 +43,6 @@ urlpatterns += [
     path('files/download-url/<int:file_id>/', file_download_url, name='file_download_url'),
     path('files/upload/<int:thread_id>/', file_upload, name='file_upload'),
     path('files/delete/<int:file_id>/', FileDeleteView.as_view(), name='file_delete'),
-    path('files/move/<int:file_id>/', FileMoveView.as_view(), name='file_move'),
 ]
 
 # Add healthcheck only in DEBUG mode
