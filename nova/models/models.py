@@ -515,6 +515,7 @@ class Interaction(models.Model):
     )
 
     question = models.TextField(verbose_name=_("Question to user"))
+    answer = models.JSONField(blank=True, null=True, default=None, verbose_name=_("User answer"))
 
     # Optional JSON schema describing expected answer shape
     schema = models.JSONField(default=dict, blank=True, null=True)

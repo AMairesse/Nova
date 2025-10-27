@@ -9,7 +9,7 @@ from django.contrib.auth.models import User
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
-from nova.models.models import Agent, Task, TaskStatus, CheckpointLink
+from nova.models.models import Agent, Task, TaskStatus, CheckpointLink, Interaction, InteractionStatus
 from nova.models.Thread import Thread
 from nova.models.Message import Message
 from nova.models.Message import Actor
@@ -661,3 +661,62 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
         logger.error(f"Celery task {task_pk} failed: {e}")
         # Let Celery handle retry logic
         raise self.retry(countdown=60, exc=e)
+
+
+@shared_task(bind=True, name="resume_ai_task")
+def resume_ai_task_celery(self, interaction_pk: int):
+    """
+    Resume an agent execution after user input.
+    Step stub: sets Task RUNNING and notifies UI.
+    In a later step, we will resume the LangGraph graph from checkpoint.
+    """
+    try:
+        interaction = Interaction.objects.select_related('task', 'thread').get(pk=interaction_pk)
+        task = interaction.task
+
+        # Safety: only proceed if interaction is answered
+        if interaction.status != InteractionStatus.ANSWERED:
+            # Nothing to do
+            return
+
+        # Update task state to RUNNING and append progress log
+        if not task.progress_logs:
+            task.progress_logs = []
+        task.progress_logs.append({
+            "step": "Resuming after user input",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+            "severity": "info"
+        })
+        task.status = TaskStatus.RUNNING
+        task.save(update_fields=['status', 'progress_logs'])
+
+        # Notify UI
+        channel_layer = get_channel_layer()
+
+        async def notify():
+            await channel_layer.group_send(
+                f"task_{task.id}",
+                {'type': 'task_update', 'message': {
+                    'type': 'progress_update',
+                    'progress_log': "Resuming after user input"
+                }}
+            )
+            # Optional: signal that the interaction has been resolved
+            await channel_layer.group_send(
+                f"task_{task.id}",
+                {'type': 'task_update', 'message': {
+                    'type': 'interaction_update',
+                    'interaction_id': interaction.id,
+                    'status': 'RESUMING'
+                }}
+            )
+
+        asyncio.run(notify())
+
+        # NOTE: actual graph resumption will be implemented in a next step.
+        # For now, this task only sets proper state and informs the UI.
+
+    except Exception as e:
+        logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")
+        # Optional retry; keep mild backoff
+        raise self.retry(countdown=30, exc=e)
