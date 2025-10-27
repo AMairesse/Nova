@@ -1,6 +1,17 @@
 <!-- nova/templates/nova/message_container.html -->
 {% load static %} {% load i18n %}
 
+<script>
+  // Configure URLs for the JavaScript modules (for AJAX-loaded content)
+  window.NovaApp = window.NovaApp || {};
+  window.NovaApp.urls = window.NovaApp.urls || {};
+  // Merge with existing URLs if they exist
+  Object.assign(window.NovaApp.urls, {
+    interactionAnswer: "{% url 'interaction_answer' 0 %}",
+    interactionCancel: "{% url 'interaction_cancel' 0 %}",
+  });
+</script>
+
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
   <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
@@ -8,7 +19,46 @@
     <div id="messages-list">
       {% for message in messages %}
       <div id="message-{{ message.id }}" class="message mb-3" data-message-id="{{ message.id }}">
-        {% if message.actor == Actor.USER %}
+        {% if message.message_type == 'interaction_question' %}
+        <!-- Interaction question message -->
+        <div class="card border-warning">
+          <div class="card-body py-2">
+            <div class="d-flex align-items-center mb-2">
+              <i class="bi bi-question-circle text-warning me-2"></i>
+              <strong>Question</strong>
+            </div>
+            <div>{{ message.rendered_html }}</div>
+            {% if message.interaction %}
+            <div class="mt-2 small text-muted">
+              {% if message.interaction.origin_name %}
+                Asked by {{ message.interaction.origin_name }}
+              {% endif %}
+              {% if message.interaction.created_at %}
+                on {{ message.interaction.created_at|date:"M d, Y H:i" }}
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        {% elif message.message_type == 'interaction_answer' %}
+        <!-- Interaction answer message -->
+        <div class="card border-success">
+          <div class="card-body py-2">
+            <div class="d-flex align-items-center mb-2">
+              <i class="bi bi-check-circle text-success me-2"></i>
+              <strong>Answer</strong>
+            </div>
+            <div>{{ message.rendered_html }}</div>
+            {% if message.interaction %}
+            <div class="mt-2 small text-muted">
+              {% if message.interaction.created_at %}
+                Answered on {{ message.interaction.created_at|date:"M d, Y H:i" }}
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+        {% elif message.actor == Actor.USER %}
         <div class="card border-primary">
           <div class="card-body py-2">
             <strong class="text-primary">{{ message.rendered_html }}</strong>
@@ -77,6 +127,42 @@
           {% endif %}
         </div>
         {% endif %}
+      </div>
+      {% endfor %}
+
+      <!-- Render pending interactions as interactive cards -->
+      {% for interaction in pending_interactions %}
+      <div id="interaction-card-{{ interaction.id }}" class="message mb-3" data-interaction-id="{{ interaction.id }}">
+        <div class="card border-warning">
+          <div class="card-body">
+            <div class="d-flex align-items-center mb-2">
+              <i class="bi bi-question-circle text-warning me-2"></i>
+              <strong>
+                {% if interaction.origin_name %}
+                  {{ interaction.origin_name }} asks:
+                {% else %}
+                  Question:
+                {% endif %}
+              </strong>
+            </div>
+            <div class="mb-2">{{ interaction.question }}</div>
+            <div class="mb-2">
+              <textarea class="form-control interaction-answer-input" rows="2" placeholder="{% trans 'Type your answer...' %}"></textarea>
+              {% if interaction.schema %}
+                <div class="form-text text-muted mt-1">{% trans 'Answer format may be structured; plain text is also accepted.' %}</div>
+              {% endif %}
+            </div>
+            <div class="d-flex gap-2">
+              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn">
+                <i class="bi bi-check2-circle me-1"></i>{% trans 'Answer' %}
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn">
+                <i class="bi bi-x-circle me-1"></i>{% trans 'Cancel' %}
+              </button>
+              <div class="ms-auto small text-muted interaction-status"></div>
+            </div>
+          </div>
+        </div>
       </div>
       {% endfor %}
     </div>

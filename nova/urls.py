@@ -12,7 +12,7 @@ from nova.views.files_views import (
     file_download_url, file_upload, FileDeleteView
 )
 from nova.views.interaction_views import (
-    answer_interaction, cancel_interaction
+    answer_interaction, cancel_interaction, get_pending_interactions
 )
 from nova.views.pwa_views import service_worker
 from nova.views.security_views import csrf_token
@@ -55,6 +55,7 @@ urlpatterns += [
 urlpatterns += [
     path('interactions/<int:interaction_id>/answer/', answer_interaction, name='interaction_answer'),
     path('interactions/<int:interaction_id>/cancel/', cancel_interaction, name='interaction_cancel'),
+    path('interactions/pending/', get_pending_interactions, name='interaction_pending'),
 ]
 
 # Add healthcheck only in DEBUG mode

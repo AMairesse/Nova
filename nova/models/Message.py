@@ -11,6 +11,12 @@ class Actor(models.TextChoices):
     SYSTEM = "SYS", _("System")
 
 
+class MessageType(models.TextChoices):
+    STANDARD = "standard", _("Standard message")
+    INTERACTION_QUESTION = "interaction_question", _("Agent question to user")
+    INTERACTION_ANSWER = "interaction_answer", _("User answer to agent question")
+
+
 class Message(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
@@ -22,6 +28,22 @@ class Message(models.Model):
     actor = models.CharField(max_length=3, choices=Actor.choices)
     thread = models.ForeignKey('Thread', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # New fields for interaction support
+    message_type = models.CharField(
+        max_length=20,
+        choices=MessageType.choices,
+        default=MessageType.STANDARD,
+        verbose_name=_("Message type")
+    )
+    interaction = models.ForeignKey(
+        'Interaction',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='messages',
+        verbose_name=_("Related interaction")
+    )
 
     def __str__(self):
         return self.text

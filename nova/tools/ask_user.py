@@ -49,6 +49,12 @@ async def _create_or_update_interaction(
         existing.origin_name = origin_display
         await sync_to_async(existing.save, thread_sensitive=False)(update_fields=["question", "schema",
                                                                                   "origin_name", "updated_at"])
+        # Update the associated message if it exists
+        if hasattr(existing, 'messages') and existing.messages.exists():
+            question_message = existing.messages.filter(message_type='interaction_question').first()
+            if question_message:
+                question_message.text = question
+                await sync_to_async(question_message.save, thread_sensitive=False)()
         return existing
 
     interaction = Interaction(
@@ -62,6 +68,19 @@ async def _create_or_update_interaction(
     )
     await sync_to_async(interaction.full_clean, thread_sensitive=False)()
     await sync_to_async(interaction.save, thread_sensitive=False)()
+
+    # Create a message for the interaction question
+    from nova.models.Message import MessageType, Actor
+    question_text = f"**{origin_display} asks:** {question}"
+    message = await sync_to_async(
+        thread.add_message,
+        thread_sensitive=False
+    )(question_text, Actor.SYSTEM, MessageType.INTERACTION_QUESTION, interaction)
+
+    # Store the message in the interaction for reference
+    interaction.question_message = message
+    await sync_to_async(interaction.save, thread_sensitive=False)()
+
     return interaction
 
 

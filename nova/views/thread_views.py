@@ -122,6 +122,24 @@ def message_list(request):
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
+
+            # Fetch pending interactions for server-side rendering
+            from nova.models.models import Interaction, InteractionStatus
+            pending_interactions = Interaction.objects.filter(
+                thread=selected_thread,
+                status=InteractionStatus.PENDING
+            ).select_related('task', 'agent')
+
+            # Add pending interactions to context
+            context = {
+                'messages': messages,
+                'thread_id': selected_thread_id,
+                'user_agents': user_agents,
+                'default_agent': default_agent,
+                'pending_interactions': pending_interactions,
+            }
+            return render(request, 'nova/message_container.html', context)
+
         except Exception:
             # Thread doesn't exist or user doesn't have access - return empty state
             selected_thread_id = None

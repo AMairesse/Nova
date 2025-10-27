@@ -18,12 +18,15 @@ class Thread(models.Model):
     def __str__(self):
         return self.subject
 
-    def add_message(self, message_text, actor):
+    def add_message(self, message_text, actor, message_type="standard", interaction=None):
         message = Message(text=message_text, thread=self)
         message.user = self.user
         if actor not in Actor.values:
             raise ValueError(_("Invalid actor: {}").format(actor))
         message.actor = actor
+        message.message_type = message_type
+        if interaction:
+            message.interaction = interaction
         message.save()
         return message
 
