@@ -349,6 +349,12 @@
             });
           }
           this.onStreamComplete(taskId);
+        } else if (data.type === 'user_prompt') {
+          // NEW: show interactive question card
+          this.onUserPrompt(taskId, data);
+        } else if (data.type === 'interaction_update') {
+          // NEW: reflect backend updates (ANSWERED/RESUMING/CANCELED)
+          this.onInteractionUpdate(taskId, data);
         }
       };
 
@@ -707,6 +713,175 @@
       }, 100);
     }
   };
+
+  // Simple HTML escape to avoid injecting content as HTML
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Disable/enable the main input area while waiting for an interaction
+  StreamingManager.prototype.setInputAreaDisabled = function(disabled) {
+    const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+    const sendBtn  = document.getElementById('send-btn');
+    if (textarea) {
+      textarea.disabled = disabled;
+      textarea.placeholder = disabled ? gettext('Waiting for your answer...') : gettext('Type your message...');
+    }
+    if (sendBtn) {
+      sendBtn.disabled = disabled;
+    }
+  };
+
+  // Render and handle a user prompt card
+  StreamingManager.prototype.onUserPrompt = function(taskId, data) {
+    // Expected payload: { interaction_id, question, schema, origin_name, thread_id }
+    const {
+      interaction_id,
+      question,
+      schema,
+      origin_name
+    } = data;
+
+    // Build card element
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message mb-3';
+    wrapper.id = `interaction-card-${interaction_id}`;
+    wrapper.setAttribute('data-interaction-id', String(interaction_id));
+
+    const origin = origin_name ? `${escapeHtml(origin_name)} ${gettext('asks')}:` : gettext('Question');
+    const schemaHint = (schema && Object.keys(schema).length > 0)
+      ? `<div class="form-text text-muted mt-1">${gettext('Answer format may be structured; plain text is also accepted.')}</div>`
+      : '';
+
+    wrapper.innerHTML = `
+      <div class="card border-warning">
+        <div class="card-body">
+          <div class="d-flex align-items-center mb-2">
+            <i class="bi bi-question-circle text-warning me-2"></i>
+            <strong>${origin}</strong>
+          </div>
+          <div class="mb-2">${escapeHtml(question)}</div>
+          <div class="mb-2">
+            <textarea class="form-control interaction-answer-input" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
+            ${schemaHint}
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-primary interaction-answer-btn">
+              <i class="bi bi-check2-circle me-1"></i>${gettext('Answer')}
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn">
+              <i class="bi bi-x-circle me-1"></i>${gettext('Cancel')}
+            </button>
+            <div class="ms-auto small text-muted interaction-status"></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Append to messages and scroll
+    this.messageManager.appendMessage(wrapper);
+    // Disable main input while awaiting user answer
+    this.setInputAreaDisabled(true);
+
+    // Bind actions
+    const answerBtn = wrapper.querySelector('.interaction-answer-btn');
+    const cancelBtn = wrapper.querySelector('.interaction-cancel-btn');
+    const inputEl   = wrapper.querySelector('.interaction-answer-input');
+    const statusEl  = wrapper.querySelector('.interaction-status');
+
+    const setBusy = (busy) => {
+      if (answerBtn) answerBtn.disabled = busy;
+      if (cancelBtn) cancelBtn.disabled = busy;
+      if (inputEl) inputEl.disabled = busy;
+    };
+
+    const postJson = async (url, payload) => {
+      return window.DOMUtils.csrfFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+      });
+    };
+
+    answerBtn?.addEventListener('click', async () => {
+      const value = inputEl?.value?.trim();
+      if (!value) {
+        statusEl.textContent = gettext('Please provide an answer.');
+        return;
+      }
+      setBusy(true);
+      statusEl.textContent = gettext('Sending your answer...');
+      try {
+        const url = window.NovaApp.urls.interactionAnswer.replace('0', String(interaction_id));
+        const resp = await postJson(url, { answer: value });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        // We optimistically mark as sent; backend will send interaction_update/RESUMING too
+        statusEl.textContent = gettext('Answer sent. Resuming...');
+        // Keep the card visible but disabled until we get an update or the task resumes streaming
+      } catch (e) {
+        console.error('Failed to send answer:', e);
+        statusEl.textContent = gettext('Failed to send the answer. Please retry.');
+        setBusy(false);
+      }
+    });
+
+    cancelBtn?.addEventListener('click', async () => {
+      setBusy(true);
+      statusEl.textContent = gettext('Canceling...');
+      try {
+        const url = window.NovaApp.urls.interactionCancel.replace('0', String(interaction_id));
+        const resp = await postJson(url, {});
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        statusEl.textContent = gettext('Canceled.');
+        // Re-enable main input on cancel
+        this.setInputAreaDisabled(false);
+      } catch (e) {
+        console.error('Failed to cancel interaction:', e);
+        statusEl.textContent = gettext('Failed to cancel. Please retry.');
+        setBusy(false);
+      }
+    });
+  };
+
+  // Reflect backend updates to the interaction card
+  StreamingManager.prototype.onInteractionUpdate = function(taskId, data) {
+    const { interaction_id, status } = data;
+    const card = document.getElementById(`interaction-card-${interaction_id}`);
+    if (!card) return;
+
+    const statusEl = card.querySelector('.interaction-status');
+    const answerBtn = card.querySelector('.interaction-answer-btn');
+    const cancelBtn = card.querySelector('.interaction-cancel-btn');
+    const inputEl = card.querySelector('.interaction-answer-input');
+
+    const disableAll = (disabled) => {
+      if (answerBtn) answerBtn.disabled = disabled;
+      if (cancelBtn) cancelBtn.disabled = disabled;
+      if (inputEl) inputEl.disabled = disabled;
+    };
+
+    if (status === 'ANSWERED') {
+      if (statusEl) statusEl.textContent = gettext('Answer received. Resuming...');
+      disableAll(true);
+      // Keep main input disabled until we actually resume or complete
+    } else if (status === 'RESUMING') {
+      if (statusEl) statusEl.textContent = gettext('Resuming...');
+      disableAll(true);
+      // Re-enable main input as we resume agent streaming
+      this.setInputAreaDisabled(false);
+      // Optionally collapse the prompt card to reduce clutter
+      // card.classList.add('opacity-50');
+    } else if (status === 'CANCELED') {
+      if (statusEl) statusEl.textContent = gettext('Canceled.');
+      disableAll(true);
+      this.setInputAreaDisabled(false);
+    }
+  };
+
 
   // ============================================================================
   // SYSTEM MESSAGE HANDLERS
