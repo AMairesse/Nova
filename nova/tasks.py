@@ -14,6 +14,7 @@ from nova.models.Thread import Thread
 from nova.models.Message import Message
 from nova.models.Message import Actor
 from nova.llm.checkpoints import get_checkpointer
+from nova.llm.exceptions import AskUserPause
 from nova.llm.llm_agent import LLMAgent
 from nova.utils import markdown_to_html
 import logging
@@ -260,6 +261,10 @@ class TaskExecutor:
             result = await self._run_agent()
             await self._process_result(result)
             await self._finalize_task()
+        except AskUserPause as pause:
+            # Do not mark as failed; state has been set to AWAITING_INPUT by the tool.
+            # We simply stop here; UI has received 'user_prompt'.
+            await self._handle_pause(pause)
         except Exception as e:
             await self._handle_execution_error(e)
         finally:
@@ -290,9 +295,23 @@ class TaskExecutor:
             self.user, self.thread, self.agent_config,
             callbacks=[self.handler]
         )
+        # Inject current task context for system tools (e.g., ask_user)
+        self.llm._current_task = self.task
 
     async def _create_prompt(self):
         return self.prompt
+
+    async def _handle_pause(self, pause: AskUserPause):
+        """
+        Handle a controlled pause requested by ask_user tool.
+        The tool already set the Task to AWAITING_INPUT and emitted WS events.
+        """
+        # Ensure status is AWAITING_INPUT (idempotent)
+        if self.task.status != TaskStatus.AWAITING_INPUT:
+            self.task.status = TaskStatus.AWAITING_INPUT
+            await sync_to_async(self.task.save, thread_sensitive=False)()
+        # Do not send 'task_complete' or 'task_error' here.
+        # Execution will resume via resume_ai_task_celery.
 
     async def _run_agent(self):
         """Execute the LLM agent and return result."""
@@ -526,6 +545,37 @@ class ContextConsumptionTracker:
         return total_bytes // 4 + 1
 
 
+class ResumeTaskExecutor(AgentTaskExecutor):
+    """
+    Executor that resumes an interrupted agent run after user input.
+    It builds a concise resume prompt from the Interaction (question + answer)
+    and continues on the same thread/checkpoint.
+    """
+    def __init__(self, task, user, thread, agent_config, interaction: Interaction):
+        super().__init__(task, user, thread, agent_config, prompt="")
+        self.interaction = interaction
+
+    async def _create_prompt(self):
+        # Build a concise resume instruction
+        import json as _json
+
+        q = self.interaction.question or ""
+        ans = self.interaction.answer
+        if isinstance(ans, (dict, list)):
+            ans_text = _json.dumps(ans, ensure_ascii=False)
+        else:
+            ans_text = str(ans)
+
+        # Keep it short and directive to avoid re-asking
+        resume_prompt = (
+            "Resume the previous task exactly where you left off.\n"
+            f"You had asked the user this clarification question: \"{q}\"\n"
+            f"The user's answer is: {ans_text}\n"
+            "Do not ask the same question again. Use this answer to proceed and complete the task."
+        )
+        return resume_prompt
+
+
 class CompactTaskExecutor (TaskExecutor):
     """
     Encapsulates the execution of a compact task
@@ -666,57 +716,27 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
 @shared_task(bind=True, name="resume_ai_task")
 def resume_ai_task_celery(self, interaction_pk: int):
     """
-    Resume an agent execution after user input.
-    Step stub: sets Task RUNNING and notifies UI.
-    In a later step, we will resume the LangGraph graph from checkpoint.
+    Resume an agent execution after user input by running the ResumeTaskExecutor.
+    Uses the same thread/checkpoint, streams via the same WS group (task_id).
     """
     try:
-        interaction = Interaction.objects.select_related('task', 'thread').get(pk=interaction_pk)
+        interaction = Interaction.objects.select_related('task', 'thread', 'agent').get(pk=interaction_pk)
         task = interaction.task
+        thread = interaction.thread
+        user = task.user
+        agent_config = interaction.agent  # set by ask_user tool; required
 
-        # Safety: only proceed if interaction is answered
         if interaction.status != InteractionStatus.ANSWERED:
-            # Nothing to do
+            # Nothing to do yet
             return
 
-        # Update task state to RUNNING and append progress log
-        if not task.progress_logs:
-            task.progress_logs = []
-        task.progress_logs.append({
-            "step": "Resuming after user input",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        })
-        task.status = TaskStatus.RUNNING
-        task.save(update_fields=['status', 'progress_logs'])
+        if agent_config is None:
+            raise ValueError("Missing agent configuration on Interaction; cannot resume.")
 
-        # Notify UI
-        channel_layer = get_channel_layer()
-
-        async def notify():
-            await channel_layer.group_send(
-                f"task_{task.id}",
-                {'type': 'task_update', 'message': {
-                    'type': 'progress_update',
-                    'progress_log': "Resuming after user input"
-                }}
-            )
-            # Optional: signal that the interaction has been resolved
-            await channel_layer.group_send(
-                f"task_{task.id}",
-                {'type': 'task_update', 'message': {
-                    'type': 'interaction_update',
-                    'interaction_id': interaction.id,
-                    'status': 'RESUMING'
-                }}
-            )
-
-        asyncio.run(notify())
-
-        # NOTE: actual graph resumption will be implemented in a next step.
-        # For now, this task only sets proper state and informs the UI.
+        # Run the resume executor
+        executor = ResumeTaskExecutor(task, user, thread, agent_config, interaction)
+        asyncio.run(executor.execute())
 
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")
-        # Optional retry; keep mild backoff
         raise self.retry(countdown=30, exc=e)
