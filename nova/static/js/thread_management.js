@@ -109,6 +109,7 @@
     constructor() {
       this.activeStreams = new Map(); // taskId -> stream data
       this.messageManager = null;
+      this.awaitingUserAnswer = false; // NEW: track if UI is paused awaiting answer
     }
 
     setMessageManager(manager) {
@@ -150,6 +151,12 @@
     }
 
     onStreamChunk(taskId, chunk) {
+      // Guard: if a chunk arrives after a user prompt, ensure the input is re-enabled
+      if (this.awaitingUserAnswer) {
+        this.setInputAreaDisabled(false);
+        this.awaitingUserAnswer = false;
+      }
+      
       const stream = this.activeStreams.get(taskId);
       if (!stream) return;
 
@@ -786,6 +793,8 @@
     this.messageManager.appendMessage(wrapper);
     // Disable main input while awaiting user answer
     this.setInputAreaDisabled(true);
+    // Track awaiting state for guard on next chunks
+    this.awaitingUserAnswer = true;
 
     // Bind actions
     const answerBtn = wrapper.querySelector('.interaction-answer-btn');
@@ -873,12 +882,13 @@
       disableAll(true);
       // Re-enable main input as we resume agent streaming
       this.setInputAreaDisabled(false);
-      // Optionally collapse the prompt card to reduce clutter
-      // card.classList.add('opacity-50');
+      this.awaitingUserAnswer = false; // NEW
+      // Optionally collapse the prompt card...
     } else if (status === 'CANCELED') {
       if (statusEl) statusEl.textContent = gettext('Canceled.');
       disableAll(true);
       this.setInputAreaDisabled(false);
+      this.awaitingUserAnswer = false; // NEW
     }
   };
 
