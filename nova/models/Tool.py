@@ -5,9 +5,14 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
+from nova.tools import get_tool_type
 from nova.utils import validate_relaxed_url
 
 logger = logging.getLogger(__name__)
+
+SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
+SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
+JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
 
 
 def get_default_schema():
@@ -84,7 +89,6 @@ class Tool(models.Model):
             if not self.tool_subtype:
                 raise ValidationError(_("A BUILTIN tool must select a subtype."))
 
-            from nova.tools import get_tool_type
             metadata = get_tool_type(self.tool_subtype)
             if not metadata:
                 raise ValidationError(_("Invalid builtin subtype: %s") % self.tool_subtype)
@@ -157,3 +161,89 @@ class ToolCredential(models.Model):
     def __str__(self):
         return _("{}'s credentials for {}").format(self.user.username,
                                                    self.tool.name)
+
+
+def check_and_create_searxng_tool():
+    # Get the searxng's system tool if it exists
+    tool = Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='searxng').first()
+
+    if SEARNGX_SERVER_URL and SEARNGX_NUM_RESULTS:
+        # Create a "system tool" if it doesn't already exist
+        if not tool:
+            tool = Tool.objects.create(user=None,
+                                       name='System - SearXNG',
+                                       tool_type=Tool.ToolType.BUILTIN,
+                                       tool_subtype='searxng',
+                                       python_path='nova.tools.builtins.searxng')
+            ToolCredential.objects.create(user=None,
+                                          tool=tool,
+                                          config={'searxng_url': SEARNGX_SERVER_URL,
+                                                  'num_results': SEARNGX_NUM_RESULTS})
+        else:
+            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
+            if not cred:
+                ToolCredential.objects.create(user=None,
+                                              tool=tool,
+                                              config={'searxng_url': SEARNGX_SERVER_URL,
+                                                      'num_results': SEARNGX_NUM_RESULTS})
+            else:
+                # Update it if needed
+                if cred.config.get('searxng_url') != SEARNGX_SERVER_URL or \
+                   cred.config.get('num_results') != SEARNGX_NUM_RESULTS:
+                    cred.config['searxng_url'] = SEARNGX_SERVER_URL
+                    cred.config['num_results'] = SEARNGX_NUM_RESULTS
+                    cred.save()
+    else:
+        if Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='searxng').exists():
+            # If the system tool is not used then delete it
+            if not tool.agents.exists():
+                tool.delete()
+            else:
+                logger.warning(
+                    """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent.""")
+
+
+def check_and_create_judge0_tool():
+    # Get the judge0's system tool if it exists
+    tool = Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='code_execution').first()
+
+    if JUDGE0_SERVER_URL:
+        # Create a "system tool" if it doesn't already exist
+        if not tool:
+            tool = Tool.objects.create(user=None,
+                                       name='System - Code Execution',
+                                       tool_type=Tool.ToolType.BUILTIN,
+                                       tool_subtype='code_execution',
+                                       python_path='nova.tools.builtins.code_execution')
+            ToolCredential.objects.create(user=None,
+                                          tool=tool,
+                                          config={'judge0_url': JUDGE0_SERVER_URL})
+        else:
+            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
+            if not cred:
+                ToolCredential.objects.create(user=None,
+                                              tool=tool,
+                                              config={'judge0_url': JUDGE0_SERVER_URL})
+            else:
+                # Update it if needed
+                if cred.config.get('judge0_url') != JUDGE0_SERVER_URL:
+                    cred.config['judge0_url'] = JUDGE0_SERVER_URL
+                    cred.save()
+    else:
+        if Tool.objects.filter(user=None,
+                               tool_type=Tool.ToolType.BUILTIN,
+                               tool_subtype='code_execution').exists():
+            # If the system tool is not used then delete it
+            if not tool.agents.exists():
+                tool.delete()
+            else:
+                logger.warning(
+                    """WARNING: JUDGE0_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent.""")

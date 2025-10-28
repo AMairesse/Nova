@@ -1,11 +1,10 @@
 import os
-import django
 from celery import Celery
 from celery import signals
 from django.db import close_old_connections
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nova.settings")
-django.setup()
+
 app = Celery("nova")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()

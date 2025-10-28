@@ -28,12 +28,12 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='tool',
             name='input_schema',
-            field=models.JSONField(blank=True, default=nova.models.models.get_default_schema, null=True),
+            field=models.JSONField(blank=True, default=nova.models.Tool.get_default_schema, null=True),
         ),
         migrations.AlterField(
             model_name='tool',
             name='output_schema',
-            field=models.JSONField(blank=True, default=nova.models.models.get_default_schema, null=True),
+            field=models.JSONField(blank=True, default=nova.models.Tool.get_default_schema, null=True),
         ),
         migrations.AlterField(
             model_name='userparameters',

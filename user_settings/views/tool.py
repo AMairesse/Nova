@@ -29,7 +29,7 @@ from user_settings.mixins import (
 from user_settings.forms import ToolForm, ToolCredentialForm
 from nova.models.Tool import Tool, ToolCredential
 from nova.tools import get_metadata
-from nova.utils import check_and_create_searxng_tool, check_and_create_judge0_tool
+from nova.models.Tool import check_and_create_searxng_tool, check_and_create_judge0_tool
 from nova.mcp.client import MCPClient
 
 logger = logging.getLogger(__name__)

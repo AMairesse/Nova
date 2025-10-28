@@ -12,7 +12,7 @@ from django.http import Http404
 from fastmcp.client import Client as FastMCPClient
 from fastmcp.client.transports import StreamableHttpTransport, SSETransport
 from fastmcp.client.auth import BearerAuth
-from nova.models.models import ToolCredential
+from nova.models.Tool import ToolCredential
 from nova.utils import normalize_url
 import json
 

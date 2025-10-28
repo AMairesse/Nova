@@ -19,6 +19,10 @@ from nova.utils import validate_relaxed_url
 
 logger = logging.getLogger(__name__)
 
+OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
+OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
+OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
+
 
 class ProviderType(models.TextChoices):
     OPENAI = "openai", "OpenAI"
@@ -71,6 +75,42 @@ class LLMProvider(models.Model):
         super().clean()
         if self.max_context_tokens < 512:
             raise ValidationError(_("Max context tokens must be at least 512."))
+
+
+def check_and_create_system_provider():
+    # Get the system provider if it exists
+    provider = LLMProvider.objects.filter(user=None,
+                                          name='System - Ollama',
+                                          provider_type=ProviderType.OLLAMA).first()
+    if OLLAMA_SERVER_URL and OLLAMA_MODEL_NAME:
+        # Create a "system provider" if it doesn't already exist
+        if not provider:
+            LLMProvider.objects.create(user=None,
+                                       name='System - Ollama',
+                                       provider_type=ProviderType.OLLAMA,
+                                       model=OLLAMA_MODEL_NAME,
+                                       base_url=OLLAMA_SERVER_URL,
+                                       max_context_tokens=OLLAMA_CONTEXT_LENGTH)
+        else:
+            # Update it if needed
+            if provider.model != OLLAMA_MODEL_NAME or \
+               provider.base_url != OLLAMA_SERVER_URL or \
+               provider.max_context_tokens != OLLAMA_CONTEXT_LENGTH:
+                provider.model = OLLAMA_MODEL_NAME
+                provider.base_url = OLLAMA_SERVER_URL
+                provider.max_context_tokens = OLLAMA_CONTEXT_LENGTH
+                provider.save()
+    else:
+        existing = LLMProvider.objects.filter(user=None, provider_type=ProviderType.OLLAMA)
+        provider = provider or existing.first()
+        if provider:
+            # If the system provider is not used then delete it
+            if not provider.agents.exists():
+                provider.delete()
+            else:
+                logger.warning(
+                    """WARNING: OLLAMA_SERVER_URL or OLLAMA_MODEL_NAME not set, but a system
+                       provider exists and is being used by at least one agent.""")
 
 
 class UserParameters(models.Model):
