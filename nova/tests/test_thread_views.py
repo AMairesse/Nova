@@ -7,9 +7,9 @@ from django.urls import reverse
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.models import Task, TaskStatus
 from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
+from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.views import thread_views
 

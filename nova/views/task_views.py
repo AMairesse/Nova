@@ -2,7 +2,7 @@
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
-from nova.models.models import Task, TaskStatus
+from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 
 

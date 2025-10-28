@@ -10,7 +10,8 @@ from langchain_core.tools import StructuredTool
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.exceptions import AskUserPause
 from nova.models.AgentConfig import AgentConfig
-from nova.models.models import Interaction, InteractionStatus, TaskStatus, Task
+from nova.models.Interaction import Interaction, InteractionStatus
+from nova.models.Task import TaskStatus, Task
 from functools import partial
 
 

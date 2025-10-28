@@ -10,10 +10,12 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
 from nova.models.AgentConfig import AgentConfig
-from nova.models.models import Task, TaskStatus, CheckpointLink, Interaction, InteractionStatus
-from nova.models.Thread import Thread
+from nova.models.CheckpointLink import CheckpointLink
+from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Message
 from nova.models.Message import Actor
+from nova.models.Task import Task, TaskStatus
+from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.exceptions import AskUserPause
 from nova.llm.llm_agent import LLMAgent

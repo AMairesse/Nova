@@ -3,7 +3,9 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.models import Task, CheckpointLink, Interaction
+from nova.models.CheckpointLink import CheckpointLink
+from nova.models.Interaction import Interaction
+from nova.models.Task import Task
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
 from nova.models.Thread import Thread

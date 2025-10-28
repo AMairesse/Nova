@@ -8,9 +8,8 @@ from django.shortcuts import get_object_or_404
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-from nova.models.models import (
-    TaskStatus, Interaction, InteractionStatus
-)
+from nova.models.Interaction import Interaction, InteractionStatus
+from nova.models.Task import TaskStatus
 from nova.models.Thread import Thread
 
 

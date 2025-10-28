@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-10-26 09:18+0000\n"
+"POT-Creation-Date: 2025-10-28 13:30+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -25,3 +25,83 @@ msgstr "No files in this thread."
 #: nova/static/js/thread_management.js:49
 msgid "Compact"
 msgstr "Compact"
+
+#: nova/static/js/thread_management.js:508
+msgid "Processing…"
+msgstr "Processing…"
+
+#: nova/static/js/thread_management.js:711
+#: nova/static/js/thread_management.js:933
+msgid "Please provide an answer."
+msgstr "Please provide an answer."
+
+#: nova/static/js/thread_management.js:715
+#: nova/static/js/thread_management.js:937
+msgid "Sending your answer..."
+msgstr "Sending your answer..."
+
+#: nova/static/js/thread_management.js:721
+#: nova/static/js/thread_management.js:943
+msgid "Answer sent. Resuming..."
+msgstr "Answer sent. Resuming..."
+
+#: nova/static/js/thread_management.js:728
+#: nova/static/js/thread_management.js:947
+msgid "Failed to send the answer. Please retry."
+msgstr "Failed to send the answer. Please retry."
+
+#: nova/static/js/thread_management.js:735
+#: nova/static/js/thread_management.js:954
+msgid "Canceling..."
+msgstr "Canceling..."
+
+#: nova/static/js/thread_management.js:741
+#: nova/static/js/thread_management.js:959
+#: nova/static/js/thread_management.js:999
+msgid "Canceled."
+msgstr "Canceled"
+
+#: nova/static/js/thread_management.js:747
+#: nova/static/js/thread_management.js:964
+msgid "Failed to cancel. Please retry."
+msgstr "Failed to cancel. Please retry."
+
+#: nova/static/js/thread_management.js:841
+msgid "Waiting for your answer..."
+msgstr "Waiting for your answer..."
+
+#: nova/static/js/thread_management.js:841
+msgid "Type your message..."
+msgstr "Type your message..."
+
+#: nova/static/js/thread_management.js:873
+msgid "asks"
+msgstr "asks"
+
+#: nova/static/js/thread_management.js:873
+msgid "Question"
+msgstr "Question"
+
+#: nova/static/js/thread_management.js:875
+msgid "Answer format may be structured; plain text is also accepted."
+msgstr "Answer format may be structured; plain text is also accepted."
+
+#: nova/static/js/thread_management.js:887
+msgid "Type your answer..."
+msgstr "Type your answer..."
+
+#: nova/static/js/thread_management.js:892
+msgid "Answer"
+msgstr "Answer"
+
+#: nova/static/js/thread_management.js:895
+msgid "Cancel"
+msgstr "Cancel"
+
+#: nova/static/js/thread_management.js:988
+msgid "Answer received. Resuming..."
+msgstr "Answer received. Resuming..."
+
+#: nova/static/js/thread_management.js:992
+msgid "Resuming..."
+msgstr "Resuming..."

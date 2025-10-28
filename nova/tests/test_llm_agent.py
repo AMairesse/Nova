@@ -25,8 +25,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             "langgraph.prebuilt",
             "nova.tools.agent_tool_wrapper",
             "nova.tools", "nova.mcp.client", "nova.tools.files",
-            "nova.llm.checkpoints",  # Add checkpoints mock
-            "nova.models.models", "nova.models.Thread",  # ORM-related
+            "nova.llm.checkpoints",
+            "nova.models.Provider", "nova.models.Thread",
             "asgiref.sync",  # For sync_to_async
         ]
         for mod in mocked_modules:
@@ -125,7 +125,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         checkpoints_mod.get_checkpointer = get_checkpointer
 
         # Fake models and Thread
-        models_mod = types.ModuleType("nova.models.models")
+        checkpointlink_mod = types.ModuleType("nova.models.CheckpointLink")
+        userfile_mod = types.ModuleType("nova.models.UserFile")
         thread_mod = types.ModuleType("nova.models.Thread")
 
         # Mock CheckpointLink with proper Django manager pattern
@@ -143,8 +144,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         class CheckpointLink:
             objects = MockManager()
 
-        models_mod.CheckpointLink = CheckpointLink
-        models_mod.UserFile = MagicMock()  # For file counting in ainvoke
+        checkpointlink_mod.CheckpointLink = CheckpointLink
+        userfile_mod.UserFile = MagicMock()  # For file counting in ainvoke
 
         # Fake asgiref.sync
         asgiref_sync = types.ModuleType("asgiref.sync")
@@ -172,8 +173,9 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             "langgraph.prebuilt": lg_pre,
             "nova.tools.agent_tool_wrapper": atw_mod,
             "nova.llm.checkpoints": checkpoints_mod,
-            "nova.models.models": models_mod,
+            "nova.models.CheckpointLink": checkpointlink_mod,
             "nova.models.Thread": thread_mod,
+            "nova.models.UserFile": userfile_mod,
             "asgiref.sync": asgiref_sync,
         }
 

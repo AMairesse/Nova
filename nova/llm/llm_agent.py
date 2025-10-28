@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.AgentConfig import AgentConfig
-from nova.models.models import CheckpointLink
+from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool

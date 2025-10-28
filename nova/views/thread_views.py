@@ -8,8 +8,9 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
 from nova.models.AgentConfig import AgentConfig
-from nova.models.models import Task, TaskStatus
+from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor
+from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
@@ -127,7 +128,6 @@ def message_list(request):
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
 
             # Fetch pending interactions for server-side rendering
-            from nova.models.models import Interaction, InteractionStatus
             pending_interactions = Interaction.objects.filter(
                 thread=selected_thread,
                 status=InteractionStatus.PENDING
