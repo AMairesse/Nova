@@ -5,6 +5,115 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def migrate_agent_to_agentconfig(apps, schema_editor):
+    """
+    Forward copy:
+    - Create AgentConfig rows with the same PKs as Agent.
+    - Copy simple fields and M2M relations (tools, agent_tools).
+    - Preserve timestamps via direct UPDATE to avoid auto_now/auto_now_add override.
+    """
+    db_alias = schema_editor.connection.alias
+    Agent = apps.get_model('nova', 'Agent')
+    AgentConfig = apps.get_model('nova', 'AgentConfig')
+
+    # 1) Copy main rows (keep the same primary keys)
+    for agent in Agent.objects.using(db_alias).all():
+        ac, _ = AgentConfig.objects.using(db_alias).update_or_create(
+            id=agent.id,
+            defaults={
+                'name': getattr(agent, 'name', None),
+                'system_prompt': getattr(agent, 'system_prompt', None),
+                'recursion_limit': getattr(agent, 'recursion_limit', 25),
+                'is_tool': getattr(agent, 'is_tool', False),
+                'tool_description': getattr(agent, 'tool_description', None),
+                'user': getattr(agent, 'user', None),
+                'llm_provider': getattr(agent, 'llm_provider', None),
+            },
+        )
+        # Preserve created_at / updated_at if available by direct UPDATE
+        try:
+            AgentConfig.objects.using(db_alias).filter(pk=agent.pk).update(
+                created_at=getattr(agent, 'created_at'),
+                updated_at=getattr(agent, 'updated_at'),
+            )
+        except Exception:
+            # If timestamps differ or do not exist in the legacy model, ignore.
+            pass
+
+    # 2) Copy M2M: tools
+    # Note: Setting M2M after objects exist.
+    for agent in Agent.objects.using(db_alias).all():
+        try:
+            ac = AgentConfig.objects.using(db_alias).get(pk=agent.pk)
+        except AgentConfig.DoesNotExist:
+            continue
+
+        # Copy 'tools' M2M if it exists on Agent
+        if hasattr(agent, 'tools'):
+            ac.tools.set(agent.tools.using(db_alias).all())
+
+        # Copy 'agent_tools' self M2M if it exists on Agent
+        if hasattr(agent, 'agent_tools'):
+            related_pks = list(agent.agent_tools.using(db_alias).values_list('pk', flat=True))
+            if related_pks:
+                ac.agent_tools.set(
+                    AgentConfig.objects.using(db_alias).filter(pk__in=related_pks)
+                )
+
+
+def migrate_agentconfig_to_agent(apps, schema_editor):
+    """
+    Backward copy:
+    - Copy AgentConfig back to Agent with same PKs.
+    - Copy M2M relations.
+    - Preserve timestamps via direct UPDATE.
+    This runs BEFORE foreign keys are switched back in reverse.
+    """
+    db_alias = schema_editor.connection.alias
+    Agent = apps.get_model('nova', 'Agent')
+    AgentConfig = apps.get_model('nova', 'AgentConfig')
+
+    # 1) Copy main rows back
+    for ac in AgentConfig.objects.using(db_alias).all():
+        a, _ = Agent.objects.using(db_alias).update_or_create(
+            id=ac.id,
+            defaults={
+                'name': getattr(ac, 'name', None),
+                'system_prompt': getattr(ac, 'system_prompt', None),
+                'recursion_limit': getattr(ac, 'recursion_limit', 25),
+                'is_tool': getattr(ac, 'is_tool', False),
+                'tool_description': getattr(ac, 'tool_description', None),
+                'user': getattr(ac, 'user', None),
+                'llm_provider': getattr(ac, 'llm_provider', None),
+            },
+        )
+        # Preserve timestamps if the legacy Agent model had them
+        try:
+            Agent.objects.using(db_alias).filter(pk=ac.pk).update(
+                created_at=getattr(ac, 'created_at'),
+                updated_at=getattr(ac, 'updated_at'),
+            )
+        except Exception:
+            pass
+
+    # 2) Copy M2M relations back
+    for ac in AgentConfig.objects.using(db_alias).all():
+        try:
+            a = Agent.objects.using(db_alias).get(pk=ac.pk)
+        except Agent.DoesNotExist:
+            continue
+
+        if hasattr(a, 'tools') and hasattr(ac, 'tools'):
+            a.tools.set(ac.tools.using(db_alias).all())
+
+        if hasattr(a, 'agent_tools') and hasattr(ac, 'agent_tools'):
+            related_pks = list(ac.agent_tools.using(db_alias).values_list('pk', flat=True))
+            if related_pks:
+                a.agent_tools.set(
+                    Agent.objects.using(db_alias).filter(pk__in=related_pks)
+                )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -13,6 +122,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # 1) Create the new model first
         migrations.CreateModel(
             name='AgentConfig',
             fields=[
@@ -33,6 +143,12 @@ class Migration(migrations.Migration):
                 'unique_together': {('user', 'name')},
             },
         ),
+        # 2) Copy data BEFORE re-pointing FKs
+        migrations.RunPython(
+            code=migrate_agent_to_agentconfig,
+            reverse_code=migrations.RunPython.noop,
+        ),
+        # 3) Re-point FK fields to AgentConfig
         migrations.AlterField(
             model_name='checkpointlink',
             name='agent',
@@ -53,6 +169,12 @@ class Migration(migrations.Migration):
             name='default_agent',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='nova.agentconfig'),
         ),
+        # 4) Provide a reverse-time data copy BEFORE reversing FK fields
+        migrations.RunPython(
+            code=migrations.RunPython.noop,
+            reverse_code=migrate_agentconfig_to_agent,
+        ),
+        # 5) Finally drop the old model
         migrations.DeleteModel(
             name='Agent',
         ),
