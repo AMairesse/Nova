@@ -14,7 +14,7 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
-from nova.tasks import run_ai_task_celery, compact_conversation_celery
+from nova.tasks.tasks import run_ai_task_celery, compact_conversation_celery
 from nova.utils import markdown_to_html
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
 from django.conf import settings

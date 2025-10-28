@@ -145,7 +145,7 @@ class MainViewsTests(TestCase):
 
     # ------------ add_message -------------------------------------------
 
-    @patch("nova.tasks.run_ai_task_celery.delay")
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
     def test_add_message_creates_task_and_starts_thread(self, mock_delay):
         self.client.login(username="alice", password="pass")
 

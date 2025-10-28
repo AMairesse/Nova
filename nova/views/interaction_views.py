@@ -81,7 +81,7 @@ def answer_interaction(request, interaction_id: int):
     )
 
     # Enqueue resume
-    from nova.tasks import resume_ai_task_celery
+    from nova.tasks.tasks import resume_ai_task_celery
     resume_ai_task_celery.delay(interaction.id)
 
     return JsonResponse({'status': 'queued', 'task_id': task.id})

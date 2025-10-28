@@ -85,3 +85,18 @@ Nova
 - A Thread contains multiple ```Messages```.
 
 
+## Workflow for specific use cases
+
+### An agent asks the user for input
+
+- An Agent is working and call the ask_user tool
+- nova/tools/ask_user.py ==> ask_user is called
+  - upsert an Interaction(PENDING),
+  - mark the Task AWAITING_INPUT,
+  - emit a WS 'user_prompt',
+  - raise AskUserPause to stop the current run.
+- nova/llm/exceptions.py ==> AskUserPause is called
+  - raise an Exception which stop the ReAct Agent
+- nova/tasks.py
+  - the exception is catched in the "execute" function of TaskExecutor
+  - it call _handle_pause which set the task to AWAITING_INPUT
