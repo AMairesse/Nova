@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from nova.models.models import ProviderType
+from nova.models.Provider import ProviderType
 import nova.llm.llm_agent as llm_agent_mod
 
 

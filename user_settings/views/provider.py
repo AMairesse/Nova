@@ -6,7 +6,7 @@ from django.db.models import Q
 from django.views.generic import ListView
 
 from nova.models.models import LLMProvider
-from nova.models.models import check_and_create_system_provider
+from nova.models.Provider import check_and_create_system_provider
 from user_settings.forms import LLMProviderForm
 from user_settings.mixins import (
     OwnerCreateView,

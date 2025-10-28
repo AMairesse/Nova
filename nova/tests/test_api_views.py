@@ -6,7 +6,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from nova.api.views import QuestionAnswerView
 from nova.tests.base import BaseTestCase
-from nova.models.models import Agent, LLMProvider, ProviderType
+from nova.models.models import Agent
+from nova.models.Provider import ProviderType, LLMProvider
 
 
 class QuestionAnswerViewTests(BaseTestCase):

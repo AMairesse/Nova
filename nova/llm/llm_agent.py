@@ -12,8 +12,8 @@ from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_core.callbacks import BaseCallbackHandler
-from nova.models.models import Agent, ProviderType, LLMProvider, UserInfo
-from nova.models.models import CheckpointLink, UserFile
+from nova.models.models import Agent, UserInfo, CheckpointLink, UserFile
+from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer

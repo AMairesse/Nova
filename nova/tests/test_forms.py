@@ -8,9 +8,8 @@ from user_settings.forms import (
     UserParametersForm, LLMProviderForm,
     AgentForm, ToolForm, ToolCredentialForm
 )
-from nova.models.models import (
-    LLMProvider, UserParameters, Agent, ProviderType
-)
+from nova.models.models import UserParameters, Agent
+from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Tool import Tool
 from .base import BaseTestCase
 

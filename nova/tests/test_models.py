@@ -6,10 +6,11 @@ from unittest.mock import patch, MagicMock, AsyncMock, ANY, call
 from botocore.exceptions import ClientError
 
 from nova.models.models import (
-    LLMProvider, UserParameters, Agent, UserProfile,
-    Task, ProviderType, TaskStatus, UserFile, CheckpointLink
+    UserParameters, Agent, UserProfile,
+    Task, TaskStatus, UserFile, CheckpointLink
 )
 from nova.models.Message import Message, Actor
+from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
 from .base import BaseTestCase
