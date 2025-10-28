@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from unittest.mock import patch
 
-from nova.models.models import Agent
+from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Tool import Tool, ToolCredential
 
@@ -122,7 +122,7 @@ class ToolsViewsTests(TestCase):
         ToolCredential.objects.create(user=self.user, tool=tool, auth_type="basic")
 
         provider = self._create_provider()
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name="Agent A",
             llm_provider=provider,

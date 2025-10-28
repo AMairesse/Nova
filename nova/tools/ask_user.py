@@ -9,9 +9,8 @@ from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.exceptions import AskUserPause
-from nova.models.models import (
-    Interaction, InteractionStatus, TaskStatus, Agent, Task
-)
+from nova.models.AgentConfig import AgentConfig
+from nova.models.models import Interaction, InteractionStatus, TaskStatus, Task
 from functools import partial
 
 
@@ -40,7 +39,7 @@ async def _create_or_update_interaction(
 ) -> Interaction:
     """Create or update the pending Interaction for this task."""
     thread = agent.thread
-    origin_agent = agent.agent_config if isinstance(agent.agent_config, Agent) else None
+    origin_agent = agent.agent_config if isinstance(agent.agent_config, AgentConfig) else None
     origin_display = origin_name or (origin_agent.name if origin_agent else "Agent")
 
     existing = await _ensure_single_pending(task)

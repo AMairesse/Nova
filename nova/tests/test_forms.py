@@ -8,9 +8,10 @@ from user_settings.forms import (
     UserParametersForm, LLMProviderForm,
     AgentForm, ToolForm, ToolCredentialForm
 )
-from nova.models.models import UserParameters, Agent
+from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Tool import Tool
+from nova.models.UserObjects import UserParameters
 from .base import BaseTestCase
 
 
@@ -104,7 +105,7 @@ class AgentFormTest(BaseTestCase):
             )
         )
         self.assertQuerySetEqual(form.fields['agent_tools'].queryset,
-                                 Agent.objects.filter(user=self.user,
+                                 AgentConfig.objects.filter(user=self.user,
                                  is_tool=True))
 
     def test_valid_agent(self):
@@ -136,10 +137,10 @@ class AgentFormTest(BaseTestCase):
         self.assertIn('tool_description', form.errors)
 
     def test_clean_agent_tools_prevent_self_reference(self):
-        agent = Agent.objects.create(user=self.user, name='A1',
-                                     llm_provider=self.provider,
-                                     system_prompt='P1', is_tool=True,
-                                     tool_description='D1')
+        agent = AgentConfig.objects.create(user=self.user, name='A1',
+                                           llm_provider=self.provider,
+                                           system_prompt='P1', is_tool=True,
+                                           tool_description='D1')
         data = {
             'name': 'A1',
             'llm_provider': self.provider.id,
@@ -155,14 +156,14 @@ class AgentFormTest(BaseTestCase):
         self.assertFalse(agent.agent_tools.filter(pk=agent.pk).exists())
 
     def test_cycle_detection_via_model(self):
-        agent1 = Agent.objects.create(user=self.user, name='A1',
-                                      llm_provider=self.provider,
-                                      system_prompt='P1', is_tool=True,
-                                      tool_description='D1')
-        agent2 = Agent.objects.create(user=self.user, name='A2',
-                                      llm_provider=self.provider,
-                                      system_prompt='P2', is_tool=True,
-                                      tool_description='D2')
+        agent1 = AgentConfig.objects.create(user=self.user, name='A1',
+                                            llm_provider=self.provider,
+                                            system_prompt='P1', is_tool=True,
+                                            tool_description='D1')
+        agent2 = AgentConfig.objects.create(user=self.user, name='A2',
+                                            llm_provider=self.provider,
+                                            system_prompt='P2', is_tool=True,
+                                            tool_description='D2')
         agent1.agent_tools.add(agent2)
         data = {
             'name': 'A2',

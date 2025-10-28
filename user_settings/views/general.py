@@ -7,7 +7,7 @@ from django.views.generic import UpdateView
 from django.http import HttpResponse
 from django.urls import reverse_lazy
 
-from nova.models.models import UserParameters
+from nova.models.UserObjects import UserParameters
 from user_settings.forms import UserParametersForm
 from user_settings.mixins import DashboardRedirectMixin
 

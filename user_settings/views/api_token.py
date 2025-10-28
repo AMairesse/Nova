@@ -6,7 +6,7 @@ from django.utils.translation import gettext_lazy
 from django.views.generic import View
 from rest_framework.authtoken.models import Token
 
-from nova.models.models import UserParameters
+from nova.models.UserObjects import UserParameters
 from user_settings.mixins import DashboardRedirectMixin
 
 

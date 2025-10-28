@@ -6,7 +6,8 @@ from django.http import HttpResponse
 from django.urls import reverse
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from nova.models.models import Agent, Task, TaskStatus
+from nova.models.AgentConfig import AgentConfig
+from nova.models.models import Task, TaskStatus
 from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
@@ -157,7 +158,7 @@ class MainViewsTests(TestCase):
             api_key="dummy",
         )
 
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name="A",
             is_tool=False,

@@ -10,8 +10,8 @@ from django.views.decorators.csrf import csrf_protect
 from asgiref.sync import sync_to_async
 import logging
 
-from nova.models.models import UserFile
 from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
 from nova.file_utils import (
     build_virtual_tree,
     batch_upload_files,

@@ -38,7 +38,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='userparameters',
             name='langfuse_host',
-            field=models.CharField(blank=True, max_length=200, null=True, validators=[nova.models.models.validate_relaxed_url]),
+            field=models.CharField(blank=True, max_length=200, null=True, validators=[nova.utils.validate_relaxed_url]),
         ),
         migrations.CreateModel(
             name='CheckpointLink',

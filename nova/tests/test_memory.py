@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 
-from nova.models.models import UserInfo
+from nova.models.UserObjects import UserInfo
 from nova.tools.builtins.memory import (
     _get_theme_content,
     _set_theme_content,

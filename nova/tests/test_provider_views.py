@@ -3,7 +3,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
-from nova.models.models import Agent
+from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider, ProviderType
 
 
@@ -152,9 +152,9 @@ class ProviderViewsTests(TestCase):
     def test_delete_provider_deletes_agents_and_provider(self):
         prov = self._create_provider()
         # Create a couple of agents using this provider
-        a1 = Agent.objects.create(user=self.user, name="A1", llm_provider=prov, system_prompt="x")
-        a2 = Agent.objects.create(user=self.user, name="A2", llm_provider=prov, system_prompt="y")
-        self.assertEqual(Agent.objects.filter(llm_provider=prov).count(), 2)
+        a1 = AgentConfig.objects.create(user=self.user, name="A1", llm_provider=prov, system_prompt="x")
+        a2 = AgentConfig.objects.create(user=self.user, name="A2", llm_provider=prov, system_prompt="y")
+        self.assertEqual(AgentConfig.objects.filter(llm_provider=prov).count(), 2)
 
         self.client.login(username="alice", password="pass")
         url = reverse("user_settings:provider-delete", args=[prov.id])
@@ -163,5 +163,5 @@ class ProviderViewsTests(TestCase):
         self.assertEqual(resp["Location"], reverse("user_settings:dashboard") + "#pane-providers")
 
         # Agents removed first, then provider removed
-        self.assertFalse(Agent.objects.filter(pk__in=[a1.pk, a2.pk]).exists())
+        self.assertFalse(AgentConfig.objects.filter(pk__in=[a1.pk, a2.pk]).exists())
         self.assertFalse(LLMProvider.objects.filter(pk=prov.pk).exists())

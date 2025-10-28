@@ -7,9 +7,12 @@ from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
-from nova.models.models import Agent, UserProfile, Task, TaskStatus, UserFile
+from nova.models.AgentConfig import AgentConfig
+from nova.models.models import Task, TaskStatus
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
+from nova.models.UserObjects import UserProfile
 from nova.tasks import run_ai_task_celery, compact_conversation_celery
 from nova.utils import markdown_to_html
 from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
@@ -98,12 +101,12 @@ def load_more_threads(request):
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
-    user_agents = Agent.objects.filter(user=request.user, is_tool=False)
+    user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
     agent_id = request.GET.get('agent_id')
     default_agent = None
     if agent_id:
-        default_agent = Agent.objects.filter(id=agent_id,
-                                             user=request.user).first()
+        default_agent = AgentConfig.objects.filter(id=agent_id,
+                                                   user=request.user).first()
     if not default_agent:
         default_agent = getattr(request.user.userprofile,
                                 "default_agent", None)
@@ -225,7 +228,7 @@ def add_message(request):
 
     agent_config = None
     if selected_agent:
-        agent_config = get_object_or_404(Agent, id=selected_agent,
+        agent_config = get_object_or_404(AgentConfig, id=selected_agent,
                                          user=request.user)
     else:
         try:

@@ -17,14 +17,14 @@ METADATA = {
 
 def _get_user_info(user):
     """Sync function to get or create UserInfo."""
-    from nova.models.models import UserInfo
+    from nova.models.UserObjects import UserInfo
     user_info, _ = UserInfo.objects.get_or_create(user=user)
     return user_info
 
 
 def _update_user_info(user, content):
     """Sync function to update UserInfo."""
-    from nova.models.models import UserInfo
+    from nova.models.UserObjects import UserInfo
     user_info, _ = UserInfo.objects.get_or_create(user=user)
     user_info.markdown_content = content
     user_info.full_clean()  # Validate before saving

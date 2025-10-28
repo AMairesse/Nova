@@ -14,7 +14,7 @@ from django.utils.translation import gettext as _
 from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
-from nova.models.models import Agent
+from nova.models.AgentConfig import AgentConfig
 from nova.models.Thread import Thread
 
 import logging
@@ -29,7 +29,7 @@ class AgentToolWrapper:
 
     def __init__(
         self,
-        agent_config: Agent,
+        agent_config: AgentConfig,
         thread: Thread,
         user: settings.AUTH_USER_MODEL,
         parent_callbacks=None,

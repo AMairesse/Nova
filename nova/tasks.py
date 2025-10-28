@@ -9,7 +9,8 @@ from django.contrib.auth.models import User
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from asgiref.sync import sync_to_async
-from nova.models.models import Agent, Task, TaskStatus, CheckpointLink, Interaction, InteractionStatus
+from nova.models.AgentConfig import AgentConfig
+from nova.models.models import Task, TaskStatus, CheckpointLink, Interaction, InteractionStatus
 from nova.models.Thread import Thread
 from nova.models.Message import Message
 from nova.models.Message import Actor
@@ -663,7 +664,7 @@ def compact_conversation_celery(self, task_pk, user_pk, thread_pk, agent_pk):
         task = Task.objects.select_related('user', 'thread').get(pk=task_pk)
         user = User.objects.get(pk=user_pk)
         thread = Thread.objects.select_related('user').get(pk=thread_pk)
-        agent_config = Agent.objects.select_related('llm_provider').get(pk=agent_pk) if agent_pk else None
+        agent_config = AgentConfig.objects.select_related('llm_provider').get(pk=agent_pk) if agent_pk else None
 
         # Call the agent
         executor = CompactTaskExecutor(task, user, thread, agent_config, "")
@@ -698,7 +699,7 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
 
         agent_config = None
         if agent_pk:
-            agent_config = Agent.objects.select_related('llm_provider').get(pk=agent_pk)
+            agent_config = AgentConfig.objects.select_related('llm_provider').get(pk=agent_pk)
 
         message = Message.objects.select_related('thread', 'user').get(pk=message_pk)
         prompt_text = message.text or ""

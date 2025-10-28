@@ -14,6 +14,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='llmprovider',
             name='base_url',
-            field=models.CharField(blank=True, max_length=200, null=True, validators=[nova.models.models.validate_relaxed_url]),
+            field=models.CharField(blank=True, max_length=200, null=True, validators=[nova.utils.validate_relaxed_url]),
         ),
     ]

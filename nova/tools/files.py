@@ -1,20 +1,22 @@
 # nova/tools/files.py
-import base64
 import aioboto3
-from typing import Tuple, Any
-from botocore.exceptions import ClientError
-from django.conf import settings
-from django.shortcuts import get_object_or_404
-from nova.models.models import UserFile
-from nova.models.Thread import Thread
-from nova.llm.llm_agent import LLMAgent
-from nova.utils import estimate_tokens
+import base64
 import logging
 import uuid
-from io import BytesIO
 from asgiref.sync import sync_to_async
-from langchain_core.tools import StructuredTool
+from botocore.exceptions import ClientError
 from functools import partial
+from io import BytesIO
+from langchain_core.tools import StructuredTool
+from typing import Tuple, Any
+
+from django.conf import settings
+from django.shortcuts import get_object_or_404
+
+from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
+from nova.llm.llm_agent import LLMAgent
+from nova.utils import estimate_tokens
 
 logger = logging.getLogger(__name__)
 

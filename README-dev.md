@@ -22,11 +22,14 @@ Nova
 |  |  └─ client.py                      # MCPClient class
 |  ├─ migrations/                       # Django model migration scripts
 |  ├─ models/                           # Django models
+|  |  ├─ AgentConfig.py                 # AgentConfig object's model
 |  |  ├─ Message.py                     # Actor, Message, MessageType objects' model
 |  |  ├─ models.py                      #
 |  |  ├─ Provider.py                    # ProviderType and LLMProvider objects' model
 |  |  └─ Thread.py                      # Thread object's model
 |  |  └─ Tool.py                        # Tool and ToolCredential objects' model
+|  |  └─ UserFile.py                    # UserFile object's model
+|  |  └─ UserObjects.py                 # UserInfo, UserParameters and UserProfile objects' model
 |  ├─ static/                           # JS helpers (streaming, tool modal manager…)
 |  |  ├─ css/                           # CSS helpers
 |  |  |  └─ main.css                    # CSS helpers
