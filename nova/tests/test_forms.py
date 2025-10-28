@@ -9,8 +9,9 @@ from user_settings.forms import (
     AgentForm, ToolForm, ToolCredentialForm
 )
 from nova.models.models import (
-    LLMProvider, UserParameters, Agent, Tool, ProviderType
+    LLMProvider, UserParameters, Agent, ProviderType
 )
+from nova.models.Tool import Tool
 from .base import BaseTestCase
 
 

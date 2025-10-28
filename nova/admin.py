@@ -2,12 +2,13 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from nova.models.models import (
-    UserParameters, UserProfile, Agent, Tool,
-    ToolCredential, LLMProvider, Task, UserFile, CheckpointLink,
+    UserParameters, UserProfile, Agent,
+    LLMProvider, Task, UserFile, CheckpointLink,
     UserInfo, Interaction
 )
 from nova.models.Message import Message
 from nova.models.Thread import Thread
+from nova.models.Tool import Tool, ToolCredential
 
 
 admin.site.site_header = "Nova Admin"

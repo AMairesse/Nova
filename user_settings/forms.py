@@ -17,15 +17,8 @@ from django.utils.translation import gettext_lazy as _
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Field
 
-from nova.models.models import (
-    Agent,
-    LLMProvider,
-    ProviderType,
-    Tool,
-    ToolCredential,
-    UserParameters,
-    UserInfo,
-)
+from nova.models.models import Agent, LLMProvider, ProviderType, UserParameters, UserInfo
+from nova.models.Tool import Tool, ToolCredential
 
 from user_settings.mixins import SecretPreserveMixin
 

@@ -1,12 +1,16 @@
 import asyncio
-import logging
 import bleach
+import logging
+import re
 from markdown import markdown
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils.safestring import mark_safe
-from nova.models.models import LLMProvider, ProviderType, Tool, ToolCredential
+from django.utils.translation import gettext_lazy as _
+from nova.models.models import LLMProvider, ProviderType
+from nova.models.Tool import Tool, ToolCredential
 from langchain_core.messages import BaseMessage
 
 OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
@@ -74,6 +78,26 @@ def normalize_url(urlish) -> str:
 
     # 4. Re-assemble, keeping every component
     return urlunparse((scheme, netloc, path, params, query, fragment))
+
+
+def validate_relaxed_url(value):
+    """
+    Simple validator for relaxed URLs:
+    This allows single-label hosts like 'langfuse:3000'.
+    Checks for scheme (http/https), host, optional port/path.
+    """
+    if not value:
+        return  # Allow empty if blank=True
+
+    # Relaxed regex: scheme://host[:port][/path]
+    regex = re.compile(
+        r'^(https?://)'  # Scheme (http or https)
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host
+        r'(?::\d{1,5})?'  # Optional port
+        r'(?:/[^\s]*)?$'  # Optional path
+    )
+    if not regex.match(value):
+        raise ValidationError(_("Enter a valid URL."))
 
 
 def extract_final_answer(output):

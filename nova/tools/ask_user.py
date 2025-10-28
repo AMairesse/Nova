@@ -12,6 +12,7 @@ from nova.llm.exceptions import AskUserPause
 from nova.models.models import (
     Interaction, InteractionStatus, TaskStatus, Agent, Task
 )
+from functools import partial
 
 
 async def _get_current_task(agent: LLMAgent) -> Task:
@@ -53,7 +54,7 @@ async def _create_or_update_interaction(
         if hasattr(existing, 'messages') and existing.messages.exists():
             question_message = existing.messages.filter(message_type='interaction_question').first()
             if question_message:
-                question_message.text = question
+                question_message.text = f"**{origin_display} asks:** {question}"
                 await sync_to_async(question_message.save, thread_sensitive=False)()
         return existing
 
@@ -112,72 +113,66 @@ async def _broadcast_user_prompt(task_id: int, payload: Dict[str, Any]):
     )
 
 
-def _build_tool(agent: LLMAgent) -> StructuredTool:
-    """Return the StructuredTool bound to the provided agent."""
+async def _ask_user(agent: LLMAgent, question: str, schema: Optional[Dict[str, Any]] = None,
+                    origin_name: Optional[str] = None) -> str:
+    """
+    Ask a blocking question to the end user.
+    This will:
+        - upsert an Interaction(PENDING),
+        - mark the Task AWAITING_INPUT,
+        - emit a WS 'user_prompt',
+        - raise AskUserPause to stop the current run.
+    """
+    # 1) Retrieve task
+    task = await _get_current_task(agent)
 
-    async def _ask_user(
-        question: str,
-        schema: Optional[Dict[str, Any]] = None,
-        origin_name: Optional[str] = None,
-    ) -> str:
-        """
-        Ask a blocking question to the end user.
-        This will:
-          - upsert an Interaction(PENDING),
-          - mark the Task AWAITING_INPUT,
-          - emit a WS 'user_prompt',
-          - raise AskUserPause to stop the current run.
-        """
-        # 1) Retrieve task
-        task = await _get_current_task(agent)
+    # 2) Create/Update Interaction
+    interaction = await _create_or_update_interaction(task, agent, question, schema, origin_name)
 
-        # 2) Create/Update Interaction
-        interaction = await _create_or_update_interaction(task, agent, question, schema, origin_name)
+    # 3) Mark task awaiting input
+    await _mark_task_awaiting(task, question)
 
-        # 3) Mark task awaiting input
-        await _mark_task_awaiting(task, question)
+    # 4) Emit WS event (UI will render an interactive card)
+    await _broadcast_user_prompt(task.id, {
+        "interaction_id": interaction.id,
+        "question": question,
+        "schema": schema or {},
+        "origin_name": interaction.origin_name,
+        "thread_id": agent.thread.id if agent.thread else None,
+    })
 
-        # 4) Emit WS event (UI will render an interactive card)
-        await _broadcast_user_prompt(task.id, {
-            "interaction_id": interaction.id,
-            "question": question,
-            "schema": schema or {},
-            "origin_name": interaction.origin_name,
-            "thread_id": agent.thread.id if agent.thread else None,
-        })
-
-        # 5) Interrupt execution flow
-        raise AskUserPause(interaction_id=interaction.id)
-
-    return StructuredTool.from_function(
-        func=None,
-        coroutine=_ask_user,
-        name="ask_user",
-        description=_(
-            "Ask the end-user a clarification question and pause execution. "
-            "Use when additional information is required to proceed."
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "The question to show to the user",
-                },
-                "schema": {
-                    "type": "object",
-                    "description": "Optional JSON schema describing expected answer shape",
-                },
-                "origin_name": {
-                    "type": "string",
-                    "description": "Optional display name of the asking agent/tool",
-                },
-            },
-            "required": ["question"],
-        },
-    )
+    # 5) Interrupt execution flow
+    raise AskUserPause(interaction_id=interaction.id)
 
 
 async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     """Expose ask_user as a single StructuredTool, loaded unconditionally."""
-    return [_build_tool(agent)]
+    return [
+        StructuredTool.from_function(
+            func=None,
+            coroutine=partial(_ask_user, agent),
+            name="ask_user",
+            description=_(
+                "Ask the end-user a clarification question and pause execution. "
+                "Use when additional information is required to proceed."
+            ),
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question to show to the user",
+                    },
+                    "schema": {
+                        "type": "object",
+                        "description": "Optional JSON schema describing expected answer shape",
+                    },
+                    "origin_name": {
+                        "type": "string",
+                        "description": "Optional display name of the asking agent/tool",
+                    },
+                },
+                "required": ["question"],
+            },
+        )
+    ]

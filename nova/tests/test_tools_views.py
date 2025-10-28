@@ -3,13 +3,8 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from unittest.mock import patch
 
-from nova.models.models import (
-    Tool,
-    ToolCredential,
-    Agent,
-    LLMProvider,
-    ProviderType,
-)
+from nova.models.models import Agent, LLMProvider, ProviderType
+from nova.models.Tool import Tool, ToolCredential
 
 
 # Fake MCPClient

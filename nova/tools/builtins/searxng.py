@@ -4,7 +4,7 @@ from langchain_community.agent_toolkits.load_tools import load_tools
 from asgiref.sync import sync_to_async
 
 from nova.llm.llm_agent import LLMAgent
-from nova.models.models import Tool, ToolCredential
+from nova.models.Tool import Tool, ToolCredential
 
 METADATA = {
     'name': 'SearXNG',

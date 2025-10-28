@@ -4,7 +4,7 @@ from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
 from playwright.async_api import async_playwright
 
 from nova.llm.llm_agent import LLMAgent
-from nova.models.models import Tool
+from nova.models.Tool import Tool
 
 METADATA = {
     'name': 'Browser',

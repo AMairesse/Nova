@@ -52,10 +52,13 @@ class MCPClient:
         headers = {}
 
         if self.transport_type == "sse":
-            return SSETransport(url=self.endpoint, auth=auth, headers=headers) if auth else SSETransport(url=self.endpoint, headers=headers)
+            return SSETransport(url=self.endpoint,
+                                auth=auth,
+                                headers=headers) if auth else SSETransport(url=self.endpoint, headers=headers)
         return StreamableHttpTransport(url=self.endpoint,
                                        auth=auth,
-                                       headers=headers) if auth else StreamableHttpTransport(url=self.endpoint, headers=headers)
+                                       headers=headers) if auth else StreamableHttpTransport(url=self.endpoint,
+                                                                                             headers=headers)
 
     # ---------- Async API -------------------------------------------------
     async def alist_tools(self, force_refresh: bool = False) -> List[Dict[str, Any]]:

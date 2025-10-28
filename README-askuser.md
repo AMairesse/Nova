@@ -169,3 +169,19 @@ Date/context: Monday, October 27, 2025 UTC. Stack: Django, Channels, Celery, Lan
 
 ---
 This v1.0 is shippable. For v1.1, prioritize: server-side rehydration of pending interactions, schema validation + enum UI, and optional native interrupts for deterministic resumes.
+
+
+
+Process
+- An Agent is working and call the ask_user tool
+- nova/tools/ask_user.py ==> ask_user is called
+  - upsert an Interaction(PENDING),
+  - mark the Task AWAITING_INPUT,
+  - emit a WS 'user_prompt',
+  - raise AskUserPause to stop the current run.
+- nova/llm/exceptions.py ==> AskUserPause is called
+  - raise an Exception which stop the ReAct Agent
+- nova/tasks.py
+  - the exception is catched in the "execute" function of TaskExecutor
+  - it call _handle_pause which set the task to AWAITING_INPUT
+
