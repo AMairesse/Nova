@@ -24,6 +24,7 @@ Nova
 |  ├─ models/                           # Django models
 |  |  ├─ Message.py                     # Actor, Message, MessageType objects' model
 |  |  ├─ models.py                      #
+|  |  ├─ Provider.py                    # ProviderType and LLMProvider objects' model
 |  |  └─ Thread.py                      # Thread object's model
 |  |  └─ Tool.py                        # Tool and ToolCredential objects' model
 |  ├─ static/                           # JS helpers (streaming, tool modal manager…)
