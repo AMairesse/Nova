@@ -81,7 +81,7 @@
               </div>
               <div class="compact-details mt-2 d-none">
                 <div class="border-start border-secondary ps-2">
-                  <small class="text-muted">${messageData.internal_data.summary || ''}</small>
+                  <small class="text-muted streaming-content">${messageData.internal_data.summary || ''}</small>
                 </div>
               </div>
             </div>
@@ -158,6 +158,7 @@
     onStreamChunk(taskId, chunk) {
       const stream = this.activeStreams.get(taskId);
       if (!stream) {
+        // Note: for system action (eg. "compact"), there is no activeStream
         return;
       }
 
@@ -168,7 +169,6 @@
       }
 
       // Create the message element if it doesn't exist
-      // Warning :for system action (eg. "compact"), there is no element for streaming
       var messageElement = stream.element
       if (!messageElement) {
         messageElement = this.createMessageElement(taskId);
