@@ -436,6 +436,19 @@
           const btn = e.target.closest('.compact-thread-btn');
           const threadId = btn.dataset.threadId;
           this.compactThread(threadId, btn);
+        } else if (e.target.matches(".interaction-answer-btn") || e.target.closest(".interaction-answer-btn")) {
+          e.preventDefault();
+          const btn = e.target.closest(".interaction-answer-btn");
+          const interactionId = btn.dataset.interactionId;
+          // Get the answer from the textarea
+          const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
+          const payload = textarea.value;
+          this.answerInteraction(interactionId, payload);
+        } else if (e.target.matches(".interaction-cancel-btn") || e.target.closest(".interaction-cancel-btn")) {
+          e.preventDefault();
+          const btn = e.target.closest(".interaction-cancel-btn");
+          const interactionId = btn.dataset.interactionId;
+          this.cancelInteraction(interactionId);
         }
       });
 
@@ -513,6 +526,46 @@
         if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
       } catch (error) {
         console.error('Error compacting thread:', error);
+        clickedBtn.disabled = false;
+        clickedBtn.innerHTML = originalHtml;
+      }
+    }
+
+    async answerInteraction(interactionId, payload) {
+      const clickedBtn = document.querySelector(`.interaction-answer-btn[data-interaction-id="${interactionId}"]`);
+      if (!clickedBtn || clickedBtn.disabled) return;
+      const originalHtml = clickedBtn.innerHTML;
+      clickedBtn.disabled = true;
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionAnswer.replace('0', interactionId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || {})
+        });
+        if (!response.ok) throw new Error('Server error');
+        const data = await response.json();
+        if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
+      } catch (error) {
+        console.error('Error answering interaction:', error);
+        clickedBtn.disabled = false;
+        clickedBtn.innerHTML = originalHtml;
+      }
+    }
+
+    async cancelInteraction(interactionId) {
+      const clickedBtn = document.querySelector(`.interaction-cancel-btn[data-interaction-id="${interactionId}"]`);
+      if (!clickedBtn || clickedBtn.disabled) return;
+      const originalHtml = clickedBtn.innerHTML;
+      clickedBtn.disabled = true;
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionCancel.replace('0', interactionId), { method: 'POST' });
+        if (!response.ok) throw new Error('Server error');
+        const data = await response.json();
+        if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
+      } catch (error) {
+        console.error('Error canceling interaction:', error);
         clickedBtn.disabled = false;
         clickedBtn.innerHTML = originalHtml;
       }
@@ -671,6 +724,7 @@
     }
 
     // Handle server-rendered interaction cards
+    //TODO : delete ?
     bindInteractionCards() {
       // Check if URLs are available
       if (!window.NovaApp.urls || !window.NovaApp.urls.interactionAnswer || !window.NovaApp.urls.interactionCancel) {
@@ -868,7 +922,6 @@
     const wrapper = document.createElement('div');
     wrapper.className = 'message mb-3';
     wrapper.id = `interaction-card-${interaction_id}`;
-    wrapper.setAttribute('data-interaction-id', String(interaction_id));
 
     const origin = origin_name ? `${escapeHtml(origin_name)} ${gettext('asks')}:` : gettext('Question');
     const schemaHint = (schema && Object.keys(schema).length > 0)
@@ -884,14 +937,14 @@
           </div>
           <div class="mb-2">${escapeHtml(question)}</div>
           <div class="mb-2">
-            <textarea class="form-control interaction-answer-input" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
+            <textarea class="form-control" id="interaction-answer-input-${interaction_id}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
             ${schemaHint}
           </div>
           <div class="d-flex gap-2">
-            <button type="button" class="btn btn-sm btn-primary interaction-answer-btn">
+            <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="${interaction_id}">
               <i class="bi bi-check2-circle me-1"></i>${gettext('Answer')}
             </button>
-            <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn">
+            <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="${interaction_id}">
               <i class="bi bi-x-circle me-1"></i>${gettext('Cancel')}
             </button>
             <div class="ms-auto small text-muted interaction-status"></div>

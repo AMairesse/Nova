@@ -15,7 +15,6 @@ Nova
 |  |  └─ views.py                       # Django REST views
 |  ├─ llm/                              # LLM integration
 |  |  ├─ checkpoints.py                 # LLM's checkpoints management functions
-|  |  ├─ exceptions.py                  # LLM exceptions
 |  |  ├─ llm_agent.py                   # Base model for an LLM agent
 |  |  └─ llm_tools.py                   # Tools management functions for the LLM agent
 |  ├─ mcp/                              # Thin wrapper around FastMCP
@@ -89,14 +88,16 @@ Nova
 
 ### An agent asks the user for input
 
-- An Agent is working and call the ask_user tool
+- nova/tasks/tasks.py ==> run_ai_task_celery is called
+  - The task object is found and an AgentTaskExecutor is created
+  - The "execute" function is called (inherited from TaskExecutor)
+  - The Agent is working and call the ask_user tool
 - nova/tools/ask_user.py ==> ask_user is called
   - upsert an Interaction(PENDING),
-  - mark the Task AWAITING_INPUT,
+  - mark the Task AWAITING_INPUT,                       ==> could be deleted because it is done in _handle_pause
   - emit a WS 'user_prompt',
-  - raise AskUserPause to stop the current run.
-- nova/llm/exceptions.py ==> AskUserPause is called
-  - raise an Exception which stop the ReAct Agent
-- nova/tasks.py
-  - the exception is catched in the "execute" function of TaskExecutor
-  - it call _handle_pause which set the task to AWAITING_INPUT
+  - create an interruption flow
+  - resume from here when the user sends an answer
+- nova/tasks/tasks.py
+  - the interrupt will stop the ReAct flow
+  - the "result" of the _run_agent() call will contain an "__interrupt__" key

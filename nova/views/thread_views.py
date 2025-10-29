@@ -131,7 +131,7 @@ def message_list(request):
             pending_interactions = Interaction.objects.filter(
                 thread=selected_thread,
                 status=InteractionStatus.PENDING
-            ).select_related('task', 'agent')
+            ).select_related('task', 'agent_config')
 
             # Add pending interactions to context
             context = {

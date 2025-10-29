@@ -4,9 +4,12 @@ import logging
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from enum import Enum
+from typing import Dict, Any
+from langgraph.types import Command
 
-from nova.llm.exceptions import AskUserPause
 from nova.llm.llm_agent import LLMAgent
+from nova.models.Interaction import Interaction, InteractionStatus
+from nova.models.Message import MessageType, Actor
 from nova.models.Task import TaskStatus
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
@@ -53,12 +56,45 @@ class TaskExecutor:
             await self._create_llm_agent()
             self.prompt = await self._create_prompt()
             result = await self._run_agent()
-            await self._process_result(result)
-            await self._finalize_task()
-        except AskUserPause as pause:
-            # Do not mark as failed; state has been set to AWAITING_INPUT by the tool.
-            # We simply stop here; UI has received 'user_prompt'.
-            await self._handle_pause(pause)
+            if isinstance(result, dict) and result['__interrupt__']:
+                await self._process_interuption(result)
+            else:
+                await self._process_result(result)
+                await self._finalize_task()
+        except Exception as e:
+            await self._handle_execution_error(e)
+        finally:
+            await self._cleanup()
+
+    async def resume(self, interruption_response):
+        """Resume from an interruption"""
+        try:
+            await self._initialize_task()
+            await self._create_llm_agent()
+
+            # Mark task as RUNNING and append a progress log entry
+            self.task.progress_logs.append({
+                "step": "Resuming after user input",
+                "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+                "severity": "info"
+            })
+            await sync_to_async(self.task.save, thread_sensitive=False)()
+
+            # Emit an update
+            await self.handler.publish_update('task_update', {
+                'type': 'progress_update',
+                'progress_log': "Resuming after user input"
+            })
+
+            # Run the agent
+            result = await self.llm.aresume(Command(resume=interruption_response))
+
+            # Process the result
+            if isinstance(result, dict) and result['__interrupt__']:
+                await self._process_interuption(result)
+            else:
+                await self._process_result(result)
+                await self._finalize_task()
         except Exception as e:
             await self._handle_execution_error(e)
         finally:
@@ -95,17 +131,65 @@ class TaskExecutor:
     async def _create_prompt(self):
         return self.prompt
 
-    async def _handle_pause(self, pause: AskUserPause):
-        """
-        Handle a controlled pause requested by ask_user tool.
-        The tool already set the Task to AWAITING_INPUT and emitted WS events.
-        """
-        # Ensure status is AWAITING_INPUT (idempotent)
-        if self.task.status != TaskStatus.AWAITING_INPUT:
-            self.task.status = TaskStatus.AWAITING_INPUT
-            await sync_to_async(self.task.save, thread_sensitive=False)()
-        # Do not send 'task_complete' or 'task_error' here.
-        # Execution will resume via resume_ai_task_celery.
+    async def _create_interaction(self, question: str, schema: Dict[str, Any], agent_name: str):
+        """Create the pending Interaction for this task."""
+        # Create an Interaction object
+        interaction = Interaction(
+            task=self.task,
+            thread=self.thread,
+            agent_config=self.agent_config,
+            origin_name=agent_name,
+            question=question,
+            schema=schema,
+            status=InteractionStatus.PENDING,
+        )
+        await sync_to_async(interaction.full_clean, thread_sensitive=False)()
+        await sync_to_async(interaction.save, thread_sensitive=False)()
+
+        # Create a message for the interaction question
+        question_text = f"**{agent_name} asks:** {question}"
+        message = await sync_to_async(
+            self.thread.add_message,
+            thread_sensitive=False
+        )(question_text, Actor.SYSTEM, MessageType.INTERACTION_QUESTION, interaction)
+
+        # Store the message in the interaction for reference
+        interaction.question_message = message
+        await sync_to_async(interaction.save, thread_sensitive=False)()
+
+    async def _process_interuption(self, result):
+        '''
+        This will:
+            - upsert an Interaction(PENDING),
+            - mark the Task AWAITING_INPUT,
+            - emit a WS 'user_prompt',
+        '''
+        # Get interruption's data
+        interruption = result['__interrupt__'][0].value
+        if not interruption['action'] == 'ask_user':
+            raise Exception(f"Unsupported interruption action: {interruption['action']}")
+        question = interruption['question']
+        schema = interruption['schema']
+        agent_name = interruption['agent_name']
+
+        # Create/Update Interaction
+        await self._create_interaction(question, schema, agent_name)
+
+        # Mark task awaiting input
+        self.task.progress_logs.append({
+            "step": f"Waiting for user input: {question[:120]}",
+            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+            "severity": "info",
+        })
+        self.task.status = TaskStatus.AWAITING_INPUT
+        await sync_to_async(self.task.save, thread_sensitive=False)()
+
+        # Emit an update
+        await self.handler.publish_update('task_update', {
+            'result': self.task.result,
+            'thread_id': self.thread.id,
+            'thread_subject': self.thread.subject
+        })
 
     async def _run_agent(self):
         """Execute the LLM agent and return result."""

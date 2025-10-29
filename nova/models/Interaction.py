@@ -27,12 +27,9 @@ class Interaction(models.Model):
         related_name='interactions',
         verbose_name=_("Thread")
     )
-    # Optional: the agent (or sub-agent) that asked the question
-    agent = models.ForeignKey(
+    agent_config = models.ForeignKey(
         'AgentConfig',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE,
         related_name='interactions',
         verbose_name=_("AgentConfig")
     )
@@ -75,8 +72,7 @@ class Interaction(models.Model):
         verbose_name_plural = _("Interactions")
 
     def __str__(self):
-        origin = self.origin_name or (self.agent.name if self.agent else "Agent")
-        return f"Interaction[{self.id}] {origin}: {self.question[:40]}..."
+        return f"Interaction[{self.id}] {self.origin_name}: {self.question[:40]}..."
 
     def clean(self):
         super().clean()

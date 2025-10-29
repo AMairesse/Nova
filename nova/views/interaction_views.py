@@ -11,6 +11,7 @@ from channels.layers import get_channel_layer
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Task import TaskStatus
 from nova.models.Thread import Thread
+from nova.tasks.tasks import resume_ai_task_celery
 
 
 @csrf_protect
@@ -36,10 +37,7 @@ def answer_interaction(request, interaction_id: int):
             payload = json.loads(request.body.decode('utf-8') or "{}")
         except json.JSONDecodeError:
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
-        answer = payload.get('answer', None)
-    else:
-        # Accept form-encoded
-        answer = request.POST.get('answer', None)
+        answer = payload
 
     if answer is None:
         return JsonResponse({'error': 'Missing "answer"'}, status=400)
@@ -81,7 +79,6 @@ def answer_interaction(request, interaction_id: int):
     )
 
     # Enqueue resume
-    from nova.tasks.tasks import resume_ai_task_celery
     resume_ai_task_celery.delay(interaction.id)
 
     return JsonResponse({'status': 'queued', 'task_id': task.id})

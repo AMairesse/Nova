@@ -379,6 +379,11 @@ class LLMAgent:
                 config=config
             )
 
+            # If the result contains an interruption then stop processing and
+            # return the interruption
+            if '__interrupt__' in result:
+                return result
+
             messages = result.get('messages', [])
             last_message = messages[-1]
 
@@ -432,3 +437,25 @@ class LLMAgent:
                 # Agent has finished, extract final answer
                 final_msg = extract_final_answer(result)
                 return final_msg
+
+    async def aresume(self, command, silent_mode=False):
+        config = self.silent_config if silent_mode else self.config
+
+        # Set the recursion limit
+        if self.recursion_limit is not None:
+            config.update({"recursion_limit": self.recursion_limit})
+
+        while True:
+            result = await self.langchain_agent.ainvoke(
+                command,
+                config=config
+            )
+
+            # If the result contains an interruption then stop processing and
+            # return the interruption
+            if '__interrupt__' in result:
+                return result
+
+            # Agent has finished, extract final answer
+            final_msg = extract_final_answer(result)
+            return final_msg

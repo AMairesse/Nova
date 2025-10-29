@@ -5,7 +5,6 @@ import logging
 import functools
 from asgiref.sync import sync_to_async
 from celery import shared_task
-from channels.layers import get_channel_layer
 
 from django.contrib.auth.models import User
 from langchain_core.messages import BaseMessage
@@ -13,7 +12,7 @@ from langchain_core.messages import BaseMessage
 from nova.llm.checkpoints import get_checkpointer
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
-from nova.models.Interaction import Interaction, InteractionStatus
+from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
@@ -396,55 +395,21 @@ def resume_ai_task_celery(self, interaction_pk: int):
     Uses the same thread/checkpoint, streams via the same WS group (task_id).
     """
     try:
-        interaction = Interaction.objects.select_related('task', 'thread', 'agent').get(pk=interaction_pk)
+        interaction = Interaction.objects.select_related('task', 'thread', 'agent_config').get(pk=interaction_pk)
         task = interaction.task
         thread = interaction.thread
         user = task.user
-        agent_config = interaction.agent  # set by ask_user tool; required
+        agent_config = interaction.agent_config
 
-        if interaction.status != InteractionStatus.ANSWERED:
-            # Nothing to do yet
-            return
-
-        if agent_config is None:
-            raise ValueError("Missing agent configuration on Interaction; cannot resume.")
-
-        # Mark task as RUNNING and append a progress log entry
-        if not task.progress_logs:
-            task.progress_logs = []
-        task.progress_logs.append({
-            "step": "Resuming after user input",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        })
-        task.status = TaskStatus.RUNNING
-        task.save(update_fields=['status', 'progress_logs'])
-
-        # Notify UI that we are resuming (helps re-enable input proactively)
-        channel_layer = get_channel_layer()
-
-        async def notify():
-            await channel_layer.group_send(
-                f"task_{task.id}",
-                {'type': 'task_update', 'message': {
-                    'type': 'interaction_update',
-                    'interaction_id': interaction.id,
-                    'status': 'RESUMING'
-                }}
-            )
-            await channel_layer.group_send(
-                f"task_{task.id}",
-                {'type': 'task_update', 'message': {
-                    'type': 'progress_update',
-                    'progress_log': "Resuming after user input"
-                }}
-            )
-
-        asyncio.run(notify())
+        # Build the interruption_response
+        interruption_response = {
+            'action': "user_response",
+            'user_response': interaction.answer
+        }
 
         # Run the resume executor
-        executor = ResumeTaskExecutor(task, user, thread, agent_config, interaction)
-        asyncio.run(executor.execute())
+        executor = AgentTaskExecutor(task, user, thread, agent_config, interaction)
+        asyncio.run(executor.resume(interruption_response))
 
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")

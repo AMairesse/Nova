@@ -5,11 +5,6 @@
   // Configure URLs for the JavaScript modules (for AJAX-loaded content)
   window.NovaApp = window.NovaApp || {};
   window.NovaApp.urls = window.NovaApp.urls || {};
-  // Merge with existing URLs if they exist
-  Object.assign(window.NovaApp.urls, {
-    interactionAnswer: "{% url 'interaction_answer' 0 %}",
-    interactionCancel: "{% url 'interaction_cancel' 0 %}",
-  });
 </script>
 
 <div class="d-flex flex-column h-100">
@@ -132,7 +127,7 @@
 
       <!-- Render pending interactions as interactive cards -->
       {% for interaction in pending_interactions %}
-      <div id="interaction-card-{{ interaction.id }}" class="message mb-3" data-interaction-id="{{ interaction.id }}">
+      <div id="interaction-card-{{ interaction.id }}" class="message mb-3">
         <div class="card border-warning">
           <div class="card-body">
             <div class="d-flex align-items-center mb-2">
@@ -147,16 +142,16 @@
             </div>
             <div class="mb-2">{{ interaction.question }}</div>
             <div class="mb-2">
-              <textarea class="form-control interaction-answer-input" rows="2" placeholder="{% trans 'Type your answer...' %}"></textarea>
+              <textarea class="form-control" id="interaction-answer-input-{{ interaction.id }}" rows="2" placeholder="{% trans 'Type your answer...' %}"></textarea>
               {% if interaction.schema %}
                 <div class="form-text text-muted mt-1">{% trans 'Answer format may be structured; plain text is also accepted.' %}</div>
               {% endif %}
             </div>
             <div class="d-flex gap-2">
-              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn">
+              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="{{ interaction.id }}">
                 <i class="bi bi-check2-circle me-1"></i>{% trans 'Answer' %}
               </button>
-              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn">
+              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="{{ interaction.id }}">
                 <i class="bi bi-x-circle me-1"></i>{% trans 'Cancel' %}
               </button>
               <div class="ms-auto small text-muted interaction-status"></div>
