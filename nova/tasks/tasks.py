@@ -325,7 +325,9 @@ def resume_ai_task_celery(self, interaction_pk: int):
         # Build the interruption_response
         interruption_response = {
             'action': "user_response",
-            'user_response': interaction.answer
+            'user_response': interaction.answer,
+            'interaction_id': interaction.id,
+            'interaction_status': interaction.status,
         }
 
         # Run the resume executor

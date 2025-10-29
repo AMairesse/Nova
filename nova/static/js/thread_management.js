@@ -543,7 +543,7 @@
         const data = await response.json();
         if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
         // Re-enable main input
-        this.setInputAreaDisabled(false);
+        this.streamingManager.setInputAreaDisabled(false);
       } catch (error) {
         console.error('Error answering interaction:', error);
         clickedBtn.disabled = false;
@@ -563,7 +563,7 @@
         const data = await response.json();
         if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
         // Re-enable main input
-        this.setInputAreaDisabled(false);
+        this.streamingManager.setInputAreaDisabled(false);
       } catch (error) {
         console.error('Error canceling interaction:', error);
         clickedBtn.disabled = false;
@@ -584,6 +584,7 @@
       }
 
       try {
+        // Send the message to the server
         const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
           method: 'POST',
           body: new FormData(form)
@@ -597,7 +598,7 @@
         if (threadIdInput) threadIdInput.value = data.thread_id;
         this.currentThreadId = data.thread_id;
 
-        // Add user message dynamically
+        // Add user message dynamically on the page
         const userMessageEl = MessageRenderer.createMessageElement(data.message, '');
         this.appendMessage(userMessageEl);
 
@@ -739,14 +740,6 @@
 
   // Register background task (non-streaming operations like compact, delete)
   StreamingManager.prototype.registerBackgroundTask = function(taskId) {
-    // Don't add visual message element, just track the task and show progress
-    this.activeStreams.set(taskId, {
-      taskId: taskId,
-      isBackground: true,
-      lastUpdate: Date.now(),
-      status: 'running'
-    });
-
     // Show progress area for background tasks
     const progressDiv = document.getElementById('task-progress');
     if (progressDiv) {
@@ -864,23 +857,11 @@
     this.setInputAreaDisabled(true);
     // Track awaiting state for guard on next chunks
     this.awaitingUserAnswer = true;
-
-    // Bind actions
-    //const answerBtn = wrapper.querySelector('.interaction-answer-btn');
-    //const cancelBtn = wrapper.querySelector('.interaction-cancel-btn');
-    //const inputEl   = wrapper.querySelector('.interaction-answer-input');
-    //const statusEl  = wrapper.querySelector('.interaction-status');
-
-    //const setBusy = (busy) => {
-    //  if (answerBtn) answerBtn.disabled = busy;
-    //  if (cancelBtn) cancelBtn.disabled = busy;
-    //  if (inputEl) inputEl.disabled = busy;
-    //};
   };
 
   // Reflect backend updates to the interaction card
   StreamingManager.prototype.onInteractionUpdate = function(taskId, data) {
-    const { interaction_id, status } = data;
+    const { interaction_id, interaction_status } = data;
     const card = document.getElementById(`interaction-card-${interaction_id}`);
     if (!card) return;
 
@@ -895,23 +876,19 @@
       if (inputEl) inputEl.disabled = disabled;
     };
 
-    if (status === 'ANSWERED') {
+    if (interaction_status === 'ANSWERED') {
       if (statusEl) statusEl.textContent = gettext('Answer received. Resuming...');
-      disableAll(true);
-      // Keep main input disabled until we actually resume or complete
-    } else if (status === 'RESUMING') {
-      if (statusEl) statusEl.textContent = gettext('Resuming...');
-      disableAll(true);
-      // Re-enable main input as we resume agent streaming
-      this.setInputAreaDisabled(false);
-      this.awaitingUserAnswer = false; // NEW
-      // Optionally collapse the prompt card...
-    } else if (status === 'CANCELED') {
+    } else if (interaction_status === 'CANCELED') {
       if (statusEl) statusEl.textContent = gettext('Canceled.');
-      disableAll(true);
-      this.setInputAreaDisabled(false);
-      this.awaitingUserAnswer = false; // NEW
     }
+    disableAll(true);
+    this.setInputAreaDisabled(false);
+    this.awaitingUserAnswer = false;
+
+    // Hide card after 2 seconds
+    setTimeout(() => {
+      card.classList.add('d-none');
+    }, 2000);
   };
 
 

@@ -33,11 +33,13 @@ class TaskProgressHandler(AsyncCallbackHandler):
         await self.publish_update('user_prompt', {'interaction_id': interaction_id, 'question': question,
                                                   'schema': schema, 'origin_name': agent_name})
 
-    async def on_resume_task(self):
+    async def on_resume_task(self, interruption_response):
         '''
         Send a message to the client when the task is resumed
         '''
-        await self.publish_update('progress_update', {'progress_log': "Resuming after user input"})
+        await self.publish_update('interaction_update',
+                                  {'interaction_id': interruption_response['interaction_id'],
+                                   'interaction_status': interruption_response['interaction_status']})
 
     async def on_task_complete(self, result, thread_id, thread_subject):
         '''

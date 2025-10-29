@@ -57,7 +57,7 @@ class TaskExecutor:
 
             if interruption_response:
                 # Emit an update
-                await self.handler.on_resume_task()
+                await self.handler.on_resume_task(interruption_response)
                 result = await self.llm.aresume(Command(resume=interruption_response))
             else:
                 self.prompt = await self._create_prompt()
