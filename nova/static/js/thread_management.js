@@ -1,12 +1,12 @@
 /* nova/static/js/thread_management.js - Modern chat architecture */
-(function() {
+(function () {
   'use strict';
 
   // Configuration object for URLs (will be populated from template)
   window.NovaApp = window.NovaApp || {};
 
   // ============================================================================
-  // MESSAGE RENDERER - Unified conversion for consistency
+  // MESSAGE RENDERER
   // ============================================================================
   class MessageRenderer {
     static createMessageElement(messageData, thread_id) {
@@ -116,22 +116,27 @@
       this.messageManager = manager;
     }
 
-    registerStream(taskId, messageData, thread_id) {
+    createMessageElement(task_id) {
+      // Create agent message element with a streaming class
       const agentMessageEl = MessageRenderer.createMessageElement({
-        ...messageData,
+        id: task_id,
         actor: 'agent',
-        text: '' // Start with empty content
-      }, thread_id);
-
-      // Add streaming class to the message container for proper CSS targeting
+        text: ''
+      }, this.messageManager.currentThreadId);
       agentMessageEl.classList.add('streaming');
 
+      // Add to message manager
       this.messageManager.appendMessage(agentMessageEl);
 
+      return agentMessageEl;
+    }
+
+    registerStream(taskId, messageData) {
       this.activeStreams.set(taskId, {
         messageId: messageData.id,
-        element: agentMessageEl,
+        element: '',
         currentText: '',
+        status: 'streaming',
         lastUpdate: Date.now()
       });
 
@@ -151,14 +156,10 @@
     }
 
     onStreamChunk(taskId, chunk) {
-      // Guard: if a chunk arrives after a user prompt, ensure the input is re-enabled
-      if (this.awaitingUserAnswer) {
-        this.setInputAreaDisabled(false);
-        this.awaitingUserAnswer = false;
-      }
-      
       const stream = this.activeStreams.get(taskId);
-      if (!stream) return;
+      if (!stream) {
+        return;
+      }
 
       // Skip duplicate chunks (server sometimes sends the same content multiple times)
       // Also skip empty chunks
@@ -166,17 +167,18 @@
         return;
       }
 
+      // Create the message element if it doesn't exist
       // Warning :for system action (eg. "compact"), there is no element for streaming
-      if (!stream.element) {
-        return
+      var messageElement = stream.element
+      if (!messageElement) {
+        messageElement = this.createMessageElement(taskId);
+        stream.element = messageElement;
       }
+      const contentEl = messageElement.querySelector('.streaming-content')
 
       // The server is already sending HTML chunks, so we don't need to process them as Markdown
       // Replace the entire content since server sends complete paragraph updates
-      const contentEl = stream.element.querySelector('.streaming-content');
-      if (contentEl) {
-        contentEl.innerHTML = chunk;
-      }
+      contentEl.innerHTML = chunk;
 
       // Still accumulate text for state management
       stream.currentText += chunk;
@@ -233,7 +235,6 @@
           try {
             // Retry after cleanup
             localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
-            console.log('Successfully saved stream state after cleanup');
           } catch (retryError) {
             console.error('Failed to save stream state even after cleanup:', retryError);
             // Continue execution - streaming will still work, just won't resume on page reload
@@ -282,10 +283,6 @@
       }
 
       keysToRemove.forEach(key => localStorage.removeItem(key));
-
-      if (keysToRemove.length > 0) {
-        console.log(`Cleaned up ${keysToRemove.length} old stream entries from localStorage`);
-      }
     }
 
     startWebSocket(taskId) {
@@ -541,7 +538,6 @@
         });
         if (!response.ok) throw new Error('Server error');
         const data = await response.json();
-        if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
         // Re-enable main input
         this.streamingManager.setInputAreaDisabled(false);
       } catch (error) {
@@ -561,7 +557,6 @@
         const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionCancel.replace('0', interactionId), { method: 'POST' });
         if (!response.ok) throw new Error('Server error');
         const data = await response.json();
-        if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
         // Re-enable main input
         this.streamingManager.setInputAreaDisabled(false);
       } catch (error) {
@@ -610,7 +605,7 @@
           id: data.task_id,
           actor: 'agent',
           text: ''
-        }, data.thread_id);
+        });
 
         // Clear textarea
         if (textarea) textarea.value = '';
@@ -739,7 +734,7 @@
   // ============================================================================
 
   // Register background task (non-streaming operations like compact, delete)
-  StreamingManager.prototype.registerBackgroundTask = function(taskId) {
+  StreamingManager.prototype.registerBackgroundTask = function (taskId) {
     // Show progress area for background tasks
     const progressDiv = document.getElementById('task-progress');
     if (progressDiv) {
@@ -760,7 +755,7 @@
   };
 
   // Handle real-time message updates like system messages
-  StreamingManager.prototype.onNewMessage = function(messageData, thread_id) {
+  StreamingManager.prototype.onNewMessage = function (messageData, thread_id) {
     // Create message element for the new message
     const messageElement = MessageRenderer.createMessageElement(messageData, thread_id);
 
@@ -794,9 +789,9 @@
   }
 
   // Disable/enable the main input area while waiting for an interaction
-  StreamingManager.prototype.setInputAreaDisabled = function(disabled) {
+  StreamingManager.prototype.setInputAreaDisabled = function (disabled) {
     const textarea = document.querySelector('#message-container textarea[name="new_message"]');
-    const sendBtn  = document.getElementById('send-btn');
+    const sendBtn = document.getElementById('send-btn');
     if (textarea) {
       textarea.disabled = disabled;
       textarea.placeholder = disabled ? gettext('Waiting for your answer...') : gettext('Type your message...');
@@ -807,7 +802,7 @@
   };
 
   // Render and handle a user prompt card
-  StreamingManager.prototype.onUserPrompt = function(taskId, data) {
+  StreamingManager.prototype.onUserPrompt = function (taskId, data) {
     // Expected payload: { interaction_id, question, schema, origin_name, thread_id }
     const {
       interaction_id,
@@ -860,7 +855,7 @@
   };
 
   // Reflect backend updates to the interaction card
-  StreamingManager.prototype.onInteractionUpdate = function(taskId, data) {
+  StreamingManager.prototype.onInteractionUpdate = function (taskId, data) {
     const { interaction_id, interaction_status } = data;
     const card = document.getElementById(`interaction-card-${interaction_id}`);
     if (!card) return;
@@ -979,15 +974,15 @@
     const incomingGroups = tmp.querySelectorAll('.thread-group');
     incomingGroups.forEach(incoming => {
       const group = incoming.dataset.group || 'older';
-      
+
       // First, try to find existing group in the container
       let targetGroup = containerEl.querySelector(`.thread-group[data-group="${group}"]`);
-      
+
       // If group doesn't exist, create it using ensureGroupContainer
       if (!targetGroup) {
         targetGroup = ensureGroupContainer(group, containerEl);
       }
-      
+
       if (!targetGroup) return;
 
       const incomingUl = incoming.querySelector('ul.list-group');
