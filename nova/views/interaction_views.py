@@ -5,8 +5,6 @@ from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_protect
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Task import TaskStatus
@@ -67,17 +65,6 @@ def answer_interaction(request, interaction_id: int):
     answer_message_text = f"**Answer:** {answer_text}"
     thread.add_message(answer_message_text, Actor.USER, MessageType.INTERACTION_ANSWER, interaction)
 
-    # Notify UI (optional early notice)
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f"task_{task.id}",
-        {'type': 'task_update', 'message': {
-            'type': 'interaction_update',
-            'interaction_id': interaction.id,
-            'status': 'ANSWERED'
-        }}
-    )
-
     # Enqueue resume
     resume_ai_task_celery.delay(interaction.id)
 
@@ -115,17 +102,6 @@ def cancel_interaction(request, interaction_id: int):
     task.status = TaskStatus.FAILED
     task.result = "Interaction canceled by user"
     task.save(update_fields=['status', 'result'])
-
-    # Notify UI via WS
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f"task_{task.id}",
-        {'type': 'task_update', 'message': {
-            'type': 'task_error',
-            'error': 'Interaction canceled by user',
-            'category': 'user_canceled'
-        }}
-    )
 
     return JsonResponse({'status': 'canceled', 'task_id': task.id})
 

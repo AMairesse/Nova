@@ -357,10 +357,8 @@
           }
           this.onStreamComplete(taskId);
         } else if (data.type === 'user_prompt') {
-          // NEW: show interactive question card
           this.onUserPrompt(taskId, data);
         } else if (data.type === 'interaction_update') {
-          // NEW: reflect backend updates (ANSWERED/RESUMING/CANCELED)
           this.onInteractionUpdate(taskId, data);
         }
       };
@@ -402,7 +400,6 @@
       this.loadInitialThread();
 
       // Handle server-rendered interaction cards and check for pending interactions
-      this.bindInteractionCards();
       this.checkPendingInteractions();
     }
 
@@ -506,7 +503,6 @@
         this.scrollToBottom();
 
         // Handle server-rendered interaction cards and check for pending interactions
-        this.bindInteractionCards();
         this.checkPendingInteractions();
       } catch (error) {
         console.error('Error loading messages:', error);
@@ -546,6 +542,8 @@
         if (!response.ok) throw new Error('Server error');
         const data = await response.json();
         if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
+        // Re-enable main input
+        this.setInputAreaDisabled(false);
       } catch (error) {
         console.error('Error answering interaction:', error);
         clickedBtn.disabled = false;
@@ -564,6 +562,8 @@
         if (!response.ok) throw new Error('Server error');
         const data = await response.json();
         if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
+        // Re-enable main input
+        this.setInputAreaDisabled(false);
       } catch (error) {
         console.error('Error canceling interaction:', error);
         clickedBtn.disabled = false;
@@ -723,92 +723,6 @@
       this.loadMessages(lastThreadId);
     }
 
-    // Handle server-rendered interaction cards
-    //TODO : delete ?
-    bindInteractionCards() {
-      // Check if URLs are available
-      if (!window.NovaApp.urls || !window.NovaApp.urls.interactionAnswer || !window.NovaApp.urls.interactionCancel) {
-        console.warn('Interaction URLs not available:', window.NovaApp.urls);
-        return;
-      }
-
-      // Bind event handlers to server-rendered interaction cards
-      document.querySelectorAll('[data-interaction-id]').forEach(card => {
-        const interactionId = card.dataset.interactionId;
-
-        // Skip if already bound
-        if (card.dataset.bound === 'true') return;
-
-        const answerBtn = card.querySelector('.interaction-answer-btn');
-        const cancelBtn = card.querySelector('.interaction-cancel-btn');
-        const inputEl = card.querySelector('.interaction-answer-input');
-        const statusEl = card.querySelector('.interaction-status');
-
-        if (answerBtn && cancelBtn && inputEl) {
-          const setBusy = (busy) => {
-            answerBtn.disabled = busy;
-            cancelBtn.disabled = busy;
-            inputEl.disabled = busy;
-          };
-
-          const postJson = async (url, payload) => {
-            return window.DOMUtils.csrfFetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload || {})
-            });
-          };
-
-          answerBtn.addEventListener('click', async () => {
-            const value = inputEl.value.trim();
-            if (!value) {
-              statusEl.textContent = gettext('Please provide an answer.');
-              return;
-            }
-            setBusy(true);
-            statusEl.textContent = gettext('Sending your answer...');
-            try {
-              const url = window.NovaApp.urls.interactionAnswer.replace('0', String(interactionId));
-              console.log('Answer URL:', url); // Debug log
-              const resp = await postJson(url, { answer: value });
-              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              statusEl.textContent = gettext('Answer sent. Resuming...');
-              // Disable the card
-              setBusy(true);
-              // Re-enable main input
-              this.streamingManager.setInputAreaDisabled(false);
-            } catch (e) {
-              console.error('Failed to send answer:', e);
-              statusEl.textContent = gettext('Failed to send the answer. Please retry.');
-              setBusy(false);
-            }
-          });
-
-          cancelBtn.addEventListener('click', async () => {
-            setBusy(true);
-            statusEl.textContent = gettext('Canceling...');
-            try {
-              const url = window.NovaApp.urls.interactionCancel.replace('0', String(interactionId));
-              console.log('Cancel URL:', url); // Debug log
-              const resp = await postJson(url, {});
-              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              statusEl.textContent = gettext('Canceled.');
-              // Disable the card and re-enable main input
-              setBusy(true);
-              this.streamingManager.setInputAreaDisabled(false);
-            } catch (e) {
-              console.error('Failed to cancel interaction:', e);
-              statusEl.textContent = gettext('Failed to cancel. Please retry.');
-              setBusy(false);
-            }
-          });
-
-          // Mark as bound
-          card.dataset.bound = 'true';
-        }
-      });
-    }
-
     // Disable main input if there are pending interactions
     checkPendingInteractions() {
       const pendingCards = document.querySelectorAll('[data-interaction-id]');
@@ -909,16 +823,7 @@
       origin_name
     } = data;
 
-    // Check if server-side card already exists
-    const existingCard = document.getElementById(`interaction-card-${interaction_id}`);
-    if (existingCard) {
-      // Server-side card exists, just ensure input is disabled and state is tracked
-      this.setInputAreaDisabled(true);
-      this.awaitingUserAnswer = true;
-      return;
-    }
-
-    // Build card element only if server-side card doesn't exist
+    // Build card element from template
     const wrapper = document.createElement('div');
     wrapper.className = 'message mb-3';
     wrapper.id = `interaction-card-${interaction_id}`;
@@ -961,63 +866,16 @@
     this.awaitingUserAnswer = true;
 
     // Bind actions
-    const answerBtn = wrapper.querySelector('.interaction-answer-btn');
-    const cancelBtn = wrapper.querySelector('.interaction-cancel-btn');
-    const inputEl   = wrapper.querySelector('.interaction-answer-input');
-    const statusEl  = wrapper.querySelector('.interaction-status');
+    //const answerBtn = wrapper.querySelector('.interaction-answer-btn');
+    //const cancelBtn = wrapper.querySelector('.interaction-cancel-btn');
+    //const inputEl   = wrapper.querySelector('.interaction-answer-input');
+    //const statusEl  = wrapper.querySelector('.interaction-status');
 
-    const setBusy = (busy) => {
-      if (answerBtn) answerBtn.disabled = busy;
-      if (cancelBtn) cancelBtn.disabled = busy;
-      if (inputEl) inputEl.disabled = busy;
-    };
-
-    const postJson = async (url, payload) => {
-      return window.DOMUtils.csrfFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {})
-      });
-    };
-
-    answerBtn?.addEventListener('click', async () => {
-      const value = inputEl?.value?.trim();
-      if (!value) {
-        statusEl.textContent = gettext('Please provide an answer.');
-        return;
-      }
-      setBusy(true);
-      statusEl.textContent = gettext('Sending your answer...');
-      try {
-        const url = window.NovaApp.urls.interactionAnswer.replace('0', String(interaction_id));
-        const resp = await postJson(url, { answer: value });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        // We optimistically mark as sent; backend will send interaction_update/RESUMING too
-        statusEl.textContent = gettext('Answer sent. Resuming...');
-        // Keep the card visible but disabled until we get an update or the task resumes streaming
-      } catch (e) {
-        console.error('Failed to send answer:', e);
-        statusEl.textContent = gettext('Failed to send the answer. Please retry.');
-        setBusy(false);
-      }
-    });
-
-    cancelBtn?.addEventListener('click', async () => {
-      setBusy(true);
-      statusEl.textContent = gettext('Canceling...');
-      try {
-        const url = window.NovaApp.urls.interactionCancel.replace('0', String(interaction_id));
-        const resp = await postJson(url, {});
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        statusEl.textContent = gettext('Canceled.');
-        // Re-enable main input on cancel
-        this.setInputAreaDisabled(false);
-      } catch (e) {
-        console.error('Failed to cancel interaction:', e);
-        statusEl.textContent = gettext('Failed to cancel. Please retry.');
-        setBusy(false);
-      }
-    });
+    //const setBusy = (busy) => {
+    //  if (answerBtn) answerBtn.disabled = busy;
+    //  if (cancelBtn) cancelBtn.disabled = busy;
+    //  if (inputEl) inputEl.disabled = busy;
+    //};
   };
 
   // Reflect backend updates to the interaction card

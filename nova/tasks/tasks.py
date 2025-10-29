@@ -2,7 +2,6 @@
 import asyncio
 import datetime as dt
 import logging
-import functools
 from asgiref.sync import sync_to_async
 from celery import shared_task
 
@@ -15,80 +14,12 @@ from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
-from nova.models.Task import Task, TaskStatus
+from nova.models.Task import Task
 from nova.models.Thread import Thread
-from nova.tasks.TaskExecutor import TaskExecutor, TaskErrorCategory
+from nova.tasks.TaskExecutor import TaskExecutor
 from nova.utils import markdown_to_html
 
 logger = logging.getLogger(__name__)
-
-
-def task_error_handler(category: TaskErrorCategory = TaskErrorCategory.SYSTEM_ERROR):
-    """
-    Decorator for handling task errors with proper logging and state management.
-    """
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            task = None
-            handler = None
-            llm = None
-
-            # Extract task from arguments
-            for arg in args:
-                if hasattr(arg, 'status'):
-                    task = arg
-                    break
-
-            try:
-                return await func(*args, **kwargs)
-            except Exception as e:
-                error_msg = f"{category.value}: {str(e)}"
-                logger.error(f"Task error in {func.__name__}: {error_msg}")
-
-                if task:
-                    await _handle_task_error(task, error_msg, category)
-
-                if handler:
-                    try:
-                        await handler.publish_update('task_error',
-                                                     {'error': error_msg, 'category': category.value})
-                    except Exception as publish_error:
-                        logger.error(f"Failed to publish error update: {publish_error}")
-
-                if llm:
-                    try:
-                        await llm.cleanup()
-                    except Exception as cleanup_error:
-                        logger.error(f"Failed to cleanup LLM: {cleanup_error}")
-
-                raise
-        return wrapper
-    return decorator
-
-
-async def _handle_task_error(task, error_msg, category):
-    """Handle task error with proper state management and logging."""
-    try:
-        task.status = TaskStatus.FAILED
-        task.result = error_msg
-
-        # Enhanced progress logging with error details
-        error_log = {
-            "step": f"Error: {error_msg}",
-            "category": category.value,
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "error"
-        }
-
-        if hasattr(task, 'progress_logs') and task.progress_logs:
-            task.progress_logs.append(error_log)
-        else:
-            task.progress_logs = [error_log]
-
-        await sync_to_async(task.save, thread_sensitive=False)()
-    except Exception as save_error:
-        logger.error(f"Failed to save task error state: {save_error}")
 
 
 class AgentTaskExecutor (TaskExecutor):
@@ -123,11 +54,7 @@ class AgentTaskExecutor (TaskExecutor):
         })
 
         # Publish context consumption
-        await self.handler.publish_update('context_consumption', {
-            'real_tokens': real_tokens,
-            'approx_tokens': approx_tokens,
-            'max_context': max_context
-        })
+        await self.handler.on_context_consumption(real_tokens, approx_tokens, max_context)
 
         # Store in message
         message.internal_data.update({
@@ -258,8 +185,7 @@ class CompactTaskExecutor (TaskExecutor):
 
     async def _create_prompt(self):
         # Emit progress update for analysis phase
-        await self.handler.publish_update('progress_update',
-                                          {'progress_log': "Analyzing conversation..."})
+        await self.handler.on_progress("Analyzing conversation...")
 
         # Retrieve context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
@@ -279,8 +205,7 @@ class CompactTaskExecutor (TaskExecutor):
         await super()._process_result(result)
 
         # Emit progress update for checkpoint update
-        await self.handler.publish_update('progress_update',
-                                          {'progress_log': "Updating context"})
+        await self.handler.on_progress("Updating context")
 
         config = self.llm.config
 
@@ -311,16 +236,12 @@ class CompactTaskExecutor (TaskExecutor):
         system_message.internal_data['summary'] = markdown_to_html(system_message.internal_data['summary'])
 
         # Broadcast the new message to all connected WebSocket clients for real-time UI updates
-        await self.handler.publish_update('new_message', {
-            'message': {
-                'id': system_message.id,
-                'text': system_message.text,
-                'actor': system_message.actor,
-                'internal_data': system_message.internal_data,
-                'created_at': system_message.created_at.isoformat() if hasattr(system_message.created_at, 'isoformat')
-                else str(system_message.created_at)
-            }
-        })
+        if hasattr(system_message.created_at, 'isoformat'):
+            created_at = system_message.created_at.isoformat()
+        else:
+            created_at = str(system_message.created_at)
+        await self.handler.on_new_message(system_message.id, system_message.text, system_message.actor,
+                                          system_message.internal_data, created_at)
 
 
 async def delete_checkpoints(ckp_id):
@@ -342,7 +263,7 @@ def compact_conversation_celery(self, task_pk, user_pk, thread_pk, agent_pk):
 
         # Call the agent
         executor = CompactTaskExecutor(task, user, thread, agent_config, "")
-        asyncio.run(executor.execute())
+        asyncio.run(executor.execute_or_resume())
 
         # Find and delete sub-agents' checkpoints
         other_agents_ckp = CheckpointLink.objects.filter(thread=thread).exclude(agent=agent_config)
@@ -380,7 +301,7 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
 
         # Use the AgentTaskExecutor for cleaner execution
         executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text)
-        asyncio.run(executor.execute())
+        asyncio.run(executor.execute_or_resume())
 
     except Exception as e:
         logger.error(f"Celery task {task_pk} failed: {e}")
@@ -409,7 +330,7 @@ def resume_ai_task_celery(self, interaction_pk: int):
 
         # Run the resume executor
         executor = AgentTaskExecutor(task, user, thread, agent_config, interaction)
-        asyncio.run(executor.resume(interruption_response))
+        asyncio.run(executor.execute_or_resume(interruption_response))
 
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")

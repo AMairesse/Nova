@@ -45,17 +45,24 @@ class TaskExecutor:
         self.thread = thread
         self.agent_config = agent_config
         self.prompt = prompt
-        self.handler = None
         self.llm = None
         self.channel_layer = get_channel_layer()
+        self.handler = TaskProgressHandler(self.task.id, self.channel_layer)
 
-    async def execute(self):
+    async def execute_or_resume(self, interruption_response=None):
         """Main execution method with comprehensive error handling."""
         try:
             await self._initialize_task()
             await self._create_llm_agent()
-            self.prompt = await self._create_prompt()
-            result = await self._run_agent()
+
+            if interruption_response:
+                # Emit an update
+                await self.handler.on_resume_task()
+                result = await self.llm.aresume(Command(resume=interruption_response))
+            else:
+                self.prompt = await self._create_prompt()
+                result = await self._run_agent()
+
             if isinstance(result, dict) and result['__interrupt__']:
                 await self._process_interuption(result)
             else:
@@ -66,59 +73,21 @@ class TaskExecutor:
         finally:
             await self._cleanup()
 
-    async def resume(self, interruption_response):
-        """Resume from an interruption"""
-        try:
-            await self._initialize_task()
-            await self._create_llm_agent()
-
-            # Mark task as RUNNING and append a progress log entry
-            self.task.progress_logs.append({
-                "step": "Resuming after user input",
-                "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-                "severity": "info"
-            })
-            await sync_to_async(self.task.save, thread_sensitive=False)()
-
-            # Emit an update
-            await self.handler.publish_update('task_update', {
-                'type': 'progress_update',
-                'progress_log': "Resuming after user input"
-            })
-
-            # Run the agent
-            result = await self.llm.aresume(Command(resume=interruption_response))
-
-            # Process the result
-            if isinstance(result, dict) and result['__interrupt__']:
-                await self._process_interuption(result)
-            else:
-                await self._process_result(result)
-                await self._finalize_task()
-        except Exception as e:
-            await self._handle_execution_error(e)
-        finally:
-            await self._cleanup()
-
-    async def _initialize_task(self):
+    async def _initialize_task(self, interruption_response=None):
         """Initialize task state and logging."""
         self.task.status = TaskStatus.RUNNING
-        self.task.progress_logs = [{
-            "step": "Initializing AI task",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        }]
+        if interruption_response:
+            step = "Resuming after user input"
+        else:
+            step = "Initializing AI task"
+        self.task.progress_logs.append({"step": step, "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+                                        "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
-
-        self.handler = TaskProgressHandler(self.task.id, self.channel_layer)
 
     async def _create_llm_agent(self):
         """Create and configure the LLM agent."""
-        self.task.progress_logs.append({
-            "step": "Creating LLM agent",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        })
+        self.task.progress_logs.append({"step": "Creating LLM agent",
+                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
         self.llm = await LLMAgent.create(
@@ -134,35 +103,30 @@ class TaskExecutor:
     async def _create_interaction(self, question: str, schema: Dict[str, Any], agent_name: str):
         """Create the pending Interaction for this task."""
         # Create an Interaction object
-        interaction = Interaction(
-            task=self.task,
-            thread=self.thread,
-            agent_config=self.agent_config,
-            origin_name=agent_name,
-            question=question,
-            schema=schema,
-            status=InteractionStatus.PENDING,
-        )
+        interaction = Interaction(task=self.task, thread=self.thread, agent_config=self.agent_config,
+                                  origin_name=agent_name, question=question, schema=schema,
+                                  status=InteractionStatus.PENDING)
         await sync_to_async(interaction.full_clean, thread_sensitive=False)()
         await sync_to_async(interaction.save, thread_sensitive=False)()
 
         # Create a message for the interaction question
         question_text = f"**{agent_name} asks:** {question}"
-        message = await sync_to_async(
-            self.thread.add_message,
-            thread_sensitive=False
-        )(question_text, Actor.SYSTEM, MessageType.INTERACTION_QUESTION, interaction)
+        message = await sync_to_async(self.thread.add_message, thread_sensitive=False)(question_text, Actor.SYSTEM,
+                                                                                       MessageType.INTERACTION_QUESTION,
+                                                                                       interaction)
 
         # Store the message in the interaction for reference
         interaction.question_message = message
         await sync_to_async(interaction.save, thread_sensitive=False)()
+
+        return interaction
 
     async def _process_interuption(self, result):
         '''
         This will:
             - upsert an Interaction(PENDING),
             - mark the Task AWAITING_INPUT,
-            - emit a WS 'user_prompt',
+            - emit an update for the frontend
         '''
         # Get interruption's data
         interruption = result['__interrupt__'][0].value
@@ -173,54 +137,34 @@ class TaskExecutor:
         agent_name = interruption['agent_name']
 
         # Create/Update Interaction
-        await self._create_interaction(question, schema, agent_name)
+        interaction = await self._create_interaction(question, schema, agent_name)
 
         # Mark task awaiting input
-        self.task.progress_logs.append({
-            "step": f"Waiting for user input: {question[:120]}",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info",
-        })
+        self.task.progress_logs.append({"step": f"Waiting for user input: {question[:120]}",
+                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         self.task.status = TaskStatus.AWAITING_INPUT
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
         # Emit an update
-        await self.handler.publish_update('task_update', {
-            'result': self.task.result,
-            'thread_id': self.thread.id,
-            'thread_subject': self.thread.subject
-        })
+        await self.handler.on_interrupt(interaction.id, question, schema, agent_name)
 
     async def _run_agent(self):
         """Execute the LLM agent and return result."""
-        self.task.progress_logs.append({
-            "step": "Running AI agent",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info"
-        })
+        self.task.progress_logs.append({"step": "Running AI agent",
+                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
-
-        await self.handler.publish_update('progress_update',
-                                          {'progress_log': "Running AI agent"})
 
         return await self.llm.ainvoke(self.prompt)
 
     async def _finalize_task(self):
         """Finalize the task as completed."""
-        self.task.progress_logs.append({
-            "step": "Task completed successfully",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "success"
-        })
-
-        await self.handler.publish_update('task_complete', {
-            'result': self.task.result,
-            'thread_id': self.thread.id,
-            'thread_subject': self.thread.subject
-        })
+        self.task.progress_logs.append({"step": "Task completed successfully",
+                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "success"})
 
         self.task.status = TaskStatus.COMPLETED
         await sync_to_async(self.task.save, thread_sensitive=False)()
+
+        await self.handler.on_task_complete(self.task.result, self.thread.id, self.thread.subject)
 
     async def _handle_execution_error(self, error):
         """Handle execution errors with proper categorization."""
@@ -234,26 +178,16 @@ class TaskExecutor:
         self.task.result = error_msg
 
         # Enhanced error logging
-        error_log = {
-            "step": f"Execution failed: {str(error)}",
-            "category": error_category.value,
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "error",
-            "error_details": {
-                "type": type(error).__name__,
-                "message": str(error)
-            }
-        }
+        error_log = {"step": f"Execution failed: {str(error)}", "category": error_category.value,
+                     "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "error",
+                     "error_details": {"type": type(error).__name__, "message": str(error)}}
         self.task.progress_logs.append(error_log)
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
         # Publish error update
         if self.handler:
             try:
-                await self.handler.publish_update('task_error', {
-                    'error': error_msg,
-                    'category': error_category.value
-                })
+                await self.handler.on_error(error_msg, error_category.value)
             except Exception as publish_error:
                 logger.error(f"Failed to publish error update: {publish_error}")
 
