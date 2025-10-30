@@ -37,7 +37,7 @@ class UserInfoModelTest(TestCase):
         user_info = UserInfo.objects.get(user=self.user)
 
         # Valid content
-        user_info.markdown_content = "# Personal\n- Name: Test"
+        user_info.markdown_content = "# global_user_preferences\n- Be concise"
         user_info.full_clean()  # Should not raise
 
         # Invalid content (no heading)

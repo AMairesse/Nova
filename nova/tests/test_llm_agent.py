@@ -86,7 +86,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
 
         lg_pre = types.ModuleType("langgraph.prebuilt")
 
-        def create_react_agent(llm, tools=None, prompt=None, checkpointer=None):
+        def create_agent(llm, tools=None, system_prompt=None, checkpointer=None):
             class DummyAgent:
                 def __init__(self):
                     # Keep last state for debugging purposes
@@ -100,7 +100,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                     return payload
             return DummyAgent()
 
-        lg_pre.create_react_agent = create_react_agent
+        lg_pre.create_agent = create_agent
 
         # Fake nova.tools.agent_tool_wrapper (used when has_agent_tools is True)
         atw_mod = types.ModuleType("nova.tools.agent_tool_wrapper")
@@ -473,8 +473,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                     with patch("nova.llm.llm_agent.load_tools", AsyncMock(return_value=[{"tool": True}])):
                         # Mock get_checkpointer to return a fake checkpointer
                         with patch("nova.llm.llm_agent.get_checkpointer", AsyncMock(return_value=MagicMock())):
-                            # Mock create_react_agent to return a fake agent
-                            with patch("nova.llm.llm_agent.create_react_agent", return_value=MagicMock()):
+                            # Mock create_agent to return a fake agent
+                            with patch("nova.llm.llm_agent.create_agent", return_value=MagicMock()):
                                 # Mock CheckpointLink.objects.get_or_create directly
                                 mock_checkpoint_link = SimpleNamespace(checkpoint_id="fake_id")
                                 with patch.object(llm_agent_mod.CheckpointLink.objects, "get_or_create",

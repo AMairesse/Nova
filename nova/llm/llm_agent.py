@@ -10,7 +10,7 @@ from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_ollama.chat_models import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
@@ -193,12 +193,12 @@ class LLMAgent:
 
         # Create the ReAct agent
         if checkpointer:
-            agent.langchain_agent = create_react_agent(llm, tools=tools,
-                                                       prompt=system_prompt,
-                                                       checkpointer=checkpointer)
+            agent.langchain_agent = create_agent(llm, tools=tools,
+                                                 system_prompt=system_prompt,
+                                                 checkpointer=checkpointer)
         else:
-            agent.langchain_agent = create_react_agent(llm, tools=tools,
-                                                       prompt=system_prompt)
+            agent.langchain_agent = create_agent(llm, tools=tools,
+                                                 system_prompt=system_prompt)
 
         agent.tools = tools
 
@@ -459,3 +459,6 @@ class LLMAgent:
             # Agent has finished, extract final answer
             final_msg = extract_final_answer(result)
             return final_msg
+
+    async def get_langgraph_state(self):
+        return await sync_to_async(self.langchain_agent.get_state, thread_sensitive=False)(self.config)

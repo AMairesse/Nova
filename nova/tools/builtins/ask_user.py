@@ -19,11 +19,26 @@ METADATA = {
 }
 
 
+async def init(agent: LLMAgent) -> None:
+    """
+    Init the question counter
+    """
+    agent._resources['ask_user_count'] = None
+
+
 async def _ask_user(agent: LLMAgent, question: str, schema: Optional[Dict[str, Any]] = None,
                     agent_name: Optional[str] = None) -> str:
     """
     Ask a blocking question to the end user.
     """
+    # The agent should only ask one question for a given turn
+    # Get the current langgraph state to find the step index
+    state = await agent.get_langgraph_state()
+    # If this step index is already stored then we have already asked a question
+    if agent._resources['ask_user_count'] == len(state):
+        return "ERROR: Cannot ask more than one question per turn. Combine your questions and try again."
+    agent._resources['ask_user_count'] = len(state)
+
     # Interrupt execution flow
     response = interrupt({
         "action": "ask_user",

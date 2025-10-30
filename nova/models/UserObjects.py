@@ -37,7 +37,7 @@ class UserInfo(models.Model):
             raise ValidationError(_("Markdown content should start with a heading (#)."))
 
         # Check that the global_user_preferences theme as not been deleted
-        if not self.markdown_content.strip().find('# global_user_preferences'):
+        if self.markdown_content.strip().find('# global_user_preferences') == -1:
             raise ValidationError(_("The 'global_user_preferences' theme cannot be deleted as it is required."))
 
         # Check size limit

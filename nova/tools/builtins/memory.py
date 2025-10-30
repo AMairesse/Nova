@@ -88,32 +88,38 @@ def _delete_theme_content(content: str, theme: str) -> str:
 
 async def get_info(theme: str, agent: LLMAgent) -> str:
     """Get information for a specific theme."""
-    user_info = await sync_to_async(_get_user_info)(agent.user)
-    content = user_info.markdown_content
+    try:
+        user_info = await sync_to_async(_get_user_info)(agent.user)
+        content = user_info.markdown_content
 
-    if not content:
-        return f"No information stored for theme '{theme}'."
+        if not content:
+            return f"No information stored for theme '{theme}'."
 
-    theme_content = _get_theme_content(content, theme)
-    if not theme_content:
-        return f"No information stored for theme '{theme}'."
+        theme_content = _get_theme_content(content, theme)
+        if not theme_content:
+            return f"No information stored for theme '{theme}'."
 
-    return theme_content
+        return theme_content
+    except Exception as e:
+        return f"Error retrieving information for theme '{theme}': {str(e)}"
 
 
 async def set_info(theme: str, content: str, agent: LLMAgent) -> str:
     """Set or update information for a specific theme."""
-    # Validate content doesn't contain malicious patterns
-    if re.search(r'<script|<iframe|<object', content, re.IGNORECASE):
-        raise ValidationError("Content contains potentially unsafe HTML tags.")
+    try:
+        # Validate content doesn't contain malicious patterns
+        if re.search(r'<script|<iframe|<object', content, re.IGNORECASE):
+            raise ValidationError("Content contains potentially unsafe HTML tags.")
 
-    user_info = await sync_to_async(_get_user_info)(agent.user)
-    current_content = user_info.markdown_content
+        user_info = await sync_to_async(_get_user_info)(agent.user)
+        current_content = user_info.markdown_content
 
-    updated_content = _set_theme_content(current_content, theme, content)
-    await sync_to_async(_update_user_info)(agent.user, updated_content)
+        updated_content = _set_theme_content(current_content, theme, content)
+        await sync_to_async(_update_user_info)(agent.user, updated_content)
 
-    return f"Information for theme '{theme}' has been updated."
+        return f"Information for theme '{theme}' has been updated."
+    except Exception as e:
+        return f"Error updating information for theme '{theme}': {str(e)}"
 
 
 async def delete_theme(theme: str, agent: LLMAgent) -> str:
@@ -121,44 +127,53 @@ async def delete_theme(theme: str, agent: LLMAgent) -> str:
     if theme == "global_user_preferences":
         return "The 'global_user_preferences' theme cannot be deleted as it is required."
 
-    user_info = await sync_to_async(_get_user_info)(agent.user)
-    current_content = user_info.markdown_content
+    try:
+        user_info = await sync_to_async(_get_user_info)(agent.user)
+        current_content = user_info.markdown_content
 
-    updated_content = _delete_theme_content(current_content, theme)
-    await sync_to_async(_update_user_info)(agent.user, updated_content)
+        updated_content = _delete_theme_content(current_content, theme)
+        await sync_to_async(_update_user_info)(agent.user, updated_content)
 
-    return f"Theme '{theme}' has been deleted."
+        return f"Theme '{theme}' has been deleted."
+    except Exception as e:
+        return f"Error deleting theme '{theme}': {str(e)}"
 
 
 async def create_theme(theme: str, agent: LLMAgent) -> str:
     """Create a new theme with empty content."""
-    user_info = await sync_to_async(_get_user_info)(agent.user)
-    current_content = user_info.markdown_content
+    try:
+        user_info = await sync_to_async(_get_user_info)(agent.user)
+        current_content = user_info.markdown_content
 
-    # Check if theme already exists
-    themes = await sync_to_async(user_info.get_themes)()
-    if theme in themes:
-        return f"Theme '{theme}' already exists."
+        # Check if theme already exists
+        themes = await sync_to_async(user_info.get_themes)()
+        if theme in themes:
+            return f"Theme '{theme}' already exists."
 
-    updated_content = _set_theme_content(current_content, theme, "")
-    await sync_to_async(_update_user_info)(agent.user, updated_content)
+        updated_content = _set_theme_content(current_content, theme, "")
+        await sync_to_async(_update_user_info)(agent.user, updated_content)
 
-    return f"Theme '{theme}' has been created."
+        return f"Theme '{theme}' has been created."
+    except Exception as e:
+        return f"Error creating theme '{theme}': {str(e)}"
 
 
 async def list_themes(agent: LLMAgent) -> str:
     """List all available themes."""
-    user_info = await sync_to_async(_get_user_info)(agent.user)
-    content = user_info.markdown_content
+    try:
+        user_info = await sync_to_async(_get_user_info)(agent.user)
+        content = user_info.markdown_content
 
-    if not content:
-        return "No themes available."
+        if not content:
+            return "No themes available."
 
-    themes = await sync_to_async(user_info.get_themes)()
-    if not themes:
-        return "No themes available."
+        themes = await sync_to_async(user_info.get_themes)()
+        if not themes:
+            return "No themes available."
 
-    return "Available themes:\n" + "\n".join(f"- {theme}" for theme in themes)
+        return "Available themes:\n" + "\n".join(f"- {theme}" for theme in themes)
+    except Exception as e:
+        return f"Error listing themes: {str(e)}"
 
 
 async def get_functions(tool, agent: LLMAgent):
