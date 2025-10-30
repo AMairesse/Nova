@@ -71,35 +71,35 @@ msgstr "Task"
 msgid "Thread"
 msgstr "Thread"
 
-#: nova/models/Interaction.py:37 nova/models/Task.py:34
+#: nova/models/Interaction.py:34 nova/models/Task.py:34
 msgid "AgentConfig"
 msgstr "AgentConfig"
 
-#: nova/models/Interaction.py:44
+#: nova/models/Interaction.py:41
 msgid "Origin (display name)"
 msgstr "Origin (display name)"
 
-#: nova/models/Interaction.py:47
+#: nova/models/Interaction.py:44
 msgid "Question to user"
 msgstr "Question to user"
 
-#: nova/models/Interaction.py:48
+#: nova/models/Interaction.py:45
 msgid "User answer"
 msgstr "User answer"
 
-#: nova/models/Interaction.py:74
+#: nova/models/Interaction.py:71
 msgid "Interaction"
 msgstr "Interaction"
 
-#: nova/models/Interaction.py:75
+#: nova/models/Interaction.py:72
 msgid "Interactions"
 msgstr "Interactions"
 
-#: nova/models/Interaction.py:85
+#: nova/models/Interaction.py:81
 msgid "Interaction thread must match task thread."
 msgstr "Interaction thread must match task thread."
 
-#: nova/models/Interaction.py:93
+#: nova/models/Interaction.py:89
 msgid "There is already a pending interaction for this task."
 msgstr "There is already a pending interaction for this task."
 
@@ -278,18 +278,24 @@ msgid "Markdown content should start with a heading (#)."
 msgstr "Markdown content should start with a heading (#)."
 
 #: nova/models/UserObjects.py:41
+msgid ""
+"The 'global_user_preferences' theme cannot be deleted as it is required."
+msgstr ""
+"The 'global_user_preferences' theme cannot be deleted as it is required."
+
+#: nova/models/UserObjects.py:45
 msgid "Content exceeds maximum size of 50,000 characters."
 msgstr "Content exceeds maximum size of 50,000 characters."
 
-#: nova/models/UserObjects.py:80
+#: nova/models/UserObjects.py:84
 msgid "Whether user has generated an API token"
 msgstr "Whether user has generated an API token"
 
-#: nova/models/UserObjects.py:97
+#: nova/models/UserObjects.py:101
 msgid "Default agent must be a normal agent."
 msgstr "Default agent must be a normal agent."
 
-#: nova/models/UserObjects.py:100
+#: nova/models/UserObjects.py:104
 msgid "Default agent must belong to the user."
 msgstr "Default agent must belong to the user."
 
@@ -342,7 +348,7 @@ msgstr "Upload files"
 msgid "Upload directory"
 msgstr "Upload directory"
 
-#: nova/templates/nova/message_container.html:67
+#: nova/templates/nova/message_container.html:66
 #, fuzzy, python-format
 #| msgid ""
 #| "\n"
@@ -369,42 +375,42 @@ msgstr[1] ""
 "                %(file_count)s files were shared with this message.\n"
 "              "
 
-#: nova/templates/nova/message_container.html:87
+#: nova/templates/nova/message_container.html:86
 msgid "Show summary details"
 msgstr "Show summary details"
 
-#: nova/templates/nova/message_container.html:110
-#: nova/templates/nova/message_container.html:112
-#: nova/templates/nova/message_container.html:114
+#: nova/templates/nova/message_container.html:109
+#: nova/templates/nova/message_container.html:111
+#: nova/templates/nova/message_container.html:113
 msgid "Context consumption"
 msgstr "Context consumption"
 
-#: nova/templates/nova/message_container.html:110
+#: nova/templates/nova/message_container.html:109
 msgid "real"
 msgstr "real"
 
-#: nova/templates/nova/message_container.html:112
-#: nova/templates/nova/message_container.html:114
+#: nova/templates/nova/message_container.html:111
+#: nova/templates/nova/message_container.html:113
 msgid "approximated"
 msgstr "approximated"
 
-#: nova/templates/nova/message_container.html:123
+#: nova/templates/nova/message_container.html:122
 msgid "Compact"
 msgstr "Compact"
 
-#: nova/templates/nova/message_container.html:150
+#: nova/templates/nova/message_container.html:149
 msgid "Type your answer..."
 msgstr "Type your answer..."
 
-#: nova/templates/nova/message_container.html:152
+#: nova/templates/nova/message_container.html:151
 msgid "Answer format may be structured; plain text is also accepted."
 msgstr "Answer format may be structured; plain text is also accepted."
 
-#: nova/templates/nova/message_container.html:157
+#: nova/templates/nova/message_container.html:156
 msgid "Answer"
 msgstr "Answer"
 
-#: nova/templates/nova/message_container.html:160
+#: nova/templates/nova/message_container.html:159
 #: user_settings/templates/user_settings/agent_confirm_delete.html:23
 #: user_settings/templates/user_settings/agent_confirm_delete.html:27
 #: user_settings/templates/user_settings/agent_form.html:28
@@ -419,31 +425,31 @@ msgstr "Answer"
 msgid "Cancel"
 msgstr "Cancel"
 
-#: nova/templates/nova/message_container.html:176
+#: nova/templates/nova/message_container.html:175
 msgid "Working..."
 msgstr "Working..."
 
-#: nova/templates/nova/message_container.html:188
+#: nova/templates/nova/message_container.html:187
 msgid "No agents configured yet."
 msgstr "No agents configured yet."
 
-#: nova/templates/nova/message_container.html:190
+#: nova/templates/nova/message_container.html:189
 msgid "Create one now"
 msgstr "Create one now"
 
-#: nova/templates/nova/message_container.html:216
+#: nova/templates/nova/message_container.html:214
 msgid "Select an agent"
 msgstr "Select an agent"
 
-#: nova/templates/nova/message_container.html:230
+#: nova/templates/nova/message_container.html:229
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:250
+#: nova/templates/nova/message_container.html:247
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/templates/nova/message_container.html:261
+#: nova/templates/nova/message_container.html:258
 msgid "Send"
 msgstr "Send"
 
@@ -505,12 +511,12 @@ msgstr "Invalid python_path: Must be under 'nova.tools.builtins.'."
 msgid "Could not import module: %s"
 msgstr "Could not import module: %s"
 
-#: nova/tools/agent_tool_wrapper.py:79
+#: nova/tools/agent_tool_wrapper.py:71
 #, python-format
 msgid "Question or instruction sent to the agent %(name)s"
 msgstr "Question or instruction sent to the agent %(name)s"
 
-#: nova/tools/ask_user.py:156
+#: nova/tools/builtins/ask_user.py:51
 msgid ""
 "Ask the end-user a clarification question and pause execution. Use when "
 "additional information is required to proceed."
