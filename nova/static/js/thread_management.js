@@ -326,7 +326,7 @@
     }
 
     attachEventHandlers() {
-      // Mapping des sélecteurs et de leurs handlers
+      // 'click' event mapping
       const eventMappings = {
         '.thread-link': (e, target) => {
           e.preventDefault();
@@ -384,13 +384,22 @@
         }
       };
 
-      // Handler générique pour les clics
+      // Generic handler for all 'click' events
       document.addEventListener('click', (e) => {
         for (const [selector, handler] of Object.entries(eventMappings)) {
           if (e.target.matches(selector) || e.target.closest(selector)) {
             handler(e, e.target.closest(selector) || e.target);
-            return; // Sortir après le premier match pour éviter les conflits
+            return;
           }
+        }
+      });
+
+      // Handle the textarea dynamic resizing
+      // Using a delegation approach because the textarea is dynamically added
+      document.addEventListener('input', (e) => {
+        if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
+          e.target.style.height = 'auto'; // Reset to auto for accurate scrollHeight
+          e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; // Adjust to content, cap at 200px max
         }
       });
 
@@ -408,13 +417,6 @@
           e.preventDefault();
           const form = document.getElementById('message-form');
           if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
-      });
-
-      document.addEventListener('input', (e) => {
-        if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
-          e.target.style.height = "38px";
-          e.target.style.height = `${e.target.scrollHeight}px`;
         }
       });
     }
@@ -564,8 +566,10 @@
         });
 
         // Clear textarea
-        if (textarea) textarea.value = '';
-
+        if (textarea) {
+          textarea.value = '';
+          textarea.dispatchEvent(new Event('input')); // Force resize to min height
+        }
       } catch (error) {
         console.error("Error sending message:", error);
       } finally {
