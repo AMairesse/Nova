@@ -7,7 +7,6 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404
 
 from nova.models.Interaction import Interaction, InteractionStatus
-from nova.models.Task import TaskStatus
 from nova.models.Thread import Thread
 from nova.tasks.tasks import resume_ai_task_celery
 
@@ -95,15 +94,14 @@ def cancel_interaction(request, interaction_id: int):
         }, status=200)
 
     # Mark interaction canceled
+    interaction.answer = "The user choose to cancel the interaction."
     interaction.status = InteractionStatus.CANCELED
-    interaction.save(update_fields=['status', 'updated_at'])
+    interaction.save(update_fields=['answer', 'status', 'updated_at'])
 
-    # Mark task failed with message
-    task.status = TaskStatus.FAILED
-    task.result = "Interaction canceled by user"
-    task.save(update_fields=['status', 'result'])
+    # Enqueue resume
+    resume_ai_task_celery.delay(interaction.id)
 
-    return JsonResponse({'status': 'canceled', 'task_id': task.id})
+    return JsonResponse({'status': 'queued', 'task_id': task.id})
 
 
 @login_required(login_url='login')
