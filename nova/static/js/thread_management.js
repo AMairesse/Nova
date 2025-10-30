@@ -1,4 +1,4 @@
-/* nova/static/js/thread_management.js - Modern chat architecture */
+/* nova/static/js/thread_management.js */
 (function () {
   'use strict';
 
@@ -28,9 +28,12 @@
         `;
       } else if (messageData.actor === 'agent') {
         // Remove "compact" button from previous message footer
-        const button_to_remove = document.querySelector('.compact-thread-btn');
-        if (button_to_remove) {
-          button_to_remove.remove();
+        const container = document.getElementById('messages-list');
+        if (container) {
+          const selector = '.compact-thread-btn';
+          const buttons = container.querySelectorAll(selector);
+          const lastBtn = buttons[buttons.length - 1];
+          if (lastBtn) lastBtn.remove();
         }
         // Agent message structure
         messageDiv.innerHTML = `
@@ -134,9 +137,7 @@
       this.activeStreams.set(taskId, {
         messageId: messageData.id,
         element: '',
-        currentText: '',
         status: 'streaming',
-        lastUpdate: Date.now()
       });
 
       // Show progress area when streaming starts (ensure it's visible)
@@ -179,10 +180,8 @@
       // Replace the entire content since server sends complete paragraph updates
       contentEl.innerHTML = chunk;
 
-      // Still accumulate text for state management
-      stream.currentText += chunk;
-      stream.lastChunk = chunk; // Track last chunk to detect duplicates
-      stream.lastUpdate = Date.now();
+      // Track last chunk to detect duplicates
+      stream.lastChunk = chunk;
     }
 
     onStreamComplete(taskId) {
@@ -240,7 +239,6 @@
 
         if (data.type === 'progress_update') {
           const progressLogs = document.getElementById('progress-logs');
-          const statusDiv = document.getElementById('task-status');
           const log = data.progress_log || "undefined";
           if (progressLogs) progressLogs.textContent = log;
         } else if (data.type === 'response_chunk') {
@@ -613,7 +611,6 @@
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;
         this.loadMessages(firstThreadId);
-        localStorage.removeItem(`runningTasks_${threadId}`);
         if (localStorage.getItem('lastThreadId') === threadId.toString()) {
           localStorage.removeItem('lastThreadId');
         }
@@ -677,15 +674,7 @@
     }
 
     // Scroll to bottom to show new message
-    const container = document.getElementById('conversation-container');
-    if (container) {
-      setTimeout(() => {
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: 'smooth'
-        });
-      }, 100);
-    }
+    this.messageManager.scrollToBottom();
   };
 
   // Simple HTML escape to avoid injecting content as HTML
@@ -770,7 +759,7 @@
     const statusEl = card.querySelector('.interaction-status');
     const answerBtn = card.querySelector('.interaction-answer-btn');
     const cancelBtn = card.querySelector('.interaction-cancel-btn');
-    const inputEl = card.querySelector('.interaction-answer-input');
+    const inputEl = card.querySelector('.interaction-answer-input-' + interaction_id);
 
     const disableAll = (disabled) => {
       if (answerBtn) answerBtn.disabled = disabled;
@@ -801,7 +790,7 @@
     // Show error message
     const progressLogs = document.getElementById('progress-logs');
     if (progressLogs) {
-      progressLogs.textContent = error;
+      progressLogs.textContent = error.message;
     }
   };
 
