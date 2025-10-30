@@ -109,7 +109,6 @@
     constructor() {
       this.activeStreams = new Map(); // taskId -> stream data
       this.messageManager = null;
-      this.awaitingUserAnswer = false; // NEW: track if UI is paused awaiting answer
     }
 
     setMessageManager(manager) {
@@ -191,8 +190,6 @@
       if (stream) {
         // Mark as completed
         stream.status = 'completed';
-        // Remove completed stream from localStorage instead of saving
-        localStorage.removeItem(`stream_${taskId}`);
 
         // Immediately hide the spinner when task completes
         const spinner = document.querySelector('#task-progress .spinner-border');
@@ -209,80 +206,6 @@
         }
       }
       this.activeStreams.delete(taskId);
-    }
-
-    saveStreamState(taskId, stream) {
-      // Limit currentText to last 50KB to prevent large individual entries
-      const maxTextLength = 50 * 1024; // 50KB
-      const currentText = stream.currentText.length > maxTextLength
-        ? stream.currentText.slice(-maxTextLength)
-        : stream.currentText;
-
-      const state = {
-        messageId: stream.messageId,
-        currentText: currentText,
-        lastUpdate: stream.lastUpdate,
-        status: stream.status || 'streaming'
-      };
-
-      try {
-        localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
-      } catch (e) {
-        if (e.name === 'QuotaExceededError') {
-          console.warn('localStorage quota exceeded, running cleanup and retrying...');
-          // Run cleanup to free up space
-          this.cleanupStreams();
-          try {
-            // Retry after cleanup
-            localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
-          } catch (retryError) {
-            console.error('Failed to save stream state even after cleanup:', retryError);
-            // Continue execution - streaming will still work, just won't resume on page reload
-          }
-        } else {
-          console.error('Error saving stream state:', e);
-        }
-      }
-    }
-
-    loadSavedStreams() {
-      const streams = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key.startsWith('stream_')) {
-          const taskId = key.replace('stream_', '');
-          try {
-            streams[taskId] = JSON.parse(localStorage.getItem(key));
-          } catch (e) {
-            console.warn('Invalid stream state:', key);
-          }
-        }
-      }
-      return streams;
-    }
-
-    cleanupStreams() {
-      const now = Date.now();
-      const twoDaysMs = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
-      const keysToRemove = [];
-
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key.startsWith('stream_')) {
-          try {
-            const state = JSON.parse(localStorage.getItem(key));
-            // Remove completed streams or streams older than 2 days
-            if (state.status === 'completed' || (state.lastUpdate && now - state.lastUpdate > twoDaysMs)) {
-              keysToRemove.push(key);
-            }
-          } catch (e) {
-            // Remove invalid entries
-            keysToRemove.push(key);
-          }
-        }
-      }
-
-      keysToRemove.forEach(key => localStorage.removeItem(key));
     }
 
     startWebSocket(taskId) {
@@ -320,9 +243,6 @@
           const statusDiv = document.getElementById('task-status');
           const log = data.progress_log || "undefined";
           if (progressLogs) progressLogs.textContent = log;
-          if (statusDiv && data.error) {
-            statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
-          }
         } else if (data.type === 'response_chunk') {
           this.onStreamChunk(taskId, data.chunk);
         } else if (data.type === 'context_consumption') {
@@ -357,6 +277,8 @@
           this.onUserPrompt(taskId, data);
         } else if (data.type === 'interaction_update') {
           this.onInteractionUpdate(taskId, data);
+        } else if (data.type === 'task_error') {
+          this.onTaskError(taskId, data);
         }
       };
 
@@ -368,15 +290,6 @@
       socket.onerror = (err) => {
         console.error('WebSocket error:', err);
       };
-    }
-
-    resumeStreams() {
-      const savedStreams = this.loadSavedStreams();
-      Object.keys(savedStreams).forEach(taskId => {
-        if (savedStreams[taskId].status !== 'completed') {
-          this.startWebSocket(taskId);
-        }
-      });
     }
   }
 
@@ -391,8 +304,7 @@
     }
 
     init() {
-      // Clean up old localStorage entries on startup
-      this.streamingManager.cleanupStreams();
+      // Attach event handlers
       this.attachEventHandlers();
       this.loadInitialThread();
 
@@ -488,8 +400,6 @@
         document.querySelectorAll('.thread-link').forEach(a => a.classList.remove('active'));
         const active = document.querySelector(`.thread-link[data-thread-id="${this.currentThreadId}"]`);
         if (active) active.classList.add('active');
-
-        this.streamingManager.resumeStreams();
 
         if (threadId) {
           localStorage.setItem('lastThreadId', threadId);
@@ -724,7 +634,6 @@
       const pendingCards = document.querySelectorAll('[data-interaction-id]');
       if (pendingCards.length > 0) {
         this.streamingManager.setInputAreaDisabled(true);
-        this.streamingManager.awaitingUserAnswer = true;
       }
     }
   }
@@ -850,8 +759,6 @@
     this.messageManager.appendMessage(wrapper);
     // Disable main input while awaiting user answer
     this.setInputAreaDisabled(true);
-    // Track awaiting state for guard on next chunks
-    this.awaitingUserAnswer = true;
   };
 
   // Reflect backend updates to the interaction card
@@ -878,7 +785,6 @@
     }
     disableAll(true);
     this.setInputAreaDisabled(false);
-    this.awaitingUserAnswer = false;
 
     // Hide card after 2 seconds
     setTimeout(() => {
@@ -886,6 +792,18 @@
     }, 2000);
   };
 
+  StreamingManager.prototype.onTaskError = function (taskId, error) {
+    // Stop the spinner
+    const spinner = document.querySelector('#task-progress .spinner-border');
+    if (spinner) {
+      spinner.classList.add('d-none');
+    }
+    // Show error message
+    const progressLogs = document.getElementById('progress-logs');
+    if (progressLogs) {
+      progressLogs.textContent = error;
+    }
+  };
 
   // ============================================================================
   // SYSTEM MESSAGE HANDLERS
