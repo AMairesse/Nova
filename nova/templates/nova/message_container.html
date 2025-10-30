@@ -199,40 +199,41 @@
         value="{{ thread_id|default_if_none:'' }}"
       />
       
-      <!-- Agent selection -->
-      <div class="mb-2">
-        <div class="dropdown">
-          <button
-            class="btn btn-outline-secondary dropdown-toggle btn-sm"
-            type="button"
-            data-bs-toggle="dropdown"
-            aria-expanded="false"
-            id="dropdownMenuButton"
-          >
-            {% if default_agent %} 
-              <i class="bi bi-robot me-1"></i>{{ default_agent.name }} 
-            {% else %} 
-              {% trans "Select an agent" %} 
-            {% endif %}
-          </button>
-          <ul class="dropdown-menu">
-            {% for agent in user_agents %}
-            <li>
-              <a class="dropdown-item agent-dropdown-item" href="#" data-value="{{ agent.id }}">
-                <i class="bi bi-robot me-2"></i>{{ agent.name }}
-              </a>
-            </li>
-            {% endfor %}
-            {% if nb_agents == 0 %}
-            <li>
-              <span class="dropdown-item-text text-muted">
-                {% trans "No agents available" %}
-              </span>
-            </li>
-            {% endif %}
-          </ul>
+      <!-- Message input group with integrated agent selector -->
+      <div class="input-group mb-2">
+        <div class="input-group-prepend">
+          <div class="dropdown">
+            <button
+              class="btn btn-outline-secondary btn-sm dropdown-toggle agent-selector-btn"
+              type="button"
+              data-bs-toggle="dropdown"
+              aria-expanded="false"
+              id="dropdownMenuButton"
+              data-bs-toggle="tooltip"
+              data-bs-placement="top"
+              title="{% if default_agent %}{{ default_agent.name }}{% else %}{% trans 'Select an agent' %}{% endif %}"
+            >
+              <i class="bi bi-robot"></i>
+            </button>
+            <ul class="dropdown-menu">
+              {% for agent in user_agents %}
+              <li>
+                <a class="dropdown-item agent-dropdown-item" href="#" data-value="{{ agent.id }}">
+                  <i class="bi bi-robot me-2"></i>{{ agent.name }}
+                </a>
+              </li>
+              {% endfor %}
+              {% if nb_agents == 0 %}
+              <li>
+                <span class="dropdown-item-text text-muted">
+                  {% trans "No agents available" %}
+                </span>
+              </li>
+              {% endif %}
+            </ul>
+          </div>
         </div>
-        
+
         <!-- Hidden input -->
         <input
           type="hidden"
@@ -240,10 +241,7 @@
           id="selectedAgentInput"
           value="{% if default_agent %}{{ default_agent.id }}{% endif %}"
         />
-      </div>
 
-      <!-- Message input group -->
-      <div class="input-group mb-2">
         <textarea class="form-control auto-resize-textarea"
                   name="new_message"
                   placeholder="{% trans 'Type your message...' %}"
