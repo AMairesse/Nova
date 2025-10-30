@@ -21,7 +21,7 @@
         messageDiv.innerHTML = `
           <div class="card border-primary">
             <div class="card-body py-2">
-              <strong class="text-primary">${messageData.text}</strong>
+              <strong class="text-primary">${window.escapeHtml(messageData.text)}</strong>
               ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
             </div>
           </div>
@@ -39,7 +39,7 @@
         messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
-              <div class="streaming-content">${messageData.text}</div>
+              <div class="streaming-content">${window.escapeHtml(messageData.text)}</div>
             </div>
             <div class="card-footer py-1 text-muted small text-end d-none d-flex justify-content-end align-items-center">
               <div class="card-footer-consumption">
@@ -71,7 +71,7 @@
           <div class="card border-light">
             <div class="card-body py-2">
               <div class="text-muted small">
-                ${messageData.text}
+                ${window.escapeHtml(messageData.text)}
                 <button
                   class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
                   type="button"
@@ -84,7 +84,7 @@
               </div>
               <div class="compact-details mt-2 d-none">
                 <div class="border-start border-secondary ps-2">
-                  <small class="text-muted streaming-content">${messageData.internal_data.summary || ''}</small>
+                  <small class="text-muted streaming-content">${window.escapeHtml(messageData.internal_data.summary || '')}</small>
                 </div>
               </div>
             </div>
@@ -95,7 +95,7 @@
         messageDiv.innerHTML = `
           <div class="card border-light">
             <div class="card-body py-2">
-              <div class="text-muted small">${messageData.text}</div>
+              <div class="text-muted small">${window.escapeHtml(messageData.text)}</div>
             </div>
           </div>
         `;
@@ -230,20 +230,20 @@
 
       socket.onopen = () => startHeartbeat();
 
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'pong') {
+      // Mapping des handlers pour les types de messages
+      const messageHandlers = {
+        'pong': (data) => {
           clearTimeout(heartbeatTimeout);
-          return;
-        }
-
-        if (data.type === 'progress_update') {
+        },
+        'progress_update': (data) => {
           const progressLogs = document.getElementById('progress-logs');
           const log = data.progress_log || "undefined";
           if (progressLogs) progressLogs.textContent = log;
-        } else if (data.type === 'response_chunk') {
+        },
+        'response_chunk': (data) => {
           this.onStreamChunk(taskId, data.chunk);
-        } else if (data.type === 'context_consumption') {
+        },
+        'context_consumption': (data) => {
           // Get the card for this message
           const stream = this.activeStreams.get(taskId);
           if (!stream) return;
@@ -259,10 +259,12 @@
             // Display the footer
             streamingFooter.parentElement.classList.remove('d-none');
           }
-        } else if (data.type === 'new_message') {
+        },
+        'new_message': (data) => {
           // Handle real-time message updates (e.g., system messages from completed tasks)
           this.onNewMessage(data.message, data.thread_id);
-        } else if (data.type === 'task_complete') {
+        },
+        'task_complete': (data) => {
           // Update thread title in sidebars if backend provided it
           if (data.thread_id && data.thread_subject) {
             const links = document.querySelectorAll(`.thread-link[data-thread-id="${data.thread_id}"]`);
@@ -271,12 +273,25 @@
             });
           }
           this.onStreamComplete(taskId);
-        } else if (data.type === 'user_prompt') {
+        },
+        'user_prompt': (data) => {
           this.onUserPrompt(taskId, data);
-        } else if (data.type === 'interaction_update') {
+        },
+        'interaction_update': (data) => {
           this.onInteractionUpdate(taskId, data);
-        } else if (data.type === 'task_error') {
+        },
+        'task_error': (data) => {
           this.onTaskError(taskId, data);
+        }
+      };
+
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const handler = messageHandlers[data.type];
+        if (handler) {
+          handler(data);
+        } else {
+          console.warn('Unhandled message type:', data.type);
         }
       };
 
@@ -311,48 +326,64 @@
     }
 
     attachEventHandlers() {
-      // Thread navigation
-      document.addEventListener('click', (e) => {
-        if (e.target.matches('.thread-link') || e.target.closest('.thread-link')) {
+      // Mapping des sélecteurs et de leurs handlers
+      const eventMappings = {
+        '.thread-link': (e, target) => {
           e.preventDefault();
-          const link = e.target.closest('.thread-link');
+          const link = target.closest('.thread-link');
           const threadId = link.dataset.threadId;
           this.loadMessages(threadId);
-        } else if (e.target.matches('.create-thread-btn') || e.target.closest('.create-thread-btn')) {
+        },
+        '.create-thread-btn': (e, target) => {
           e.preventDefault();
           this.createThread();
-        } else if (e.target.matches('.delete-thread-btn') || e.target.closest('.delete-thread-btn')) {
+        },
+        '.delete-thread-btn': (e, target) => {
           e.preventDefault();
-          const btn = e.target.closest('.delete-thread-btn');
+          const btn = target.closest('.delete-thread-btn');
           const threadId = btn.dataset.threadId;
           this.deleteThread(threadId);
-        } else if (e.target.matches('.agent-dropdown-item') || e.target.closest('.agent-dropdown-item')) {
+        },
+        '.agent-dropdown-item': (e, target) => {
           e.preventDefault();
-          const item = e.target.closest('.agent-dropdown-item');
+          const item = target.closest('.agent-dropdown-item');
           const value = item.dataset.value;
           const label = item.textContent.trim();
           const selectedAgentInput = document.getElementById('selectedAgentInput');
           const dropdownButton = document.getElementById('dropdownMenuButton');
           if (selectedAgentInput) selectedAgentInput.value = value;
           if (dropdownButton) dropdownButton.textContent = label;
-        } else if (e.target.matches('.compact-thread-btn') || e.target.closest('.compact-thread-btn')) {
+        },
+        '.compact-thread-btn': (e, target) => {
           e.preventDefault();
-          const btn = e.target.closest('.compact-thread-btn');
+          const btn = target.closest('.compact-thread-btn');
           const threadId = btn.dataset.threadId;
           this.compactThread(threadId, btn);
-        } else if (e.target.matches(".interaction-answer-btn") || e.target.closest(".interaction-answer-btn")) {
+        },
+        '.interaction-answer-btn': (e, target) => {
           e.preventDefault();
-          const btn = e.target.closest(".interaction-answer-btn");
+          const btn = target.closest(".interaction-answer-btn");
           const interactionId = btn.dataset.interactionId;
           // Get the answer from the textarea
           const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
           const payload = textarea.value;
           this.answerInteraction(interactionId, payload);
-        } else if (e.target.matches(".interaction-cancel-btn") || e.target.closest(".interaction-cancel-btn")) {
+        },
+        '.interaction-cancel-btn': (e, target) => {
           e.preventDefault();
-          const btn = e.target.closest(".interaction-cancel-btn");
+          const btn = target.closest(".interaction-cancel-btn");
           const interactionId = btn.dataset.interactionId;
           this.cancelInteraction(interactionId);
+        }
+      };
+
+      // Handler générique pour les clics
+      document.addEventListener('click', (e) => {
+        for (const [selector, handler] of Object.entries(eventMappings)) {
+          if (e.target.matches(selector) || e.target.closest(selector)) {
+            handler(e, e.target.closest(selector) || e.target);
+            return; // Sortir après le premier match pour éviter les conflits
+          }
         }
       });
 
@@ -677,15 +708,6 @@
     this.messageManager.scrollToBottom();
   };
 
-  // Simple HTML escape to avoid injecting content as HTML
-  function escapeHtml(str) {
-    if (str == null) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   // Disable/enable the main input area while waiting for an interaction
   StreamingManager.prototype.setInputAreaDisabled = function (disabled) {
     const textarea = document.querySelector('#message-container textarea[name="new_message"]');
@@ -714,7 +736,7 @@
     wrapper.className = 'message mb-3';
     wrapper.id = `interaction-card-${interaction_id}`;
 
-    const origin = origin_name ? `${escapeHtml(origin_name)} ${gettext('asks')}:` : gettext('Question');
+    const origin = origin_name ? `${window.escapeHtml(origin_name)} ${gettext('asks')}:` : gettext('Question');
     const schemaHint = (schema && Object.keys(schema).length > 0)
       ? `<div class="form-text text-muted mt-1">${gettext('Answer format may be structured; plain text is also accepted.')}</div>`
       : '';
@@ -726,7 +748,7 @@
             <i class="bi bi-question-circle text-warning me-2"></i>
             <strong>${origin}</strong>
           </div>
-          <div class="mb-2">${escapeHtml(question)}</div>
+          <div class="mb-2">${window.escapeHtml(question)}</div>
           <div class="mb-2">
             <textarea class="form-control" id="interaction-answer-input-${interaction_id}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
             ${schemaHint}
@@ -759,7 +781,7 @@
     const statusEl = card.querySelector('.interaction-status');
     const answerBtn = card.querySelector('.interaction-answer-btn');
     const cancelBtn = card.querySelector('.interaction-cancel-btn');
-    const inputEl = card.querySelector('.interaction-answer-input-' + interaction_id);
+    const inputEl = card.querySelector('#interaction-answer-input-' + interaction_id);
 
     const disableAll = (disabled) => {
       if (answerBtn) answerBtn.disabled = disabled;
