@@ -88,16 +88,3 @@ Nova
 
 ### An agent asks the user for input
 
-- nova/tasks/tasks.py ==> run_ai_task_celery is called
-  - The task object is found and an AgentTaskExecutor is created
-  - The "execute" function is called (inherited from TaskExecutor)
-  - The Agent is working and call the ask_user tool
-- nova/tools/ask_user.py ==> ask_user is called
-  - upsert an Interaction(PENDING),
-  - mark the Task AWAITING_INPUT,                       ==> could be deleted because it is done in _handle_pause
-  - emit a WS 'user_prompt',
-  - create an interruption flow
-  - resume from here when the user sends an answer
-- nova/tasks/tasks.py
-  - the interrupt will stop the ReAct flow
-  - the "result" of the _run_agent() call will contain an "__interrupt__" key

@@ -96,7 +96,6 @@ async def load_tools(agent) -> List[StructuredTool]:
         from nova.tools.agent_tool_wrapper import AgentToolWrapper
 
         parent_callbacks = agent.config.get('callbacks', [])
-        current_task = getattr(agent, "_current_task", None)
 
         for agent_config in agent.agent_tools:
             wrapper = AgentToolWrapper(
@@ -104,7 +103,6 @@ async def load_tools(agent) -> List[StructuredTool]:
                 thread=agent.thread,
                 user=agent.user,
                 parent_callbacks=parent_callbacks,
-                current_task=current_task,
             )
             langchain_tool = wrapper.create_langchain_tool()
             tools.append(langchain_tool)
@@ -113,10 +111,5 @@ async def load_tools(agent) -> List[StructuredTool]:
     from nova.tools import files
     file_tools = await files.get_functions(agent)
     tools.extend(file_tools)
-
-    # Load "ask_user" system tool (always available)
-    from nova.tools import ask_user as ask_user_tool
-    ask_user_tools = await ask_user_tool.get_functions(agent)
-    tools.extend(ask_user_tools)
 
     return tools

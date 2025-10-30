@@ -94,8 +94,6 @@ class TaskExecutor:
             self.user, self.thread, self.agent_config,
             callbacks=[self.handler]
         )
-        # Inject current task context for system tools (e.g., ask_user)
-        self.llm._current_task = self.task
 
     async def _create_prompt(self):
         return self.prompt

@@ -1,13 +1,22 @@
 # nova/tools/ask_user.py
-from __future__ import annotations
-
+from functools import partial
 from typing import Optional, Dict, Any
-from django.utils.translation import gettext_lazy as _
 from langchain_core.tools import StructuredTool
 from langgraph.types import interrupt
 
+from django.utils.translation import gettext_lazy as _
+
 from nova.llm.llm_agent import LLMAgent
-from functools import partial
+from nova.models.Tool import Tool
+
+METADATA = {
+    'name': 'Ask user',
+    'description': 'Allow the agent to ask a question to the end user',
+    'requires_config': False,
+    'config_fields': [],
+    'test_function': None,
+    'test_function_args': [],
+}
 
 
 async def _ask_user(agent: LLMAgent, question: str, schema: Optional[Dict[str, Any]] = None,
@@ -31,7 +40,7 @@ async def _ask_user(agent: LLMAgent, question: str, schema: Optional[Dict[str, A
     return "User did not answer"
 
 
-async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
+async def get_functions(tool: Tool, agent: LLMAgent) -> list[StructuredTool]:
     """Expose ask_user as a single StructuredTool, loaded unconditionally."""
     return [
         StructuredTool.from_function(

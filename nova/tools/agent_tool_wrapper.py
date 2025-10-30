@@ -33,13 +33,11 @@ class AgentToolWrapper:
         thread: Thread,
         user: settings.AUTH_USER_MODEL,
         parent_callbacks=None,
-        current_task=None,
     ) -> None:
         self.agent_config = agent_config
         self.thread = thread
         self.user = user
         self.parent_callbacks = parent_callbacks or []
-        self.current_task = current_task
 
     # ------------------------------------------------------------------ #
     #  Public API                                                        #
@@ -58,9 +56,6 @@ class AgentToolWrapper:
                 self.agent_config,
                 callbacks=self.parent_callbacks,  # propagate streaming callbacks
             )
-            # Ensure ask_user has access to the same Task context
-            if self.current_task is not None:
-                agent_llm._current_task = self.current_task
 
             try:
                 return await agent_llm.ainvoke(question)
