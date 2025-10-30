@@ -40,8 +40,10 @@ You need at least one LLM provider to power your agents. For local setups, use e
 ## 2. Create Your Tools
 
 Add these default tools to your Nova workspace:
+- `Ask user`: For user interaction.
 - `Date / Time`: Essential for time-sensitive tasks.
 - `Browser`: For web navigation (used by the Internet Agent).
+- `Memory`: For long-term memory storage of an agent.
 - `SearXNG`: Privacy-focused search engine (requires `add-searxng` docker-compose).
 - `Judge0`: Code execution sandbox (requires `add-judge0` docker-compose).
 
@@ -105,7 +107,7 @@ The central agent that delegates to sub-agents.
 | Prompt | `You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries; do not fabricate abilities or offer services beyond your tools. Default to the user’s language and reply in Markdown. Keep answers concise unless the user requests detailed explanations. If you can read/store user data, persist relevant information and consult it before replying; only retrieve themes pertinent to the current query (e.g., check stored location when asked the time).` |
 | Recursion limit | `25` |
 | Use as a tool | `No` |
-| Associated tools | `Date / Time` |
+| Associated tools | `Ask user`, `Date / Time`, `Memory` |
 | Agents as tools | `Internet Agent`, `Calendar Agent`, `Code Agent` |
 
 ## 4. Run Your Agent

@@ -70,7 +70,7 @@ def _set_theme_content(content: str, theme: str, new_content: str) -> str:
 
 
 def _delete_theme_content(content: str, theme: str) -> str:
-    """Remove content for a specific theme."""
+    """Remove a specific theme."""
     lines = content.split('\n')
     new_lines = []
     in_theme = False
@@ -80,7 +80,6 @@ def _delete_theme_content(content: str, theme: str) -> str:
             in_theme = True
         elif line.strip().startswith('# ') and in_theme:
             in_theme = False
-            new_lines.append(line)
         elif not in_theme:
             new_lines.append(line)
 
@@ -117,25 +116,18 @@ async def set_info(theme: str, content: str, agent: LLMAgent) -> str:
     return f"Information for theme '{theme}' has been updated."
 
 
-async def delete_info(theme: str, agent: LLMAgent) -> str:
-    """Delete information for a specific theme."""
+async def delete_theme(theme: str, agent: LLMAgent) -> str:
+    """Delete a specific theme."""
     if theme == "global_user_preferences":
         return "The 'global_user_preferences' theme cannot be deleted as it is required."
 
     user_info = await sync_to_async(_get_user_info)(agent.user)
     current_content = user_info.markdown_content
 
-    if not current_content:
-        return f"No information stored for theme '{theme}'."
-
-    theme_content = _get_theme_content(current_content, theme)
-    if not theme_content:
-        return f"No information stored for theme '{theme}'."
-
     updated_content = _delete_theme_content(current_content, theme)
     await sync_to_async(_update_user_info)(agent.user, updated_content)
 
-    return f"Information for theme '{theme}' has been deleted."
+    return f"Theme '{theme}' has been deleted."
 
 
 async def create_theme(theme: str, agent: LLMAgent) -> str:
@@ -209,15 +201,15 @@ async def get_functions(tool, agent: LLMAgent):
             }
         ),
         StructuredTool.from_function(
-            coroutine=lambda theme: delete_info(theme, agent),
-            name="delete_info",
-            description="Delete stored information for a specific theme",
+            coroutine=lambda theme: delete_theme(theme, agent),
+            name="delete_theme",
+            description="Delete a specific theme",
             args_schema={
                 "type": "object",
                 "properties": {
                     "theme": {
                         "type": "string",
-                        "description": "The theme name to delete information for"
+                        "description": "The theme name to delete"
                     }
                 },
                 "required": ["theme"]

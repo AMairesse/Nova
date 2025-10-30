@@ -32,12 +32,10 @@ class AgentToolWrapper:
         agent_config: AgentConfig,
         thread: Thread,
         user: settings.AUTH_USER_MODEL,
-        parent_callbacks=None,
     ) -> None:
         self.agent_config = agent_config
         self.thread = thread
         self.user = user
-        self.parent_callbacks = parent_callbacks or []
 
     # ------------------------------------------------------------------ #
     #  Public API                                                        #
@@ -54,7 +52,6 @@ class AgentToolWrapper:
                 self.user,
                 self.thread,
                 self.agent_config,
-                callbacks=self.parent_callbacks,  # propagate streaming callbacks
             )
 
             try:

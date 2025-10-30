@@ -30,7 +30,7 @@ class UserInfoModelTest(TestCase):
         """Test UserInfo is created automatically."""
         user_info = UserInfo.objects.get(user=self.user)
         self.assertEqual(user_info.user, self.user)
-        self.assertEqual(user_info.markdown_content, "")
+        self.assertEqual(user_info.markdown_content, "# global_user_preferences\n")
 
     def test_userinfo_validation(self):
         """Test UserInfo validation."""

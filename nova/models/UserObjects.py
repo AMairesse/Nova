@@ -16,7 +16,7 @@ class UserInfo(models.Model):
                                 related_name='user_info')
     markdown_content = models.TextField(
         blank=True,
-        default="",
+        default="# global_user_preferences\n",
         max_length=50000,
         help_text=_("User information stored in Markdown format")
     )
@@ -35,6 +35,10 @@ class UserInfo(models.Model):
         # Basic Markdown validation - ensure it starts with # if not empty
         if self.markdown_content and not self.markdown_content.strip().startswith('#'):
             raise ValidationError(_("Markdown content should start with a heading (#)."))
+
+        # Check that the global_user_preferences theme as not been deleted
+        if not self.markdown_content.strip().find('# global_user_preferences'):
+            raise ValidationError(_("The 'global_user_preferences' theme cannot be deleted as it is required."))
 
         # Check size limit
         if len(self.markdown_content) > 50000:

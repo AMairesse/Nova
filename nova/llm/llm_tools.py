@@ -95,14 +95,11 @@ async def load_tools(agent) -> List[StructuredTool]:
     if agent.has_agent_tools:
         from nova.tools.agent_tool_wrapper import AgentToolWrapper
 
-        parent_callbacks = agent.config.get('callbacks', [])
-
         for agent_config in agent.agent_tools:
             wrapper = AgentToolWrapper(
                 agent_config=agent_config,
                 thread=agent.thread,
                 user=agent.user,
-                parent_callbacks=parent_callbacks,
             )
             langchain_tool = wrapper.create_langchain_tool()
             tools.append(langchain_tool)
