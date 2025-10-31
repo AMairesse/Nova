@@ -2,6 +2,43 @@
 
 Using docker compose is the recommended way to run Nova, even for development.
 
+## Project layout
+
+```
+Nova
+├─ docker/                                # Docker compose configuration for the project
+|  ├─ judge0/
+|  |  └─  judge0.conf                     # Default configuration file for the judge0 container
+|  ├─ nginx/
+|  |  ├─ templates
+|  |  |  └─  default.conf.template        # Template for nginx's config (needed because MINIO_BUCKET_NAME can be set in config)
+|  |  └─ nginx.conf                       # Nginx's config
+|  ├─ ollama/
+|  |  ├─ templates
+|  |  |  └─  Modelfile.template           # Template file for Ollama (needed to configure default model to load and context size)
+|  |  └─ ollama_entrypoint.sh             # Ollama's container's entrypoint which will serve the configured model
+|  ├─ searxng/
+|  |  ├─  limiter.toml                    # Required config file for searxng
+|  |  └─  settings.yml                    # Settings' file for SearXNG (warning: running the container will change owner's file)
+|  ├─ .env                                # This file should be created from .env.example
+|  ├─ .env.example                        # Example file with environment's variable for the project
+|  ├─ docker-compose.add-judge0.yml       # Add judge0 to your default setup
+|  ├─ docker-compose.add-langfuse.yml     # Add Langfuse to your default setup
+|  ├─ docker-compose.add-ollama.yml       # Add Ollama to your default setup
+|  ├─ docker-compose.add-pgadmin.yml      # Add pgAdmin to your default setup
+|  ├─ docker-compose.add-searxng.yml      # Add SearXNG to your default setup
+|  ├─ docker-compose.base.yml             # Base configuration for the project
+|  ├─ docker-compose.dev.yml              # Dev configuration for the project
+|  ├─ docker-compose.from-source.yml      # Base configuration for the project but using the source code
+|  ├─ docker-compose.yml                  # Default configuration for the project
+|  ├─ Dockerfile                          # Nova's container's Dockerfile
+|  ├─ entrypoint.sh                       # Nova's container's entrypoint
+|  └─ README.md                           # This file
+├─ locale/
+├─ ...
+└─ requirements.txt
+```
+
 ## Default setup
 
 This setup include :

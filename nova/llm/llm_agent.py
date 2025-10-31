@@ -10,11 +10,15 @@ from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_ollama.chat_models import ChatOllama
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
-from nova.models.models import Agent, Tool, ProviderType, LLMProvider, UserInfo
-from nova.models.models import CheckpointLink, UserFile
+from nova.models.AgentConfig import AgentConfig
+from nova.models.CheckpointLink import CheckpointLink
+from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
+from nova.models.Tool import Tool
+from nova.models.UserFile import UserFile
+from nova.models.UserObjects import UserInfo
 from nova.llm.checkpoints import get_checkpointer
 from nova.utils import extract_final_answer, get_theme_content
 from .llm_tools import load_tools
@@ -132,7 +136,7 @@ class LLMAgent:
 
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
-                     agent_config: Agent, parent_config=None,
+                     agent_config: AgentConfig, parent_config=None,
                      callbacks: List[BaseCallbackHandler] = None):
         """
         Async factory to create an LLMAgent instance (an agent) with
@@ -189,12 +193,12 @@ class LLMAgent:
 
         # Create the ReAct agent
         if checkpointer:
-            agent.langchain_agent = create_react_agent(llm, tools=tools,
-                                                       prompt=system_prompt,
-                                                       checkpointer=checkpointer)
+            agent.langchain_agent = create_agent(llm, tools=tools,
+                                                 system_prompt=system_prompt,
+                                                 checkpointer=checkpointer)
         else:
-            agent.langchain_agent = create_react_agent(llm, tools=tools,
-                                                       prompt=system_prompt)
+            agent.langchain_agent = create_agent(llm, tools=tools,
+                                                 system_prompt=system_prompt)
 
         agent.tools = tools
 
@@ -375,6 +379,11 @@ class LLMAgent:
                 config=config
             )
 
+            # If the result contains an interruption then stop processing and
+            # return the interruption
+            if '__interrupt__' in result:
+                return result
+
             messages = result.get('messages', [])
             last_message = messages[-1]
 
@@ -428,3 +437,28 @@ class LLMAgent:
                 # Agent has finished, extract final answer
                 final_msg = extract_final_answer(result)
                 return final_msg
+
+    async def aresume(self, command, silent_mode=False):
+        config = self.silent_config if silent_mode else self.config
+
+        # Set the recursion limit
+        if self.recursion_limit is not None:
+            config.update({"recursion_limit": self.recursion_limit})
+
+        while True:
+            result = await self.langchain_agent.ainvoke(
+                command,
+                config=config
+            )
+
+            # If the result contains an interruption then stop processing and
+            # return the interruption
+            if '__interrupt__' in result:
+                return result
+
+            # Agent has finished, extract final answer
+            final_msg = extract_final_answer(result)
+            return final_msg
+
+    async def get_langgraph_state(self):
+        return await sync_to_async(self.langchain_agent.get_state, thread_sensitive=False)(self.config)

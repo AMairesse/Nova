@@ -3,10 +3,14 @@
 /* Layout Structure - Using Bootstrap flex utilities where possible */
 body {
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
 .main-container {
     flex: 1;
+    display: flex;
+    flex-direction: column;
     min-height: 0;
 }
 
@@ -14,7 +18,6 @@ body {
 @media (max-width: 991.98px) {
     .container-fluid>.row {
         height: calc(100vh - 76px - 56px) !important;
-        /* Subtract main navbar + mobile nav */
     }
 }
 
@@ -34,6 +37,17 @@ body {
         font-size: 16px;
         /* Prevents zoom on iOS */
         min-height: 44px;
+    }
+
+    .file-item-actions {
+        opacity: 1;
+        /* Always show on touch devices */
+    }
+
+    .file-delete-btn {
+        padding: 6px 8px;
+        min-height: 32px;
+        min-width: 32px;
     }
 }
 
@@ -88,22 +102,20 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    flex-grow: 1;
 }
 
 /* Ensure sidebars allow inner overflow containers to scroll */
 #threads-sidebar,
-#files-sidebar {
-    min-height: 0;
-}
-
-/* Fix file sidebar content scrolling on desktop */
-#file-sidebar-content {
+#files-sidebar,
+#file-sidebar-content,
+#file-sidebar-content-mobile,
+#threads-container,
+#mobile-threads-container {
     overflow-y: auto;
-    overflow-x: auto;
+    overflow-x: hidden;
     height: 100%;
-    /* Ensure proper scrolling behavior */
     -webkit-overflow-scrolling: touch;
-    /* Smooth scrolling for better UX */
     scroll-behavior: smooth;
 }
 
@@ -113,41 +125,12 @@ body {
     height: 100%;
 }
 
-/* Mobile file sidebar content - ensure it also scrolls properly */
-#file-sidebar-content-mobile {
-    overflow-y: auto;
-    overflow-x: auto;
-    height: 100%;
-    -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
-}
-
-/* Fix threads container scrolling on desktop */
-#threads-container {
-    overflow-y: auto;
-    overflow-x: hidden;
-    height: 100%;
-    /* Ensure proper scrolling behavior */
-    -webkit-overflow-scrolling: touch;
-    /* Smooth scrolling for better UX */
-    scroll-behavior: smooth;
-}
-
-/* Mobile threads container - ensure it also scrolls properly */
-#mobile-threads-container {
-    overflow-y: auto;
-    overflow-x: hidden;
-    height: 100%;
-    -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
-}
-
 /* Ensure thread groups don't interfere with scrolling */
 .thread-group {
     flex-shrink: 0;
 }
 
-/* Ensure load more button is properly positioned and doesn't interfere with scrolling */
+/* Ensure load more button is properly positioned */
 #load-more-container,
 #mobile-load-more-container {
     flex-shrink: 0;
@@ -155,34 +138,24 @@ body {
     z-index: 1;
 }
 
-/* Ensure proper spacing and layout for thread items */
-.thread-group .list-group-item {
-    border-left: none;
-    border-right: none;
-    border-radius: 0;
-}
-
-.thread-group:first-child .list-group-item:first-child {
-    border-top: none;
-}
-
-.thread-group:last-child .list-group-item:last-child {
-    border-bottom: none;
-}
-
+/* Message Input Area */
 .message-input-area {
     flex-shrink: 0;
     border-top: 1px solid var(--bs-border-color);
     background-color: var(--bs-light);
+    padding-bottom: 0;
+}
+
+.message-input-area .input-group {
+    margin-bottom: 0;
 }
 
 /* Form Controls */
 .auto-resize-textarea {
-    resize: vertical;
-    overflow-y: hidden;
-    transition: height 0.2s ease-in-out;
     min-height: 38px;
-    height: 38px;
+    max-height: 200px;
+    overflow-y: auto;
+    resize: none;
 }
 
 /* Progress Indicators */
@@ -195,19 +168,13 @@ body {
 }
 
 /* File Panel Styles */
-.file-tree-item {
-    position: relative;
-}
-
 .file-item-content {
     display: flex;
     align-items: center;
     padding: 4px 8px;
     border-radius: 4px;
     transition: background-color 0.2s ease;
-    /* Prevent wrapping of file names */
     white-space: nowrap;
-    /* Ensure minimum width for deeply nested items */
     min-width: max-content;
 }
 
@@ -239,20 +206,6 @@ body {
     }
 }
 
-/* Touch devices: always show actions for accessibility */
-@media (hover: none) and (pointer: coarse) {
-    .file-item-actions {
-        opacity: 1;
-    }
-
-    /* Make delete button more touch-friendly on mobile */
-    .file-delete-btn {
-        padding: 6px 8px;
-        min-height: 32px;
-        min-width: 32px;
-    }
-}
-
 .file-delete-btn {
     padding: 2px 6px;
     border: none;
@@ -276,18 +229,14 @@ body {
     list-style: none;
     margin: 0;
     padding: 0;
-    /* Ensure horizontal scrolling when content is too wide */
     min-width: max-content;
 }
 
 /* Ensure file tree root container handles overflow properly */
 .file-tree-list.root {
-    /* Allow horizontal scrolling for deeply nested directories */
     overflow-x: auto;
-    /* Maintain vertical flow */
     overflow-y: visible;
 }
-
 
 /* Ensure file names don't break on long paths */
 .file-item-name,
@@ -296,7 +245,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 200px;
-    /* Reasonable max width before ellipsis */
 }
 
 /* On hover, show full name */
@@ -347,4 +295,31 @@ body {
 
 #upload-progress .progress-bar:empty::after {
     content: "0%";
+}
+
+/* Agent selector button */
+.agent-selector-btn {
+    padding: 0.25rem 0.5rem;
+    min-width: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.agent-selector-btn i {
+    font-size: 1.2rem;
+}
+
+/* Tooltip styling (Bootstrap handles the display) */
+.tooltip-inner {
+    max-width: 200px;
+    text-align: center;
+}
+
+/* Mobile adjustments: Ensure button is touch-friendly */
+@media (hover: none) and (pointer: coarse) {
+    .agent-selector-btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
 }

@@ -1,5 +1,5 @@
 /* nova/static/js/utils.js - Utility functions with absorbed CSRF */
-(function() {
+(function () {
   'use strict';
 
   // LocalStorage utilities with expiration support
@@ -146,4 +146,13 @@
   // Expose utilities globally
   window.StorageUtils = StorageUtils;
   window.DOMUtils = DOMUtils;
+
+  // Simple HTML escape to avoid injecting content as HTML
+  window.escapeHtml = function (str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  };
 })();

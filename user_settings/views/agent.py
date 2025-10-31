@@ -9,7 +9,9 @@ from django.shortcuts import redirect, reverse, get_object_or_404
 from django.views.decorators.csrf import csrf_protect
 from django.views.generic import ListView
 
-from nova.models.models import Agent, UserProfile, LLMProvider
+from nova.models.AgentConfig import AgentConfig
+from nova.models.Provider import LLMProvider
+from nova.models.UserObjects import UserProfile
 from user_settings.forms import AgentForm
 from user_settings.mixins import (
     UserOwnedQuerySetMixin,
@@ -24,7 +26,7 @@ from user_settings.mixins import (
 #  List                                                                      #
 # ---------------------------------------------------------------------------#
 class AgentListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
-    model = Agent
+    model = AgentConfig
     template_name = "user_settings/agent_list.html"
     context_object_name = "agents"
     paginate_by = 20
@@ -60,7 +62,7 @@ class _AgentBaseView(DashboardRedirectMixin, LoginRequiredMixin):
     Custom save logic is required to inject the user before the first `.save()`
     and to handle many-to-many relations.
     """
-    model = Agent
+    model = AgentConfig
     form_class = AgentForm
     template_name = "user_settings/agent_form.html"
     dashboard_tab = "agents"
@@ -93,7 +95,7 @@ class AgentUpdateView(_AgentBaseView, OwnerUpdateView):
 class AgentDeleteView(  # type: ignore[misc]
     DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView
 ):
-    model = Agent
+    model = AgentConfig
     template_name = "user_settings/agent_confirm_delete.html"
     dashboard_tab = "agents"
 
@@ -101,7 +103,7 @@ class AgentDeleteView(  # type: ignore[misc]
 @csrf_protect
 @login_required
 def make_default_agent(request, agent_id):
-    agent = get_object_or_404(Agent, id=agent_id, user=request.user)
+    agent = get_object_or_404(AgentConfig, id=agent_id, user=request.user)
     if agent:
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         profile.default_agent = agent

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-10-26 09:18+0000\n"
+"POT-Creation-Date: 2025-10-30 14:58+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -22,6 +22,52 @@ msgstr ""
 msgid "No files in this thread."
 msgstr "No files in this thread."
 
-#: nova/static/js/thread_management.js:49
+#: nova/static/js/thread_management.js:52
 msgid "Compact"
 msgstr "Compact"
+
+#: nova/static/js/thread_management.js:472
+#: nova/static/js/thread_management.js:490
+#: nova/static/js/thread_management.js:513
+msgid "Processing…"
+msgstr "Processing…"
+
+#: nova/static/js/thread_management.js:738
+msgid "Waiting for your answer..."
+msgstr "Waiting for your answer..."
+
+#: nova/static/js/thread_management.js:738
+msgid "Type your message..."
+msgstr "Type your message..."
+
+#: nova/static/js/thread_management.js:760
+msgid "asks"
+msgstr "asks"
+
+#: nova/static/js/thread_management.js:760
+msgid "Question"
+msgstr "Question"
+
+#: nova/static/js/thread_management.js:762
+msgid "Answer format may be structured; plain text is also accepted."
+msgstr "Answer format may be structured; plain text is also accepted."
+
+#: nova/static/js/thread_management.js:774
+msgid "Type your answer..."
+msgstr "Type your answer..."
+
+#: nova/static/js/thread_management.js:779
+msgid "Answer"
+msgstr "Answer"
+
+#: nova/static/js/thread_management.js:782
+msgid "Cancel"
+msgstr "Cancel"
+
+#: nova/static/js/thread_management.js:814
+msgid "Answer received. Resuming..."
+msgstr "Answer received. Resuming..."
+
+#: nova/static/js/thread_management.js:816
+msgid "Canceled."
+msgstr "Canceled"

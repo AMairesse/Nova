@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from nova.models.models import ProviderType
+from nova.models.Provider import ProviderType
 import nova.llm.llm_agent as llm_agent_mod
 
 
@@ -25,8 +25,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             "langgraph.prebuilt",
             "nova.tools.agent_tool_wrapper",
             "nova.tools", "nova.mcp.client", "nova.tools.files",
-            "nova.llm.checkpoints",  # Add checkpoints mock
-            "nova.models.models", "nova.models.Thread",  # ORM-related
+            "nova.llm.checkpoints",
+            "nova.models.Provider", "nova.models.Thread",
             "asgiref.sync",  # For sync_to_async
         ]
         for mod in mocked_modules:
@@ -86,7 +86,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
 
         lg_pre = types.ModuleType("langgraph.prebuilt")
 
-        def create_react_agent(llm, tools=None, prompt=None, checkpointer=None):
+        def create_agent(llm, tools=None, system_prompt=None, checkpointer=None):
             class DummyAgent:
                 def __init__(self):
                     # Keep last state for debugging purposes
@@ -100,7 +100,7 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                     return payload
             return DummyAgent()
 
-        lg_pre.create_react_agent = create_react_agent
+        lg_pre.create_agent = create_agent
 
         # Fake nova.tools.agent_tool_wrapper (used when has_agent_tools is True)
         atw_mod = types.ModuleType("nova.tools.agent_tool_wrapper")
@@ -125,7 +125,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         checkpoints_mod.get_checkpointer = get_checkpointer
 
         # Fake models and Thread
-        models_mod = types.ModuleType("nova.models.models")
+        checkpointlink_mod = types.ModuleType("nova.models.CheckpointLink")
+        userfile_mod = types.ModuleType("nova.models.UserFile")
         thread_mod = types.ModuleType("nova.models.Thread")
 
         # Mock CheckpointLink with proper Django manager pattern
@@ -143,8 +144,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
         class CheckpointLink:
             objects = MockManager()
 
-        models_mod.CheckpointLink = CheckpointLink
-        models_mod.UserFile = MagicMock()  # For file counting in ainvoke
+        checkpointlink_mod.CheckpointLink = CheckpointLink
+        userfile_mod.UserFile = MagicMock()  # For file counting in ainvoke
 
         # Fake asgiref.sync
         asgiref_sync = types.ModuleType("asgiref.sync")
@@ -172,8 +173,9 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
             "langgraph.prebuilt": lg_pre,
             "nova.tools.agent_tool_wrapper": atw_mod,
             "nova.llm.checkpoints": checkpoints_mod,
-            "nova.models.models": models_mod,
+            "nova.models.CheckpointLink": checkpointlink_mod,
             "nova.models.Thread": thread_mod,
+            "nova.models.UserFile": userfile_mod,
             "asgiref.sync": asgiref_sync,
         }
 
@@ -471,8 +473,8 @@ class LLMAgentTests(IsolatedAsyncioTestCase):
                     with patch("nova.llm.llm_agent.load_tools", AsyncMock(return_value=[{"tool": True}])):
                         # Mock get_checkpointer to return a fake checkpointer
                         with patch("nova.llm.llm_agent.get_checkpointer", AsyncMock(return_value=MagicMock())):
-                            # Mock create_react_agent to return a fake agent
-                            with patch("nova.llm.llm_agent.create_react_agent", return_value=MagicMock()):
+                            # Mock create_agent to return a fake agent
+                            with patch("nova.llm.llm_agent.create_agent", return_value=MagicMock()):
                                 # Mock CheckpointLink.objects.get_or_create directly
                                 mock_checkpoint_link = SimpleNamespace(checkpoint_id="fake_id")
                                 with patch.object(llm_agent_mod.CheckpointLink.objects, "get_or_create",

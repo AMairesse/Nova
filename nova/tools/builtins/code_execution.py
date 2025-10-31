@@ -9,7 +9,7 @@ from langchain_core.tools import StructuredTool
 from asgiref.sync import sync_to_async
 
 from nova.llm.llm_agent import LLMAgent
-from nova.models.models import Tool, ToolCredential
+from nova.models.Tool import Tool, ToolCredential
 
 logger = logging.getLogger(__name__)
 

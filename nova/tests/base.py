@@ -1,7 +1,7 @@
 # nova/tests/base.py
 from django.test import TestCase
 from django.contrib.auth.models import User
-from nova.models.models import UserProfile, UserParameters
+from nova.models.UserObjects import UserProfile, UserParameters
 
 
 class BaseTestCase(TestCase):

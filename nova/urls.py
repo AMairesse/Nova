@@ -11,6 +11,9 @@ from nova.views.files_views import (
     sidebar_panel_view, file_list,
     file_download_url, file_upload, FileDeleteView
 )
+from nova.views.interaction_views import (
+    answer_interaction, cancel_interaction, get_pending_interactions
+)
 from nova.views.pwa_views import service_worker
 from nova.views.security_views import csrf_token
 from nova.views.health import healthz
@@ -46,6 +49,13 @@ urlpatterns += [
     path('files/download-url/<int:file_id>/', file_download_url, name='file_download_url'),
     path('files/upload/<int:thread_id>/', file_upload, name='file_upload'),
     path('files/delete/<int:file_id>/', FileDeleteView.as_view(), name='file_delete'),
+]
+
+# Users' interactions from agents
+urlpatterns += [
+    path('interactions/<int:interaction_id>/answer/', answer_interaction, name='interaction_answer'),
+    path('interactions/<int:interaction_id>/cancel/', cancel_interaction, name='interaction_cancel'),
+    path('interactions/pending/', get_pending_interactions, name='interaction_pending'),
 ]
 
 # Add healthcheck only in DEBUG mode

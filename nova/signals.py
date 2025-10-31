@@ -6,9 +6,9 @@ from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from asgiref.sync import async_to_sync
 
-from nova.models.models import UserProfile, UserParameters, UserInfo
-from nova.models.Thread import Thread
 from nova.llm.checkpoints import get_checkpointer
+from nova.models.UserObjects import UserInfo, UserParameters, UserProfile
+from nova.models.Thread import Thread
 
 logger = logging.getLogger(__name__)
 

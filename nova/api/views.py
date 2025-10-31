@@ -9,7 +9,7 @@ from rest_framework import status
 from asgiref.sync import async_to_sync
 
 from .serializers import QuestionSerializer
-from nova.models.models import UserProfile
+from nova.models.UserObjects import UserProfile
 from nova.llm.llm_agent import LLMAgent
 
 

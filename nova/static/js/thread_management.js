@@ -1,12 +1,12 @@
-/* nova/static/js/thread_management.js - Modern chat architecture */
-(function() {
+/* nova/static/js/thread_management.js */
+(function () {
   'use strict';
 
   // Configuration object for URLs (will be populated from template)
   window.NovaApp = window.NovaApp || {};
 
   // ============================================================================
-  // MESSAGE RENDERER - Unified conversion for consistency
+  // MESSAGE RENDERER
   // ============================================================================
   class MessageRenderer {
     static createMessageElement(messageData, thread_id) {
@@ -21,22 +21,25 @@
         messageDiv.innerHTML = `
           <div class="card border-primary">
             <div class="card-body py-2">
-              <strong class="text-primary">${messageData.text}</strong>
+              <strong class="text-primary">${window.escapeHtml(messageData.text)}</strong>
               ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
             </div>
           </div>
         `;
       } else if (messageData.actor === 'agent') {
         // Remove "compact" button from previous message footer
-        const button_to_remove = document.querySelector('.compact-thread-btn');
-        if (button_to_remove) {
-          button_to_remove.remove();
+        const container = document.getElementById('messages-list');
+        if (container) {
+          const selector = '.compact-thread-btn';
+          const buttons = container.querySelectorAll(selector);
+          const lastBtn = buttons[buttons.length - 1];
+          if (lastBtn) lastBtn.remove();
         }
         // Agent message structure
         messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
-              <div class="streaming-content">${messageData.text}</div>
+              <div class="streaming-content">${window.escapeHtml(messageData.text)}</div>
             </div>
             <div class="card-footer py-1 text-muted small text-end d-none d-flex justify-content-end align-items-center">
               <div class="card-footer-consumption">
@@ -68,7 +71,7 @@
           <div class="card border-light">
             <div class="card-body py-2">
               <div class="text-muted small">
-                ${messageData.text}
+                ${window.escapeHtml(messageData.text)}
                 <button
                   class="btn btn-sm text-muted p-0 ms-1 border-0 bg-transparent"
                   type="button"
@@ -81,7 +84,7 @@
               </div>
               <div class="compact-details mt-2 d-none">
                 <div class="border-start border-secondary ps-2">
-                  <small class="text-muted">${messageData.internal_data.summary || ''}</small>
+                  <small class="text-muted streaming-content">${window.escapeHtml(messageData.internal_data.summary || '')}</small>
                 </div>
               </div>
             </div>
@@ -92,7 +95,7 @@
         messageDiv.innerHTML = `
           <div class="card border-light">
             <div class="card-body py-2">
-              <div class="text-muted small">${messageData.text}</div>
+              <div class="text-muted small">${window.escapeHtml(messageData.text)}</div>
             </div>
           </div>
         `;
@@ -115,23 +118,26 @@
       this.messageManager = manager;
     }
 
-    registerStream(taskId, messageData, thread_id) {
+    createMessageElement(task_id) {
+      // Create agent message element with a streaming class
       const agentMessageEl = MessageRenderer.createMessageElement({
-        ...messageData,
+        id: task_id,
         actor: 'agent',
-        text: '' // Start with empty content
-      }, thread_id);
-
-      // Add streaming class to the message container for proper CSS targeting
+        text: ''
+      }, this.messageManager.currentThreadId);
       agentMessageEl.classList.add('streaming');
 
+      // Add to message manager
       this.messageManager.appendMessage(agentMessageEl);
 
+      return agentMessageEl;
+    }
+
+    registerStream(taskId, messageData) {
       this.activeStreams.set(taskId, {
         messageId: messageData.id,
-        element: agentMessageEl,
-        currentText: '',
-        lastUpdate: Date.now()
+        element: '',
+        status: 'streaming',
       });
 
       // Show progress area when streaming starts (ensure it's visible)
@@ -151,7 +157,10 @@
 
     onStreamChunk(taskId, chunk) {
       const stream = this.activeStreams.get(taskId);
-      if (!stream) return;
+      if (!stream) {
+        // Note: for system action (eg. "compact"), there is no activeStream
+        return;
+      }
 
       // Skip duplicate chunks (server sometimes sends the same content multiple times)
       // Also skip empty chunks
@@ -159,22 +168,20 @@
         return;
       }
 
-      // Warning :for system action (eg. "compact"), there is no element for streaming
-      if (!stream.element) {
-        return
+      // Create the message element if it doesn't exist
+      var messageElement = stream.element
+      if (!messageElement) {
+        messageElement = this.createMessageElement(taskId);
+        stream.element = messageElement;
       }
+      const contentEl = messageElement.querySelector('.streaming-content')
 
       // The server is already sending HTML chunks, so we don't need to process them as Markdown
       // Replace the entire content since server sends complete paragraph updates
-      const contentEl = stream.element.querySelector('.streaming-content');
-      if (contentEl) {
-        contentEl.innerHTML = chunk;
-      }
+      contentEl.innerHTML = chunk;
 
-      // Still accumulate text for state management
-      stream.currentText += chunk;
-      stream.lastChunk = chunk; // Track last chunk to detect duplicates
-      stream.lastUpdate = Date.now();
+      // Track last chunk to detect duplicates
+      stream.lastChunk = chunk;
     }
 
     onStreamComplete(taskId) {
@@ -182,8 +189,6 @@
       if (stream) {
         // Mark as completed
         stream.status = 'completed';
-        // Remove completed stream from localStorage instead of saving
-        localStorage.removeItem(`stream_${taskId}`);
 
         // Immediately hide the spinner when task completes
         const spinner = document.querySelector('#task-progress .spinner-border');
@@ -200,85 +205,6 @@
         }
       }
       this.activeStreams.delete(taskId);
-    }
-
-    saveStreamState(taskId, stream) {
-      // Limit currentText to last 50KB to prevent large individual entries
-      const maxTextLength = 50 * 1024; // 50KB
-      const currentText = stream.currentText.length > maxTextLength
-        ? stream.currentText.slice(-maxTextLength)
-        : stream.currentText;
-
-      const state = {
-        messageId: stream.messageId,
-        currentText: currentText,
-        lastUpdate: stream.lastUpdate,
-        status: stream.status || 'streaming'
-      };
-
-      try {
-        localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
-      } catch (e) {
-        if (e.name === 'QuotaExceededError') {
-          console.warn('localStorage quota exceeded, running cleanup and retrying...');
-          // Run cleanup to free up space
-          this.cleanupStreams();
-          try {
-            // Retry after cleanup
-            localStorage.setItem(`stream_${taskId}`, JSON.stringify(state));
-            console.log('Successfully saved stream state after cleanup');
-          } catch (retryError) {
-            console.error('Failed to save stream state even after cleanup:', retryError);
-            // Continue execution - streaming will still work, just won't resume on page reload
-          }
-        } else {
-          console.error('Error saving stream state:', e);
-        }
-      }
-    }
-
-    loadSavedStreams() {
-      const streams = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key.startsWith('stream_')) {
-          const taskId = key.replace('stream_', '');
-          try {
-            streams[taskId] = JSON.parse(localStorage.getItem(key));
-          } catch (e) {
-            console.warn('Invalid stream state:', key);
-          }
-        }
-      }
-      return streams;
-    }
-
-    cleanupStreams() {
-      const now = Date.now();
-      const twoDaysMs = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
-      const keysToRemove = [];
-
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key.startsWith('stream_')) {
-          try {
-            const state = JSON.parse(localStorage.getItem(key));
-            // Remove completed streams or streams older than 2 days
-            if (state.status === 'completed' || (state.lastUpdate && now - state.lastUpdate > twoDaysMs)) {
-              keysToRemove.push(key);
-            }
-          } catch (e) {
-            // Remove invalid entries
-            keysToRemove.push(key);
-          }
-        }
-      }
-
-      keysToRemove.forEach(key => localStorage.removeItem(key));
-
-      if (keysToRemove.length > 0) {
-        console.log(`Cleaned up ${keysToRemove.length} old stream entries from localStorage`);
-      }
     }
 
     startWebSocket(taskId) {
@@ -304,24 +230,20 @@
 
       socket.onopen = () => startHeartbeat();
 
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'pong') {
+      // Mapping des handlers pour les types de messages
+      const messageHandlers = {
+        'pong': (data) => {
           clearTimeout(heartbeatTimeout);
-          return;
-        }
-
-        if (data.type === 'progress_update') {
+        },
+        'progress_update': (data) => {
           const progressLogs = document.getElementById('progress-logs');
-          const statusDiv = document.getElementById('task-status');
           const log = data.progress_log || "undefined";
           if (progressLogs) progressLogs.textContent = log;
-          if (statusDiv && data.error) {
-            statusDiv.innerHTML = '<p class="text-danger">' + data.error + "</p>";
-          }
-        } else if (data.type === 'response_chunk') {
+        },
+        'response_chunk': (data) => {
           this.onStreamChunk(taskId, data.chunk);
-        } else if (data.type === 'context_consumption') {
+        },
+        'context_consumption': (data) => {
           // Get the card for this message
           const stream = this.activeStreams.get(taskId);
           if (!stream) return;
@@ -337,10 +259,12 @@
             // Display the footer
             streamingFooter.parentElement.classList.remove('d-none');
           }
-        } else if (data.type === 'new_message') {
+        },
+        'new_message': (data) => {
           // Handle real-time message updates (e.g., system messages from completed tasks)
           this.onNewMessage(data.message, data.thread_id);
-        } else if (data.type === 'task_complete') {
+        },
+        'task_complete': (data) => {
           // Update thread title in sidebars if backend provided it
           if (data.thread_id && data.thread_subject) {
             const links = document.querySelectorAll(`.thread-link[data-thread-id="${data.thread_id}"]`);
@@ -349,6 +273,25 @@
             });
           }
           this.onStreamComplete(taskId);
+        },
+        'user_prompt': (data) => {
+          this.onUserPrompt(taskId, data);
+        },
+        'interaction_update': (data) => {
+          this.onInteractionUpdate(taskId, data);
+        },
+        'task_error': (data) => {
+          this.onTaskError(taskId, data);
+        }
+      };
+
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const handler = messageHandlers[data.type];
+        if (handler) {
+          handler(data);
+        } else {
+          console.warn('Unhandled message type:', data.type);
         }
       };
 
@@ -360,15 +303,6 @@
       socket.onerror = (err) => {
         console.error('WebSocket error:', err);
       };
-    }
-
-    resumeStreams() {
-      const savedStreams = this.loadSavedStreams();
-      Object.keys(savedStreams).forEach(taskId => {
-        if (savedStreams[taskId].status !== 'completed') {
-          this.startWebSocket(taskId);
-        }
-      });
     }
   }
 
@@ -383,42 +317,89 @@
     }
 
     init() {
-      // Clean up old localStorage entries on startup
-      this.streamingManager.cleanupStreams();
+      // Attach event handlers
       this.attachEventHandlers();
       this.loadInitialThread();
+
+      // Handle server-rendered interaction cards and check for pending interactions
+      this.checkPendingInteractions();
     }
 
     attachEventHandlers() {
-      // Thread navigation
-      document.addEventListener('click', (e) => {
-        if (e.target.matches('.thread-link') || e.target.closest('.thread-link')) {
+      // 'click' event mapping
+      const eventMappings = {
+        '.thread-link': (e, target) => {
           e.preventDefault();
-          const link = e.target.closest('.thread-link');
+          const link = target.closest('.thread-link');
           const threadId = link.dataset.threadId;
           this.loadMessages(threadId);
-        } else if (e.target.matches('.create-thread-btn') || e.target.closest('.create-thread-btn')) {
+        },
+        '.create-thread-btn': (e, target) => {
           e.preventDefault();
           this.createThread();
-        } else if (e.target.matches('.delete-thread-btn') || e.target.closest('.delete-thread-btn')) {
+        },
+        '.delete-thread-btn': (e, target) => {
           e.preventDefault();
-          const btn = e.target.closest('.delete-thread-btn');
+          const btn = target.closest('.delete-thread-btn');
           const threadId = btn.dataset.threadId;
           this.deleteThread(threadId);
-        } else if (e.target.matches('.agent-dropdown-item') || e.target.closest('.agent-dropdown-item')) {
+        },
+        '.agent-dropdown-item': (e, target) => {
           e.preventDefault();
-          const item = e.target.closest('.agent-dropdown-item');
+          const item = target.closest('.agent-dropdown-item');
           const value = item.dataset.value;
           const label = item.textContent.trim();
           const selectedAgentInput = document.getElementById('selectedAgentInput');
           const dropdownButton = document.getElementById('dropdownMenuButton');
           if (selectedAgentInput) selectedAgentInput.value = value;
-          if (dropdownButton) dropdownButton.textContent = label;
-        } else if (e.target.matches('.compact-thread-btn') || e.target.closest('.compact-thread-btn')) {
+          if (dropdownButton) {
+            dropdownButton.innerHTML = '<i class="bi bi-robot"></i>'; // Keep only icon
+            dropdownButton.setAttribute('title', label); // Update tooltip title
+            // Refresh tooltip
+            const tooltipInstance = bootstrap.Tooltip.getInstance(dropdownButton);
+            if (tooltipInstance) tooltipInstance.dispose();
+            new bootstrap.Tooltip(dropdownButton);
+          }
+        },
+        '.compact-thread-btn': (e, target) => {
           e.preventDefault();
-          const btn = e.target.closest('.compact-thread-btn');
+          const btn = target.closest('.compact-thread-btn');
           const threadId = btn.dataset.threadId;
           this.compactThread(threadId, btn);
+        },
+        '.interaction-answer-btn': (e, target) => {
+          e.preventDefault();
+          const btn = target.closest(".interaction-answer-btn");
+          const interactionId = btn.dataset.interactionId;
+          // Get the answer from the textarea
+          const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
+          const payload = textarea.value;
+          this.answerInteraction(interactionId, payload);
+        },
+        '.interaction-cancel-btn': (e, target) => {
+          e.preventDefault();
+          const btn = target.closest(".interaction-cancel-btn");
+          const interactionId = btn.dataset.interactionId;
+          this.cancelInteraction(interactionId);
+        }
+      };
+
+      // Generic handler for all 'click' events
+      document.addEventListener('click', (e) => {
+        for (const [selector, handler] of Object.entries(eventMappings)) {
+          if (e.target.matches(selector) || e.target.closest(selector)) {
+            handler(e, e.target.closest(selector) || e.target);
+            return;
+          }
+        }
+      });
+
+      // Handle the textarea dynamic resizing
+      // Using a delegation approach because the textarea is dynamically added
+      document.addEventListener('input', (e) => {
+        if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
+          e.target.style.height = 'auto'; // Reset to auto for accurate scrollHeight
+          e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; // Adjust to content, cap at 200px max
         }
       });
 
@@ -436,13 +417,6 @@
           e.preventDefault();
           const form = document.getElementById('message-form');
           if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
-      });
-
-      document.addEventListener('input', (e) => {
-        if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
-          e.target.style.height = "38px";
-          e.target.style.height = `${e.target.scrollHeight}px`;
         }
       });
     }
@@ -465,8 +439,6 @@
         const active = document.querySelector(`.thread-link[data-thread-id="${this.currentThreadId}"]`);
         if (active) active.classList.add('active');
 
-        this.streamingManager.resumeStreams();
-
         if (threadId) {
           localStorage.setItem('lastThreadId', threadId);
         }
@@ -474,9 +446,22 @@
         this.initTextareaFocus();
         // Auto-scroll to bottom for new conversations
         this.scrollToBottom();
+
+        // Initialize tooltips after loading
+        this.initTooltips();
+
+        // Handle server-rendered interaction cards and check for pending interactions
+        this.checkPendingInteractions();
       } catch (error) {
         console.error('Error loading messages:', error);
       }
+    }
+
+    initTooltips() {
+      const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+      tooltipTriggerList.forEach(tooltipTriggerEl => {
+        new bootstrap.Tooltip(tooltipTriggerEl);
+      });
     }
 
     async compactThread(threadId, btnEl) {
@@ -497,6 +482,48 @@
       }
     }
 
+    async answerInteraction(interactionId, payload) {
+      const clickedBtn = document.querySelector(`.interaction-answer-btn[data-interaction-id="${interactionId}"]`);
+      if (!clickedBtn || clickedBtn.disabled) return;
+      const originalHtml = clickedBtn.innerHTML;
+      clickedBtn.disabled = true;
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionAnswer.replace('0', interactionId), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || {})
+        });
+        if (!response.ok) throw new Error('Server error');
+        const data = await response.json();
+        // Re-enable main input
+        this.streamingManager.setInputAreaDisabled(false);
+      } catch (error) {
+        console.error('Error answering interaction:', error);
+        clickedBtn.disabled = false;
+        clickedBtn.innerHTML = originalHtml;
+      }
+    }
+
+    async cancelInteraction(interactionId) {
+      const clickedBtn = document.querySelector(`.interaction-cancel-btn[data-interaction-id="${interactionId}"]`);
+      if (!clickedBtn || clickedBtn.disabled) return;
+      const originalHtml = clickedBtn.innerHTML;
+      clickedBtn.disabled = true;
+      clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
+      try {
+        const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionCancel.replace('0', interactionId), { method: 'POST' });
+        if (!response.ok) throw new Error('Server error');
+        const data = await response.json();
+        // Re-enable main input
+        this.streamingManager.setInputAreaDisabled(false);
+      } catch (error) {
+        console.error('Error canceling interaction:', error);
+        clickedBtn.disabled = false;
+        clickedBtn.innerHTML = originalHtml;
+      }
+    }
+
     async handleFormSubmit(form) {
       const textarea = form.querySelector('textarea[name="new_message"]');
       const msg = textarea ? textarea.value.trim() : '';
@@ -510,6 +537,7 @@
       }
 
       try {
+        // Send the message to the server
         const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
           method: 'POST',
           body: new FormData(form)
@@ -523,7 +551,7 @@
         if (threadIdInput) threadIdInput.value = data.thread_id;
         this.currentThreadId = data.thread_id;
 
-        // Add user message dynamically
+        // Add user message dynamically on the page
         const userMessageEl = MessageRenderer.createMessageElement(data.message, '');
         this.appendMessage(userMessageEl);
 
@@ -535,11 +563,13 @@
           id: data.task_id,
           actor: 'agent',
           text: ''
-        }, data.thread_id);
+        });
 
         // Clear textarea
-        if (textarea) textarea.value = '';
-
+        if (textarea) {
+          textarea.value = '';
+          textarea.dispatchEvent(new Event('input')); // Force resize to min height
+        }
       } catch (error) {
         console.error("Error sending message:", error);
       } finally {
@@ -633,7 +663,6 @@
         const firstThread = document.querySelector('.thread-link');
         const firstThreadId = firstThread?.dataset.threadId;
         this.loadMessages(firstThreadId);
-        localStorage.removeItem(`runningTasks_${threadId}`);
         if (localStorage.getItem('lastThreadId') === threadId.toString()) {
           localStorage.removeItem('lastThreadId');
         }
@@ -648,6 +677,14 @@
       const lastThreadId = localStorage.getItem('lastThreadId');
       this.loadMessages(lastThreadId);
     }
+
+    // Disable main input if there are pending interactions
+    checkPendingInteractions() {
+      const pendingCards = document.querySelectorAll('[data-interaction-id]');
+      if (pendingCards.length > 0) {
+        this.streamingManager.setInputAreaDisabled(true);
+      }
+    }
   }
 
   // ============================================================================
@@ -655,15 +692,7 @@
   // ============================================================================
 
   // Register background task (non-streaming operations like compact, delete)
-  StreamingManager.prototype.registerBackgroundTask = function(taskId) {
-    // Don't add visual message element, just track the task and show progress
-    this.activeStreams.set(taskId, {
-      taskId: taskId,
-      isBackground: true,
-      lastUpdate: Date.now(),
-      status: 'running'
-    });
-
+  StreamingManager.prototype.registerBackgroundTask = function (taskId) {
     // Show progress area for background tasks
     const progressDiv = document.getElementById('task-progress');
     if (progressDiv) {
@@ -684,7 +713,7 @@
   };
 
   // Handle real-time message updates like system messages
-  StreamingManager.prototype.onNewMessage = function(messageData, thread_id) {
+  StreamingManager.prototype.onNewMessage = function (messageData, thread_id) {
     // Create message element for the new message
     const messageElement = MessageRenderer.createMessageElement(messageData, thread_id);
 
@@ -697,14 +726,114 @@
     }
 
     // Scroll to bottom to show new message
-    const container = document.getElementById('conversation-container');
-    if (container) {
-      setTimeout(() => {
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: 'smooth'
-        });
-      }, 100);
+    this.messageManager.scrollToBottom();
+  };
+
+  // Disable/enable the main input area while waiting for an interaction
+  StreamingManager.prototype.setInputAreaDisabled = function (disabled) {
+    const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+    const sendBtn = document.getElementById('send-btn');
+    if (textarea) {
+      textarea.disabled = disabled;
+      textarea.placeholder = disabled ? gettext('Waiting for your answer...') : gettext('Type your message...');
+    }
+    if (sendBtn) {
+      sendBtn.disabled = disabled;
+    }
+  };
+
+  // Render and handle a user prompt card
+  StreamingManager.prototype.onUserPrompt = function (taskId, data) {
+    // Expected payload: { interaction_id, question, schema, origin_name, thread_id }
+    const {
+      interaction_id,
+      question,
+      schema,
+      origin_name
+    } = data;
+
+    // Build card element from template
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message mb-3';
+    wrapper.id = `interaction-card-${interaction_id}`;
+
+    const origin = origin_name ? `${window.escapeHtml(origin_name)} ${gettext('asks')}:` : gettext('Question');
+    const schemaHint = (schema && Object.keys(schema).length > 0)
+      ? `<div class="form-text text-muted mt-1">${gettext('Answer format may be structured; plain text is also accepted.')}</div>`
+      : '';
+
+    wrapper.innerHTML = `
+      <div class="card border-warning">
+        <div class="card-body">
+          <div class="d-flex align-items-center mb-2">
+            <i class="bi bi-question-circle text-warning me-2"></i>
+            <strong>${origin}</strong>
+          </div>
+          <div class="mb-2">${window.escapeHtml(question)}</div>
+          <div class="mb-2">
+            <textarea class="form-control" id="interaction-answer-input-${interaction_id}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
+            ${schemaHint}
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="${interaction_id}">
+              <i class="bi bi-check2-circle me-1"></i>${gettext('Answer')}
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="${interaction_id}">
+              <i class="bi bi-x-circle me-1"></i>${gettext('Cancel')}
+            </button>
+            <div class="ms-auto small text-muted interaction-status"></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Append to messages and scroll
+    this.messageManager.appendMessage(wrapper);
+    // Disable main input while awaiting user answer
+    this.setInputAreaDisabled(true);
+  };
+
+  // Reflect backend updates to the interaction card
+  StreamingManager.prototype.onInteractionUpdate = function (taskId, data) {
+    const { interaction_id, interaction_status } = data;
+    const card = document.getElementById(`interaction-card-${interaction_id}`);
+    if (!card) return;
+
+    const statusEl = card.querySelector('.interaction-status');
+    const answerBtn = card.querySelector('.interaction-answer-btn');
+    const cancelBtn = card.querySelector('.interaction-cancel-btn');
+    const inputEl = card.querySelector('#interaction-answer-input-' + interaction_id);
+
+    const disableAll = (disabled) => {
+      if (answerBtn) answerBtn.disabled = disabled;
+      if (cancelBtn) cancelBtn.disabled = disabled;
+      if (inputEl) inputEl.disabled = disabled;
+    };
+
+    if (interaction_status === 'ANSWERED') {
+      if (statusEl) statusEl.textContent = gettext('Answer received. Resuming...');
+    } else if (interaction_status === 'CANCELED') {
+      if (statusEl) statusEl.textContent = gettext('Canceled.');
+    }
+    disableAll(true);
+    this.setInputAreaDisabled(false);
+
+    // Hide card after 2 seconds
+    setTimeout(() => {
+      card.classList.add('d-none');
+    }, 2000);
+  };
+
+  StreamingManager.prototype.onTaskError = function (taskId, error) {
+    // Stop the spinner
+    const spinner = document.querySelector('#task-progress .spinner-border');
+    if (spinner) {
+      spinner.classList.add('d-none');
+    }
+    // Show error message
+    const progressLogs = document.getElementById('progress-logs');
+    if (progressLogs) {
+      progressLogs.textContent = error.message;
     }
   };
 
@@ -795,15 +924,15 @@
     const incomingGroups = tmp.querySelectorAll('.thread-group');
     incomingGroups.forEach(incoming => {
       const group = incoming.dataset.group || 'older';
-      
+
       // First, try to find existing group in the container
       let targetGroup = containerEl.querySelector(`.thread-group[data-group="${group}"]`);
-      
+
       // If group doesn't exist, create it using ensureGroupContainer
       if (!targetGroup) {
         targetGroup = ensureGroupContainer(group, containerEl);
       }
-      
+
       if (!targetGroup) return;
 
       const incomingUl = incoming.querySelector('ul.list-group');
@@ -917,3 +1046,4 @@
   window.ThreadLoadingManager = ThreadLoadingManager;
 
 })();
+

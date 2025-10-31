@@ -5,7 +5,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 
-from nova.models.models import UserInfo
+from nova.models.UserObjects import UserInfo
 from nova.tools.builtins.memory import (
     _get_theme_content,
     _set_theme_content,
@@ -30,14 +30,14 @@ class UserInfoModelTest(TestCase):
         """Test UserInfo is created automatically."""
         user_info = UserInfo.objects.get(user=self.user)
         self.assertEqual(user_info.user, self.user)
-        self.assertEqual(user_info.markdown_content, "")
+        self.assertEqual(user_info.markdown_content, "# global_user_preferences\n")
 
     def test_userinfo_validation(self):
         """Test UserInfo validation."""
         user_info = UserInfo.objects.get(user=self.user)
 
         # Valid content
-        user_info.markdown_content = "# Personal\n- Name: Test"
+        user_info.markdown_content = "# global_user_preferences\n- Be concise"
         user_info.full_clean()  # Should not raise
 
         # Invalid content (no heading)

@@ -46,8 +46,8 @@ async def load_tools(agent) -> List[StructuredTool]:
         try:
             from nova.mcp.client import MCPClient
             client = MCPClient(
-                endpoint=tool_obj.endpoint, 
-                credential=cred, 
+                endpoint=tool_obj.endpoint,
+                credential=cred,
                 transport_type=tool_obj.transport_type,
                 user_id=cred_user_id
             )
@@ -97,9 +97,9 @@ async def load_tools(agent) -> List[StructuredTool]:
 
         for agent_config in agent.agent_tools:
             wrapper = AgentToolWrapper(
-                agent_config,
-                agent.thread,
-                agent.user,
+                agent_config=agent_config,
+                thread=agent.thread,
+                user=agent.user,
             )
             langchain_tool = wrapper.create_langchain_tool()
             tools.append(langchain_tool)

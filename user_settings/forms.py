@@ -17,16 +17,10 @@ from django.utils.translation import gettext_lazy as _
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Field
 
-from nova.models.models import (
-    Agent,
-    LLMProvider,
-    ProviderType,
-    Tool,
-    ToolCredential,
-    UserParameters,
-    UserInfo,
-)
-
+from nova.models.AgentConfig import AgentConfig
+from nova.models.Provider import ProviderType, LLMProvider
+from nova.models.Tool import Tool, ToolCredential
+from nova.models.UserObjects import UserInfo, UserParameters
 from user_settings.mixins import SecretPreserveMixin
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -117,14 +111,14 @@ class AgentForm(forms.ModelForm):
 
     # Agents that can be used as tools
     agent_tools = forms.ModelMultipleChoiceField(
-        queryset=Agent.objects.none(),
+        queryset=AgentConfig.objects.none(),
         required=False,
         widget=forms.CheckboxSelectMultiple,
         label=_("Agents to use as tools"),
     )
 
     class Meta:
-        model = Agent
+        model = AgentConfig
         fields = [
             "name",
             "llm_provider",
@@ -151,7 +145,7 @@ class AgentForm(forms.ModelForm):
             self.fields["tools"].queryset = Tool.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             )
-            self.fields["agent_tools"].queryset = Agent.objects.filter(
+            self.fields["agent_tools"].queryset = AgentConfig.objects.filter(
                 user=user, is_tool=True
             ).exclude(pk=self.instance.pk if self.instance.pk else None)
 

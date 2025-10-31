@@ -6,7 +6,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from nova.api.views import QuestionAnswerView
 from nova.tests.base import BaseTestCase
-from nova.models.models import Agent, LLMProvider, ProviderType
+from nova.models.AgentConfig import AgentConfig
+from nova.models.Provider import ProviderType, LLMProvider
 
 
 class QuestionAnswerViewTests(BaseTestCase):
@@ -16,7 +17,8 @@ class QuestionAnswerViewTests(BaseTestCase):
         # Create an agent and set it as the default
         provider = LLMProvider.objects.create(user=self.user, name="Prov", provider_type=ProviderType.OPENAI,
                                               model="gpt-4o-mini", api_key="dummy")
-        agent_config = Agent.objects.create(user=self.user, name="Agent A", llm_provider=provider, system_prompt="x")
+        agent_config = AgentConfig.objects.create(user=self.user, name="Agent A",
+                                                  llm_provider=provider, system_prompt="x")
         self.profile.default_agent = agent_config
         self.profile.save()
 

@@ -5,7 +5,7 @@ from django.http import HttpResponse
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 
-from nova.models.models import UserInfo
+from nova.models.UserObjects import UserInfo
 from user_settings.forms import UserInfoForm
 from user_settings.mixins import DashboardRedirectMixin
 

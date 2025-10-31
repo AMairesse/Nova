@@ -1,20 +1,15 @@
 import asyncio
-import logging
 import bleach
+import logging
+import re
 from markdown import markdown
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
-from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils.safestring import mark_safe
-from nova.models.models import LLMProvider, ProviderType, Tool, ToolCredential
+from django.utils.translation import gettext_lazy as _
 from langchain_core.messages import BaseMessage
 
-OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
-OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
-OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
-SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
-SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
-JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
 
 # Markdown configuration for better list handling
 MARKDOWN_EXTENSIONS = [
@@ -76,6 +71,26 @@ def normalize_url(urlish) -> str:
     return urlunparse((scheme, netloc, path, params, query, fragment))
 
 
+def validate_relaxed_url(value):
+    """
+    Simple validator for relaxed URLs:
+    This allows single-label hosts like 'langfuse:3000'.
+    Checks for scheme (http/https), host, optional port/path.
+    """
+    if not value:
+        return  # Allow empty if blank=True
+
+    # Relaxed regex: scheme://host[:port][/path]
+    regex = re.compile(
+        r'^(https?://)'  # Scheme (http or https)
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host
+        r'(?::\d{1,5})?'  # Optional port
+        r'(?:/[^\s]*)?$'  # Optional path
+    )
+    if not regex.match(value):
+        raise ValidationError(_("Enter a valid URL."))
+
+
 def extract_final_answer(output):
     if isinstance(output, str):
         return output
@@ -122,128 +137,6 @@ def schedule_in_event_loop(coro):
         asyncio.create_task(coro)
 
     async_to_sync(_runner)()
-
-
-def check_and_create_system_provider():
-    # Get the system provider if it exists
-    provider = LLMProvider.objects.filter(user=None,
-                                          name='System - Ollama',
-                                          provider_type=ProviderType.OLLAMA).first()
-    if OLLAMA_SERVER_URL and OLLAMA_MODEL_NAME:
-        # Create a "system provider" if it doesn't already exist
-        if not provider:
-            LLMProvider.objects.create(user=None,
-                                       name='System - Ollama',
-                                       provider_type=ProviderType.OLLAMA,
-                                       model=OLLAMA_MODEL_NAME,
-                                       base_url=OLLAMA_SERVER_URL,
-                                       max_context_tokens=OLLAMA_CONTEXT_LENGTH)
-        else:
-            # Update it if needed
-            if provider.model != OLLAMA_MODEL_NAME or \
-               provider.base_url != OLLAMA_SERVER_URL or \
-               provider.max_context_tokens != OLLAMA_CONTEXT_LENGTH:
-                provider.model = OLLAMA_MODEL_NAME
-                provider.base_url = OLLAMA_SERVER_URL
-                provider.max_context_tokens = OLLAMA_CONTEXT_LENGTH
-                provider.save()
-    else:
-        existing = LLMProvider.objects.filter(user=None, provider_type=ProviderType.OLLAMA)
-        provider = provider or existing.first()
-        if provider:
-            # If the system provider is not used then delete it
-            if not provider.agents.exists():
-                provider.delete()
-            else:
-                logger.warning(
-                    """WARNING: OLLAMA_SERVER_URL or OLLAMA_MODEL_NAME not set, but a system
-                       provider exists and is being used by at least one agent.""")
-
-
-def check_and_create_searxng_tool():
-    # Get the searxng's system tool if it exists
-    tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='searxng').first()
-
-    if SEARNGX_SERVER_URL and SEARNGX_NUM_RESULTS:
-        # Create a "system tool" if it doesn't already exist
-        if not tool:
-            tool = Tool.objects.create(user=None,
-                                       name='System - SearXNG',
-                                       tool_type=Tool.ToolType.BUILTIN,
-                                       tool_subtype='searxng',
-                                       python_path='nova.tools.builtins.searxng')
-            ToolCredential.objects.create(user=None,
-                                          tool=tool,
-                                          config={'searxng_url': SEARNGX_SERVER_URL,
-                                                  'num_results': SEARNGX_NUM_RESULTS})
-        else:
-            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
-            if not cred:
-                ToolCredential.objects.create(user=None,
-                                              tool=tool,
-                                              config={'searxng_url': SEARNGX_SERVER_URL,
-                                                      'num_results': SEARNGX_NUM_RESULTS})
-            else:
-                # Update it if needed
-                if cred.config.get('searxng_url') != SEARNGX_SERVER_URL or \
-                   cred.config.get('num_results') != SEARNGX_NUM_RESULTS:
-                    cred.config['searxng_url'] = SEARNGX_SERVER_URL
-                    cred.config['num_results'] = SEARNGX_NUM_RESULTS
-                    cred.save()
-    else:
-        if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='searxng').exists():
-            # If the system tool is not used then delete it
-            if not tool.agents.exists():
-                tool.delete()
-            else:
-                logger.warning(
-                    """WARNING: SEARXNG_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent.""")
-
-
-def check_and_create_judge0_tool():
-    # Get the judge0's system tool if it exists
-    tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='code_execution').first()
-
-    if JUDGE0_SERVER_URL:
-        # Create a "system tool" if it doesn't already exist
-        if not tool:
-            tool = Tool.objects.create(user=None,
-                                       name='System - Code Execution',
-                                       tool_type=Tool.ToolType.BUILTIN,
-                                       tool_subtype='code_execution',
-                                       python_path='nova.tools.builtins.code_execution')
-            ToolCredential.objects.create(user=None,
-                                          tool=tool,
-                                          config={'judge0_url': JUDGE0_SERVER_URL})
-        else:
-            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
-            if not cred:
-                ToolCredential.objects.create(user=None,
-                                              tool=tool,
-                                              config={'judge0_url': JUDGE0_SERVER_URL})
-            else:
-                # Update it if needed
-                if cred.config.get('judge0_url') != JUDGE0_SERVER_URL:
-                    cred.config['judge0_url'] = JUDGE0_SERVER_URL
-                    cred.save()
-    else:
-        if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='code_execution').exists():
-            # If the system tool is not used then delete it
-            if not tool.agents.exists():
-                tool.delete()
-            else:
-                logger.warning(
-                    """WARNING: JUDGE0_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent.""")
 
 
 def markdown_to_html(markdown_text: str) -> str:

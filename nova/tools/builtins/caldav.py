@@ -1,19 +1,21 @@
 # nova/tools/builtins/caldav.py
-from datetime import datetime, timedelta, timezone
-from typing import Optional, List
-from functools import partial
 import caldav
+import logging
+from datetime import datetime, timedelta, timezone
+from functools import partial
 from icalendar import Event as iCalEvent
+from typing import Optional, List
+
+from asgiref.sync import sync_to_async  # For async-safe ORM accesses
 from django.http import JsonResponse
 from django.utils.translation import gettext_lazy as _, ngettext
-from nova.models.models import ToolCredential, Tool
+
 from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
+from nova.models.Tool import Tool, ToolCredential
 
-from asgiref.sync import sync_to_async  # For async-safe ORM accesses
 
-import logging
 logger = logging.getLogger(__name__)
 
 

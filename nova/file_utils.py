@@ -10,7 +10,7 @@ from asgiref.sync import sync_to_async
 import aioboto3  # For async S3 operations
 import magic  # For MIME detection
 
-from nova.models.models import UserFile
+from nova.models.UserFile import UserFile
 from nova.models.Thread import Thread
 
 logger = logging.getLogger(__name__)

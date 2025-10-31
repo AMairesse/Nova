@@ -6,15 +6,11 @@ from django.http import HttpResponse
 from django.urls import reverse
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from nova.models.models import (
-    Agent,
-    Task,
-    TaskStatus,
-    LLMProvider,
-    ProviderType,
-)
-from nova.models.Thread import Thread
+from nova.models.AgentConfig import AgentConfig
 from nova.models.Message import Actor
+from nova.models.Provider import ProviderType, LLMProvider
+from nova.models.Task import Task, TaskStatus
+from nova.models.Thread import Thread
 from nova.views import thread_views
 
 
@@ -149,7 +145,7 @@ class MainViewsTests(TestCase):
 
     # ------------ add_message -------------------------------------------
 
-    @patch("nova.tasks.run_ai_task_celery.delay")
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
     def test_add_message_creates_task_and_starts_thread(self, mock_delay):
         self.client.login(username="alice", password="pass")
 
@@ -162,7 +158,7 @@ class MainViewsTests(TestCase):
             api_key="dummy",
         )
 
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name="A",
             is_tool=False,

@@ -5,12 +5,15 @@ from django.contrib.auth.models import User
 from unittest.mock import patch, MagicMock, AsyncMock, ANY, call
 from botocore.exceptions import ClientError
 
-from nova.models.models import (
-    LLMProvider, UserParameters, Tool, Agent, UserProfile,
-    ToolCredential, Task, ProviderType, TaskStatus, UserFile, CheckpointLink
-)
+from nova.models.AgentConfig import AgentConfig
+from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Message import Message, Actor
+from nova.models.Provider import ProviderType, LLMProvider
+from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
+from nova.models.Tool import Tool, ToolCredential
+from nova.models.UserFile import UserFile
+from nova.models.UserObjects import UserParameters, UserProfile
 from .base import BaseTestCase
 
 
@@ -134,7 +137,7 @@ class AgentModelTest(BaseTestCase):
         )
 
     def test_create_agent(self):
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name='Test Agent',
             llm_provider=self.provider,
@@ -144,7 +147,7 @@ class AgentModelTest(BaseTestCase):
         self.assertEqual(str(agent), 'Test Agent')
 
     def test_is_tool_requires_description(self):
-        agent = Agent(
+        agent = AgentConfig(
             user=self.user,
             name='Tool Agent',
             llm_provider=self.provider,
@@ -155,18 +158,18 @@ class AgentModelTest(BaseTestCase):
             agent.full_clean()
 
     def test_cycle_detection(self):
-        agent1 = Agent.objects.create(user=self.user, name='Agent1',
-                                      llm_provider=self.provider,
-                                      system_prompt='P1', is_tool=True,
-                                      tool_description='D1')
-        agent2 = Agent.objects.create(user=self.user, name='Agent2',
-                                      llm_provider=self.provider,
-                                      system_prompt='P2', is_tool=True,
-                                      tool_description='D2')
-        agent3 = Agent.objects.create(user=self.user, name='Agent3',
-                                      llm_provider=self.provider,
-                                      system_prompt='P3', is_tool=True,
-                                      tool_description='D3')
+        agent1 = AgentConfig.objects.create(user=self.user, name='Agent1',
+                                            llm_provider=self.provider,
+                                            system_prompt='P1', is_tool=True,
+                                            tool_description='D1')
+        agent2 = AgentConfig.objects.create(user=self.user, name='Agent2',
+                                            llm_provider=self.provider,
+                                            system_prompt='P2', is_tool=True,
+                                            tool_description='D2')
+        agent3 = AgentConfig.objects.create(user=self.user, name='Agent3',
+                                            llm_provider=self.provider,
+                                            system_prompt='P3', is_tool=True,
+                                            tool_description='D3')
 
         # Create cycle: A1 -> A2 -> A3 -> A1
         agent1.agent_tools.add(agent2)
@@ -177,19 +180,19 @@ class AgentModelTest(BaseTestCase):
             agent1.full_clean()  # Cycle should be detected
 
     def test_no_cycle(self):
-        agent1 = Agent.objects.create(user=self.user, name='Agent1',
-                                      llm_provider=self.provider,
-                                      system_prompt='P1', is_tool=True,
-                                      tool_description='D1')
-        agent2 = Agent.objects.create(user=self.user, name='Agent2',
-                                      llm_provider=self.provider,
-                                      system_prompt='P2', is_tool=True,
-                                      tool_description='D2')
+        agent1 = AgentConfig.objects.create(user=self.user, name='Agent1',
+                                            llm_provider=self.provider,
+                                            system_prompt='P1', is_tool=True,
+                                            tool_description='D1')
+        agent2 = AgentConfig.objects.create(user=self.user, name='Agent2',
+                                            llm_provider=self.provider,
+                                            system_prompt='P2', is_tool=True,
+                                            tool_description='D2')
         agent1.agent_tools.add(agent2)  # No cycle
         agent1.full_clean()  # Should pass
 
     def test_auto_set_default_agent(self):
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name='First Agent',
             llm_provider=self.provider,
@@ -265,7 +268,7 @@ class ThreadModelTest(BaseTestCase):
         self.assertEqual(messages.count(), 2)
 
     @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    @patch("nova.models.models.boto3.client")
+    @patch("nova.models.UserFile.boto3.client")
     def test_thread_deletion_cleans_up_files(
         self,
         mock_boto3_client,
@@ -321,7 +324,7 @@ class ThreadModelTest(BaseTestCase):
         mock_s3_client.delete_object.assert_has_calls(expected_calls, any_order=True)
 
     @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    @patch("nova.models.models.boto3.client")
+    @patch("nova.models.UserFile.boto3.client")
     def test_thread_deletion_handles_minio_errors(
         self,
         mock_boto3_client,
@@ -369,7 +372,7 @@ class ThreadModelTest(BaseTestCase):
         thread1 = Thread.objects.create(user=self.user, subject="T1")
         thread2 = Thread.objects.create(user=self.user, subject="T2")
 
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name="Agent",
             llm_provider=LLMProvider.objects.create(
@@ -404,7 +407,7 @@ class ThreadModelTest(BaseTestCase):
         mock_get_checkpointer.return_value = mock_saver
 
         thread = Thread.objects.create(user=self.user, subject="T")
-        agent = Agent.objects.create(
+        agent = AgentConfig.objects.create(
             user=self.user,
             name="Agent",
             llm_provider=LLMProvider.objects.create(
@@ -429,7 +432,7 @@ class TaskModelTest(BaseTestCase):
         super().setUp()
         self.thread = Thread.objects.create(user=self.user,
                                             subject='Test Thread')
-        self.agent = Agent.objects.create(
+        self.agent = AgentConfig.objects.create(
             user=self.user,
             name='Test Agent',
             llm_provider=LLMProvider.objects.create(
