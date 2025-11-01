@@ -139,7 +139,7 @@ msgstr "Message type"
 msgid "Related interaction"
 msgstr "Related interaction"
 
-#: nova/models/Provider.py:45
+#: nova/models/Provider.py:50
 #, fuzzy
 #| msgid ""
 #| "Maximum tokens for this provider's context window (e.g., 4096 for small "
@@ -152,11 +152,11 @@ msgstr ""
 "Maximum tokens for this provider's context window (e.g., 4096 for small "
 "models, 100000 or more for large)."
 
-#: nova/models/Provider.py:56
+#: nova/models/Provider.py:61
 msgid "LLM providers"
 msgstr "LLM providers"
 
-#: nova/models/Provider.py:69 user_settings/forms.py:98
+#: nova/models/Provider.py:74 user_settings/forms.py:98
 msgid "Max context tokens must be at least 512."
 msgstr "Max context tokens must be at least 512."
 
@@ -437,19 +437,24 @@ msgstr "No agents configured yet."
 msgid "Create one now"
 msgstr "Create one now"
 
-#: nova/templates/nova/message_container.html:214
+#: nova/templates/nova/message_container.html:213
 msgid "Select an agent"
 msgstr "Select an agent"
 
-#: nova/templates/nova/message_container.html:229
+#: nova/templates/nova/message_container.html:228
 msgid "No agents available"
 msgstr "No agents available"
 
-#: nova/templates/nova/message_container.html:247
+#: nova/templates/nova/message_container.html:246
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/templates/nova/message_container.html:258
+#: nova/templates/nova/message_container.html:254
+#: nova/templates/nova/message_container.html:257
+msgid "Voice input"
+msgstr "Voice input"
+
+#: nova/templates/nova/message_container.html:266
 msgid "Send"
 msgstr "Send"
 
@@ -516,7 +521,7 @@ msgstr "Could not import module: %s"
 msgid "Question or instruction sent to the agent %(name)s"
 msgstr "Question or instruction sent to the agent %(name)s"
 
-#: nova/tools/builtins/ask_user.py:51
+#: nova/tools/builtins/ask_user.py:66
 msgid ""
 "Ask the end-user a clarification question and pause execution. Use when "
 "additional information is required to proceed."
