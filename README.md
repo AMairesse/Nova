@@ -5,12 +5,12 @@
 
 **Nova is a personal‑AI workspace that puts privacy first.**
 
-![Tool being used](./screenshots/Tool%20being%20used.png)
+![Get the news](./screenshots/Webbrowsing%20by%20agent.png)
 
 | | | | |
 | --- | --- | --- | --- |
-| ![Providers' config](./screenshots/Providers%20config.png) | ![MCP Servers support](./screenshots/MCP%20Servers%20support.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
-| ![Simple question](./screenshots/Simple%20question.png) | ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Webbrowsing by agent](./screenshots/Webbrowsing%20by%20agent.png) | ![Agents and Agents as tools](./screenshots/Agents%20and%20Agents%20as%20tools.png) |
+| ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Work on files](./screenshots/Work%20on%20files.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
+| ![Providers' config](./screenshots/Providers%20config.png) | ![Caldav config](./screenshots/Caldav%20config.png) | ![Multiple tools](./screenshots/Multiple%20tools.png) | ![Agents and Agents as tools](./screenshots/Various%20agents.png) |
 | | | | |
 
 ## Quickstart
