@@ -446,6 +446,8 @@
         }
 
         this.initTextareaFocus();
+        // Update voice button visibility based on browser support
+        this.updateVoiceButtonState();
         // Auto-scroll to bottom for new conversations
         this.scrollToBottom();
 
@@ -700,8 +702,7 @@
           this.handleVoiceEnd();
         });
 
-        // Update voice button state based on browser support
-        this.updateVoiceButtonState();
+        // Note: updateVoiceButtonState() is called in loadMessages() after DOM is ready
       }
     }
 
