@@ -360,12 +360,10 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
                     "start_date": {
                         "type": "string",
                         "description": "start of the period (format: YYYY-MM-DD)",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "end_date": {
                         "type": "string",
                         "description": "end of the period (format: YYYY-MM-DD)",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "calendar_name": {
                         "type": "string",

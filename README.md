@@ -5,12 +5,12 @@
 
 **Nova is a personal‑AI workspace that puts privacy first.**
 
-![Tool being used](./screenshots/Tool%20being%20used.png)
+![Get the news](./screenshots/Webbrowsing%20by%20agent.png)
 
 | | | | |
 | --- | --- | --- | --- |
-| ![Providers' config](./screenshots/Providers%20config.png) | ![MCP Servers support](./screenshots/MCP%20Servers%20support.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
-| ![Simple question](./screenshots/Simple%20question.png) | ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Webbrowsing by agent](./screenshots/Webbrowsing%20by%20agent.png) | ![Agents and Agents as tools](./screenshots/Agents%20and%20Agents%20as%20tools.png) |
+| ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Work on files](./screenshots/Work%20on%20files.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
+| ![Providers' config](./screenshots/Providers%20config.png) | ![Caldav config](./screenshots/Caldav%20config.png) | ![Multiple tools](./screenshots/Multiple%20tools.png) | ![Agents and Agents as tools](./screenshots/Various%20agents.png) |
 | | | | |
 
 ## Quickstart
@@ -31,14 +31,14 @@ The default username is `admin` and the default password is `changeme`.
 Then you can create your first agent and start playing with it : [How to configure agents](README-agents.md).
 
 <details>
-  <summary>Optionally you can use Nova with Ollama included</summary>
-  If you also want to use Ollama for a default system provider available to all users, you can use the `docker-compose.add-ollama.yml` file:
+  <summary>Optionally you can use Nova with llama.cpp included</summary>
+  If you also want to use llama.cpp for a default system provider available to all users, you can use the `docker-compose.add-llamacpp.yml` file:
 
 ```
-docker compose -f docker-compose.yml -f docker-compose.add-ollama.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.add-llamacpp.yml up -d
 ```
 
-See [docker/README.md](docker/README.md#add-ollama-to-your-default-setup) for more details.
+See [docker/README.md](docker/README.md#add-llamacpp-to-your-default-setup) for more details.
 </details>
 
 ## Description
@@ -46,7 +46,7 @@ See [docker/README.md](docker/README.md#add-ollama-to-your-default-setup) for mo
 Instead of sending every prompt to a remote model, Nova lets you decide – transparently and at run‑time – whether an agent should reason with a local LLM running on your own machine or delegate to a cloud model only when extra horsepower is really needed. The result is a flexible “best of both worlds” setup that keeps sensitive data on‑prem while still giving you access to state‑of‑the‑art capabilities when you want them.
 
 - **Agent‑centric workflow** – Create smart assistants (agents) and equip them with “tools” that can be simple Python helpers, calendar utilities, HTTP/APIs or even other agents. Agents can chain or delegate work to one another, allowing complex reasoning paths.
-- **Bring‑your‑own models** – Connect to OpenAI (or compatible providers like openrouter.ai) or Mistral if the task is public, but switch to local back‑ends such as Ollama or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
+- **Bring‑your‑own models** – Connect to OpenAI (or compatible providers like openrouter.ai) or Mistral if the task is public, but switch to local back‑ends such as Ollama, llama.cpp or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
 - **Privacy by design** – API keys and tokens are stored encrypted; only the minimal data required for a given call ever leaves your machine.
 - **Built‑in tools** – Nova comes with a bunch of “built‑in” tools for common tasks, like CalDav calendar queries, web surfing, date management and more to come!
 - **Pluggable tools** – Besides built‑in utilities, Nova can talk to external micro‑services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.

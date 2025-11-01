@@ -15,11 +15,16 @@ OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
 OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
 OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
 
+LLAMA_CPP_SERVER_URL = settings.LLAMA_CPP_SERVER_URL
+LLAMA_CPP_MODEL = settings.LLAMA_CPP_MODEL
+LLAMA_CPP_CTX_SIZE = settings.LLAMA_CPP_CTX_SIZE
+
 
 class ProviderType(models.TextChoices):
     OPENAI = "openai", "OpenAI"
     MISTRAL = "mistral", "Mistral"
     OLLAMA = "ollama", "Ollama"
+    LLAMA_CPP = "llama.cpp", "llama.cpp"
     LLMSTUDIO = "lmstudio", "LMStudio"
 
 
@@ -70,7 +75,7 @@ class LLMProvider(models.Model):
 
 
 def check_and_create_system_provider():
-    # Get the system provider if it exists
+    # Get the OLLAMA's system provider if it exists
     provider = LLMProvider.objects.filter(user=None,
                                           name='System - Ollama',
                                           provider_type=ProviderType.OLLAMA).first()
@@ -97,9 +102,42 @@ def check_and_create_system_provider():
         provider = provider or existing.first()
         if provider:
             # If the system provider is not used then delete it
-            if not provider.agents.exists():
+            if not provider.AgentsConfig.exists():
                 provider.delete()
             else:
                 logger.warning(
                     """WARNING: OLLAMA_SERVER_URL or OLLAMA_MODEL_NAME not set, but a system
+                       provider exists and is being used by at least one agent.""")
+    # Get the LLAMA_CPP's system provider if it exists
+    provider = LLMProvider.objects.filter(user=None,
+                                          name='System - llama.cpp',
+                                          provider_type=ProviderType.LLAMA_CPP).first()
+    if LLAMA_CPP_SERVER_URL and LLAMA_CPP_MODEL:
+        # Create a "system provider" if it doesn't already exist
+        if not provider:
+            LLMProvider.objects.create(user=None,
+                                       name='System - llama.cpp',
+                                       provider_type=ProviderType.LLAMA_CPP,
+                                       model=LLAMA_CPP_MODEL,
+                                       base_url=LLAMA_CPP_SERVER_URL,
+                                       max_context_tokens=LLAMA_CPP_CTX_SIZE)
+        else:
+            # Update it if needed
+            if provider.model != LLAMA_CPP_MODEL or \
+               provider.base_url != LLAMA_CPP_SERVER_URL or \
+               provider.max_context_tokens != LLAMA_CPP_CTX_SIZE:
+                provider.model = LLAMA_CPP_MODEL
+                provider.base_url = LLAMA_CPP_SERVER_URL
+                provider.max_context_tokens = LLAMA_CPP_CTX_SIZE
+                provider.save()
+    else:
+        existing = LLMProvider.objects.filter(user=None, provider_type=ProviderType.LLAMA_CPP)
+        provider = provider or existing.first()
+        if provider:
+            # If the system provider is not used then delete it
+            if not provider.AgentsConfig.exists():
+                provider.delete()
+            else:
+                logger.warning(
+                    """WARNING: LLAMA_CPP_SERVER_URL or LLAMA_CPP_MODEL not set, but a system
                        provider exists and is being used by at least one agent.""")

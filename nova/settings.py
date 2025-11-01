@@ -215,6 +215,11 @@ OLLAMA_SERVER_URL = os.getenv('OLLAMA_SERVER_URL', None)
 OLLAMA_MODEL_NAME = os.getenv('OLLAMA_MODEL_NAME', None)
 OLLAMA_CONTEXT_LENGTH = os.getenv('OLLAMA_CONTEXT_LENGTH', None)
 
+# Get infos about an llama.cpp server if configured
+LLAMA_CPP_SERVER_URL = os.getenv('LLAMA_CPP_SERVER_URL', None)
+LLAMA_CPP_MODEL = os.getenv('LLAMA_CPP_MODEL', None)
+LLAMA_CPP_CTX_SIZE = os.getenv('LLAMA_CPP_CTX_SIZE', None)
+
 # Get info about a Searxng server if configured
 SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)
 SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)

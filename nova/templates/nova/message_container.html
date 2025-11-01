@@ -209,7 +209,6 @@
               data-bs-toggle="dropdown"
               aria-expanded="false"
               id="dropdownMenuButton"
-              data-bs-toggle="tooltip"
               data-bs-placement="top"
               title="{% if default_agent %}{{ default_agent.name }}{% else %}{% trans 'Select an agent' %}{% endif %}"
             >
@@ -248,6 +247,15 @@
                   rows="1"
                   maxlength="2000"
                   autofocus></textarea>
+        <button
+          type="button"
+          id="voice-btn"
+          class="btn btn-outline-secondary"
+          title="{% trans 'Voice input' %}"
+        >
+          <i class="bi bi-mic"></i>
+          <span class="visually-hidden">{% trans "Voice input" %}</span>
+        </button>
         <button
           type="submit"
           id="send-btn"

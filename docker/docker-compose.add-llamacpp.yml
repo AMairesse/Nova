@@ -1,0 +1,29 @@
+services:
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    environment:
+      - LLAMA_CPP_SERVER_URL=http://llamacpp:8080/v1
+      - LLAMA_CPP_MODEL=${LLAMA_CPP_MODEL:-qwen/qwen3-8B-GGUF}
+      - LLAMA_CPP_CTX_SIZE=${LLAMA_CPP_CTX_SIZE:-4096}
+
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    volumes:
+      - hfcache:/root/.cache
+    environment:
+      - LLAMA_ARG_HF_REPO=${LLAMA_CPP_MODEL:-qwen/qwen3-8B-GGUF}
+      - LLAMA_ARG_CHAT_TEMPLATE=${LLAMA_CPP_CHAT_TEMPLATE:-chatml}
+      - LLAMA_ARG_CTX_SIZE=${LLAMA_CPP_CTX_SIZE:-4096}
+      - LLAMA_ARG_THINK_BUDGET=${LLAMA_CPP_THINKING_BUDGET:-0}
+      - LLAMA_ARG_FLASH_ATTN=1
+      - LLAMA_ARG_JINJA=1
+      - LLAMA_ARG_NO_WEBUI=1
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/v1/health"]
+      interval: 5s
+
+volumes:
+  hfcache:

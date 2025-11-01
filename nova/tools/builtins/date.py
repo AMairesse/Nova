@@ -77,7 +77,6 @@ async def get_functions(tool, agent: LLMAgent):
                     "date": {
                         "type": "string",
                         "description": "the date to add days to (format: YYYY-MM-DD)",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "days": {
                         "type": "integer",
@@ -97,7 +96,6 @@ async def get_functions(tool, agent: LLMAgent):
                     "date": {
                         "type": "string",
                         "description": "the date to add weeks to (format: YYYY-MM-DD)",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "weeks": {
                         "type": "integer",
@@ -117,12 +115,10 @@ async def get_functions(tool, agent: LLMAgent):
                     "start_date": {
                         "type": "string",
                         "description": "the start date (format: YYYY-MM-DD)",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "end_date": {
                         "type": "string",
                         "description": "the end date (format: YYYY-MM-DD)",
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     }
                 },
                 "required": ["start_date", "end_date"]

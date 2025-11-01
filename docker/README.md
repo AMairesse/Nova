@@ -24,6 +24,7 @@ Nova
 |  ├─ .env.example                        # Example file with environment's variable for the project
 |  ├─ docker-compose.add-judge0.yml       # Add judge0 to your default setup
 |  ├─ docker-compose.add-langfuse.yml     # Add Langfuse to your default setup
+|  ├─ docker-compose.add-llamacpp.yml     # Add llama.cpp to your default setup
 |  ├─ docker-compose.add-ollama.yml       # Add Ollama to your default setup
 |  ├─ docker-compose.add-pgadmin.yml      # Add pgAdmin to your default setup
 |  ├─ docker-compose.add-searxng.yml      # Add SearXNG to your default setup
@@ -102,6 +103,25 @@ This setup include :
    docker compose pull
    docker compose up -d
    ```
+
+## Add llama.cpp to your default setup
+
+1. Download the `docker-compose.add-llamacpp.yml` file:
+
+   ```bash
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-llamacpp.yml
+   ```
+
+2. Edit the `.env` file if you want to change the context window size, the model and/or the thinking mode
+
+4. Start containers:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.add-llamacpp.yml up -d
+   ```
+
+5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
+
 
 ## Add Ollama to your default setup
 

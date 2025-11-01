@@ -42,6 +42,17 @@ def register_provider(type_: ProviderType,
 # Register built-in providers
 # (call this once at app startup, or in settings.py)
 register_provider(
+    ProviderType.LLAMA_CPP,
+    lambda p: ChatOpenAI(
+        model=p.model,
+        openai_api_key="None",
+        base_url=p.base_url,
+        temperature=0,
+        max_retries=2,
+        streaming=True
+    )
+)
+register_provider(
     ProviderType.MISTRAL,
     lambda p: ChatMistralAI(
         model=p.model,
