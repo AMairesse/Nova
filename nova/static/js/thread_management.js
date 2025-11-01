@@ -353,12 +353,8 @@
           const dropdownButton = document.getElementById('dropdownMenuButton');
           if (selectedAgentInput) selectedAgentInput.value = value;
           if (dropdownButton) {
-            dropdownButton.innerHTML = '<i class="bi bi-robot"></i>'; // Keep only icon
-            dropdownButton.setAttribute('title', label); // Update tooltip title
-            // Refresh tooltip
-            const tooltipInstance = bootstrap.Tooltip.getInstance(dropdownButton);
-            if (tooltipInstance) tooltipInstance.dispose();
-            new bootstrap.Tooltip(dropdownButton);
+            dropdownButton.innerHTML = '<i class="bi bi-robot"></i>';
+            dropdownButton.setAttribute('title', label);
           }
         },
         '.compact-thread-btn': (e, target) => {
@@ -447,21 +443,11 @@
         // Auto-scroll to bottom for new conversations
         this.scrollToBottom();
 
-        // Initialize tooltips after loading
-        this.initTooltips();
-
         // Handle server-rendered interaction cards and check for pending interactions
         this.checkPendingInteractions();
       } catch (error) {
         console.error('Error loading messages:', error);
       }
-    }
-
-    initTooltips() {
-      const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
-      tooltipTriggerList.forEach(tooltipTriggerEl => {
-        new bootstrap.Tooltip(tooltipTriggerEl);
-      });
     }
 
     async compactThread(threadId, btnEl) {
