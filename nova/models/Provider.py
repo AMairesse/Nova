@@ -102,7 +102,7 @@ def check_and_create_system_provider():
         provider = provider or existing.first()
         if provider:
             # If the system provider is not used then delete it
-            if not provider.agents.exists():
+            if not provider.AgentsConfig.exists():
                 provider.delete()
             else:
                 logger.warning(
@@ -135,7 +135,7 @@ def check_and_create_system_provider():
         provider = provider or existing.first()
         if provider:
             # If the system provider is not used then delete it
-            if not provider.agents.exists():
+            if not provider.AgentsConfig.exists():
                 provider.delete()
             else:
                 logger.warning(
