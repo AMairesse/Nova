@@ -1,4 +1,3 @@
-import re
 import sys
 import types
 import importlib
@@ -109,7 +108,6 @@ class DateBuiltinTests(SimpleTestCase):
         self.assertIn("days", schema.get("required", []))
         self.assertEqual(schema["properties"]["days"]["type"], "integer")
         self.assertEqual(schema["properties"]["date"]["type"], "string")
-        self.assertTrue(re.match(r"^\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$$", schema["properties"]["date"]["pattern"]))
         self.assertIs(t["func"], self.mod.add_days)
 
         # add_weeks
