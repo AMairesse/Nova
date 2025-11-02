@@ -86,9 +86,9 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
-    @patch("user_settings.forms.get_available_tool_types", return_value={"date": {"name": "Date Tool"}})
+    @patch("nova.tools.get_available_tool_types", return_value={"date": {"name": "Date Tool"}})
     @patch(
-        "user_settings.forms.get_tool_type",
+        "nova.tools.get_tool_type",
         return_value={
             "name": "Date Tool",
             "description": "Dates",
@@ -227,7 +227,15 @@ class ToolsViewsTests(TestCase):
         tool = create_tool(self.user, tool_type=Tool.ToolType.API, endpoint="https://api.example.com")
         response = self.client.post(
             reverse("user_settings:tool-configure", args=[tool.id]),
-            data={"auth_type": "basic", "username": "foo", "password": "bar"},
+            data={
+                "auth_type": "basic",
+                "username": "foo",
+                "password": "bar",
+                "token": "",
+                "token_type": "",
+                "client_id": "",
+                "client_secret": "",
+            },
         )
         self.assertEqual(response.status_code, 302)
         credential = ToolCredential.objects.get(user=self.user, tool=tool)

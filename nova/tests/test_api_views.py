@@ -109,10 +109,8 @@ class QuestionAnswerViewTests(BaseTestCase):
         self.assertIn("LLM error", response.data.get("detail", ""))
 
     def test_post_agent_creation_failure_returns_500(self):
-        async def failing_create(*args, **kwargs):
-            raise RuntimeError("failed to build agent")
-
-        with patch("nova.api.views.LLMAgent.create", side_effect=failing_create):
+        with patch("nova.api.views.LLMAgent.create") as mock_create:
+            mock_create.side_effect = RuntimeError("failed to build agent")
             request = self.factory.post(
                 "/api/ask/", data={"question": "Hi?"}, format="json"
             )

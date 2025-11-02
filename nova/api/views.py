@@ -57,10 +57,9 @@ class QuestionAnswerView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Create the agent
-        llm_agent = async_to_sync(LLMAgent.create)(request.user, None, agent_config)
-
         try:
+            # Create the agent
+            llm_agent = async_to_sync(LLMAgent.create)(request.user, None, agent_config)
             answer = async_to_sync(llm_agent.ainvoke)(question)
         except Exception as exc:
             return Response(

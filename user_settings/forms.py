@@ -361,7 +361,7 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
     caldav_url = forms.URLField(
         required=False,
         help_text=_("CalDav server URL"),
-        empty_value="https://",
+        empty_value=None,
     )
 
     class Meta:

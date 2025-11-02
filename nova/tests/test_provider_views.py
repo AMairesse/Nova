@@ -158,6 +158,7 @@ class ProviderViewsTests(TestCase):
             reverse("user_settings:provider-delete", args=[provider.id])
         )
         self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response["Location"])
 
         self.client.login(username="bob", password="testpass123")
         response = self.client.post(
@@ -187,8 +188,7 @@ class ProviderViewsTests(TestCase):
         response = self.client.post(
             reverse("user_settings:provider-delete", args=[system_provider.id])
         )
-        # The view redirects back to dashboard but keeps the provider
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 404)
         self.assertTrue(
             LLMProvider.objects.filter(pk=system_provider.pk).exists()
         )
