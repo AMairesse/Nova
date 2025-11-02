@@ -5,7 +5,26 @@
       hx-swap="none" novalidate>
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
-  
+
+  <!-- Change Password Section -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">{% trans "Change Password" %}</h5>
+    </div>
+    <div class="card-body">
+      {% csrf_token %}
+      {{ password_form.old_password|as_crispy_field }}
+      {{ password_form.new_password1|as_crispy_field }}
+      {{ password_form.new_password2|as_crispy_field }}
+      <button type="submit"
+              formaction="{% url 'user_settings:general' %}?partial=1"
+              formmethod="post"
+              class="btn btn-primary">
+        {% trans "Change Password" %}
+      </button>
+    </div>
+  </div>
+
   <!-- Langfuse Configuration Section -->
   <div class="card mb-4">
     <div class="card-header">
