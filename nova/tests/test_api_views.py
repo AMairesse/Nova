@@ -1,98 +1,124 @@
 # nova/tests/test_api_views.py
+from __future__ import annotations
+
 from unittest.mock import patch
 
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from nova.api.views import QuestionAnswerView
+from nova.models.Provider import ProviderType
 from nova.tests.base import BaseTestCase
-from nova.models.AgentConfig import AgentConfig
-from nova.models.Provider import ProviderType, LLMProvider
+from nova.tests.factories import create_agent, create_provider
 
 
 class QuestionAnswerViewTests(BaseTestCase):
     def setUp(self):
         super().setUp()
         self.factory = APIRequestFactory()
-        # Create an agent and set it as the default
-        provider = LLMProvider.objects.create(user=self.user, name="Prov", provider_type=ProviderType.OPENAI,
-                                              model="gpt-4o-mini", api_key="dummy")
-        agent_config = AgentConfig.objects.create(user=self.user, name="Agent A",
-                                                  llm_provider=provider, system_prompt="x")
-        self.profile.default_agent = agent_config
+        provider = create_provider(self.user, provider_type=ProviderType.OPENAI)
+        agent = create_agent(self.user, provider=provider)
+        self.profile.default_agent = agent
         self.profile.save()
+
+    def _view(self):
+        return QuestionAnswerView.as_view()
 
     def test_get_requires_authentication(self):
         request = self.factory.get("/api/ask/")
-        response = QuestionAnswerView.as_view()(request)
-
-        self.assertIn(response.status_code, {status.HTTP_401_UNAUTHORIZED,
-                                             status.HTTP_403_FORBIDDEN})
+        response = self._view()(request)
+        self.assertIn(
+            response.status_code,
+            {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN},
+        )
 
     def test_get_usage_ok(self):
         request = self.factory.get("/api/ask/")
         force_authenticate(request, user=self.user)
-        response = QuestionAnswerView.as_view()(request)
-
+        response = self._view()(request)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("usage", response.data)
         self.assertIn("message", response.data)
         self.assertIn("payload_format", response.data["usage"])
 
-    def test_post_invalid_payload_returns_400(self):
+    def test_post_invalid_payload_returns_400_with_errors(self):
         request = self.factory.post("/api/ask/", data={}, format="json")
         force_authenticate(request, user=self.user)
-        response = QuestionAnswerView.as_view()(request)
-
+        response = self._view()(request)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertTrue(response.data)
+        self.assertIn("question", response.data)
+
+    def test_post_missing_default_agent_returns_400(self):
+        self.profile.default_agent = None
+        self.profile.save()
+        request = self.factory.post(
+            "/api/ask/", data={"question": "Hi?"}, format="json"
+        )
+        force_authenticate(request, user=self.user)
+        response = self._view()(request)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "User has no default agent")
 
     def test_post_valid_payload_success(self):
         class FakeLLMAgent:
             def __init__(self, user, thread_id, agent_config):
-                self.user = None
-                self.thread_id = None
-                self.agent_config = None
+                self.user = user
+                self.thread_id = thread_id
+                self.agent_config = agent_config
 
             @classmethod
             async def create(cls, user, thread_id, agent_config):
-                agent = cls(user, thread_id, agent_config)
-                return agent
+                return cls(user, thread_id, agent_config)
 
             async def ainvoke(self, question):
-                return "This is the answer"
+                return "Answer"
 
         with patch("nova.api.views.LLMAgent", FakeLLMAgent):
-            request = self.factory.post("/api/ask/", data={"question": "Hi?"},
-                                        format="json")
+            request = self.factory.post(
+                "/api/ask/", data={"question": "Hi?"}, format="json"
+            )
             force_authenticate(request, user=self.user)
-            response = QuestionAnswerView.as_view()(request)
-
+            response = self._view()(request)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data.get("question"), "Hi?")
-        self.assertEqual(response.data.get("answer"), "This is the answer")
+        self.assertEqual(response.data["question"], "Hi?")
+        self.assertEqual(response.data["answer"], "Answer")
 
     def test_post_llm_error_returns_500(self):
         class FailingLLMAgent:
             def __init__(self, user, thread_id, agent_config):
-                self.user = None
-                self.thread_id = None
-                self.agent_config = None
+                self.user = user
+                self.thread_id = thread_id
+                self.agent_config = agent_config
 
             @classmethod
             async def create(cls, user, thread_id, agent_config):
-                agent = cls(user, thread_id, agent_config)
-                return agent
+                return cls(user, thread_id, agent_config)
 
             def ainvoke(self, question):
                 raise RuntimeError("boom")
 
         with patch("nova.api.views.LLMAgent", FailingLLMAgent):
-            request = self.factory.post("/api/ask/", data={"question": "Hi?"},
-                                        format="json")
+            request = self.factory.post(
+                "/api/ask/", data={"question": "Hi?"}, format="json"
+            )
             force_authenticate(request, user=self.user)
-            response = QuestionAnswerView.as_view()(request)
+            response = self._view()(request)
+        self.assertEqual(
+            response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        self.assertIn("LLM error", response.data.get("detail", ""))
 
-        self.assertEqual(response.status_code,
-                         status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def test_post_agent_creation_failure_returns_500(self):
+        async def failing_create(*args, **kwargs):
+            raise RuntimeError("failed to build agent")
+
+        with patch("nova.api.views.LLMAgent.create", side_effect=failing_create):
+            request = self.factory.post(
+                "/api/ask/", data={"question": "Hi?"}, format="json"
+            )
+            force_authenticate(request, user=self.user)
+            response = self._view()(request)
+        self.assertEqual(
+            response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
         self.assertIn("LLM error", response.data.get("detail", ""))
