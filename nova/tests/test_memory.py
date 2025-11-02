@@ -4,12 +4,19 @@ Tests for the memory builtin tool and UserInfo model.
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from asgiref.sync import async_to_sync
+from types import SimpleNamespace
 
 from nova.models.UserObjects import UserInfo
 from nova.tools.builtins.memory import (
     _get_theme_content,
     _set_theme_content,
     _delete_theme_content,
+    get_info,
+    set_info,
+    delete_theme,
+    create_theme,
+    list_themes,
 )
 
 
@@ -97,10 +104,82 @@ class MemoryToolTest(TestCase):
         self.assertNotIn("# Work", updated)
         self.assertNotIn("Company: Test Corp", updated)
 
-    def test_memory_functions(self):
-        """Test async memory functions."""
-        # This would require mocking LLMAgent, but basic structure is tested above
-        pass
+
+class MemoryToolAsyncTests(TestCase):
+    """Tests covering the memory tool coroutine helpers."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='asyncuser',
+            email='async@example.com',
+            password='asyncpass123'
+        )
+        self.agent = SimpleNamespace(user=self.user)
+        user_info = UserInfo.objects.get(user=self.user)
+        user_info.markdown_content = "\n".join([
+            "# global_user_preferences",
+            "- Locale: en",
+            "",
+            "# Personal",
+            "- Name: Async User",
+            "- Age: 42",
+            "",
+            "# Work",
+            "- Company: Async Corp",
+            "- Role: Engineer",
+        ])
+        user_info.save()
+
+    def test_get_info_returns_existing_theme(self):
+        result = async_to_sync(get_info)("Personal", self.agent)
+        self.assertIn("Async User", result)
+
+    def test_get_info_handles_missing_theme(self):
+        result = async_to_sync(get_info)("UnknownTheme", self.agent)
+        self.assertEqual(result, "No information stored for theme 'UnknownTheme'.")
+
+    def test_set_info_updates_existing_theme(self):
+        response = async_to_sync(set_info)("Personal", "- Name: Updated User\n- Age: 43", self.agent)
+        self.assertEqual(response, "Information for theme 'Personal' has been updated.")
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertIn("Updated User", user_info.markdown_content)
+
+    def test_set_info_rejects_malicious_content(self):
+        response = async_to_sync(set_info)("Personal", "<script>alert(1)</script>", self.agent)
+        self.assertIn("unsafe HTML tags", response)
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertNotIn("alert(1)", user_info.markdown_content)
+
+    def test_delete_theme_removes_section(self):
+        response = async_to_sync(delete_theme)("Work", self.agent)
+        self.assertEqual(response, "Theme 'Work' has been deleted.")
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertNotIn("# Work", user_info.markdown_content)
+
+    def test_delete_theme_protects_global_preferences(self):
+        response = async_to_sync(delete_theme)("global_user_preferences", self.agent)
+        self.assertEqual(
+            response,
+            "The 'global_user_preferences' theme cannot be deleted as it is required."
+        )
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertIn("# global_user_preferences", user_info.markdown_content)
+
+    def test_create_theme_adds_new_section(self):
+        response = async_to_sync(create_theme)("Hobbies", self.agent)
+        self.assertEqual(response, "Theme 'Hobbies' has been created.")
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertIn("# Hobbies", user_info.markdown_content)
+
+    def test_create_theme_returns_existing_message(self):
+        response = async_to_sync(create_theme)("Personal", self.agent)
+        self.assertEqual(response, "Theme 'Personal' already exists.")
+
+    def test_list_themes_formats_output(self):
+        response = async_to_sync(list_themes)(self.agent)
+        self.assertIn("Available themes:", response)
+        self.assertIn("- Personal", response)
+        self.assertIn("- global_user_preferences", response)
 
 
 class MemoryIntegrationTest(TestCase):
