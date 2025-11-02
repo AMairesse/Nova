@@ -5,7 +5,12 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
 from nova.models.UserObjects import UserProfile
 from nova.tests.base import BaseTestCase
-from nova.tests.factories import create_agent, create_provider, create_user
+from nova.tests.factories import (
+    create_agent,
+    create_provider,
+    create_tool,
+    create_user,
+)
 
 
 class AgentViewsTest(BaseTestCase):
@@ -46,6 +51,17 @@ class AgentViewsTest(BaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/fragments/agent_table.html")
+
+    def test_list_view_orders_agents_by_name(self):
+        provider = self._create_provider()
+        create_agent(self.user, provider=provider, name="Beta")
+        create_agent(self.user, provider=provider, name="Alpha")
+
+        response = self.client.get(reverse("user_settings:agents"))
+        self.assertEqual(response.status_code, 200)
+
+        ordered_names = [agent.name for agent in response.context["object_list"]]
+        self.assertEqual(ordered_names, ["Alpha", "Beta"])
 
     def test_create_agent_success_redirects_to_dashboard_tab(self):
         provider = self._create_provider()
@@ -93,6 +109,40 @@ class AgentViewsTest(BaseTestCase):
             form,
             "tool_description",
             "Required when using an agent as a tool.",
+        )
+
+    def test_create_agent_persists_selected_tools_and_agent_tools(self):
+        provider = self._create_provider()
+        attached_tool = create_tool(self.user, name="Shared Tool")
+        helper_agent = create_agent(
+            self.user,
+            provider=provider,
+            name="Helper Tool Agent",
+            is_tool=True,
+            tool_description="Assists other agents",
+        )
+        payload = {
+            "from": "agents",
+            "name": "Agent With Tools",
+            "llm_provider": str(provider.pk),
+            "system_prompt": "Make great use of assigned tools.",
+            "recursion_limit": "35",
+            "tools": [str(attached_tool.pk)],
+            "agent_tools": [str(helper_agent.pk)],
+            "tool_description": "",
+        }
+
+        response = self.client.post(reverse("user_settings:agent-add"), payload)
+
+        self.assertEqual(response.status_code, 302)
+        created_agent = AgentConfig.objects.get(user=self.user, name="Agent With Tools")
+        self.assertSetEqual(
+            set(created_agent.tools.values_list("pk", flat=True)),
+            {attached_tool.pk},
+        )
+        self.assertSetEqual(
+            set(created_agent.agent_tools.values_list("pk", flat=True)),
+            {helper_agent.pk},
         )
 
     def test_update_agent_successfully_changes_name(self):

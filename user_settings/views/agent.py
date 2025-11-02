@@ -31,6 +31,12 @@ class AgentListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
     context_object_name = "agents"
     paginate_by = 20
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return queryset.select_related("llm_provider").prefetch_related(
+            "tools", "agent_tools"
+        ).order_by("name", "pk")
+
     def get_template_names(self):
         if self.request.GET.get("partial") == "1":
             return ["user_settings/fragments/agent_table.html"]
