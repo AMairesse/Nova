@@ -73,7 +73,11 @@ class GeneralSettingsView(
                 update_session_auth_hash(request, user)  # Keep user logged in
                 # Return success response for HTMX
                 if request.headers.get("HX-Request") == "true":
-                    return render(request, 'user_settings/fragments/password_change_success.html')
+                    context = {
+                        'password_form': PasswordChangeForm(user=request.user),
+                        'password_change_success': True
+                    }
+                    return render(request, 'user_settings/fragments/password_change_form.html', context)
                 # For non-HTMX, redirect to dashboard
                 return self.get_success_url()
             else:
