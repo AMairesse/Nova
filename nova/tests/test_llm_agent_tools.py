@@ -160,6 +160,13 @@ class LLMAgentToolsTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
 
     async def test_load_tools_agent_tools(self):
         """Test loading of agent-as-tools."""
+        # Mock nova.tools.files to avoid import error
+        fake_files_mod = types.ModuleType("nova.tools.files")
+
+        async def async_get_functions(agent):
+            return []
+        fake_files_mod.get_functions = async_get_functions
+
         agent_tools = [SimpleNamespace(name="delegate_agent")]
 
         agent = llm_agent_mod.LLMAgent(
@@ -174,8 +181,10 @@ class LLMAgentToolsTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
             system_prompt=None,
             llm_provider=self.create_mock_provider(),
         )
-
-        tools = await llm_agent_mod.load_tools(agent)
+        with patch.dict(sys.modules, {
+            "nova.tools.files": fake_files_mod
+        }):
+            tools = await llm_agent_mod.load_tools(agent)
 
         # Verify agent tool wrapper was created
         self.assertIn({"wrapped_agent_tool": "delegate_agent"}, tools)
