@@ -167,7 +167,7 @@ class AgentViewsTest(BaseTestCase):
         self.assertEqual(agent.name, "Renamed")
 
     def test_update_agent_rejects_non_owner(self):
-        other_user = create_user()
+        other_user = create_user("otheruser")
         provider = create_provider(other_user)
         other_agent = create_agent(other_user, provider=provider)
         url = reverse("user_settings:agent-edit", args=[other_agent.pk])
@@ -187,7 +187,7 @@ class AgentViewsTest(BaseTestCase):
         self.assertFalse(AgentConfig.objects.filter(pk=agent.pk).exists())
 
     def test_delete_agent_rejects_non_owner(self):
-        other_user = create_user()
+        other_user = create_user("otheruser")
         provider = create_provider(other_user)
         other_agent = create_agent(other_user, provider=provider)
         url = reverse("user_settings:agent-delete", args=[other_agent.pk])
@@ -213,7 +213,7 @@ class AgentViewsTest(BaseTestCase):
         self.assertEqual(profile.default_agent_id, agent_secondary.id)
 
     def test_make_default_agent_rejects_non_owner(self):
-        other_user = create_user()
+        other_user = create_user("otheruser")
         provider = create_provider(other_user)
         other_agent = create_agent(other_user, provider=provider)
 
