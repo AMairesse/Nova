@@ -4,7 +4,8 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from langchain_core.tools import StructuredTool
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
+
+from django.conf import settings
 
 from nova.llm.llm_agent import LLMAgent
 
@@ -25,54 +26,16 @@ METADATA = {
 _MAX_TOTAL_BYTES = 600 * 1024  # 600 KB total cap across all files
 
 
-# ------------- Input normalization helpers -----------------------------------------------
-
-def _extract_slug(slug_or_url: Optional[str]) -> Optional[str]:
-    """
-    Be forgiving with agent input: accept either a bare slug or a full /apps/<slug>/ URL.
-    Returns normalized slug string or None when input is empty/invalid.
-    """
-    if not slug_or_url:
-        return None
-    s = str(slug_or_url).strip()
-    if not s:
-        return None
-
-    # Fast path: if it looks like a URL, parse it
-    try:
-        parsed = urlparse(s)
-        path = parsed.path if parsed.scheme or parsed.netloc else s
-    except Exception:
-        path = s
-
-    # Remove query/fragment from raw strings too
-    if "?" in path:
-        path = path.split("?", 1)[0]
-    if "#" in path:
-        path = path.split("#", 1)[0]
-
-    # Normalize trailing slashes and split
-    path = path.strip("/")
-    parts = [p for p in path.split("/") if p]
-
-    # Accept forms:
-    # - "apps/<slug>" or "/apps/<slug>/" or "https://host/apps/<slug>/..."
-    # - "<slug>" (bare)
-    if not parts:
-        return None
-    if parts[0] == "apps" and len(parts) >= 2:
-        return parts[1]
-    # Otherwise take the last non-empty segment as a best effort
-    return parts[-1]
-
-
 # ------------- DB helpers (sync wrapped) -------------------------------------------------
-
 
 def _get_webapp_by_slug_sync(user, slug: str):
     from nova.models.WebApp import WebApp
     # Strict multi-tenancy: only user's apps
-    return WebApp.objects.select_related("thread", "user").get(user=user, slug=slug)
+    try:
+        webapp = WebApp.objects.select_related("thread", "user").get(user=user, slug=slug)
+    except WebApp.DoesNotExist:
+        webapp = None
+    return webapp
 
 
 def _create_webapp_sync(user, thread):
@@ -182,15 +145,15 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         logger.error("Agent must be bound to a user and a thread to manage a webapp.")
         return ("Error with the tool.")
 
-    normalized = _extract_slug(slug) if slug is not None else None
-    if normalized:
+    if slug:
         # Fetch existing app, enforce ownership by user
-        webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(user, normalized)
+        webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(user, slug)
+        if not webapp:
+            return ("The webapp slug provided does not exist.")
         # Enforce same thread for stricter isolation (one app per thread context)
         if webapp.thread_id != thread.id:
             logger.error("WebApp belongs to a different thread.")
             return ("Error with the tool.")
-        slug = normalized
     else:
         webapp = await sync_to_async(_create_webapp_sync, thread_sensitive=False)(user, thread)
         slug = webapp.slug
@@ -201,7 +164,8 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         if error_msg:
             return error_msg
 
-    public_url = f"/apps/{slug}/"
+    external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip('/')
+    public_url = f"{external_base}/apps/{slug}/"
 
     # Emit URL and update for live preview setup and refresh
     try:
@@ -217,11 +181,9 @@ async def read_webapp(slug: str, agent: LLMAgent) -> Dict[str, str]:
     """
     Read all files of a webapp (path -> content).
     """
-    normalized = _extract_slug(slug)
-    if not normalized:
-        return ("`slug` must be a non-empty string or an /apps/<slug>/ URL.")
-
-    webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(agent.user, normalized)
+    webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(agent.user, slug)
+    if not webapp:
+        return ("The webapp slug provided does not exist.")
     # Ownership is enforced by query; optional thread affinity check:
     if webapp.thread_id != agent.thread.id:
         logger.error("WebApp belongs to a different thread.")
@@ -240,17 +202,13 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
     """
     return [
         StructuredTool.from_function(
-            coroutine=lambda slug, files: upsert_webapp(slug, files, agent),
-            name="upsert_webapp",
-            description="Create or update a static web-app for the current thread. "
-                        "Allowed extensions: .html, .css, .js. Partial upsert supported.",
+            coroutine=lambda files: upsert_webapp(None, files, agent),
+            name="create_webapp",
+            description="Create a static web-app for the current thread. "
+                        "Allowed extensions: .html, .css, .js.",
             args_schema={
                 "type": "object",
                 "properties": {
-                    "slug": {
-                        "type": ["string", "null"],
-                        "description": "Existing app slug to update, or null to create a new app",
-                    },
                     "files": {
                         "type": "object",
                         "description": "Map of path -> content to upsert (only .html/.css/.js files)",
@@ -258,6 +216,27 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
                     },
                 },
                 "required": ["files"],
+            },
+        ),
+        StructuredTool.from_function(
+            coroutine=lambda slug, files: upsert_webapp(slug, files, agent),
+            name="update_webapp",
+            description="Update an existing static web-app for the current thread. "
+                        "Allowed extensions: .html, .css, .js. Partial update supported.",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "description": "Existing app slug to update",
+                    },
+                    "files": {
+                        "type": "object",
+                        "description": "Map of path -> content to upsert (only .html/.css/.js files)",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                "required": ["slug", "files"],
             },
         ),
         StructuredTool.from_function(
