@@ -204,14 +204,15 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         StructuredTool.from_function(
             coroutine=lambda files: upsert_webapp(None, files, agent),
             name="create_webapp",
-            description="Create a static web-app for the current thread. "
-                        "Allowed extensions: .html, .css, .js.",
+            description="Create a static web-app for the current thread."
+                        "Use only if update is not possible or relevant.",
             args_schema={
                 "type": "object",
                 "properties": {
                     "files": {
                         "type": "object",
-                        "description": "Map of path -> content to upsert (only .html/.css/.js files)",
+                        "description": "Map of path -> content to upsert (only .html/.css/.js files, "
+                                       "do not escape chars)",
                         "additionalProperties": {"type": "string"},
                     },
                 },
@@ -221,8 +222,8 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         StructuredTool.from_function(
             coroutine=lambda slug, files: upsert_webapp(slug, files, agent),
             name="update_webapp",
-            description="Update an existing static web-app for the current thread. "
-                        "Allowed extensions: .html, .css, .js. Partial update supported.",
+            description="Update an existing static web-app for the current thread."
+                        "Partial update supported.",
             args_schema={
                 "type": "object",
                 "properties": {
