@@ -89,15 +89,14 @@
           return;
         }
 
-        // Webapps: preview side-by-side
+        // Webapps: open dedicated preview page
         const previewEl = e.target.closest('.webapp-preview-btn');
         if (previewEl) {
           e.preventDefault();
           const slug = previewEl.dataset.slug || '';
-          const url = previewEl.dataset.url || '';
-          if (window.FileManager && typeof window.FileManager.activateSplitPreview === 'function') {
-            window.FileManager.activateSplitPreview(slug, url);
-          }
+          const threadId = this.currentThreadId || localStorage.getItem('lastThreadId');
+          if (!slug || !threadId) return;
+          window.location.href = `/apps/preview/${threadId}/${slug}/`;
           return;
         }
       });

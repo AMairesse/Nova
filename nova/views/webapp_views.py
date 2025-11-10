@@ -84,3 +84,28 @@ def webapps_list(request, thread_id: int):
         "nova/files/webapps_list.html",
         {"thread": thread, "webapps": items},
     )
+
+
+@login_required
+def preview_webapp(request, thread_id: int, slug: str):
+    """
+    Full-page preview that shows a 30/70 split:
+    - Left: the selected thread's chat UI
+    - Right: iframe of the selected webapp
+    Includes a close button to return to the regular display.
+    """
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    webapp = get_object_or_404(WebApp, user=request.user, thread=thread, slug=slug)
+
+    external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip("/") if settings.CSRF_TRUSTED_ORIGINS else ""
+    public_url = f"{external_base}/apps/{slug}/" if external_base else f"/apps/{slug}/"
+
+    context = {
+        "thread": thread,
+        "webapp": {
+            "slug": slug,
+            "public_url": public_url,
+            "name": getattr(webapp, "name", None),
+        },
+    }
+    return render(request, "nova/preview.html", context)
