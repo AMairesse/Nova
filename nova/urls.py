@@ -59,6 +59,11 @@ urlpatterns += [
     path('interactions/pending/', get_pending_interactions, name='interaction_pending'),
 ]
 
+# Web apps sidebar listing (server-rendered partial)
+urlpatterns += [
+    path('apps/list/<int:thread_id>/', webapps_list, name='webapps_list'),
+]
+
 # Web apps
 urlpatterns += [
     path('apps/<slug:slug>/', serve_webapp, name='serve_webapp_root'),
@@ -70,11 +75,6 @@ if settings.DEBUG:
     urlpatterns += [
         path('healthz/', healthz, name='healthz'),
     ]
-
-# Web apps sidebar listing (server-rendered partial)
-urlpatterns += [
-    path('apps/list/<int:thread_id>/', webapps_list, name='webapps_list'),
-]
 
 # User settings
 urlpatterns += [

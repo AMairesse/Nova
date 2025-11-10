@@ -261,29 +261,11 @@
           }
         },
 
-        // Refresh web-app iframe(s) on updates
+        // Announce webapp update; actual debounced refresh handled by PreviewManager
         'webapp_update': (data) => {
           try {
             const slug = data.slug || '';
-            // Broadcast a custom event for any component that wants to react
             document.dispatchEvent(new CustomEvent('webapp_update', { detail: { slug } }));
-
-            // Default behavior: refresh any iframe annotated with data-webapp-slug
-            const iframe = document.querySelector('iframe[data-webapp-slug]');
-            if (iframe) {
-              const currentSlug = iframe.dataset.webappSlug || '';
-              const src = iframe.getAttribute('src') || '';
-              if (currentSlug === slug || src.includes(`/apps/${slug}/`)) {
-                try {
-                  const url = new URL(src, window.location.origin);
-                  url.searchParams.set('v', Date.now().toString());
-                  iframe.setAttribute('src', url.toString());
-                } catch (e) {
-                  // Fallback if URL parsing fails
-                  iframe.setAttribute('src', src + (src.includes('?') ? '&' : '?') + 'v=' + Date.now());
-                }
-              }
-            }
           } catch (e) {
             console.warn('webapp_update handler error:', e);
           }
@@ -485,6 +467,9 @@
         if (threadId) {
           localStorage.setItem('lastThreadId', threadId);
         }
+
+        // Announce thread change so other modules (Files panel, Preview split) can react
+        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: threadId || null } }));
 
         this.initTextareaFocus();
         // Update voice button visibility based on browser support
@@ -1065,6 +1050,251 @@
   // ============================================================================
   // MAIN INITIALIZATION
   // ============================================================================
+  // Preview split manager for webapp iframe
+  const PreviewManager = (function () {
+    let debounceTimer = null;
+
+    function el(id) { return document.getElementById(id); }
+    function getThreadId() { return localStorage.getItem('lastThreadId') || null; }
+    function getWidthKey(threadId) { return `splitWidth:${threadId}`; }
+    function getSlugKey(threadId) { return `lastPreviewSlug:${threadId}`; }
+    function isMobile() { return window.innerWidth < 992; }
+
+    function applyPersistedWidth() {
+      const threadId = getThreadId();
+      const pct = threadId ? parseInt(localStorage.getItem(getWidthKey(threadId)) || '30', 10) : 30;
+      document.documentElement.style.setProperty('--chat-pane-width', `${Math.min(80, Math.max(20, pct))}%`);
+    }
+
+    function attachIframeLoadHandler() {
+      const iframe = el('webapp-iframe');
+      const spinner = el('webapp-spinner');
+      if (!iframe) return;
+      iframe.addEventListener('load', () => {
+        if (spinner) {
+          spinner.classList.add('d-none');
+          spinner.classList.remove('d-flex');
+        }
+      });
+    }
+
+    function setSpinnerVisible(visible) {
+      const spinner = el('webapp-spinner');
+      if (!spinner) return;
+      spinner.classList.toggle('d-none', !visible);
+      spinner.classList.toggle('d-flex', visible);
+    }
+
+    function cacheBust(url) {
+      try {
+        const u = new URL(url, window.location.origin);
+        u.searchParams.set('v', Date.now().toString());
+        return u.toString();
+      } catch (_) {
+        return url + (url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+      }
+    }
+
+    function refreshIframeIfMatches(slug) {
+      const iframe = el('webapp-iframe');
+      if (!iframe) return;
+      const currentSlug = iframe.dataset.webappSlug || '';
+      const src = iframe.getAttribute('src') || '';
+      if (!src) return;
+      if (currentSlug === slug || src.includes(`/apps/${slug}/`)) {
+        setSpinnerVisible(true);
+        iframe.setAttribute('src', cacheBust(src));
+      }
+    }
+
+    function setDesktopLayoutActive(active) {
+      const resizer = el('split-resizer');
+      if (resizer) resizer.classList.toggle('d-none', !active);
+    }
+
+    function setMobileOverlayModeActive(active) {
+      const chatPane = el('chat-pane');
+      if (!chatPane) return;
+      if (active) {
+        chatPane.classList.add('position-absolute', 'top-0', 'start-0', 'w-100', 'h-100', 'bg-white', 'shadow');
+        chatPane.classList.add('d-none'); // start hidden over preview
+      } else {
+        chatPane.classList.remove('position-absolute', 'top-0', 'start-0', 'w-100', 'h-100', 'bg-white', 'shadow', 'd-none');
+      }
+    }
+
+    function openPreview(slug, url) {
+      const threadId = getThreadId();
+      const previewPane = el('preview-pane');
+      const iframe = el('webapp-iframe');
+      const openBtn = el('webapp-open-btn');
+      const slugLbl = el('webapp-slug-label');
+
+      if (!previewPane || !iframe) return;
+
+      // Persist slug
+      if (threadId) localStorage.setItem(getSlugKey(threadId), slug);
+
+      // Apply width and show panels
+      applyPersistedWidth();
+      previewPane.classList.remove('d-none');
+      setDesktopLayoutActive(!isMobile());
+      setMobileOverlayModeActive(isMobile());
+
+      // Set URL and labels
+      const targetUrl = url || `/apps/${slug}/`;
+      iframe.dataset.webappSlug = slug || '';
+      setSpinnerVisible(true);
+      iframe.setAttribute('src', targetUrl);
+      if (openBtn) openBtn.setAttribute('href', targetUrl);
+      if (slugLbl) slugLbl.textContent = slug ? `(${slug})` : '';
+    }
+
+    function closePreview() {
+      const previewPane = el('preview-pane');
+      const resizer = el('split-resizer');
+      const chatPane = el('chat-pane');
+      if (previewPane) previewPane.classList.add('d-none');
+      if (resizer) resizer.classList.add('d-none');
+      if (chatPane) {
+        document.documentElement.style.setProperty('--chat-pane-width', '100%');
+      }
+    }
+
+    function handleResizeDrag() {
+      const resizer = el('split-resizer');
+      const container = el('split-container');
+      if (!resizer || !container) return;
+
+      resizer.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const onMove = (ev) => {
+          const rect = container.getBoundingClientRect();
+          const x = ev.clientX - rect.left;
+          let pct = Math.round((x / rect.width) * 100);
+          pct = Math.min(80, Math.max(20, pct));
+          document.documentElement.style.setProperty('--chat-pane-width', `${pct}%`);
+        };
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          const threadId = getThreadId();
+          if (threadId) {
+            const style = getComputedStyle(document.documentElement).getPropertyValue('--chat-pane-width').trim();
+            const pct = parseInt(style.replace('%', '')) || 30;
+            localStorage.setItem(getWidthKey(threadId), String(pct));
+          }
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+
+      // Keyboard resize
+      resizer.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        const style = getComputedStyle(document.documentElement).getPropertyValue('--chat-pane-width').trim();
+        let pct = parseInt(style.replace('%', '')) || 30;
+        pct += (e.key === 'ArrowRight' ? 2 : -2);
+        pct = Math.min(80, Math.max(20, pct));
+        document.documentElement.style.setProperty('--chat-pane-width', `${pct}%`);
+        const threadId = getThreadId();
+        if (threadId) localStorage.setItem(getWidthKey(threadId), String(pct));
+      });
+    }
+
+    function bindControls() {
+      const closeBtn = document.getElementById('webapp-close-btn');
+      const refreshBtn = document.getElementById('webapp-refresh-btn');
+      const mobileToggle = document.getElementById('mobile-chat-toggle');
+      const iframe = document.getElementById('webapp-iframe');
+
+      if (closeBtn) closeBtn.addEventListener('click', closePreview);
+      if (refreshBtn) refreshBtn.addEventListener('click', () => {
+        if (!iframe) return;
+        const src = iframe.getAttribute('src') || '';
+        if (!src) return;
+        setSpinnerVisible(true);
+        iframe.setAttribute('src', cacheBust(src));
+      });
+      if (mobileToggle) mobileToggle.addEventListener('click', () => {
+        const chatPane = document.getElementById('chat-pane');
+        if (!chatPane) return;
+        chatPane.classList.toggle('d-none');
+      });
+
+      // ESC focuses chat input
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+          if (textarea) textarea.focus();
+        }
+      });
+
+      // Update layout mode on resize
+      window.addEventListener('resize', () => {
+        if (document.getElementById('preview-pane')?.classList.contains('d-none')) return;
+        setDesktopLayoutActive(!isMobile());
+        setMobileOverlayModeActive(isMobile());
+      });
+    }
+
+    function handleThreadChanged(threadId) {
+      // Restore split width for new thread
+      applyPersistedWidth();
+      // Restore last preview for this thread if any
+      if (!threadId) {
+        closePreview();
+        return;
+      }
+      const slug = localStorage.getItem(getSlugKey(threadId));
+      if (slug) {
+        openPreview(slug, `/apps/${slug}/`);
+      } else {
+        closePreview();
+      }
+    }
+
+    function init() {
+      attachIframeLoadHandler();
+      handleResizeDrag();
+      bindControls();
+      applyPersistedWidth();
+
+      // Event: open split preview
+      document.addEventListener('webapp_preview_activate', (e) => {
+        const { slug, url } = (e.detail || {});
+        if (!slug) return;
+        openPreview(slug, url);
+      });
+
+      // Event: webapp update debounced
+      document.addEventListener('webapp_update', (e) => {
+        const slug = (e.detail && e.detail.slug) || '';
+        if (!slug) return;
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          refreshIframeIfMatches(slug);
+        }, 400);
+      });
+
+      // Restore on initial load
+      const threadId = getThreadId();
+      if (threadId) {
+        const slug = localStorage.getItem(getSlugKey(threadId));
+        if (slug) {
+          openPreview(slug, `/apps/${slug}/`);
+        }
+      }
+
+      // Listen to thread changes
+      document.addEventListener('threadChanged', (e) => {
+        handleThreadChanged(e.detail?.threadId || null);
+      });
+    }
+
+    return { init, openPreview, closePreview, applyPersistedWidth };
+  })();
 
   // Thread UI helpers for grouping and DOM manipulation
   function getGroupOrder() {
@@ -1230,12 +1460,18 @@
       messageManager.init();
       const threadLoadingManager = new ThreadLoadingManager();
       threadLoadingManager.init();
+      if (typeof PreviewManager !== 'undefined') {
+        PreviewManager.init();
+      }
     });
   } else {
     const messageManager = new MessageManager();
     messageManager.init();
     const threadLoadingManager = new ThreadLoadingManager();
     threadLoadingManager.init();
+    if (typeof PreviewManager !== 'undefined') {
+      PreviewManager.init();
+    }
   }
 
   // Expose for debugging

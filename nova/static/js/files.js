@@ -103,6 +103,70 @@
       });
     },
 
+    // Bind Files | Webapps tabs inside the sidebar (works even when content is injected via innerHTML)
+    bindSidebarTabs() {
+      const tabsEl = document.getElementById('files-webapps-tabs');
+      if (!tabsEl) return;
+
+      const filesEl = document.getElementById('file-tree-container');
+      const appsEl = document.getElementById('webapps-list-container');
+      const toolbar = document.getElementById('files-toolbar');
+
+      // Determine persisted tab per thread
+      const threadId = this.currentThreadId || localStorage.getItem('lastThreadId') || null;
+      const savedTab = threadId ? (localStorage.getItem(`sidebarTab:${threadId}`) || 'files') : 'files';
+
+      // Initialize state from storage
+      this.applySidebarTabState(threadId, savedTab);
+
+      // Delegate click inside tabs header
+      tabsEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.nav-link');
+        if (!btn) return;
+        const target = btn.getAttribute('data-tab-target');
+        if (!target) return;
+
+        // Persist selection per thread
+        const tid = this.currentThreadId || localStorage.getItem('lastThreadId') || null;
+        if (tid) localStorage.setItem(`sidebarTab:${tid}`, target);
+
+        // Apply state (active class + containers + toolbar)
+        this.applySidebarTabState(tid, target);
+      });
+    },
+
+    // Apply active tab and containers visibility based on provided tab ('files' | 'webapps')
+    applySidebarTabState(threadId, tab) {
+      const tabsEl = document.getElementById('files-webapps-tabs');
+      const filesEl = document.getElementById('file-tree-container');
+      const appsEl = document.getElementById('webapps-list-container');
+      const toolbar = document.getElementById('files-toolbar');
+
+      if (!tabsEl) return;
+
+      const isWebapps = tab === 'webapps';
+
+      // Active state on header buttons
+      tabsEl.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+      const activeBtn = tabsEl.querySelector(`.nav-link[data-tab-target="${isWebapps ? 'webapps' : 'files'}"]`);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      // Toggle containers
+      if (filesEl) filesEl.classList.toggle('d-none', isWebapps);
+      if (appsEl) {
+        appsEl.classList.toggle('d-none', !isWebapps);
+        appsEl.setAttribute('aria-hidden', isWebapps ? 'false' : 'true');
+      }
+
+      // Toggle toolbar (only for Files)
+      if (toolbar) toolbar.classList.toggle('d-none', isWebapps);
+
+      // Load webapps list on first show
+      if (isWebapps && typeof window.FileManager.loadWebappsList === 'function') {
+        window.FileManager.loadWebappsList();
+      }
+    },
+
     async loadSidebarContent() {
       if (this.sidebarContentLoaded) return;
 
@@ -118,7 +182,15 @@
         const html = await response.text();
         contentEl.innerHTML = html;
 
+        // Bind tabs and file actions after content injection
+        this.bindSidebarTabs();
         this.attachSidebarEventHandlers();
+
+        // Apply saved tab for current thread
+        const threadId = this.currentThreadId || localStorage.getItem('lastThreadId') || null;
+        const savedTab = threadId ? (localStorage.getItem(`sidebarTab:${threadId}`) || 'files') : 'files';
+        this.applySidebarTabState(threadId, savedTab);
+
         this.sidebarContentLoaded = true;
       } catch (error) {
         console.error('Error loading sidebar:', error);
@@ -600,6 +672,11 @@
 
       await this.loadTree();
 
+      // Re-apply saved tab for this thread
+      const tid = this.currentThreadId || localStorage.getItem('lastThreadId') || null;
+      const savedTab = tid ? (localStorage.getItem(`sidebarTab:${tid}`) || 'files') : 'files';
+      this.applySidebarTabState(tid, savedTab);
+
       if (window.ResponsiveManager) {
         window.ResponsiveManager.syncFilesContent();
       }
@@ -656,10 +733,24 @@
     }
   };
 
-  // Initialize delegated handlers once DOM is ready
+  // Initialize delegated handlers and thread sync once DOM is ready
   document.addEventListener('DOMContentLoaded', () => {
     if (window.FileManager && typeof window.FileManager.initDelegatedHandlers === 'function') {
       window.FileManager.initDelegatedHandlers();
+    }
+
+    // Sync sidebar content with current thread whenever it changes
+    document.addEventListener('threadChanged', (e) => {
+      const tid = e.detail?.threadId || null;
+      if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
+        window.FileManager.updateForThread(tid);
+      }
+    });
+
+    // Initialize sidebar for last thread on load (if available)
+    const initialTid = localStorage.getItem('lastThreadId') || null;
+    if (initialTid && window.FileManager && typeof window.FileManager.updateForThread === 'function') {
+      window.FileManager.updateForThread(initialTid);
     }
   });
 })();
