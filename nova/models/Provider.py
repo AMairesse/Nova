@@ -11,14 +11,6 @@ from nova.utils import validate_relaxed_url
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
-OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
-OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
-
-LLAMA_CPP_SERVER_URL = settings.LLAMA_CPP_SERVER_URL
-LLAMA_CPP_MODEL = settings.LLAMA_CPP_MODEL
-LLAMA_CPP_CTX_SIZE = settings.LLAMA_CPP_CTX_SIZE
-
 
 class ProviderType(models.TextChoices):
     OPENAI = "openai", "OpenAI"
@@ -75,6 +67,15 @@ class LLMProvider(models.Model):
 
 
 def check_and_create_system_provider():
+    # Define shortcuts for settings
+    OLLAMA_SERVER_URL = settings.OLLAMA_SERVER_URL
+    OLLAMA_MODEL_NAME = settings.OLLAMA_MODEL_NAME
+    OLLAMA_CONTEXT_LENGTH = settings.OLLAMA_CONTEXT_LENGTH
+
+    LLAMA_CPP_SERVER_URL = settings.LLAMA_CPP_SERVER_URL
+    LLAMA_CPP_MODEL = settings.LLAMA_CPP_MODEL
+    LLAMA_CPP_CTX_SIZE = settings.LLAMA_CPP_CTX_SIZE
+
     # Get the OLLAMA's system provider if it exists
     provider = LLMProvider.objects.filter(user=None,
                                           name='System - Ollama',

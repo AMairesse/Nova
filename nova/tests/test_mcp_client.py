@@ -15,11 +15,19 @@ from nova.mcp.client import MCPClient
 
 class MCPClientTests(SimpleTestCase):
     def setUp(self):
+        """
+        Ensure each test starts with a clean cache so MCPClient caching behavior
+        is deterministic and isolated between tests.
+        """
         cache.clear()
 
     # ------------- helpers -----------------
 
     class _FakeAsyncClient:
+        """
+        Lightweight stand-in for FastMCPClient exposing only list_tools and
+        call_tool so we can exercise MCPClient logic without real network calls.
+        """
         def __init__(self, tools_queue=None, call_results_queue=None,
                      raise_on_call=None):
             self.tools_queue = tools_queue or []
@@ -51,6 +59,12 @@ class MCPClientTests(SimpleTestCase):
     # ------------- alist_tools -----------------
 
     def test_alist_tools_maps_fields_and_caches(self):
+        """
+        Verify alist_tools():
+        - normalizes heterogeneous MCP tool objects into a consistent dict shape
+        - fills input_schema/output_schema from either snake_case or camelCase
+        - stores results in cache so subsequent calls avoid hitting the server.
+        """
         # Prepare fake tools with mixed attribute styles
         class T1:
             name = "t1"
@@ -87,6 +101,11 @@ class MCPClientTests(SimpleTestCase):
             self.assertEqual(tools2, tools)
 
     def test_alist_tools_cache_is_isolated_by_user_and_force_refresh(self):
+        """
+        Ensure alist_tools():
+        - isolates cached tool lists per (endpoint, user_id)
+        - respects force_refresh=True by bypassing cache and refetching tools.
+        """
         # Build lightweight tool objects with only the required attributes
         class ToolObj:
             def __init__(self, name):
@@ -131,6 +150,12 @@ class MCPClientTests(SimpleTestCase):
     # ------------- acall -----------------
 
     def test_acall_caches_by_tool_and_normalized_inputs(self):
+        """
+        Verify acall():
+        - caches responses per (tool_name, normalized_inputs)
+        - treats kwargs in different orders as identical for caching
+        - avoids extra MCP calls when equivalent requests are repeated.
+        """
         result1 = {"ok": 1}
         fake_client = self._FakeAsyncClient(call_results_queue=[result1])
         with patch("nova.mcp.client.FastMCPClient",
@@ -154,6 +179,12 @@ class MCPClientTests(SimpleTestCase):
             _ = base64.urlsafe_b64encode(base).decode("utf-8")
 
     def test_acall_http_errors_are_mapped(self):
+        """
+        Ensure acall() maps transport errors correctly:
+        - 404 -> Http404 (missing resource/tool)
+        - 500+ -> HTTPStatusError (propagate server failures)
+        - RequestError -> ConnectionError (connectivity issues).
+        """
         req = httpx.Request("GET", "http://x")
         resp_404 = httpx.Response(404, request=req)
         resp_500 = httpx.Response(500, request=req)
@@ -193,6 +224,12 @@ class MCPClientTests(SimpleTestCase):
     # ------------- _validate_inputs -----------------
 
     def test_validate_inputs_accepts_supported_and_rejects_others(self):
+        """
+        Validate _validate_inputs():
+        - accepts only supported primitive/container types within depth limit
+        - rejects sets and overly deep structures
+        - rejects strings longer than the allowed limit.
+        """
         c = MCPClient(endpoint="http://srv")
 
         # Accepted types and nesting up to depth 5
@@ -223,14 +260,26 @@ class MCPClientTests(SimpleTestCase):
     # ------------- sync wrappers -----------------
 
     def test_list_tools_sync_wrapper_calls_async(self):
-        with patch.object(MCPClient, "alist_tools",
-                          new=AsyncMock(return_value=["ok"])) as mocked:
+        """
+        Sanity-check that the sync wrapper for listing tools delegates to
+        alist_tools() as expected (tested here via AsyncMock).
+        """
+        with patch.object(
+            MCPClient,
+            "alist_tools",
+            new=AsyncMock(return_value=["ok"]),
+        ) as mocked:
             c = MCPClient(endpoint="http://srv")
             out = asyncio.run(c.alist_tools())
             self.assertEqual(out, ["ok"])
             mocked.assert_called_once_with()
 
     def test_call_sync_wrapper_validates_then_calls_async(self):
+        """
+        Ensure the sync call() API:
+        - runs _validate_inputs() on provided kwargs
+        - delegates to acall() for actual async execution.
+        """
         with patch.object(MCPClient, "_validate_inputs") as validate_mock, \
              patch.object(MCPClient, "acall",
                           new=AsyncMock(return_value="OK")) as acall_mock:
@@ -243,6 +292,11 @@ class MCPClientTests(SimpleTestCase):
     # ------------- auth helper -----------------
 
     def test_auth_object_uses_bearer_when_token_like(self):
+        """
+        Verify _auth_object():
+        - returns BearerAuth when a token-like credential is provided
+        - returns None when auth_type is none or token missing.
+        """
         class FakeAuth:
             def __init__(self, token):
                 self.token = token

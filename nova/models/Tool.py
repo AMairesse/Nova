@@ -12,10 +12,6 @@ from nova.utils import validate_relaxed_url
 
 logger = logging.getLogger(__name__)
 
-SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
-SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
-JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
-
 
 def get_default_schema():
     return {}
@@ -166,6 +162,9 @@ class ToolCredential(models.Model):
 
 
 def check_and_create_searxng_tool():
+    SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
+    SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
+
     # Get the searxng's system tool if it exists
     tool = Tool.objects.filter(user=None,
                                tool_type=Tool.ToolType.BUILTIN,
@@ -211,6 +210,8 @@ def check_and_create_searxng_tool():
 
 
 def check_and_create_judge0_tool():
+    JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
+
     # Get the judge0's system tool if it exists
     tool = Tool.objects.filter(user=None,
                                tool_type=Tool.ToolType.BUILTIN,

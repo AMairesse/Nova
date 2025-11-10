@@ -9,18 +9,29 @@ from .base import BaseTestCase
 
 class AgentToolWrapperTests(BaseTestCase):
     def setUp(self):
+        """
+        Ensure each test runs with its own thread and a fresh AgentToolWrapper
+        import so sys.modules and fake dependencies are fully controlled.
+        """
         super().setUp()
         # Base.py already sets up a test user
         self.thread = Thread.objects.create(user=self.user, subject="T")
         self.AgentToolWrapper = self._import_wrapper()
 
     def tearDown(self):
+        """
+        Clean up any injected modules so no state leaks between tests.
+        """
         super().tearDown()
         sys.modules.pop("nova.tools.agent_tool_wrapper", None)
         sys.modules.pop("langchain_core.tools", None)
 
     @staticmethod
     def _install_fake_langchain_tools():
+        """
+        Install a minimal fake of langchain_core.tools.StructuredTool so
+        AgentToolWrapper can be tested without the real LangChain dependency.
+        """
         # Provide a minimal fake of langchain_core.tools.StructuredTool
         lc_core_tools = types.ModuleType("langchain_core.tools")
 
@@ -42,6 +53,10 @@ class AgentToolWrapperTests(BaseTestCase):
         sys.modules["langchain_core.tools"] = lc_core_tools
 
     def _import_wrapper(self):
+        """
+        Import AgentToolWrapper after injecting the fake langchain_core.tools,
+        guaranteeing the wrapper is wired against the controlled test stub.
+        """
         # Ensure fake third-party module is in place
         # before importing the module under test
         self._install_fake_langchain_tools()
@@ -51,6 +66,13 @@ class AgentToolWrapperTests(BaseTestCase):
         return AgentToolWrapper
 
     def test_create_langchain_tool_shape_schema_and_name(self):
+        """
+        Verify that create_langchain_tool() produces a well-formed tool:
+        - name normalized from agent name with `agent_` prefix
+        - description taken from agent.tool_description
+        - JSON-style args_schema requiring `question` mentioning agent name
+        - exposes async coroutine only (no sync func).
+        """
         # Agent stub with minimal fields used by wrapper
         agent_stub = SimpleNamespace(
             name="Sub Agent 1",
@@ -84,6 +106,12 @@ class AgentToolWrapperTests(BaseTestCase):
         self.assertTrue(callable(tool["coroutine"]))
 
     def test_execute_agent_success_invokes_and_cleans_up_and_tags(self):
+        """
+        Ensure the wrapped tool:
+        - constructs LLMAgent with the correct user/thread/agent_config
+        - calls ainvoke(question) and returns its result
+        - performs cleanup() after execution.
+        """
         # Fake LLMAgent with async factory 'create',
         # then async 'invoke' and 'cleanup'
         class FakeLLMAgent:
@@ -132,6 +160,12 @@ class AgentToolWrapperTests(BaseTestCase):
         self.assertEqual(answer, "ANSWER")
 
     def test_execute_agent_failure_returns_formatted_error_and_cleans_up(self):
+        """
+        When the delegated LLMAgent fails:
+        - return a readable error string including agent name and message
+        - include configuration guidance
+        - still run cleanup() to avoid leaking resources.
+        """
         class FailingLLMAgent:
             def __init__(self):
                 self.cleanup_called = False

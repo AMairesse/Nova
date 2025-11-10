@@ -61,8 +61,13 @@ class ProviderUpdateView(  # type: ignore[misc]
 
 
 class ProviderDeleteView(  # type: ignore[misc]
-    DashboardRedirectMixin, LoginRequiredMixin, OwnerDeleteView, SystemReadonlyMixin
+    LoginRequiredMixin, SystemReadonlyMixin, DashboardRedirectMixin, OwnerDeleteView
 ):
     model = LLMProvider
     template_name = "user_settings/provider_confirm_delete.html"
     dashboard_tab = "providers"
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+        return super().dispatch(request, *args, **kwargs)

@@ -14,6 +14,10 @@ Memory bank initialization completed and verified by user. All core memory bank 
 - Created `context.md` - Current project state
 - User verified memory bank accuracy
 - User corrected test command to use `--settings nova.settings_test`
+- Added password change feature to user settings General panel
+  - Inline HTMX form requiring current password
+  - Uses Django's PasswordChangeForm with session persistence
+  - Added unit tests and integration test documentation
 
 ## Next Steps
 

@@ -4,12 +4,19 @@ Tests for the memory builtin tool and UserInfo model.
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from asgiref.sync import async_to_sync
+from types import SimpleNamespace
 
 from nova.models.UserObjects import UserInfo
 from nova.tools.builtins.memory import (
     _get_theme_content,
     _set_theme_content,
     _delete_theme_content,
+    get_info,
+    set_info,
+    delete_theme,
+    create_theme,
+    list_themes,
 )
 
 
@@ -17,7 +24,7 @@ User = get_user_model()
 
 
 class UserInfoModelTest(TestCase):
-    """Test UserInfo model functionality."""
+    """Verify automatic creation and validation rules for the UserInfo model."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -27,13 +34,21 @@ class UserInfoModelTest(TestCase):
         )
 
     def test_userinfo_creation(self):
-        """Test UserInfo is created automatically."""
+        """
+        Ensure a UserInfo record is automatically created for a new user with
+        the expected default global_user_preferences heading.
+        """
         user_info = UserInfo.objects.get(user=self.user)
         self.assertEqual(user_info.user, self.user)
         self.assertEqual(user_info.markdown_content, "# global_user_preferences\n")
 
     def test_userinfo_validation(self):
-        """Test UserInfo validation."""
+        """
+        Validate that UserInfo enforces:
+        - presence of the required heading
+        - maximum content length
+        - acceptance of valid markdown content.
+        """
         user_info = UserInfo.objects.get(user=self.user)
 
         # Valid content
@@ -52,7 +67,7 @@ class UserInfoModelTest(TestCase):
 
 
 class MemoryToolTest(TestCase):
-    """Test memory tool functions."""
+    """Test low-level helpers that slice and mutate theme sections."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -76,14 +91,14 @@ class MemoryToolTest(TestCase):
         self.user_info.save()
 
     def test_get_theme_content(self):
-        """Test extracting content for a specific theme."""
+        """Ensure _get_theme_content returns only the lines for the given theme."""
         content = self.user_info.markdown_content
         theme_content = _get_theme_content(content, "Personal")
         self.assertIn("Name: Test User", theme_content)
         self.assertIn("Age: 30", theme_content)
 
     def test_set_theme_content(self):
-        """Test updating theme content."""
+        """Ensure _set_theme_content replaces the targeted theme block correctly."""
         content = self.user_info.markdown_content
         new_content = "# Personal\n- Name: Updated User\n- Age: 31"
         updated = _set_theme_content(content, "Personal", new_content)
@@ -91,20 +106,104 @@ class MemoryToolTest(TestCase):
         self.assertIn("Age: 31", updated)
 
     def test_delete_theme_content(self):
-        """Test deleting theme content."""
+        """Ensure _delete_theme_content removes the requested theme section."""
         content = self.user_info.markdown_content
         updated = _delete_theme_content(content, "Work")
         self.assertNotIn("# Work", updated)
         self.assertNotIn("Company: Test Corp", updated)
 
-    def test_memory_functions(self):
-        """Test async memory functions."""
-        # This would require mocking LLMAgent, but basic structure is tested above
-        pass
+
+class MemoryToolAsyncTests(TestCase):
+    """
+    Cover the async-facing memory tool helpers (get_info, set_info, delete_theme,
+    create_theme, list_themes) as used by agents.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='asyncuser',
+            email='async@example.com',
+            password='asyncpass123'
+        )
+        self.agent = SimpleNamespace(user=self.user)
+        user_info = UserInfo.objects.get(user=self.user)
+        user_info.markdown_content = "\n".join([
+            "# global_user_preferences",
+            "- Locale: en",
+            "",
+            "# Personal",
+            "- Name: Async User",
+            "- Age: 42",
+            "",
+            "# Work",
+            "- Company: Async Corp",
+            "- Role: Engineer",
+        ])
+        user_info.save()
+
+    def test_get_info_returns_existing_theme(self):
+        """get_info should return content for an existing theme."""
+        result = async_to_sync(get_info)("Personal", self.agent)
+        self.assertIn("Async User", result)
+
+    def test_get_info_handles_missing_theme(self):
+        """get_info should emit a friendly message when theme is missing."""
+        result = async_to_sync(get_info)("UnknownTheme", self.agent)
+        self.assertEqual(result, "No information stored for theme 'UnknownTheme'.")
+
+    def test_set_info_updates_existing_theme(self):
+        """set_info should update an existing theme and persist changes."""
+        response = async_to_sync(set_info)("Personal", "- Name: Updated User\n- Age: 43", self.agent)
+        self.assertEqual(response, "Information for theme 'Personal' has been updated.")
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertIn("Updated User", user_info.markdown_content)
+
+    def test_set_info_rejects_malicious_content(self):
+        """set_info should detect and reject unsafe HTML/script content."""
+        response = async_to_sync(set_info)("Personal", "<script>alert(1)</script>", self.agent)
+        self.assertIn("unsafe HTML tags", response)
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertNotIn("alert(1)", user_info.markdown_content)
+
+    def test_delete_theme_removes_section(self):
+        """delete_theme should remove the target theme from markdown_content."""
+        response = async_to_sync(delete_theme)("Work", self.agent)
+        self.assertEqual(response, "Theme 'Work' has been deleted.")
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertNotIn("# Work", user_info.markdown_content)
+
+    def test_delete_theme_protects_global_preferences(self):
+        """delete_theme must not allow deletion of global_user_preferences."""
+        response = async_to_sync(delete_theme)("global_user_preferences", self.agent)
+        self.assertEqual(
+            response,
+            "The 'global_user_preferences' theme cannot be deleted as it is required."
+        )
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertIn("# global_user_preferences", user_info.markdown_content)
+
+    def test_create_theme_adds_new_section(self):
+        """create_theme should append a new, empty theme section when absent."""
+        response = async_to_sync(create_theme)("Hobbies", self.agent)
+        self.assertEqual(response, "Theme 'Hobbies' has been created.")
+        user_info = UserInfo.objects.get(user=self.user)
+        self.assertIn("# Hobbies", user_info.markdown_content)
+
+    def test_create_theme_returns_existing_message(self):
+        """create_theme should be idempotent and report when theme already exists."""
+        response = async_to_sync(create_theme)("Personal", self.agent)
+        self.assertEqual(response, "Theme 'Personal' already exists.")
+
+    def test_list_themes_formats_output(self):
+        """list_themes should return a human-readable list including all themes."""
+        response = async_to_sync(list_themes)(self.agent)
+        self.assertIn("Available themes:", response)
+        self.assertIn("- Personal", response)
+        self.assertIn("- global_user_preferences", response)
 
 
 class MemoryIntegrationTest(TestCase):
-    """Test memory integration with agents."""
+    """Integration-level checks for signals and tool registration."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -114,13 +213,19 @@ class MemoryIntegrationTest(TestCase):
         )
 
     def test_userinfo_signal_creation(self):
-        """Test UserInfo is created via signal when user is created."""
+        """
+        Ensure the post-save signal creates a UserInfo for new users so memory
+        is always available.
+        """
         # User creation should trigger signal
         user_info_count = UserInfo.objects.filter(user=self.user).count()
         self.assertEqual(user_info_count, 1)
 
     def test_memory_tool_registration(self):
-        """Test memory tool is properly registered."""
+        """
+        Confirm that the memory tool is registered in the global tool registry
+        with the expected key and display name.
+        """
         from nova.tools import get_available_tool_types
         tool_types = get_available_tool_types()
         self.assertIn('memory', tool_types)
