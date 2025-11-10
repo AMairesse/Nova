@@ -3,17 +3,21 @@
   {% if webapps %}
     <ul class="list-group list-group-flush">
       {% for app in webapps %}
-        <li class="list-group-item d-flex justify-content-between align-items-center">
-          <div>
-            <div class="fw-semibold">{{ app.slug }}</div>
-            <div class="text-muted small">{% trans "Updated" %} {{ app.updated_at|date:"Y-m-d H:i" }}</div>
+        <li class="list-group-item d-flex align-items-center gap-2">
+          <div class="text-truncate me-auto" style="max-width: 260px;">
+            <div class="fw-semibold text-truncate">
+              {{ app.name|default:app.slug }}
+            </div>
+            <div class="text-muted small d-none d-xl-block">
+              {% trans "Updated" %} {{ app.updated_at|date:"Y-m-d H:i" }}
+            </div>
           </div>
-          <div class="btn-group">
-            <a href="#" class="btn btn-sm btn-outline-primary webapp-preview-btn" data-slug="{{ app.slug }}" data-url="{{ app.public_url }}">
-              <i class="bi bi-layout-split me-1"></i>{% trans "Preview" %}
+          <div class="btn-group btn-group-sm" role="group" aria-label="{% trans 'Actions' %}">
+            <a href="#" class="btn btn-outline-primary webapp-preview-btn" data-slug="{{ app.slug }}" data-url="{{ app.public_url }}" title="{% trans 'Preview side-by-side' %}" aria-label="{% trans 'Preview side-by-side' %}">
+              <i class="bi bi-layout-split"></i>
             </a>
-            <a href="{{ app.public_url }}" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener noreferrer">
-              <i class="bi bi-box-arrow-up-right me-1"></i>{% trans "Open" %}
+            <a href="{{ app.public_url }}" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}" aria-label="{% trans 'Open in new tab' %}">
+              <i class="bi bi-box-arrow-up-right"></i>
             </a>
           </div>
         </li>

@@ -1137,6 +1137,7 @@
 
       // Apply width and show panels
       applyPersistedWidth();
+      document.body.classList.add('preview-active');
       previewPane.classList.remove('d-none');
       setDesktopLayoutActive(!isMobile());
       setMobileOverlayModeActive(isMobile());
@@ -1156,9 +1157,12 @@
       const chatPane = el('chat-pane');
       if (previewPane) previewPane.classList.add('d-none');
       if (resizer) resizer.classList.add('d-none');
+      // Leave chat pane visible and reset width to full
       if (chatPane) {
         document.documentElement.style.setProperty('--chat-pane-width', '100%');
       }
+      // Exit full-page split mode
+      document.body.classList.remove('preview-active');
     }
 
     function handleResizeDrag() {

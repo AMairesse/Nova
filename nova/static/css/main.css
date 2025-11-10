@@ -323,3 +323,29 @@ body {
         min-width: 44px;
     }
 }
+
+/* Preview mode: hide sidebars and expand message area for split preview */
+.preview-active #threads-sidebar,
+.preview-active #files-sidebar {
+    display: none !important;
+}
+
+@media (min-width: 992px) {
+
+    /* When preview is active, central column takes full width */
+    .preview-active #message-area {
+        flex: 0 0 100% !important;
+        max-width: 100% !important;
+    }
+
+    /* Hide "Messages" toolbar row inside message area to maximize space */
+    .preview-active #message-area>.d-lg-flex {
+        display: none !important;
+    }
+}
+
+/* Accessibility: make resizer more visible on focus */
+#split-resizer:focus {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}
