@@ -1,13 +1,15 @@
 # nova/tools/builtins/webapp.py
-from __future__ import annotations
-
-from typing import Dict, List, Optional
+import logging
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
-from django.core.exceptions import ValidationError
 from langchain_core.tools import StructuredTool
+from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 from nova.llm.llm_agent import LLMAgent
+
+
+logger = logging.getLogger(__name__)
 
 # Public metadata for the built-in tool registry
 METADATA = {
@@ -21,6 +23,47 @@ METADATA = {
 
 # Limits
 _MAX_TOTAL_BYTES = 600 * 1024  # 600 KB total cap across all files
+
+
+# ------------- Input normalization helpers -----------------------------------------------
+
+def _extract_slug(slug_or_url: Optional[str]) -> Optional[str]:
+    """
+    Be forgiving with agent input: accept either a bare slug or a full /apps/<slug>/ URL.
+    Returns normalized slug string or None when input is empty/invalid.
+    """
+    if not slug_or_url:
+        return None
+    s = str(slug_or_url).strip()
+    if not s:
+        return None
+
+    # Fast path: if it looks like a URL, parse it
+    try:
+        parsed = urlparse(s)
+        path = parsed.path if parsed.scheme or parsed.netloc else s
+    except Exception:
+        path = s
+
+    # Remove query/fragment from raw strings too
+    if "?" in path:
+        path = path.split("?", 1)[0]
+    if "#" in path:
+        path = path.split("#", 1)[0]
+
+    # Normalize trailing slashes and split
+    path = path.strip("/")
+    parts = [p for p in path.split("/") if p]
+
+    # Accept forms:
+    # - "apps/<slug>" or "/apps/<slug>/" or "https://host/apps/<slug>/..."
+    # - "<slug>" (bare)
+    if not parts:
+        return None
+    if parts[0] == "apps" and len(parts) >= 2:
+        return parts[1]
+    # Otherwise take the last non-empty segment as a best effort
+    return parts[-1]
 
 
 # ------------- DB helpers (sync wrapped) -------------------------------------------------
@@ -62,22 +105,23 @@ def _all_contents_size_sync(webapp) -> int:
 
 
 async def _ensure_total_size_within_limit(webapp):
+    '''
+    Enforce total file size cap.
+    Returns True if total size is within limit, False otherwise.
+    '''
     total = await sync_to_async(_all_contents_size_sync, thread_sensitive=False)(webapp)
-    if total > _MAX_TOTAL_BYTES:
-        raise ValidationError(
-            f"Total app size too large: {total} bytes. Max allowed is {_MAX_TOTAL_BYTES} bytes."
-        )
+    return total <= _MAX_TOTAL_BYTES
 
 
 async def _upsert_files(webapp, files: Dict[str, str]):
     if not isinstance(files, dict):
-        raise ValidationError("`files` must be an object mapping path -> content (string).")
+        return ("`files` must be an object mapping path -> content (string).")
 
     for path, content in files.items():
         if not isinstance(path, str):
-            raise ValidationError("All file paths must be strings.")
+            return ("All file paths must be strings.")
         if not isinstance(content, str):
-            raise ValidationError(f"Content for '{path}' must be a string.")
+            return (f"Content for '{path}' must be a string.")
 
         # Upsert the file, model-level clean enforces path + per-file size + extension
         fobj = await sync_to_async(_get_or_create_file_sync, thread_sensitive=False)(webapp, path)
@@ -86,7 +130,10 @@ async def _upsert_files(webapp, files: Dict[str, str]):
         await sync_to_async(fobj.save, thread_sensitive=False)()
 
     # Enforce total cap after all upserts
-    await _ensure_total_size_within_limit(webapp)
+    if not await _ensure_total_size_within_limit(webapp):
+        return ("Total file size exceeds the limit.")
+
+    return None
 
 
 async def _publish_webapp_update(agent: LLMAgent, slug: str, public_url: Optional[str] = None):
@@ -121,7 +168,7 @@ async def _publish_webapp_update(agent: LLMAgent, slug: str, public_url: Optiona
 # ------------- Tool functions ------------------------------------------------------------
 
 
-async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAgent) -> Dict[str, str]:
+async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAgent):
     """
     Create or update a static web-app for the current thread and user.
     - If slug is None: create a new app; otherwise update existing (partial upsert).
@@ -132,21 +179,27 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
     thread = agent.thread
 
     if not thread or not user:
-        raise ValidationError("Agent must be bound to a user and a thread to manage a webapp.")
+        logger.error("Agent must be bound to a user and a thread to manage a webapp.")
+        return ("Error with the tool.")
 
-    if slug:
+    normalized = _extract_slug(slug) if slug is not None else None
+    if normalized:
         # Fetch existing app, enforce ownership by user
-        webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(user, slug)
+        webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(user, normalized)
         # Enforce same thread for stricter isolation (one app per thread context)
         if webapp.thread_id != thread.id:
-            raise ValidationError("WebApp belongs to a different thread.")
+            logger.error("WebApp belongs to a different thread.")
+            return ("Error with the tool.")
+        slug = normalized
     else:
         webapp = await sync_to_async(_create_webapp_sync, thread_sensitive=False)(user, thread)
         slug = webapp.slug
 
     # Upsert files if provided
     if files:
-        await _upsert_files(webapp, files)
+        error_msg = await _upsert_files(webapp, files)
+        if error_msg:
+            return error_msg
 
     public_url = f"/apps/{slug}/"
 
@@ -164,13 +217,15 @@ async def read_webapp(slug: str, agent: LLMAgent) -> Dict[str, str]:
     """
     Read all files of a webapp (path -> content).
     """
-    if not isinstance(slug, str) or not slug.strip():
-        raise ValidationError("`slug` must be a non-empty string.")
+    normalized = _extract_slug(slug)
+    if not normalized:
+        return ("`slug` must be a non-empty string or an /apps/<slug>/ URL.")
 
-    webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(agent.user, slug)
+    webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(agent.user, normalized)
     # Ownership is enforced by query; optional thread affinity check:
     if webapp.thread_id != agent.thread.id:
-        raise ValidationError("WebApp belongs to a different thread.")
+        logger.error("WebApp belongs to a different thread.")
+        return ("Error with the tool.")
 
     files = await sync_to_async(_list_files_sync, thread_sensitive=False)(webapp)
     return {item["path"]: item["content"] for item in files}
