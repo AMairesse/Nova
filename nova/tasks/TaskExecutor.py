@@ -95,6 +95,15 @@ class TaskExecutor:
             callbacks=[self.handler]
         )
 
+        # Expose runtime resources to tools via agent._resources
+        # Allows built-in tools to emit progress/events over existing WS channels
+        try:
+            self.llm._resources['channel_layer'] = self.channel_layer
+            self.llm._resources['task_id'] = self.task.id
+        except Exception:
+            # Tools can still fallback to get_channel_layer() if needed
+            pass
+
     async def _create_prompt(self):
         return self.prompt
 

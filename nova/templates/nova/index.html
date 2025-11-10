@@ -53,6 +53,64 @@
         </button>
       </div>
       <div id="message-container" class="d-flex flex-column flex-grow-1" style="min-height: 0;"></div>
+
+      <!-- Web-app preview panel (hidden by default) -->
+      <div id="webapp-panel" class="d-none border-top" style="min-height:0; height: 40%;">
+        <div class="d-flex gap-2 p-1 border-bottom small bg-light align-items-center">
+          <button class="btn btn-light btn-sm" id="webapp-refresh-btn" type="button" title="{% trans 'Refresh preview' %}">⟳</button>
+          <a class="btn btn-light btn-sm" id="webapp-open-btn" href="#" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}">↗ {% trans "Open" %}</a>
+          <span class="ms-2 text-muted small" id="webapp-slug-label"></span>
+        </div>
+        <iframe
+          id="webapp-iframe"
+          data-webapp-slug=""
+          sandbox="allow-scripts"
+          style="width:100%; height: calc(100% - 32px); border:0"
+        ></iframe>
+      </div>
+
+      <script>
+        (function(){
+          const panel   = document.getElementById('webapp-panel');
+          const iframe  = document.getElementById('webapp-iframe');
+          const openBtn = document.getElementById('webapp-open-btn');
+          const refresh = document.getElementById('webapp-refresh-btn');
+          const slugLbl = document.getElementById('webapp-slug-label');
+
+          if (refresh) {
+            refresh.addEventListener('click', () => {
+              const src = iframe.getAttribute('src') || '';
+              if (!src) return;
+              try {
+                const url = new URL(src, window.location.origin);
+                url.searchParams.set('v', Date.now().toString());
+                iframe.setAttribute('src', url.toString());
+              } catch (e) {
+                iframe.setAttribute('src', src + (src.includes('?') ? '&' : '?') + 'v=' + Date.now());
+              }
+            });
+          }
+
+          // Optional: listen to custom events (used by thread_management.js)
+          document.addEventListener('webapp_update', (e) => {
+            // Panel remains visible; iframe refresh handled in thread_management.js
+            if (panel && !panel.classList.contains('d-none')) return;
+          });
+
+          // When the app URL is first announced, show the panel
+          document.addEventListener('webapp_public_url', (e) => {
+            const { slug, public_url } = e.detail || {};
+            if (!public_url) return;
+            if (iframe) {
+              iframe.dataset.webappSlug = slug || '';
+              iframe.setAttribute('src', public_url);
+            }
+            if (openBtn) openBtn.setAttribute('href', public_url);
+            if (slugLbl) slugLbl.textContent = slug ? '(' + slug + ')' : '';
+            if (panel) panel.classList.remove('d-none');
+          });
+        })();
+      </script>
     </div>
     
     <!-- Files Sidebar (Desktop) -->

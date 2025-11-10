@@ -17,6 +17,7 @@ from nova.views.interaction_views import (
 from nova.views.pwa_views import service_worker
 from nova.views.security_views import csrf_token
 from nova.views.health import healthz
+from nova.views.webapp_views import serve_webapp
 from django.conf import settings
 
 urlpatterns = [
@@ -56,6 +57,12 @@ urlpatterns += [
     path('interactions/<int:interaction_id>/answer/', answer_interaction, name='interaction_answer'),
     path('interactions/<int:interaction_id>/cancel/', cancel_interaction, name='interaction_cancel'),
     path('interactions/pending/', get_pending_interactions, name='interaction_pending'),
+]
+
+# Web apps
+urlpatterns += [
+    path('apps/<slug:slug>/', serve_webapp, name='serve_webapp_root'),
+    path('apps/<slug:slug>/<path:path>/', serve_webapp, name='serve_webapp_file'),
 ]
 
 # Add healthcheck only in DEBUG mode

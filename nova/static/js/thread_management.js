@@ -260,6 +260,34 @@
             streamingFooter.parentElement.classList.remove('d-none');
           }
         },
+
+        // Refresh web-app iframe(s) on updates
+        'webapp_update': (data) => {
+          try {
+            const slug = data.slug || '';
+            // Broadcast a custom event for any component that wants to react
+            document.dispatchEvent(new CustomEvent('webapp_update', { detail: { slug } }));
+
+            // Default behavior: refresh any iframe annotated with data-webapp-slug
+            const iframe = document.querySelector('iframe[data-webapp-slug]');
+            if (iframe) {
+              const currentSlug = iframe.dataset.webappSlug || '';
+              const src = iframe.getAttribute('src') || '';
+              if (currentSlug === slug || src.includes(`/apps/${slug}/`)) {
+                try {
+                  const url = new URL(src, window.location.origin);
+                  url.searchParams.set('v', Date.now().toString());
+                  iframe.setAttribute('src', url.toString());
+                } catch (e) {
+                  // Fallback if URL parsing fails
+                  iframe.setAttribute('src', src + (src.includes('?') ? '&' : '?') + 'v=' + Date.now());
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('webapp_update handler error:', e);
+          }
+        },
         'new_message': (data) => {
           // Handle real-time message updates (e.g., system messages from completed tasks)
           this.onNewMessage(data.message, data.thread_id);
@@ -280,6 +308,19 @@
         'interaction_update': (data) => {
           this.onInteractionUpdate(taskId, data);
         },
+
+        // Receive initial public URL and announce it to the page (index.html script listens)
+        'webapp_public_url': (data) => {
+          try {
+            const slug = data.slug || '';
+            const public_url = data.public_url || '';
+            if (!public_url) return;
+            document.dispatchEvent(new CustomEvent('webapp_public_url', { detail: { slug, public_url } }));
+          } catch (e) {
+            console.warn('webapp_public_url handler error:', e);
+          }
+        },
+
         'task_error': (data) => {
           this.onTaskError(taskId, data);
         }
