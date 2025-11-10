@@ -85,8 +85,9 @@
   // Force current thread for this preview page so the chat loads immediately
   // Do this before JS modules init to ensure initial load targets this thread
   try {
-    localStorage.setItem('lastThreadId', "{{ thread.id }}");
-  } catch (e) {}
+  localStorage.setItem('lastThreadId', "{{ thread.id }}");
+  localStorage.setItem('lastPreviewSlug:{{ thread.id }}', "{{ webapp.slug }}");
+} catch (e) {}
 
   // Set initial URL for iframe and wire close buttons after DOM is ready
   document.addEventListener('DOMContentLoaded', () => {
@@ -106,8 +107,10 @@
     if (openBtn) {
       openBtn.href = "{{ webapp.public_url }}";
     }
-
-    const navigateBack = () => {
+    // Ensure preview pane visible and initialize split
+    const previewPane = document.getElementById('preview-pane');
+    if (previewPane) previewPane.classList.remove('d-none');
+    document.dispatchEvent(new CustomEvent('webapp_preview_activate', { detail: { slug: "{{ webapp.slug }}", url: "{{ webapp.public_url }}" } }));const navigateBack = () => {
       if (window.history.length > 1) { window.history.back(); }
       else { window.location.href = "{% url 'index' %}"; }
     };
