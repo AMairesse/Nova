@@ -17,7 +17,7 @@ from nova.views.interaction_views import (
 from nova.views.pwa_views import service_worker
 from nova.views.security_views import csrf_token
 from nova.views.health import healthz
-from nova.views.webapp_views import serve_webapp
+from nova.views.webapp_views import serve_webapp, webapps_list
 from django.conf import settings
 
 urlpatterns = [
@@ -70,6 +70,11 @@ if settings.DEBUG:
     urlpatterns += [
         path('healthz/', healthz, name='healthz'),
     ]
+
+# Web apps sidebar listing (server-rendered partial)
+urlpatterns += [
+    path('apps/list/<int:thread_id>/', webapps_list, name='webapps_list'),
+]
 
 # User settings
 urlpatterns += [

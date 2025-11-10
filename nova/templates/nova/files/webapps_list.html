@@ -1,0 +1,25 @@
+{% load i18n %}
+<div class="p-2">
+  {% if webapps %}
+    <ul class="list-group list-group-flush">
+      {% for app in webapps %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            <div class="fw-semibold">{{ app.slug }}</div>
+            <div class="text-muted small">{% trans "Updated" %} {{ app.updated_at|date:"Y-m-d H:i" }}</div>
+          </div>
+          <div class="btn-group">
+            <a href="#" class="btn btn-sm btn-outline-primary webapp-preview-btn" data-slug="{{ app.slug }}" data-url="{{ app.public_url }}">
+              <i class="bi bi-layout-split me-1"></i>{% trans "Preview" %}
+            </a>
+            <a href="{{ app.public_url }}" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener noreferrer">
+              <i class="bi bi-box-arrow-up-right me-1"></i>{% trans "Open" %}
+            </a>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-muted">{% trans "No webapps yet for this thread." %}</p>
+  {% endif %}
+</div>

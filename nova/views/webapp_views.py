@@ -3,9 +3,11 @@ import mimetypes
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
+from django.conf import settings
 
 from nova.models.WebApp import WebApp
+from nova.models.Thread import Thread
 
 
 def _guess_mime(path: str) -> str:
@@ -48,3 +50,37 @@ def serve_webapp(request, slug: str, path: str | None = None):
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+@login_required
+def webapps_list(request, thread_id: int):
+    """
+    Return a server-rendered partial listing webapps for the given thread.
+    Intended for sidebar rendering (Files | Webapps toggle).
+    """
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    apps = (
+        WebApp.objects.filter(user=request.user, thread=thread)
+        .order_by("-updated_at")
+        .only("slug", "updated_at")
+    )
+
+    # Build absolute public URLs based on trusted external base
+    external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip("/") if settings.CSRF_TRUSTED_ORIGINS else ""
+    items = []
+    for app in apps:
+        slug = app.slug
+        public_url = f"{external_base}/apps/{slug}/" if external_base else f"/apps/{slug}/"
+        items.append(
+            {
+                "slug": slug,
+                "updated_at": app.updated_at,
+                "public_url": public_url,
+            }
+        )
+
+    return render(
+        request,
+        "nova/files/webapps_list.html",
+        {"thread": thread, "webapps": items},
+    )
