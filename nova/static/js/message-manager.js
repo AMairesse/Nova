@@ -67,8 +67,8 @@
                     const interactionId = btn.dataset.interactionId;
                     // Get the answer from the textarea
                     const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
-                    const payload = textarea.value;
-                    this.answerInteraction(interactionId, payload);
+                    const answer = textarea ? textarea.value : '';
+                    this.answerInteraction(interactionId, answer);
                 },
                 '.interaction-cancel-btn': (e, target) => {
                     e.preventDefault();
@@ -175,7 +175,7 @@
             }
         }
 
-        async answerInteraction(interactionId, payload) {
+        async answerInteraction(interactionId, answer) {
             const clickedBtn = document.querySelector(`.interaction-answer-btn[data-interaction-id="${interactionId}"]`);
             if (!clickedBtn || clickedBtn.disabled) return;
             const originalHtml = clickedBtn.innerHTML;
@@ -185,7 +185,7 @@
                 const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionAnswer.replace('0', interactionId), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload || {})
+                    body: JSON.stringify({ answer: answer || '' })
                 });
                 if (!response.ok) throw new Error('Server error');
                 const data = await response.json();

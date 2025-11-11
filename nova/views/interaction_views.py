@@ -29,15 +29,28 @@ def answer_interaction(request, interaction_id: int):
 
     # Parse answer from request
     answer = None
-    if request.content_type and "application/json" in request.content_type:
+    content_type = request.META.get('CONTENT_TYPE', '')
+
+    # JSON body: expect {"answer": ...}
+    if "application/json" in content_type:
         try:
             payload = json.loads(request.body.decode('utf-8') or "{}")
         except json.JSONDecodeError:
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
-        answer = payload
 
-    if answer is None:
-        return JsonResponse({'error': 'Missing "answer"'}, status=400)
+        if not isinstance(payload, dict):
+            return JsonResponse({'error': 'Invalid JSON: expected an object with "answer" field'}, status=400)
+
+        if 'answer' not in payload:
+            return JsonResponse({'error': 'Missing "answer"'}, status=400)
+
+        answer = payload['answer']
+    else:
+        # Form-encoded: use POST["answer"]
+        answer = request.POST.get('answer')
+
+        if answer is None:
+            return JsonResponse({'error': 'Missing "answer"'}, status=400)
 
     # Idempotence: if not pending, return OK with info
     if interaction.status != InteractionStatus.PENDING:
