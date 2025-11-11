@@ -1,158 +1,137 @@
-/* nova/static/js/utils.js - Utility functions with absorbed CSRF */
+// static/nova/js/utils.js
 (function () {
   'use strict';
 
-  // LocalStorage utilities with expiration support
-  const StorageUtils = {
-    setWithExpiry(key, value, ttl = 3600000) {
-      const now = new Date().getTime();
-      const item = { value: value, expiry: now + ttl };
-      localStorage.setItem(key, JSON.stringify(item));
+  // DOM Utilities
+  window.DOMUtils = {
+    // Get element by ID shorthand
+    el: function (id) {
+      return document.getElementById(id);
     },
 
-    getWithExpiry(key) {
-      const itemStr = localStorage.getItem(key);
-      if (!itemStr) return null;
-      try {
-        const item = JSON.parse(itemStr);
-        const now = new Date().getTime();
-        if (now > item.expiry) {
-          localStorage.removeItem(key);
-          return null;
-        }
-        return item.value;
-      } catch {
-        localStorage.removeItem(key);
-        return null;
+    // Escape HTML for safe insertion
+    escapeHTML: function (text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    },
+
+    // Escape attribute values
+    escapeAttr: function (text) {
+      return this.escapeHTML(text).replace(/`/g, '&#96;');
+    },
+
+    // CSRF-safe fetch wrapper
+    csrfFetch: async function (url, options = {}) {
+      const token = document.querySelector('[name=csrfmiddlewaretoken]');
+      if (token) {
+        options.headers = options.headers || {};
+        options.headers['X-CSRFToken'] = token.value;
       }
+      return fetch(url, options);
     },
 
-    set(key, value) {
-      try {
-        localStorage.setItem(key, JSON.stringify(value));
-      } catch (error) {
-        console.warn('Failed to save to localStorage:', error);
-      }
+    // Debounce function
+    debounce: function (func, wait) {
+      let timeout;
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(timeout);
+          func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+      };
+    }
+  };
+
+  // LocalStorage Utilities
+  window.StorageUtils = {
+    // Thread-related storage keys
+    getThreadId: function () {
+      return localStorage.getItem('lastThreadId') || null;
     },
 
-    get(key) {
+    getWidthKey: function (threadId) {
+      return `splitWidth:${threadId}`;
+    },
+
+    getSlugKey: function (threadId) {
+      return `lastPreviewSlug:${threadId}`;
+    },
+
+    getSidebarTabKey: function (threadId) {
+      return `sidebarTab:${threadId}`;
+    },
+
+    // Generic storage helpers
+    getItem: function (key, defaultValue = null) {
       try {
         const item = localStorage.getItem(key);
-        return item ? JSON.parse(item) : null;
-      } catch {
-        return null;
+        return item !== null ? item : defaultValue;
+      } catch (e) {
+        console.warn('localStorage access failed:', e);
+        return defaultValue;
       }
     },
 
-    remove(key) {
-      localStorage.removeItem(key);
-    },
-
-    addStoredTask(threadId, taskId) {
-      if (!threadId || !taskId) return;
-      const key = `storedTask_${threadId}`;
-      this.setWithExpiry(key, taskId);
-    },
-
-    removeStoredTask(threadId, taskId) {
-      const key = `storedTask_${threadId}`;
-      const storedTask = this.getWithExpiry(key);
-      if (storedTask === taskId) this.remove(key);
-    },
-
-    getStoredRunningTasks(threadId) {
-      return this.get(`runningTasks_${threadId}`) || [];
-    },
-
-    setStoredRunningTasks(threadId, taskIds) {
-      this.set(`runningTasks_${threadId}`, taskIds);
+    setItem: function (key, value) {
+      try {
+        localStorage.setItem(key, value);
+      } catch (e) {
+        console.warn('localStorage write failed:', e);
+      }
     }
   };
 
-  // DOM and Network utilities
-  const DOMUtils = {
-    // Query selectors
-    $(selector) {
-      return document.querySelector(selector);
+  // Event Utilities
+  window.EventUtils = {
+    // Add event listener with automatic cleanup tracking
+    addListener: function (element, event, handler, options = {}) {
+      element.addEventListener(event, handler, options);
+      // Track for potential cleanup (optional)
+      element._novaListeners = element._novaListeners || [];
+      element._novaListeners.push({ event, handler });
     },
 
-    $$(selector) {
-      return document.querySelectorAll(selector);
-    },
-
-    // Event handling
-    on(element, event, handler) {
-      if (typeof element === 'string') element = this.$(element);
-      if (element) element.addEventListener(event, handler);
-    },
-
-    // Form data serialization
-    serializeForm(form) {
-      if (typeof form === 'string') form = this.$(form);
-      return new FormData(form);
-    },
-
-    // CSRF token cache
-    _tokenPromise: null,
-    async getCSRFToken() {
-      if (!this._tokenPromise) {
-        this._tokenPromise = fetch("/api/csrf/", { credentials: "include" })
-          .then(r => r.json())
-          .then(({ csrfToken }) => csrfToken);
-      }
-      return this._tokenPromise;
-    },
-
-    // Fetch with auto-CSRF
-    async csrfFetch(input, init = {}) {
-      const method = (init.method || "GET").toUpperCase();
-      const headers = new Headers(init.headers || {});
-
-      if (!/^(GET|HEAD|OPTIONS|TRACE)$/.test(method)) {
-        headers.set("X-CSRFToken", await this.getCSRFToken());
-      }
-
-      return fetch(input, {
-        ...init,
-        method,
-        headers,
-        credentials: "include",
+    // Remove all tracked listeners from element
+    removeAllListeners: function (element) {
+      if (!element._novaListeners) return;
+      element._novaListeners.forEach(({ event, handler }) => {
+        element.removeEventListener(event, handler);
       });
-    },
-
-    // Simple AJAX wrapper
-    async ajax(options) {
-      const { url, method = 'GET', data, headers = {} } = options;
-      const config = { method, headers: { 'X-AJAX': 'true', ...headers } };
-
-      if (data) {
-        if (data instanceof FormData) {
-          config.body = data;
-        } else if (typeof data === 'object') {
-          config.headers['Content-Type'] = 'application/json';
-          config.body = JSON.stringify(data);
-        } else {
-          config.body = data;
-        }
-      }
-
-      const response = await fetch(url, config);
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      const contentType = response.headers.get('content-type');
-      return contentType?.includes('application/json') ? response.json() : response.text();
+      element._novaListeners = [];
     }
   };
 
-  // Expose utilities globally
-  window.StorageUtils = StorageUtils;
-  window.DOMUtils = DOMUtils;
+  // UI Utilities
+  window.UIUtils = {
+    // Show/hide spinner
+    setSpinnerVisible: function (spinnerId, visible) {
+      const spinner = DOMUtils.el(spinnerId);
+      if (!spinner) return;
+      spinner.classList.toggle('d-none', !visible);
+      spinner.classList.toggle('d-flex', visible);
+    },
 
-  // Simple HTML escape to avoid injecting content as HTML
-  window.escapeHtml = function (str) {
-    if (str == null) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    // Update progress bar
+    updateProgressBar: function (barId, percentage, text = null) {
+      const bar = DOMUtils.el(barId);
+      if (!bar) return;
+      bar.style.width = `${percentage}%`;
+      bar.setAttribute('aria-valuenow', percentage);
+      if (text !== null) {
+        bar.textContent = text;
+      }
+    },
+
+    // Check if mobile viewport
+    isMobile: function () {
+      return window.innerWidth < 992;
+    }
   };
+
 })();
