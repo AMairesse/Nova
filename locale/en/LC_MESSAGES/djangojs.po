@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-11-01 18:31+0000\n"
+"POT-Creation-Date: 2025-11-11 15:36+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,56 +18,55 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: nova/static/js/files.js:146
+#: nova/static/js/file-operations.js:312
 msgid "No files in this thread."
 msgstr "No files in this thread."
 
-#: nova/static/js/thread_management.js:52
-msgid "Compact"
-msgstr "Compact"
-
-#: nova/static/js/thread_management.js:466
-#: nova/static/js/thread_management.js:484
-#: nova/static/js/thread_management.js:507
+#: nova/static/js/message-manager.js:165 nova/static/js/message-manager.js:183
+#: nova/static/js/message-manager.js:206
 msgid "Processing…"
 msgstr "Processing…"
 
-#: nova/static/js/thread_management.js:896
+#: nova/static/js/message-renderer.js:49
+msgid "Compact"
+msgstr "Compact"
+
+#: nova/static/js/streaming-manager.js:272
 msgid "Waiting for your answer..."
 msgstr "Waiting for your answer..."
 
-#: nova/static/js/thread_management.js:896
+#: nova/static/js/streaming-manager.js:272
 msgid "Type your message..."
 msgstr "Type your message..."
 
-#: nova/static/js/thread_management.js:918
+#: nova/static/js/streaming-manager.js:294
 msgid "asks"
 msgstr "asks"
 
-#: nova/static/js/thread_management.js:918
+#: nova/static/js/streaming-manager.js:294
 msgid "Question"
 msgstr "Question"
 
-#: nova/static/js/thread_management.js:920
+#: nova/static/js/streaming-manager.js:296
 msgid "Answer format may be structured; plain text is also accepted."
 msgstr "Answer format may be structured; plain text is also accepted."
 
-#: nova/static/js/thread_management.js:932
+#: nova/static/js/streaming-manager.js:308
 msgid "Type your answer..."
 msgstr "Type your answer..."
 
-#: nova/static/js/thread_management.js:937
+#: nova/static/js/streaming-manager.js:313
 msgid "Answer"
 msgstr "Answer"
 
-#: nova/static/js/thread_management.js:940
+#: nova/static/js/streaming-manager.js:316
 msgid "Cancel"
 msgstr "Cancel"
 
-#: nova/static/js/thread_management.js:972
+#: nova/static/js/streaming-manager.js:348
 msgid "Answer received. Resuming..."
 msgstr "Answer received. Resuming..."
 
-#: nova/static/js/thread_management.js:974
+#: nova/static/js/streaming-manager.js:350
 msgid "Canceled."
 msgstr "Canceled"

@@ -353,11 +353,16 @@ class LLMAgent:
             except Exception as e:
                 logger.warning(f"Failed to load user memory: {e}")
 
-        # Add information about files available in disussion
-        file_count = await self._get_thread_file_count(self.thread.id)
-        if file_count:
-            files_context = f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
+        # Add information about files available in discussion
+        if self.thread is not None:
+            file_count = await self._get_thread_file_count(self.thread.id)
+            if file_count:
+                files_context = f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
+            else:
+                files_context = "\nNo attached files available."
         else:
+            # When no thread is associated (e.g. /api/ask/), skip DB access
+            # and explicitly state that there are no attached files.
             files_context = "\nNo attached files available."
         base_prompt += files_context
 

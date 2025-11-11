@@ -1,5 +1,4 @@
 # nova/utils/file_utils.py
-import os
 import logging
 import posixpath
 from collections import defaultdict
@@ -84,18 +83,6 @@ async def upload_file_to_minio(content: bytes, path: str, mime: str,
         except Exception as e:  # Catch aioboto3 errors
             logger.error(f"Error uploading to MinIO: {e}")
             raise
-
-
-async def get_existing_count(thread: Thread, parent_dir: str, base: str) -> int:
-    """Async-safe wrapper for counting existing files with prefix."""
-    @sync_to_async
-    def inner_count():
-        filter_kwargs = {
-            'thread': thread,
-            'original_filename__startswith': os.path.join(parent_dir, base)
-        }
-        return UserFile.objects.filter(**filter_kwargs).count()
-    return await inner_count()
 
 
 async def auto_rename_path(thread: Thread, proposed_path: str) -> str:

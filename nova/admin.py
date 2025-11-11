@@ -12,6 +12,8 @@ from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserInfo, UserParameters, UserProfile
+from nova.models.WebApp import WebApp
+from nova.models.WebAppFile import WebAppFile
 
 
 admin.site.site_header = "Nova Admin"
@@ -69,3 +71,15 @@ admin.site.register(User, UserAdmin)
 admin.site.register(UserFile)
 admin.site.register(CheckpointLink)
 admin.site.register(Interaction)
+
+
+class WebAppFilesInline(admin.TabularInline):
+    model = WebAppFile
+    can_delete = False
+    verbose_name_plural = "files"
+
+
+@admin.register(WebApp)
+class WebAppAdmin(admin.ModelAdmin):
+    list_display = ('user', 'thread', 'slug', 'created_at', 'updated_at')
+    inlines = [WebAppFilesInline]

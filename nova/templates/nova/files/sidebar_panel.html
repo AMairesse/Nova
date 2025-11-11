@@ -1,26 +1,57 @@
 <!-- templates/nova/files/sidebar_panel.html -->
-<div class="file-panel">
-  <div class="file-panel-header">
-  </div>
-  
-  <div class="file-panel-body">
-    <!-- Container for the file tree -->
-    <div id="file-tree-container">
-      <p class="text-muted">Loading files...</p>
+{% load i18n %}
+<div class="file-panel d-flex flex-column h-100">
+  <!-- Tabs: Files | Webapps -->
+  <ul class="nav nav-tabs px-2 pt-2" role="tablist" id="files-webapps-tabs">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="tab-files" data-bs-toggle="tab" data-tab-target="files" type="button" role="tab" aria-controls="files" aria-selected="true">
+        <i class="bi bi-files me-1"></i>{% trans "Files" %}
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="tab-webapps" data-bs-toggle="tab" data-tab-target="webapps" type="button" role="tab" aria-controls="webapps" aria-selected="false">
+        <i class="bi bi-window me-1"></i>{% trans "Webapps" %}
+      </button>
+    </li>
+  </ul>
+
+  <!-- Toolbar (visible for Files only) -->
+  <div class="d-flex justify-content-between align-items-center px-2 py-2 border-bottom bg-light" id="files-toolbar">
+    <div class="small text-muted">{% trans "Upload files" %}</div>
+    <div>
+      <button id="upload-files-btn" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
+        <i class="bi bi-upload"></i>
+      </button>
+      <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
+        <i class="bi bi-folder-plus"></i>
+      </button>
     </div>
   </div>
-  
+
+  <!-- Panel body -->
+  <div class="file-panel-body flex-grow-1 overflow-auto">
+    <!-- Files container -->
+    <div id="file-tree-container" class="p-2">
+      <p class="text-muted mb-0">{% trans "Loading files..." %}</p>
+    </div>
+
+    <!-- Webapps container (hidden by default) -->
+    <div id="webapps-list-container" class="p-2 d-none" aria-hidden="true">
+      <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
+    </div>
+  </div>
+
   <!-- Hidden file input -->
   <input type="file" id="file-input" multiple style="display: none;" accept="image/*,text/*,.pdf,.md,.csv,.js,.json">
-  
+
   <!-- Hidden directory input -->
   <input type="file" id="directory-input" webkitdirectory style="display: none;">
-  
+
   <!-- Upload progress -->
   <div id="upload-progress" style="display: none;">
-    <div class="progress">
+    <div class="progress m-2">
       <div class="progress-bar" role="progressbar" style="width: 0%">0%</div>
     </div>
   </div>
-  
 </div>
+

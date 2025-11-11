@@ -1,0 +1,35 @@
+{% load i18n %}
+<div class="p-2">
+  {% if webapps %}
+    <ul class="list-group list-group-flush">
+      {% for app in webapps %}
+        <li class="list-group-item d-flex align-items-center gap-2">
+          <div class="text-truncate me-auto" style="max-width: 260px;">
+            <div class="fw-semibold text-truncate">
+              {{ app.name|default:app.slug }}
+            </div>
+            <div class="text-muted small d-none d-xl-block">
+              {% trans "Updated" %} {{ app.updated_at|date:"Y-m-d H:i" }}
+            </div>
+          </div>
+          <div class="btn-group btn-group-sm" role="group" aria-label="{% trans 'Actions' %}">
+            {# Desktop: show explicit split-preview button; Mobile: hide it so mobile uses full-screen preview behavior #}
+            <a href="#"
+               class="btn btn-outline-primary webapp-preview-btn d-none d-lg-inline-flex"
+               data-slug="{{ app.slug }}"
+               data-url="{{ app.public_url }}"
+               title="{% trans 'Preview side-by-side' %}"
+               aria-label="{% trans 'Preview side-by-side' %}">
+              <i class="bi bi-layout-split"></i>
+            </a>
+            <a href="{{ app.public_url }}" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}" aria-label="{% trans 'Open in new tab' %}">
+              <i class="bi bi-box-arrow-up-right"></i>
+            </a>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-muted">{% trans "No webapps yet for this thread." %}</p>
+  {% endif %}
+</div>

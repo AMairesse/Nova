@@ -147,37 +147,6 @@ class ContextConsumptionTracker:
         return total_bytes // 4 + 1
 
 
-class ResumeTaskExecutor(AgentTaskExecutor):
-    """
-    Executor that resumes an interrupted agent run after user input.
-    It builds a concise resume prompt from the Interaction (question + answer)
-    and continues on the same thread/checkpoint.
-    """
-    def __init__(self, task, user, thread, agent_config, interaction: Interaction):
-        super().__init__(task, user, thread, agent_config, prompt="")
-        self.interaction = interaction
-
-    async def _create_prompt(self):
-        # Build a concise resume instruction
-        import json as _json
-
-        q = self.interaction.question or ""
-        ans = self.interaction.answer
-        if isinstance(ans, (dict, list)):
-            ans_text = _json.dumps(ans, ensure_ascii=False)
-        else:
-            ans_text = str(ans)
-
-        # Keep it short and directive to avoid re-asking
-        resume_prompt = (
-            "Resume the previous task exactly where you left off.\n"
-            f"You had asked the user this clarification question: \"{q}\"\n"
-            f"The user's answer is: {ans_text}\n"
-            "Do not ask the same question again. Use this answer to proceed and complete the task."
-        )
-        return resume_prompt
-
-
 class CompactTaskExecutor (TaskExecutor):
     """
     Encapsulates the execution of a compact task
@@ -312,8 +281,8 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
 @shared_task(bind=True, name="resume_ai_task")
 def resume_ai_task_celery(self, interaction_pk: int):
     """
-    Resume an agent execution after user input by running the ResumeTaskExecutor.
-    Uses the same thread/checkpoint, streams via the same WS group (task_id).
+    Resume an agent execution after user input.
+    Uses the same thread/checkpoint and streams via the same WS group (task_id).
     """
     try:
         interaction = Interaction.objects.select_related('task', 'thread', 'agent_config').get(pk=interaction_pk)

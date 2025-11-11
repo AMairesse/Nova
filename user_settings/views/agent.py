@@ -1,14 +1,18 @@
 # user_settings/views/agent.py
 from __future__ import annotations
-from django.contrib.auth.decorators import login_required
 
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, reverse, get_object_or_404
+from django.utils.translation import gettext_lazy as _
 from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.http import require_POST
 from django.views.generic import ListView
 
+from nova.bootstrap import bootstrap_default_setup
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
 from nova.models.UserObjects import UserProfile
@@ -57,6 +61,8 @@ class AgentListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         ).exists()
         ctx["has_providers"] = has_providers
 
+        # Flag used by the template to enable/disable the bootstrap button
+        ctx["can_bootstrap_defaults"] = has_providers
         return ctx
 
 
@@ -114,4 +120,54 @@ def make_default_agent(request, agent_id):
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         profile.default_agent = agent
         profile.save()
-    return redirect(reverse('user_settings:dashboard') + '#pane-agents')
+    return redirect(reverse("user_settings:dashboard") + "#pane-agents")
+
+
+# ---------------------------------------------------------------------------#
+#  Bootstrap default agents                                                  #
+# ---------------------------------------------------------------------------#
+@csrf_protect
+@login_required
+@require_POST
+def bootstrap_defaults(request):
+    """
+    One-click, idempotent bootstrap of the recommended default tools/agents
+    for the current user.
+
+    - Requires at least one provider (user or system), otherwise does nothing.
+    - Reuses existing entities and fills in missing pieces.
+    - Never deletes user content.
+    """
+    result = bootstrap_default_setup(request.user)
+
+    # Build a concise human-readable summary
+    created_agents = result.get("created_agents", [])
+    updated_agents = result.get("updated_agents", [])
+    skipped = result.get("skipped_agents", [])
+    notes = result.get("notes", [])
+
+    parts = []
+    if created_agents:
+        parts.append(_("Created: ") + ", ".join(created_agents))
+    if updated_agents:
+        parts.append(_("Updated: ") + ", ".join(updated_agents))
+    for s in skipped:
+        # s expected: {"name": "...", "reason": "..."}
+        parts.append(
+            _("Skipped {name}: {reason}").format(
+                name=s.get("name", "?"),
+                reason=s.get("reason", ""),
+            )
+        )
+    for n in notes:
+        parts.append(str(n))
+
+    if parts:
+        messages.info(request, " ".join(parts))
+    else:
+        messages.info(
+            request,
+            _("Bootstrap completed with no changes (everything already configured)."),
+        )
+
+    return redirect(reverse("user_settings:dashboard") + "#pane-agents")

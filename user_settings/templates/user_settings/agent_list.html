@@ -6,6 +6,27 @@
 <div class="container py-4">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2>{% trans "Agents" %}</h2>
+
+    <div class="ms-auto">
+      {% if can_bootstrap_defaults %}
+        <form method="post"
+              action="{% url 'user_settings:agents-bootstrap-defaults' %}"
+              class="d-inline">
+          {% csrf_token %}
+          <button type="submit"
+                  class="btn btn-sm btn-primary">
+            {% trans "Bootstrap default agents" %}
+          </button>
+        </form>
+      {% else %}
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary"
+                disabled
+                title="{% trans 'Configure at least one LLM provider to enable bootstrap.' %}">
+          {% trans "Bootstrap default agents" %}
+        </button>
+      {% endif %}
+    </div>
   </div>
 
   {% include "user_settings/fragments/agent_table.html" %}

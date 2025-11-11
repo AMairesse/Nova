@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% load i18n %} {% load static %}
+
+{% block content %}
+<div class="container-fluid h-100 p-0" style="overflow: hidden;">
+  <!-- Full-page split: Chat (30%) + Webapp (70%) -->
+  <div class="row g-0" style="height: calc(100vh - 76px); min-height: 0;">
+    <div class="col-12 d-flex flex-column h-100 position-relative">
+
+      <!-- Floating close button (top-right corner) -->
+      <button
+        id="preview-close-floating"
+        type="button"
+        class="btn btn-light border position-absolute top-0 end-0 m-2"
+        title="{% trans 'Close preview' %}"
+        aria-label="{% trans 'Close preview' %}"
+      >×</button>
+
+      <!-- Split container -->
+      <div id="split-container" class="d-flex flex-row flex-grow-1 position-relative" aria-label="{% trans 'Conversation and Preview Split' %}" style="min-height:0;">
+        <!-- Pane A: Chat -->
+        <div id="chat-pane" class="d-flex flex-column" aria-label="{% trans 'Chat pane' %}" style="min-width: 240px; width: var(--chat-pane-width, 30%); min-height:0;">
+          <div id="message-container" class="d-flex flex-column flex-grow-1" style="min-height: 0;"></div>
+        </div>
+
+        <!-- Resizer (desktop only) -->
+        <div
+          id="split-resizer"
+          class="d-none d-lg-block"
+          role="separator"
+          aria-label="{% trans 'Resize preview' %}"
+          aria-orientation="vertical"
+          tabindex="0"
+          style="width: 6px; cursor: col-resize; background: repeating-linear-gradient(to bottom, rgba(0,0,0,.05), rgba(0,0,0,.05) 8px, transparent 8px, transparent 16px);">
+        </div>
+
+        <!-- Pane B: Preview -->
+        <div id="preview-pane" class="d-flex flex-column flex-grow-1 border-start" aria-label="{% trans 'Webapp preview' %}" style="min-width: 200px; min-height:0;">
+          <div class="d-flex align-items-center gap-2 px-2 py-1 border-bottom bg-white">
+            <!-- Left side actions -->
+            <button class="btn btn-sm btn-outline-secondary" id="webapp-refresh-btn" type="button" title="{% trans 'Refresh preview' %}" aria-label="{% trans 'Refresh preview' %}">
+              <i class="bi bi-arrow-clockwise"></i>
+            </button>
+            <a class="btn btn-sm btn-outline-primary" id="webapp-open-btn" href="#" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}" aria-label="{% trans 'Open in new tab' %}">
+              <i class="bi bi-box-arrow-up-right"></i>
+              <span class="d-none d-sm-inline">{% trans "Open" %}</span>
+            </a>
+            <span class="ms-2 text-muted small text-truncate" id="webapp-slug-label" aria-live="polite">
+              {{ webapp.name|default:webapp.slug }}
+            </span>
+
+            <!-- Right side: spacer pushes controls to far right -->
+            <div class="flex-grow-1"></div>
+
+            <!-- Mobile: toggle chat, stays on the right but before close -->
+            <button class="btn btn-sm btn-outline-secondary d-lg-none" id="mobile-chat-toggle" type="button" title="{% trans 'Toggle chat' %}">
+              <i class="bi bi-chat-dots"></i>
+              <span class="d-none d-sm-inline">{% trans "Chat" %}</span>
+            </button>
+
+            <!-- Close: always fully right-aligned -->
+            <button class="btn btn-sm btn-outline-secondary" id="webapp-close-btn" type="button" title="{% trans 'Close preview' %}" aria-label="{% trans 'Close preview' %}">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+          <div class="position-relative flex-grow-1" style="min-height:0;">
+            <iframe id="webapp-iframe" data-webapp-slug="{{ webapp.slug }}" sandbox="allow-scripts allow-same-origin" class="w-100 h-100 border-0"></iframe>
+            <div id="webapp-spinner" class="position-absolute top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center bg-white bg-opacity-75">
+              <div class="spinner-border" role="status" aria-label="{% trans 'Loading' %}"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Small helper style to ensure default split width -->
+      <style>
+        :root { --chat-pane-width: 30%; }
+      </style>
+
+    </div>
+  </div>
+</div>
+
+<!-- Configure URLs for the JavaScript modules -->
+<script>
+  window.NovaApp = window.NovaApp || {};
+  window.NovaApp.urls = {
+    addMessage: "{% url 'add_message' %}",
+    messageList: "{% url 'message_list' %}",
+    runningTasksBase: "/running-tasks/",
+    createThread: "{% url 'create_thread' %}",
+    deleteThread: "{% url 'delete_thread' 0 %}",
+    loadMoreThreads: "{% url 'load_more_threads' %}",
+    compactThread: "{% url 'compact_thread' 0 %}",
+    fileList: "{% url 'file_list' 0 %}",
+    fileUpload: "{% url 'file_upload' 0 %}",
+    fileDelete: "{% url 'file_delete' 0 %}",
+    interactionAnswer: "{% url 'interaction_answer' 0 %}",
+    interactionCancel: "{% url 'interaction_cancel' 0 %}",
+  };
+
+  // Force current thread for this preview page so the chat loads immediately
+  // Do this before JS modules init to ensure initial load targets this thread
+  try {
+  localStorage.setItem('lastThreadId', "{{ thread.id }}");
+  localStorage.setItem('lastPreviewSlug:{{ thread.id }}', "{{ webapp.slug }}");
+} catch (e) {}
+
+  // Set initial URL for iframe and wire close buttons after DOM is ready
+  document.addEventListener('DOMContentLoaded', () => {
+    const iframe = document.getElementById('webapp-iframe');
+    const spinner = document.getElementById('webapp-spinner');
+    const openBtn = document.getElementById('webapp-open-btn');
+    const closeFloating = document.getElementById('preview-close-floating');
+
+    // Set initial iframe src
+    if (iframe) {
+      if (spinner) { spinner.classList.remove('d-none'); spinner.classList.add('d-flex'); }
+      iframe.src = "{{ webapp.public_url }}";
+      iframe.addEventListener('load', () => {
+        if (spinner) { spinner.classList.add('d-none'); spinner.classList.remove('d-flex'); }
+      });
+    }
+    if (openBtn) {
+      openBtn.href = "{{ webapp.public_url }}";
+    }
+    // Ensure preview pane visible and initialize split
+    const previewPane = document.getElementById('preview-pane');
+    if (previewPane) {
+      previewPane.classList.remove('d-none');
+    }
+
+    // Announce activation so PreviewManager can sync state
+    document.dispatchEvent(new CustomEvent('webapp_preview_activate', {
+      detail: { slug: "{{ webapp.slug }}", url: "{{ webapp.public_url }}" }
+    }));
+
+    const navigateBack = () => {
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = "{% url 'index' %}";
+      }
+    };
+
+    const closeBtn = document.getElementById('webapp-close-btn');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', navigateBack);
+    }
+    if (closeFloating) {
+      closeFloating.addEventListener('click', navigateBack);
+    }
+  });
+</script>
+
+<!-- JS modules -->
+<script src="{% static 'js/responsive.js' %}" defer></script>
+<script src="{% static 'js/voice_recognition.js' %}" defer></script>
+<script src="{% static 'js/message-renderer.js' %}" defer></script>
+<script src="{% static 'js/streaming-manager.js' %}" defer></script>
+<script src="{% static 'js/thread-utils.js' %}" defer></script>
+<script src="{% static 'js/message-manager.js' %}" defer></script>
+<script src="{% static 'js/preview-manager.js' %}" defer></script>
+<script src="{% static 'js/thread-manager.js' %}" defer></script>
+<script src="{% static 'js/thread_management.js' %}" defer></script>
+{% endblock %}

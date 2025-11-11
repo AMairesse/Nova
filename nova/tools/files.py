@@ -2,11 +2,9 @@
 import aioboto3
 import base64
 import logging
-import uuid
 from asgiref.sync import sync_to_async
 from botocore.exceptions import ClientError
 from functools import partial
-from io import BytesIO
 from langchain_core.tools import StructuredTool
 from typing import Tuple, Any
 
@@ -17,6 +15,7 @@ from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.llm.llm_agent import LLMAgent
 from nova.utils import estimate_tokens
+from nova.file_utils import batch_upload_files
 
 logger = logging.getLogger(__name__)
 
@@ -169,33 +168,41 @@ async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0,
 
 
 async def create_file(thread_id, user, filename: str, content: str) -> str:
-    """Create a new file in the current thread with given content."""
+    """
+    Create a new text file in the current thread with given content.
+
+    This implementation delegates to the unified upload pipeline:
+    - Uses batch_upload_files() for consistent validation (size, MIME),
+      sanitization, auto-renaming and MinIO key format:
+      users/{user_id}/threads/{thread_id}{safe_path}
+    - Keeps the original return shape: "File created: ID {id}" or an error message.
+    """
     thread = await async_get_object_or_404(Thread, id=thread_id, user=user)
-    unique_id = uuid.uuid4().hex[:8]
-    user_id = await async_get_user_id(user)
-    key = f"{user_id}/{thread_id}/{unique_id}_{filename}"
-    session = aioboto3.Session()
-    async with session.client(
-        's3',
-        endpoint_url=settings.MINIO_ENDPOINT_URL,
-        aws_access_key_id=settings.MINIO_ACCESS_KEY,
-        aws_secret_access_key=settings.MINIO_SECRET_KEY
-    ) as s3_client:
-        try:
-            await s3_client.upload_fileobj(
-                BytesIO(content.encode('utf-8')),
-                settings.MINIO_BUCKET_NAME,
-                key,
-                ExtraArgs={'ContentType': 'text/plain'}
-            )
-            size = len(content.encode('utf-8'))  # Taille précise en bytes
-            user_file = await async_create_userfile(
-                user, thread, key, filename, 'text/plain', size
-            )
-            return f"File created: ID {user_file.id}"
-        except ClientError as e:
-            logger.error(f"Failed to create file: {e}")
-            return f"Error creating file: {str(e)}"
+
+    # batch_upload_files expects bytes and a path relative to this thread.
+    # We use "/{filename}" as proposed path; it will be sanitized and renamed if needed.
+    file_data = [{
+        "path": f"/{filename}",
+        "content": content.encode("utf-8"),
+    }]
+
+    try:
+        created, errors = await batch_upload_files(thread, user, file_data)
+    except Exception as e:
+        logger.error(f"Failed to create file via batch_upload_files: {e}")
+        return f"Error creating file: {str(e)}"
+
+    if not created:
+        # Surface validation/flow errors while preserving simple text response.
+        if errors:
+            return f"Error creating file: {'; '.join(errors)}"
+        return "Error creating file: unknown error"
+
+    file_id = created[0].get("id")
+    if not file_id:
+        return "Error creating file: invalid response from upload pipeline"
+
+    return f"File created: ID {file_id}"
 
 
 async def read_image(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
