@@ -126,7 +126,7 @@ def get_pending_interactions(request):
     pending_interactions = Interaction.objects.filter(
         thread=thread,
         status=InteractionStatus.PENDING
-    ).select_related('task', 'agent')
+    ).select_related('task', 'agent_config')
 
     interactions_data = []
     for interaction in pending_interactions:
