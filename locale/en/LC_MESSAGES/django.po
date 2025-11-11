@@ -15,7 +15,7 @@ msgstr "Prompt"
 msgid "Recursion limit"
 msgstr "Recursion limit"
 
-#: nova/models/AgentConfig.py:25 nova/models/Tool.py:41
+#: nova/models/AgentConfig.py:25 nova/models/Tool.py:37
 #: user_settings/templates/user_settings/dashboard.html:36
 #: user_settings/templates/user_settings/tool_list.html:8
 msgid "Tools"
@@ -68,6 +68,7 @@ msgid "Task"
 msgstr "Task"
 
 #: nova/models/Interaction.py:28 nova/models/Task.py:28
+#: nova/models/WebApp.py:29
 msgid "Thread"
 msgstr "Thread"
 
@@ -139,7 +140,7 @@ msgstr "Message type"
 msgid "Related interaction"
 msgstr "Related interaction"
 
-#: nova/models/Provider.py:50
+#: nova/models/Provider.py:42
 #, fuzzy
 #| msgid ""
 #| "Maximum tokens for this provider's context window (e.g., 4096 for small "
@@ -152,11 +153,11 @@ msgstr ""
 "Maximum tokens for this provider's context window (e.g., 4096 for small "
 "models, 100000 or more for large)."
 
-#: nova/models/Provider.py:61
+#: nova/models/Provider.py:53
 msgid "LLM providers"
 msgstr "LLM providers"
 
-#: nova/models/Provider.py:74 user_settings/forms.py:98
+#: nova/models/Provider.py:66 user_settings/forms.py:98
 msgid "Max context tokens must be at least 512."
 msgstr "Max context tokens must be at least 512."
 
@@ -188,80 +189,80 @@ msgstr "User threads"
 msgid "Invalid actor: {}"
 msgstr "Invalid actor: {}"
 
-#: nova/models/Tool.py:26
+#: nova/models/Tool.py:22
 msgid "Builtin"
 msgstr "Builtin"
 
-#: nova/models/Tool.py:27
+#: nova/models/Tool.py:23
 msgid "API HTTP/REST"
 msgstr "API HTTP/REST"
 
-#: nova/models/Tool.py:28
+#: nova/models/Tool.py:24
 msgid "MCP Server"
 msgstr "MCP Server"
 
-#: nova/models/Tool.py:31
+#: nova/models/Tool.py:27
 msgid "Streamable HTTP (Default)"
 msgstr "Streamable HTTP (Default)"
 
-#: nova/models/Tool.py:32
+#: nova/models/Tool.py:28
 msgid "SSE (Legacy)"
 msgstr "SSE (Legacy)"
 
-#: nova/models/Tool.py:67
+#: nova/models/Tool.py:63
 msgid "Transport method for MCP servers"
 msgstr "Transport method for MCP servers"
 
-#: nova/models/Tool.py:79
+#: nova/models/Tool.py:75
 msgid "Available functions for this tool, if any."
 msgstr "Available functions for this tool, if any."
 
-#: nova/models/Tool.py:92
+#: nova/models/Tool.py:88
 msgid "A BUILTIN tool must select a subtype."
 msgstr "A BUILTIN tool must select a subtype."
 
-#: nova/models/Tool.py:96
+#: nova/models/Tool.py:92
 #, python-format
 msgid "Invalid builtin subtype: %s"
 msgstr "Invalid builtin subtype: %s"
 
-#: nova/models/Tool.py:103
+#: nova/models/Tool.py:99
 msgid "Endpoint is mandatory for API or MCP tools."
 msgstr "Endpoint is mandatory for API or MCP tools."
 
-#: nova/models/Tool.py:119
+#: nova/models/Tool.py:115
 msgid "Tool credentials"
 msgstr "Tool credentials"
 
-#: nova/models/Tool.py:123
+#: nova/models/Tool.py:119
 msgid "Credentials"
 msgstr "Credentials"
 
-#: nova/models/Tool.py:128
+#: nova/models/Tool.py:124
 msgid "No Authentication"
 msgstr "No Authentication"
 
-#: nova/models/Tool.py:129
+#: nova/models/Tool.py:125
 msgid "Basic Auth"
 msgstr "Basic Auth"
 
-#: nova/models/Tool.py:130
+#: nova/models/Tool.py:126
 msgid "Token Auth"
 msgstr "Token Auth"
 
-#: nova/models/Tool.py:131
+#: nova/models/Tool.py:127
 msgid "OAuth"
 msgstr "OAuth"
 
-#: nova/models/Tool.py:132
+#: nova/models/Tool.py:128
 msgid "API Key"
 msgstr "API Key"
 
-#: nova/models/Tool.py:133
+#: nova/models/Tool.py:129
 msgid "Custom"
 msgstr "Custom"
 
-#: nova/models/Tool.py:164
+#: nova/models/Tool.py:160
 msgid "{}'s credentials for {}"
 msgstr "{}'s credentials for {}"
 
@@ -299,6 +300,71 @@ msgstr "Default agent must be a normal agent."
 msgid "Default agent must belong to the user."
 msgstr "Default agent must belong to the user."
 
+#: nova/models/WebApp.py:23
+msgid "User webapps"
+msgstr "User webapps"
+
+#: nova/models/WebApp.py:36 nova/models/WebAppFile.py:44
+msgid "Web application"
+msgstr "Web application"
+
+#: nova/models/WebApp.py:37
+msgid "Web applications"
+msgstr "Web applications"
+
+#: nova/models/WebApp.py:47
+msgid "WebApp user must match Thread owner."
+msgstr "WebApp user must match Thread owner."
+
+#: nova/models/WebAppFile.py:17
+msgid ""
+"Invalid file path. Only letters, digits, dots, underscores and hyphens are "
+"allowed (max 120)."
+msgstr ""
+"Invalid file path. Only letters, digits, dots, underscores and hyphens are "
+"allowed (max 120)."
+
+#: nova/models/WebAppFile.py:21
+msgid "Path must be a single filename without directories."
+msgstr "Path must be a single filename without directories."
+
+#: nova/models/WebAppFile.py:24
+msgid "Invalid file extension. Allowed: .html, .css, .js"
+msgstr "Invalid file extension. Allowed: .html, .css, .js"
+
+#: nova/models/WebAppFile.py:26
+msgid "Hidden files are not allowed."
+msgstr "Hidden files are not allowed."
+
+#: nova/models/WebAppFile.py:32
+#, python-brace-format
+msgid "File is too large: {size} bytes. Max {_MAX_BYTES_PER_FILE} bytes."
+msgstr "File is too large: {size} bytes. Max {_MAX_BYTES_PER_FILE} bytes."
+
+#: nova/models/WebAppFile.py:48
+msgid "Path (filename)"
+msgstr "Path (filename)"
+
+#: nova/models/WebAppFile.py:49
+msgid "Example: index.html, styles.css, app.js"
+msgstr "Example: index.html, styles.css, app.js"
+
+#: nova/models/WebAppFile.py:52
+msgid "Content"
+msgstr "Content"
+
+#: nova/models/WebAppFile.py:53
+msgid "File content (UTF-8). Max 200 KB per file."
+msgstr "File content (UTF-8). Max 200 KB per file."
+
+#: nova/models/WebAppFile.py:57
+msgid "Web application file"
+msgstr "Web application file"
+
+#: nova/models/WebAppFile.py:58
+msgid "Web application files"
+msgstr "Web application files"
+
 #: nova/templates/base.html:8
 msgid "Nova Application"
 msgstr "Nova Application"
@@ -322,8 +388,63 @@ msgstr "Logout"
 msgid "Close"
 msgstr "Close"
 
+#: nova/templates/nova/files/sidebar_panel.html:8
+#: nova/templates/nova/index.html:16 nova/templates/nova/index.html:105
+msgid "Files"
+msgstr "Files"
+
+#: nova/templates/nova/files/sidebar_panel.html:13
+#: nova/templates/nova/index.html:110
+msgid "Webapps"
+msgstr "Webapps"
+
+#: nova/templates/nova/files/sidebar_panel.html:20
+#: nova/templates/nova/files/sidebar_panel.html:22
+#: nova/templates/nova/index.html:117 nova/templates/nova/index.html:119
+msgid "Upload files"
+msgstr "Upload files"
+
+#: nova/templates/nova/files/sidebar_panel.html:25
+#: nova/templates/nova/index.html:122
+msgid "Upload directory"
+msgstr "Upload directory"
+
+#: nova/templates/nova/files/sidebar_panel.html:35
+msgid "Loading files..."
+msgstr "Loading files..."
+
+#: nova/templates/nova/files/sidebar_panel.html:40
+#: nova/templates/nova/index.html:136
+msgid "Loading webapps..."
+msgstr "Loading webapps..."
+
+#: nova/templates/nova/files/webapps_list.html:12
+msgid "Updated"
+msgstr "Updated"
+
+#: nova/templates/nova/files/webapps_list.html:15
+#: user_settings/templates/user_settings/fragments/agent_table.html:24
+#: user_settings/templates/user_settings/fragments/provider_table.html:13
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Actions"
+msgstr "Actions"
+
+#: nova/templates/nova/files/webapps_list.html:21
+#: nova/templates/nova/files/webapps_list.html:22
+msgid "Preview side-by-side"
+msgstr "Preview side-by-side"
+
+#: nova/templates/nova/files/webapps_list.html:25
+#: nova/templates/nova/preview.html:44
+msgid "Open in new tab"
+msgstr "Open in new tab"
+
+#: nova/templates/nova/files/webapps_list.html:33
+msgid "No webapps yet for this thread."
+msgstr "No webapps yet for this thread."
+
 #: nova/templates/nova/index.html:11 nova/templates/nova/index.html:26
-#: nova/templates/nova/index.html:78
+#: nova/templates/nova/index.html:68
 msgid "Threads"
 msgstr "Threads"
 
@@ -331,22 +452,13 @@ msgstr "Threads"
 msgid "Messages"
 msgstr "Messages"
 
-#: nova/templates/nova/index.html:16 nova/templates/nova/index.html:61
-#: nova/templates/nova/index.html:107
-msgid "Files"
-msgstr "Files"
-
-#: nova/templates/nova/index.html:40 nova/templates/nova/index.html:96
+#: nova/templates/nova/index.html:40 nova/templates/nova/index.html:86
 msgid "Load More"
 msgstr "Load More"
 
-#: nova/templates/nova/index.html:63 nova/templates/nova/index.html:109
-msgid "Upload files"
-msgstr "Upload files"
-
-#: nova/templates/nova/index.html:66 nova/templates/nova/index.html:112
-msgid "Upload directory"
-msgstr "Upload directory"
+#: nova/templates/nova/index.html:97
+msgid "Files & Webapps"
+msgstr "Files & Webapps"
 
 #: nova/templates/nova/message_container.html:66
 #, fuzzy, python-format
@@ -481,6 +593,47 @@ msgstr "Older"
 #: nova/templates/nova/partials/_thread_item.html:12
 msgid "Delete Thread"
 msgstr "Delete Thread"
+
+#: nova/templates/nova/preview.html:15 nova/templates/nova/preview.html:16
+#: nova/templates/nova/preview.html:62
+msgid "Close preview"
+msgstr "Close preview"
+
+#: nova/templates/nova/preview.html:20
+msgid "Conversation and Preview Split"
+msgstr "Conversation and Preview Split"
+
+#: nova/templates/nova/preview.html:22
+msgid "Chat pane"
+msgstr "Chat pane"
+
+#: nova/templates/nova/preview.html:31
+msgid "Resize preview"
+msgstr "Resize preview"
+
+#: nova/templates/nova/preview.html:38
+msgid "Webapp preview"
+msgstr "Webapp preview"
+
+#: nova/templates/nova/preview.html:41
+msgid "Refresh preview"
+msgstr "Refresh preview"
+
+#: nova/templates/nova/preview.html:46
+msgid "Open"
+msgstr "Open"
+
+#: nova/templates/nova/preview.html:56
+msgid "Toggle chat"
+msgstr "Toggle chat"
+
+#: nova/templates/nova/preview.html:58
+msgid "Chat"
+msgstr "Chat"
+
+#: nova/templates/nova/preview.html:69
+msgid "Loading"
+msgstr "Loading"
 
 #: nova/templates/registration/login.html:9
 #: nova/templates/registration/login.html:67
@@ -642,8 +795,6 @@ msgid "No credential configured for this Code Execution tool."
 msgstr "No credential configured for this Code Execution tool."
 
 #: nova/tools/builtins/code_execution.py:70
-#, fuzzy
-#| msgid "Field judge0_url is missing from the configuration."
 msgid "Field judge0_url is missing from the configuration."
 msgstr "Field judge0_url is missing from the configuration."
 
@@ -710,12 +861,10 @@ msgid "No credential configured for this SearXNG tool."
 msgstr "No credential configured for this SearXNG tool."
 
 #: nova/tools/builtins/searxng.py:39
-#, fuzzy
-#| msgid "Field searxng_url is missing from the configuration."
 msgid "Field searxng_url is missing from the configuration."
 msgstr "Field searxng_url is missing from the configuration."
 
-#: nova/utils.py:91
+#: nova/utils.py:92
 msgid "Enter a valid URL."
 msgstr "Enter a valid URL."
 
@@ -847,32 +996,18 @@ msgid "Memory"
 msgstr "Memory"
 
 #: user_settings/templates/user_settings/dashboard.html:67
-#, fuzzy
-#| msgid "Loading providers"
 msgid "Loading providers"
 msgstr "Loading providers"
 
 #: user_settings/templates/user_settings/dashboard.html:77
-#, fuzzy
-#| msgid "Loading agents"
 msgid "Loading agents"
 msgstr "Loading agents"
 
 #: user_settings/templates/user_settings/dashboard.html:87
-#, fuzzy
-#| msgid "Loading tools"
 msgid "Loading tools"
 msgstr "Loading tools"
 
-#: user_settings/templates/user_settings/dashboard.html:97
-#, fuzzy
-#| msgid "Loading"
-msgid "Loading"
-msgstr "Loading"
-
 #: user_settings/templates/user_settings/dashboard.html:108
-#, fuzzy
-#| msgid "Loading memory"
 msgid "Loading memory"
 msgstr "Loading memory"
 
@@ -885,12 +1020,6 @@ msgstr "Name"
 #: user_settings/templates/user_settings/fragments/agent_table.html:24
 msgid "Agent as tool"
 msgstr "Agent as a tool"
-
-#: user_settings/templates/user_settings/fragments/agent_table.html:24
-#: user_settings/templates/user_settings/fragments/provider_table.html:13
-#: user_settings/templates/user_settings/fragments/tool_table.html:14
-msgid "Actions"
-msgstr "Actions"
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:34
 #: user_settings/templates/user_settings/fragments/provider_table.html:25
@@ -920,31 +1049,31 @@ msgstr "Go to Providers"
 msgid "Click on \"Add Agent\" to create your first agent."
 msgstr "Click on \"Add Agent\" to create your first agent."
 
-#: user_settings/templates/user_settings/fragments/general_form.html:12
+#: user_settings/templates/user_settings/fragments/general_form.html:15
 msgid "Langfuse Configuration"
 msgstr "Langfuse configuration"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:25
+#: user_settings/templates/user_settings/fragments/general_form.html:28
 msgid "API Token Management"
 msgstr "API Token Management"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:31
+#: user_settings/templates/user_settings/fragments/general_form.html:34
 msgid "This will replace any existing token. Continue?"
 msgstr "This will replace any existing token. Continue?"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:32
+#: user_settings/templates/user_settings/fragments/general_form.html:35
 msgid "Are you sure you want to delete your API token?"
 msgstr "Are you sure you want to delete your API token?"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:41
+#: user_settings/templates/user_settings/fragments/general_form.html:44
 msgid "Generate New Token"
 msgstr "Generate New Token"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:51
+#: user_settings/templates/user_settings/fragments/general_form.html:54
 msgid "Delete Token"
 msgstr "Delete Token"
 
-#: user_settings/templates/user_settings/fragments/general_form.html:58
+#: user_settings/templates/user_settings/fragments/general_form.html:61
 msgid ""
 "Use your API token to authenticate with the Nova API. The token will only be "
 "displayed once when generated."
@@ -952,7 +1081,7 @@ msgstr ""
 "Use your API token to authenticate with the Nova API. The token will only be "
 "displayed once when generated."
 
-#: user_settings/templates/user_settings/fragments/general_form.html:65
+#: user_settings/templates/user_settings/fragments/general_form.html:68
 msgid "Save Settings"
 msgstr "Save Settings"
 
@@ -987,6 +1116,23 @@ msgstr ""
 #: user_settings/templates/user_settings/fragments/memory_form.html:39
 msgid "Save Memory"
 msgstr "Save Memory"
+
+#: user_settings/templates/user_settings/fragments/password_change_form.html:6
+#: user_settings/templates/user_settings/fragments/password_change_form.html:27
+msgid "Change Password"
+msgstr "Change Password"
+
+#: user_settings/templates/user_settings/fragments/password_change_form.html:11
+msgid "Password changed successfully!"
+msgstr "Password changed successfully!"
+
+#: user_settings/templates/user_settings/fragments/password_change_form.html:12
+msgid ""
+"Your password has been updated. You are still logged in and can continue "
+"using the application."
+msgstr ""
+"Your password has been updated. You are still logged in and can continue "
+"using the application."
 
 #: user_settings/templates/user_settings/fragments/provider_table.html:7
 #: user_settings/templates/user_settings/provider_form.html:16

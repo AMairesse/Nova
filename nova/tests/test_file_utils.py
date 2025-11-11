@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from nova.tests.base import BaseTestCase
 from nova.file_utils import (
     detect_mime, sanitize_user_path, upload_file_to_minio,
-    get_existing_count, auto_rename_path, build_virtual_tree,
+    auto_rename_path, build_virtual_tree,
     check_thread_access, batch_upload_files,
     MAX_FILE_SIZE, MULTIPART_THRESHOLD
 )
@@ -169,34 +169,6 @@ class FileUtilsTest(BaseTestCase):
             with self.assertRaises(Exception):
                 await upload_file_to_minio(content, path, mime, self.thread, self.user)
             self.assertIn("Error uploading to MinIO", cm.output[0])
-
-    async def test_get_existing_count_no_files(self):
-        """Test counting existing files when none exist."""
-        count = await get_existing_count(self.thread, '', 'test')
-        self.assertEqual(count, 0)
-
-    async def test_get_existing_count_with_files(self):
-        """Test counting existing files."""
-        # Create some test files
-        from asgiref.sync import sync_to_async
-        await sync_to_async(UserFile.objects.create)(
-            user=self.user, thread=self.thread,
-            original_filename='/test.txt', mime_type='text/plain',
-            size=10, key='key1'
-        )
-        await sync_to_async(UserFile.objects.create)(
-            user=self.user, thread=self.thread,
-            original_filename='/test (2).txt', mime_type='text/plain',
-            size=10, key='key2'
-        )
-        await sync_to_async(UserFile.objects.create)(
-            user=self.user, thread=self.thread,
-            original_filename='/other.txt', mime_type='text/plain',
-            size=10, key='key3'
-        )
-
-        count = await get_existing_count(self.thread, '/', 'test')
-        self.assertEqual(count, 2)  # Should count test.txt and test (2).txt
 
     async def test_auto_rename_path_no_conflict(self):
         """Test auto-rename when no conflict exists."""
