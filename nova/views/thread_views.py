@@ -12,17 +12,13 @@ from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
-from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, compact_conversation_celery
 from nova.utils import markdown_to_html
-from nova.file_utils import ALLOWED_MIME_TYPES, MAX_FILE_SIZE
-from django.conf import settings
 import logging
-import boto3
-from botocore.exceptions import ClientError
-import io  # For in-memory file handling
-import uuid  # For unique keys
+
+from asgiref.sync import async_to_sync
+from nova.file_utils import batch_upload_files
 
 logger = logging.getLogger(__name__)
 
@@ -196,31 +192,51 @@ def add_message(request):
         thread_html = None
 
     uploaded_file_ids = []
-    s3_client = boto3.client('s3',
-                             endpoint_url=settings.MINIO_ENDPOINT_URL,
-                             aws_access_key_id=settings.MINIO_ACCESS_KEY,
-                             aws_secret_access_key=settings.MINIO_SECRET_KEY)
-    for file in uploaded_files:
-        if file.size > MAX_FILE_SIZE:
-            return JsonResponse({"status": "ERROR", "message": "File too large (max 10MB)"}, status=400)
-        if file.content_type not in ALLOWED_MIME_TYPES:
-            return JsonResponse({"status": "ERROR", "message": "Unsupported file type"}, status=400)
+
+    if uploaded_files:
+        # Prepare data for unified async upload pipeline.
+        # We propose simple top-level paths; batch_upload_files() will:
+        # - sanitize paths
+        # - enforce size and MIME limits
+        # - auto-rename on collision
+        # - upload to MinIO under users/{user_id}/threads/{thread_id}{safe_path}
+        file_data = []
+        for f in uploaded_files:
+            try:
+                content = f.read()
+            except Exception as e:
+                logger.error(f"Failed reading uploaded file {f.name}: {e}")
+                return JsonResponse(
+                    {"status": "ERROR", "message": "File upload failed while reading content"},
+                    status=500,
+                )
+            # Use a simple POSIX path; sanitize_user_path() will normalize.
+            proposed_path = f"/{f.name}"
+            file_data.append({"path": proposed_path, "content": content})
+
         try:
-            unique_id = uuid.uuid4().hex[:8]
-            key = f"{request.user.id}/{thread.id}/{unique_id}_{file.name}"
-            s3_client.upload_fileobj(io.BytesIO(file.read()),
-                                     settings.MINIO_BUCKET_NAME, key,
-                                     ExtraArgs={'ContentType': file.content_type})
-            user_file = UserFile.objects.create(user=request.user,
-                                                thread=thread,
-                                                key=key,
-                                                original_filename=file.name,
-                                                mime_type=file.content_type,
-                                                size=file.size)
-            uploaded_file_ids.append(user_file.id)
-        except ClientError as e:
-            logger.error(f"Upload failed: {e}")
-            return JsonResponse({"status": "ERROR", "message": "File upload failed"}, status=500)
+            created_files, errors = async_to_sync(batch_upload_files)(thread, request.user, file_data)
+        except Exception as e:
+            logger.error(f"Batch upload failed: {e}")
+            return JsonResponse(
+                {"status": "ERROR", "message": "File upload failed"},
+                status=500,
+            )
+
+        # Collect created ids for message.internal_data and API compatibility.
+        for item in created_files:
+            file_id = item.get("id")
+            if file_id:
+                uploaded_file_ids.append(file_id)
+
+        # Surface validation errors (size, MIME, etc.) in a backward compatible way:
+        # if any error occurred and nothing was uploaded, treat as failure.
+        if errors and not uploaded_file_ids:
+            # Join errors into a single message; details are safe/validation oriented.
+            return JsonResponse(
+                {"status": "ERROR", "message": "; ".join(errors)},
+                status=400,
+            )
 
     message = thread.add_message(new_message, actor=Actor.USER)
     message.internal_data = {'file_ids': uploaded_file_ids}
