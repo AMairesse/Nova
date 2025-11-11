@@ -73,8 +73,5 @@
   window.StreamingManager = window.StreamingManager;
   window.MessageRenderer = window.MessageRenderer;
   window.ThreadLoadingManager = window.ThreadLoadingManager;
-  // Thread grouping helpers are now provided by ThreadUIUtils in thread-utils.js:
-  // window.ThreadUIUtils.ensureGroupContainer(...)
-  // window.ThreadUIUtils.mergeThreadGroupsFromHtml(...)
 
 })();

@@ -543,6 +543,4 @@
             alert(message);
         }
     };
-
-    // No-op: thread grouping utilities moved to ThreadUIUtils in thread-utils.js
 })();
