@@ -4,10 +4,10 @@ import mimetypes
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
-from django.conf import settings
 
 from nova.models.WebApp import WebApp
 from nova.models.Thread import Thread
+from nova.utils.webapp_urls import compute_webapp_public_url
 
 
 def _guess_mime(path: str) -> str:
@@ -70,12 +70,11 @@ def webapps_list(request, thread_id: int):
         .only("slug", "updated_at")
     )
 
-    # Build absolute public URLs based on trusted external base
-    external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip("/") if settings.CSRF_TRUSTED_ORIGINS else ""
+    # Build public URLs using shared helper to avoid drift with tool behavior
     items = []
     for app in apps:
         slug = app.slug
-        public_url = f"{external_base}/apps/{slug}/" if external_base else f"/apps/{slug}/"
+        public_url = compute_webapp_public_url(slug)
         items.append(
             {
                 "slug": slug,
@@ -102,8 +101,7 @@ def preview_webapp(request, thread_id: int, slug: str):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
     webapp = get_object_or_404(WebApp, user=request.user, thread=thread, slug=slug)
 
-    external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip("/") if settings.CSRF_TRUSTED_ORIGINS else ""
-    public_url = f"{external_base}/apps/{slug}/" if external_base else f"/apps/{slug}/"
+    public_url = compute_webapp_public_url(slug)
 
     context = {
         "thread": thread,

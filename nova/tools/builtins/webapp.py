@@ -5,9 +5,8 @@ from channels.layers import get_channel_layer
 from langchain_core.tools import StructuredTool
 from typing import Dict, List, Optional
 
-from django.conf import settings
-
 from nova.llm.llm_agent import LLMAgent
+from nova.utils.webapp_urls import compute_webapp_public_url
 
 
 logger = logging.getLogger(__name__)
@@ -24,47 +23,6 @@ METADATA = {
 
 # Limits
 _MAX_TOTAL_BYTES = 600 * 1024  # 600 KB total cap across all files
-
-
-def _compute_public_url(slug: str) -> str:
-    """
-    Compute a robust public URL for a webapp.
-
-    Preference order:
-    1. First CSRF_TRUSTED_ORIGIN (if set), e.g. "https://example.com"
-    2. Single ALLOWED_HOSTS entry (non-wildcard), with scheme:
-       - if value already contains scheme, keep it
-       - else:
-         - https when SECURE_SSL_REDIRECT or not DEBUG
-         - http otherwise
-    3. Fallback to relative path: /apps/<slug>/
-
-    Always returns a URL ending with `/apps/<slug>/`.
-    """
-    base = None
-
-    # 1) CSRF_TRUSTED_ORIGINS
-    origins = getattr(settings, "CSRF_TRUSTED_ORIGINS", None) or []
-    if origins:
-        base = origins[0].rstrip("/")
-
-    # 2) ALLOWED_HOSTS heuristic (single non-wildcard host)
-    if not base:
-        hosts = [h for h in getattr(settings, "ALLOWED_HOSTS", []) if h and "*" not in h]
-        if len(hosts) == 1:
-            host = hosts[0]
-            if host.startswith("http://") or host.startswith("https://"):
-                base = host.rstrip("/")
-            else:
-                use_https = getattr(settings, "SECURE_SSL_REDIRECT", False) or not getattr(settings, "DEBUG", False)
-                scheme = "https" if use_https else "http"
-                base = f"{scheme}://{host}".rstrip("/")
-
-    # 3) Fallback: relative URL only
-    if not base:
-        return f"/apps/{slug}/"
-
-    return f"{base}/apps/{slug}/"
 
 
 # ------------- DB helpers (sync wrapped) -------------------------------------------------
@@ -211,7 +169,7 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         if error_msg:
             return error_msg
 
-    public_url = _compute_public_url(slug)
+    public_url = compute_webapp_public_url(slug)
 
     # Emit URL and update for live preview setup and refresh
     try:
