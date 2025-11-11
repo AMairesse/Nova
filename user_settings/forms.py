@@ -154,6 +154,12 @@ class AgentForm(forms.ModelForm):
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
 
         # Crispy-forms helper
+        #
+        # Layout note:
+        # - "tools" uses a custom dual-list widget implemented in JS:
+        #   - Available tools vs Selected tools
+        #   - The original multi-select is rendered but visually replaced.
+        # - "agent_tools" keeps checkbox list for clarity (usually fewer items).
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.disable_csrf = True
@@ -168,7 +174,10 @@ class AgentForm(forms.ModelForm):
                 css_id="tool-description-wrapper",
                 css_class="ms-3",
             ),
-            "tools",
+            Field(
+                "tools",
+                css_class="dual-list-tools-source",
+            ),
             "agent_tools",
         )
 
