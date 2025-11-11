@@ -583,6 +583,8 @@
             const order = getGroupOrder();
             const targetIndex = order.indexOf(group);
             let insertBefore = null;
+            // Ensure groups is defined (it may not exist if no groups yet)
+            const groups = Array.from(container.querySelectorAll('.thread-group'));
             for (const g of groups) {
                 const idx = order.indexOf(g.dataset.group || 'older');
                 if (idx > targetIndex) {
