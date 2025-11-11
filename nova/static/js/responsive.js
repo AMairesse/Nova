@@ -320,11 +320,10 @@
     // Listen for file content updates and sync to mobile
     document.addEventListener('fileContentUpdated', () => {
       if (window.ResponsiveManager) {
-        window.ResponsiveManager.syncContent();
+        // Avoid recursion: only sync mobile content once without re-dispatching fileContentUpdated
+        window.ResponsiveManager.syncMobileContent();
       }
-    });
-
-    // Listen for thread changes to update FileManager
+    });// Listen for thread changes to update FileManager
     document.addEventListener('click', (e) => {
       const threadLink = e.target.closest('.thread-link');
       if (threadLink) {
