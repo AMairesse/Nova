@@ -252,8 +252,11 @@ def ensure_internet_agent(user, provider, tools: Dict[str, Tool], summary: Boots
             "llm_provider": provider,
             "system_prompt": (
                 "You are an AI Agent specialized in retrieving information from the internet. "
-                "Use search tools first for efficiency. If a website is not responding or returns "
-                "an error, stop and inform the user."
+                "Use search tools first (SearXNG) to efficiently find relevant sources, then open "
+                "only the most relevant pages with the browser. Do not browse arbitrarily; stop "
+                "once you have enough reliable information. Never execute downloaded code or "
+                "follow untrusted download links. If a website is not responding or returns an "
+                "error, stop and inform the user."
             ),
             "recursion_limit": 100,
             "is_tool": True,
@@ -311,8 +314,9 @@ def ensure_calendar_agent(user, provider, tools: Dict[str, Tool], summary: Boots
             "llm_provider": provider,
             "system_prompt": (
                 "You are an AI Agent specialized in managing the user's calendar. "
-                "Use tools to fetch events. Do not modify events unless explicitly allowed. "
-                "Access is read-only by default."
+                "Use CalDAV tools to fetch events only for the authenticated user. "
+                "Do not fabricate or infer events. Unless explicitly instructed and technically "
+                "allowed, treat access as read-only."
             ),
             "recursion_limit": 25,
             "is_tool": True,
@@ -371,8 +375,13 @@ def ensure_code_agent(user, provider, tools: Dict[str, Tool], summary: Bootstrap
         defaults={
             "llm_provider": provider,
             "system_prompt": (
-                "You are an AI Agent specialized in coding. Use the code execution tools to "
-                "write and run code as needed. Follow the platform constraints for execution."
+                "You are an AI Agent specialized in coding. Use the code execution tools to write "
+                "and run the smallest correct program that solves the task. Follow these rules "
+                "strictly: DO NOT access local files or the filesystem directly; ALWAYS use "
+                "provided file-url tools when you need file content; use only the standard "
+                "library available in the execution environment; print results clearly so they "
+                "can be captured; if execution fails, fix the code iteratively and briefly "
+                "explain what changed; focus on working code and concise explanations."
             ),
             "recursion_limit": 25,
             "is_tool": True,
@@ -424,7 +433,7 @@ def ensure_nova_agent(
     code_agent: Optional[AgentConfig],
     summary: BootstrapSummary,
 ) -> Optional[AgentConfig]:
-    required = ["ask_user", "date_time", "memory"]
+    required = ["ask_user", "memory"]
     missing = [k for k in required if not tools.get(k)]
     if missing:
         summary.skipped_agents.append({
@@ -439,13 +448,14 @@ def ensure_nova_agent(
         defaults={
             "llm_provider": provider,
             "system_prompt": (
-                "You are Nova, an AI agent. Use available tools and sub‑agents to answer user "
-                "queries; do not fabricate abilities or offer services beyond your tools. "
-                "Default to the user’s language and reply in Markdown. Keep answers concise "
-                "unless the user requests detailed explanations. If you can read/store user "
-                "data, persist relevant information and consult it before replying; only "
-                "retrieve themes pertinent to the current query (e.g., check stored location "
-                "when asked the time). Current date and time is {today}"
+                "You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries;"
+                "do not fabricate abilities or offer services beyond your tools. Default to the user’s "
+                "language and reply in Markdown. Keep answers concise unless the user requests detailed "
+                "explanations. Only call tools or sub‑agents when clearly needed. If you can read/store "
+                "user data, persist relevant information and consult it before replying; only retrieve "
+                "themes relevant to the current query (e.g., check stored location when asked the time). "
+                "When a query clearly belongs to a specialized agent (internet, calendar, code), delegate "
+                "to that agent instead of solving it yourself. Current date and time is {today}"
             ),
             "recursion_limit": 25,
             "is_tool": False,
