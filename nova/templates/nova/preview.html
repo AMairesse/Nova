@@ -36,14 +36,26 @@
 
         <!-- Pane B: Preview -->
         <div id="preview-pane" class="d-flex flex-column flex-grow-1 border-start" aria-label="{% trans 'Webapp preview' %}" style="min-width: 200px; min-height:0;">
-          <div class="d-flex align-items-center gap-2 p-1 border-bottom small bg-light">
-            <button class="btn btn-light btn-sm" id="webapp-close-btn" type="button" title="{% trans 'Close preview' %}">×</button>
-            <button class="btn btn-light btn-sm" id="webapp-refresh-btn" type="button" title="{% trans 'Refresh preview' %}">⟳</button>
-            <a class="btn btn-light btn-sm" id="webapp-open-btn" href="#" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}">↗ {% trans "Open" %}</a>
-            <span class="ms-2 text-muted small" id="webapp-slug-label" aria-live="polite">{{ webapp.name|default:webapp.slug }}</span>
+          <div class="d-flex align-items-center gap-2 px-2 py-1 border-bottom bg-white">
+            <!-- Match main layout: subtle outline icon buttons + primary actions -->
+            <button class="btn btn-sm btn-outline-secondary" id="webapp-refresh-btn" type="button" title="{% trans 'Refresh preview' %}" aria-label="{% trans 'Refresh preview' %}">
+              <i class="bi bi-arrow-clockwise"></i>
+            </button>
+            <a class="btn btn-sm btn-outline-primary" id="webapp-open-btn" href="#" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}" aria-label="{% trans 'Open in new tab' %}">
+              <i class="bi bi-box-arrow-up-right"></i>
+              <span class="d-none d-sm-inline">{% trans "Open" %}</span>
+            </a>
+            <span class="ms-2 text-muted small text-truncate" id="webapp-slug-label" aria-live="polite">
+              {{ webapp.name|default:webapp.slug }}
+            </span>
             <!-- Mobile toggle to bring chat over the preview -->
-            <button class="btn btn-outline-secondary btn-sm ms-auto d-lg-none" id="mobile-chat-toggle" type="button" title="{% trans 'Toggle chat' %}">
-              <i class="bi bi-chat-dots"></i> {% trans "Chat" %}
+            <button class="btn btn-sm btn-outline-secondary ms-auto d-lg-none" id="mobile-chat-toggle" type="button" title="{% trans 'Toggle chat' %}">
+              <i class="bi bi-chat-dots"></i>
+              <span class="d-none d-sm-inline">{% trans "Chat" %}</span>
+            </button>
+            <!-- Close aligned fully right -->
+            <button class="btn btn-sm btn-outline-secondary ms-2" id="webapp-close-btn" type="button" title="{% trans 'Close preview' %}" aria-label="{% trans 'Close preview' %}">
+              <i class="bi bi-x-lg"></i>
             </button>
           </div>
           <div class="position-relative flex-grow-1" style="min-height:0;">
