@@ -120,12 +120,23 @@ def _get_or_create_builtin_tool(
 
     # 2) Create
     owner = None if system_only else user
+
+    # Resolve builtin metadata to set python_path and schemas when available
+    from nova.tools import get_tool_type  # Local import to avoid circulars at module import time
+    metadata = get_tool_type(subtype) or {}
+    python_path = metadata.get("python_path", "") or ""
+    input_schema = metadata.get("input_schema", {})
+    output_schema = metadata.get("output_schema", {})
+
     tool = Tool.objects.create(
         user=owner,
         name=name,
         description=description,
         tool_type=Tool.ToolType.BUILTIN,
         tool_subtype=subtype,
+        python_path=python_path,
+        input_schema=input_schema,
+        output_schema=output_schema,
     )
     summary.created_tools.append(tool.name)
     return tool
