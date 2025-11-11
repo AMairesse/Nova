@@ -132,9 +132,9 @@
 
     syncMobileContent() {
       // Sync files content between desktop and mobile (desktop tree → mobile clone)
-      this.syncFilesContent();
-
-      // Sync upload button functionality (desktop + mobile triggers)
+      // IMPORTANT: Do NOT call syncFilesContent() here, because syncFilesContent()
+      // dispatches 'fileContentUpdated', and the global listener calls syncMobileContent().
+      // That cycle caused the "too much recursion" error.
       this.syncUploadButtons();
 
       // Ensure FileManager is initialized once
@@ -317,13 +317,19 @@
   document.addEventListener('DOMContentLoaded', () => {
     window.ResponsiveManager = new ResponsiveManager();
 
-    // Listen for file content updates and sync to mobile
+    // Listen for file content updates:
+    // This event is dispatched ONLY from syncFilesContent().
+    // To avoid recursion:
+    // - Do NOT call syncMobileContent() here (it used to call syncFilesContent()).
+    // - Just ensure upload buttons and FileManager are wired for the new DOM.
     document.addEventListener('fileContentUpdated', () => {
       if (window.ResponsiveManager) {
-        // Avoid recursion: only sync mobile content once without re-dispatching fileContentUpdated
-        window.ResponsiveManager.syncMobileContent();
+        window.ResponsiveManager.syncUploadButtons();
+        window.ResponsiveManager.initializeFileManager();
       }
-    });// Listen for thread changes to update FileManager
+    });
+
+    // Listen for thread changes to update FileManager
     document.addEventListener('click', (e) => {
       const threadLink = e.target.closest('.thread-link');
       if (threadLink) {
