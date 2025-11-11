@@ -6,7 +6,7 @@ from langchain_core.tools import StructuredTool
 from typing import Dict, List, Optional
 
 from nova.llm.llm_agent import LLMAgent
-from nova.utils.webapp_urls import compute_webapp_public_url
+from nova.utils import compute_webapp_public_url
 
 
 logger = logging.getLogger(__name__)

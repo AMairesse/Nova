@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, render
 
 from nova.models.WebApp import WebApp
 from nova.models.Thread import Thread
-from nova.utils.webapp_urls import compute_webapp_public_url
+from nova.utils import compute_webapp_public_url
 
 
 def _guess_mime(path: str) -> str:
