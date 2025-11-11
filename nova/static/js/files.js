@@ -2,11 +2,44 @@
 (function () {
   'use strict';
 
+  /**
+   * FileManager is a small facade that:
+   * - Tracks the current thread id for file/webapp operations.
+   * - Wires delegated click handlers for file actions (download/delete).
+   * - Delegates actual work to SidebarManager, WebSocketManager, WebappIntegration.
+   *
+   * Initialization is invoked once from NovaApp.bootstrapThreadUI().
+   */
   window.FileManager = {
     currentThreadId: window.StorageUtils.getThreadId(),
     isUploading: false,
-    sidebarContentLoaded: false,  // Cache flag to avoid reloading content
-    _delegatesBound: false,       // Ensure we bind delegated handlers only once
+    sidebarContentLoaded: false,
+    _delegatesBound: false,
+    _initialized: false,
+
+    /**
+     * Initialize FileManager once.
+     * Safe to call multiple times; guarded by _initialized flag.
+     */
+    init() {
+      if (this._initialized) return;
+      this._initialized = true;
+
+      this.currentThreadId = window.StorageUtils.getThreadId();
+      this.attachSidebarEventHandlers();
+      this.initDelegatedHandlers();
+
+      // React to canonical threadChanged events to keep in sync.
+      document.addEventListener('threadChanged', (e) => {
+        const tid = e.detail?.threadId || null;
+        this.updateForThread(tid);
+      });
+
+      // Initial sync for last thread (if any).
+      if (this.currentThreadId) {
+        this.updateForThread(this.currentThreadId);
+      }
+    },
 
     attachSidebarEventHandlers() {
       const uploadBtn = document.getElementById('upload-files-btn');
@@ -45,63 +78,76 @@
       if (this._delegatesBound) return;
       this._delegatesBound = true;
 
-      document.addEventListener('click', async (e) => {
-        // Download
-        const downloadEl = e.target.closest('a[data-action="download"], .file-download-link');
-        if (downloadEl) {
-          e.preventDefault();
-          const item = downloadEl.closest('.file-tree-item');
-          if (!item) return;
-
-          const fileId = item.dataset.fileId;
-          const fileName = item.dataset.fileName || (downloadEl.textContent || '').trim();
-          if (!fileId) return;
-
-          try {
-            await window.FileOperations.downloadFile(fileId, fileName);
-          } catch (err) {
-            console.error('Download failed', err);
-            alert('Download failed.');
-          }
-          return;
-        }
-
-        // Delete
-        const deleteEl = e.target.closest('[data-action="delete"], .file-delete-btn');
-        if (deleteEl) {
-          e.preventDefault();
-          const item = deleteEl.closest('.file-tree-item');
-          if (!item) return;
-
-          const itemType = item.dataset.type;
-          const fileName = item.dataset.fileName || (item.querySelector('.file-item-name, .file-download-link')?.textContent || '').trim();
-
-          if (itemType === 'dir' || itemType === 'folder') {
-            const dirPath = item.dataset.path || '';
-            if (!confirm(`Are you sure you want to delete directory "${fileName}" and all files inside it?`)) return;
-            await window.FileOperations.deleteDirectory(fileName, dirPath);
-          } else {
-            const fileId = item.dataset.fileId;
-            if (!fileId) return;
-            await window.FileOperations.deleteSingleFile(fileId, fileName);
-          }
-          return;
-        }
-
-        // Webapps: open dedicated preview page
-        const previewEl = e.target.closest('.webapp-preview-btn');
-        if (previewEl) {
-          e.preventDefault();
-          const slug = previewEl.dataset.slug || '';
-          const threadId = this.currentThreadId || window.StorageUtils.getThreadId();
-          if (!slug || !threadId) return;
-          window.location.href = `/apps/preview/${threadId}/${slug}/`;
-          return;
-        }
+      document.addEventListener('click', (e) => {
+        if (this._handleDownloadClick(e)) return;
+        if (this._handleDeleteClick(e)) return;
+        if (this._handleWebappPreviewClick(e)) return;
       });
     },
 
-    // Delegate to SidebarManager
+    // --- Internal delegated handlers ------------------------------------------------
+
+    _handleDownloadClick(e) {
+      const downloadEl = e.target.closest('a[data-action="download"], .file-download-link');
+      if (!downloadEl) return false;
+
+      e.preventDefault();
+      const item = downloadEl.closest('.file-tree-item');
+      if (!item) return true;
+
+      const fileId = item.dataset.fileId;
+      const fileName = item.dataset.fileName || (downloadEl.textContent || '').trim();
+      if (!fileId) return true;
+
+      window.FileOperations.downloadFile(fileId, fileName).catch((err) => {
+        console.error('Download failed', err);
+        alert('Download failed.');
+      });
+      return true;
+    },
+
+    _handleDeleteClick(e) {
+      const deleteEl = e.target.closest('[data-action="delete"], .file-delete-btn');
+      if (!deleteEl) return false;
+
+      e.preventDefault();
+      const item = deleteEl.closest('.file-tree-item');
+      if (!item) return true;
+
+      const itemType = item.dataset.type;
+      const fileName =
+        item.dataset.fileName ||
+        (item.querySelector('.file-item-name, .file-download-link')?.textContent || '').trim();
+
+      if (itemType === 'dir' || itemType === 'folder') {
+        const dirPath = item.dataset.path || '';
+        if (!confirm(`Are you sure you want to delete directory "${fileName}" and all files inside it?`)) {
+          return true;
+        }
+        window.FileOperations.deleteDirectory(fileName, dirPath);
+      } else {
+        const fileId = item.dataset.fileId;
+        if (!fileId) return true;
+        window.FileOperations.deleteSingleFile(fileId, fileName);
+      }
+      return true;
+    },
+
+    _handleWebappPreviewClick(e) {
+      const previewEl = e.target.closest('.webapp-preview-btn');
+      if (!previewEl) return false;
+
+      e.preventDefault();
+      const slug = previewEl.dataset.slug || '';
+      const threadId = this.currentThreadId || window.StorageUtils.getThreadId();
+      if (!slug || !threadId) return true;
+
+      window.location.href = `/apps/preview/${threadId}/${slug}/`;
+      return true;
+    },
+
+    // --- Delegation helpers ---------------------------------------------------------
+
     loadSidebarContent() {
       return window.SidebarManager.loadSidebarContent();
     },
@@ -110,13 +156,16 @@
       return window.SidebarManager.loadTree();
     },
 
-    // Delegate to WebSocketManager
     connectWebSocket() {
       return window.WebSocketManager.connectWebSocket();
     },
 
-    // Delegate to SidebarManager
     updateForThread(threadId) {
+      if (!threadId) {
+        this.currentThreadId = null;
+        return;
+      }
+      this.currentThreadId = threadId;
       return window.SidebarManager.updateForThread(threadId);
     },
 
@@ -124,7 +173,6 @@
       return window.SidebarManager.handleThreadDeletion();
     },
 
-    // Delegate to WebappIntegration
     loadWebappsList() {
       return window.WebappIntegration.loadWebappsList();
     },
@@ -133,26 +181,5 @@
       return window.WebappIntegration.activateSplitPreview(slug, url);
     }
   };
-
-  // Initialize delegated handlers and thread sync once DOM is ready
-  document.addEventListener('DOMContentLoaded', () => {
-    if (window.FileManager && typeof window.FileManager.initDelegatedHandlers === 'function') {
-      window.FileManager.initDelegatedHandlers();
-    }
-
-    // Sync sidebar content with current thread whenever it changes
-    document.addEventListener('threadChanged', (e) => {
-      const tid = e.detail?.threadId || null;
-      if (window.FileManager && typeof window.FileManager.updateForThread === 'function') {
-        window.FileManager.updateForThread(tid);
-      }
-    });
-
-    // Initialize sidebar for last thread on load (if available)
-    const initialTid = window.StorageUtils.getThreadId();
-    if (initialTid && window.FileManager && typeof window.FileManager.updateForThread === 'function') {
-      window.FileManager.updateForThread(initialTid);
-    }
-  });
 
 })();
