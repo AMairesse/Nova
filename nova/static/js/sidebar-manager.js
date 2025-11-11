@@ -163,29 +163,6 @@
             }
         },
 
-        // Handle thread deletion
-        handleThreadDeletion() {
-            window.FileManager.currentThreadId = null;
-
-            const filesColumn = document.getElementById('files-sidebar');
-            if (!filesColumn || filesColumn.classList.contains('files-hidden')) {
-                return;
-            }
-
-            if (!window.FileManager.sidebarContentLoaded) {
-                return;
-            }
-
-            if (window.WebSocketManager && window.WebSocketManager.ws) {
-                window.WebSocketManager.ws.close();
-                window.WebSocketManager.ws = null;
-            }
-
-            const treeContainer = document.getElementById('file-tree-container');
-            if (treeContainer) {
-                treeContainer.innerHTML = '<p class="text-muted p-3">No thread selected</p>';
-            }
-        }
     };
 
 })();

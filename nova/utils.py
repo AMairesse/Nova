@@ -1,9 +1,7 @@
-import asyncio
 import bleach
 import logging
 import re
 
-from asgiref.sync import async_to_sync
 from markdown import markdown
 from urllib.parse import urlparse, urlunparse
 
@@ -133,13 +131,6 @@ def estimate_tokens(text: str = None, input_size: int = None) -> int:
         return len(text) // 4 + 1
     else:
         return 0
-
-
-def schedule_in_event_loop(coro):
-    async def _runner():
-        asyncio.create_task(coro)
-
-    async_to_sync(_runner)()
 
 
 def markdown_to_html(markdown_text: str) -> str:

@@ -169,10 +169,6 @@
       return window.SidebarManager.updateForThread(threadId);
     },
 
-    handleThreadDeletion() {
-      return window.SidebarManager.handleThreadDeletion();
-    },
-
     loadWebappsList() {
       return window.WebappIntegration.loadWebappsList();
     },
