@@ -91,23 +91,50 @@
     </div>
   </div>
 
-  <!-- Mobile Files Offcanvas -->
+  <!-- Mobile Files/Webapps Offcanvas -->
   <div class="offcanvas offcanvas-end" tabindex="-1" id="filesOffcanvas" aria-labelledby="filesOffcanvasLabel">
     <div class="offcanvas-header border-bottom d-flex justify-content-between align-items-center">
-      <h5 class="offcanvas-title" id="filesOffcanvasLabel">{% trans "Files" %}</h5>
-      <div class="d-flex gap-2">
-        <button id="upload-files-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload files' %}">
-          <i class="bi bi-upload"></i>
-        </button>
-        <button id="upload-directory-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
-          <i class="bi bi-folder-plus"></i>
-        </button>
-        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
-      </div>
+      <h5 class="offcanvas-title" id="filesOffcanvasLabel">{% trans "Files & Webapps" %}</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
     </div>
-    <div class="offcanvas-body p-0">
-      <div id="file-sidebar-content-mobile">
-        <!-- Content loaded dynamically -->
+    <div class="offcanvas-body p-0 d-flex flex-column">
+      <!-- Mobile tabs -->
+      <ul class="nav nav-tabs px-2 pt-2" role="tablist" id="mobile-files-webapps-tabs">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="mobile-tab-files" data-view="files" type="button" role="tab" aria-selected="true">
+            <i class="bi bi-files me-1"></i>{% trans "Files" %}
+          </button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="mobile-tab-webapps" data-view="webapps" type="button" role="tab" aria-selected="false">
+            <i class="bi bi-window me-1"></i>{% trans "Webapps" %}
+          </button>
+        </li>
+      </ul>
+
+      <!-- Mobile toolbar (shown only for Files view) -->
+      <div class="d-flex justify-content-between align-items-center px-2 py-2 border-bottom bg-light" id="mobile-files-toolbar">
+        <div class="small text-muted">{% trans "Upload files" %}</div>
+        <div>
+          <button id="upload-files-btn-mobile" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
+            <i class="bi bi-upload"></i>
+          </button>
+          <button id="upload-directory-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
+            <i class="bi bi-folder-plus"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Mobile content containers -->
+      <div class="flex-grow-1 overflow-auto">
+        <!-- Files tree clone -->
+        <div id="file-sidebar-content-mobile">
+          <!-- Cloned from desktop sidebar; kept as-is -->
+        </div>
+        <!-- Webapps list -->
+        <div id="webapps-list-container-mobile" class="p-2 d-none" aria-hidden="true">
+          <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
+        </div>
       </div>
     </div>
   </div>

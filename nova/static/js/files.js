@@ -42,22 +42,43 @@
     },
 
     attachSidebarEventHandlers() {
-      const uploadBtn = document.getElementById('upload-files-btn');
-      if (uploadBtn) {
-        uploadBtn.addEventListener('click', () => {
+      // Desktop upload buttons
+      const desktopUploadBtn = document.getElementById('upload-files-btn');
+      if (desktopUploadBtn) {
+        desktopUploadBtn.addEventListener('click', () => {
           const fileInput = document.getElementById('file-input');
           if (fileInput) fileInput.click();
         });
       }
 
-      const uploadDirectoryBtn = document.getElementById('upload-directory-btn');
-      if (uploadDirectoryBtn) {
-        uploadDirectoryBtn.addEventListener('click', () => {
+      const desktopUploadDirectoryBtn = document.getElementById('upload-directory-btn');
+      if (desktopUploadDirectoryBtn) {
+        desktopUploadDirectoryBtn.addEventListener('click', () => {
           const directoryInput = document.getElementById('directory-input');
           if (directoryInput) directoryInput.click();
         });
       }
 
+      // Mobile upload buttons (offcanvas header)
+      const mobileUploadBtn = document.getElementById('upload-files-btn-mobile');
+      if (mobileUploadBtn) {
+        mobileUploadBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const fileInput = document.getElementById('file-input');
+          if (fileInput) fileInput.click();
+        });
+      }
+
+      const mobileUploadDirectoryBtn = document.getElementById('upload-directory-btn-mobile');
+      if (mobileUploadDirectoryBtn) {
+        mobileUploadDirectoryBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const directoryInput = document.getElementById('directory-input');
+          if (directoryInput) directoryInput.click();
+        });
+      }
+
+      // File input handlers (shared)
       const fileInput = document.getElementById('file-input');
       if (fileInput) {
         fileInput.addEventListener('change', (e) => {
@@ -142,6 +163,14 @@
       const threadId = this.currentThreadId || window.StorageUtils.getThreadId();
       if (!slug || !threadId) return true;
 
+      // Mobile: open dedicated full-page preview
+      const isMobile = window.innerWidth < 992;
+      if (isMobile) {
+        window.location.href = `/apps/preview/${threadId}/${slug}/`;
+        return true;
+      }
+
+      // Desktop: keep existing behavior (split preview handled by preview page/layout)
       window.location.href = `/apps/preview/${threadId}/${slug}/`;
       return true;
     },

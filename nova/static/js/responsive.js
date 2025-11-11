@@ -55,6 +55,9 @@
 
       // Sync mobile upload buttons with desktop ones
       this.syncUploadButtons();
+
+      // Setup mobile Files/Webapps tab switching
+      this.setupMobileFilesWebappsTabs();
     }
 
     setupFilesToggle() {
@@ -128,10 +131,10 @@
     }
 
     syncMobileContent() {
-      // Sync files content between desktop and mobile
+      // Sync files content between desktop and mobile (desktop tree → mobile clone)
       this.syncFilesContent();
 
-      // Sync upload button functionality
+      // Sync upload button functionality (desktop + mobile triggers)
       this.syncUploadButtons();
 
       // Ensure FileManager is initialized once
@@ -148,14 +151,19 @@
       const desktopFilesContent = document.getElementById('file-sidebar-content');
       const mobileFilesContent = document.getElementById('file-sidebar-content-mobile');
       if (!desktopFilesContent || !mobileFilesContent) return;
+
       const tree = desktopFilesContent.querySelector('#file-tree-container');
       mobileFilesContent.innerHTML = '';
       if (tree) {
         const clone = tree.cloneNode(true);
-        // Use a distinct id to avoid duplicates
+        // Use a distinct id on mobile to avoid duplicate IDs
         clone.id = 'file-tree-container-mobile';
         mobileFilesContent.appendChild(clone);
       }
+
+      // Let FileManager's delegated handlers work on cloned content
+      const event = new Event('fileContentUpdated');
+      document.dispatchEvent(event);
     }
 
     syncUploadButtons() {
@@ -164,21 +172,71 @@
       const desktopDirBtn = document.getElementById('upload-directory-btn');
       const mobileDirBtn = document.getElementById('upload-directory-btn-mobile');
 
-      // Sync upload files button
-      if (desktopUploadBtn && mobileUploadBtn) {
-        mobileUploadBtn.onclick = (e) => {
+      // For mobile we now trigger the shared hidden inputs directly from files.js
+      // These sync handlers are kept for backward compatibility if desktop buttons exist.
+      if (desktopUploadBtn && mobileUploadBtn && !mobileUploadBtn._synced) {
+        mobileUploadBtn._synced = true;
+        mobileUploadBtn.addEventListener('click', (e) => {
           e.preventDefault();
           desktopUploadBtn.click();
-        };
+        });
       }
 
-      // Sync upload directory button
-      if (desktopDirBtn && mobileDirBtn) {
-        mobileDirBtn.onclick = (e) => {
+      if (desktopDirBtn && mobileDirBtn && !mobileDirBtn._synced) {
+        mobileDirBtn._synced = true;
+        mobileDirBtn.addEventListener('click', (e) => {
           e.preventDefault();
           desktopDirBtn.click();
-        };
+        });
       }
+    }
+
+    setupMobileFilesWebappsTabs() {
+      const tabFiles = document.getElementById('mobile-tab-files');
+      const tabWebapps = document.getElementById('mobile-tab-webapps');
+      const toolbar = document.getElementById('mobile-files-toolbar');
+      const filesContainer = document.getElementById('file-sidebar-content-mobile');
+      const webappsContainer = document.getElementById('webapps-list-container-mobile');
+
+      if (!tabFiles || !tabWebapps || !filesContainer || !webappsContainer) return;
+
+      const activateFiles = () => {
+        tabFiles.classList.add('active');
+        tabWebapps.classList.remove('active');
+        if (toolbar) toolbar.classList.remove('d-none');
+        filesContainer.classList.remove('d-none');
+        filesContainer.removeAttribute('aria-hidden');
+        webappsContainer.classList.add('d-none');
+        webappsContainer.setAttribute('aria-hidden', 'true');
+      };
+
+      const activateWebapps = () => {
+        tabWebapps.classList.add('active');
+        tabFiles.classList.remove('active');
+        if (toolbar) toolbar.classList.add('d-none');
+        filesContainer.classList.add('d-none');
+        filesContainer.setAttribute('aria-hidden', 'true');
+        webappsContainer.classList.remove('d-none');
+        webappsContainer.removeAttribute('aria-hidden');
+
+        // Load mobile webapps list on demand
+        if (window.WebappIntegration && typeof window.WebappIntegration.loadMobileWebappsList === 'function') {
+          window.WebappIntegration.loadMobileWebappsList();
+        }
+      };
+
+      tabFiles.addEventListener('click', (e) => {
+        e.preventDefault();
+        activateFiles();
+      });
+
+      tabWebapps.addEventListener('click', (e) => {
+        e.preventDefault();
+        activateWebapps();
+      });
+
+      // Default to Files view
+      activateFiles();
     }
 
     syncThreadLists() {
