@@ -55,36 +55,3 @@
   </div>
 </div>
 
-<script>
-  (function() {
-    // Lightweight tab switcher binding; actual content loading handled in files.js
-    document.addEventListener('click', function(e) {
-      const btn = e.target.closest('#files-webapps-tabs .nav-link');
-      if (!btn) return;
-      const target = btn.getAttribute('data-tab-target');
-      if (!target) return;
-
-      // Toggle active state
-      document.querySelectorAll('#files-webapps-tabs .nav-link').forEach(el => el.classList.remove('active'));
-      btn.classList.add('active');
-
-      // Toggle toolbar (only for Files)
-      const toolbar = document.getElementById('files-toolbar');
-      if (toolbar) toolbar.classList.toggle('d-none', target !== 'files');
-
-      // Toggle containers
-      const filesEl = document.getElementById('file-tree-container');
-      const appsEl = document.getElementById('webapps-list-container');
-      if (filesEl) filesEl.classList.toggle('d-none', target !== 'files');
-      if (appsEl) {
-        const showApps = target === 'webapps';
-        appsEl.classList.toggle('d-none', !showApps);
-        appsEl.setAttribute('aria-hidden', showApps ? 'false' : 'true');
-        // Request load when first shown
-        if (showApps && window.FileManager && typeof window.FileManager.loadWebappsList === 'function') {
-          window.FileManager.loadWebappsList();
-        }
-      }
-    });
-  })();
-</script>
