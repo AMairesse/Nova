@@ -72,6 +72,7 @@ def _find_tool(subtype: str, user, require_user_cred: bool = False) -> Optional[
     ).filter(
         Q(user=user) | Q(user__isnull=True)
     ).order_by(
+        # user-owned first (non-null), then system (null)
         "-user_id",
         "pk",
     )
@@ -132,7 +133,9 @@ def _get_or_create_builtin_tool(
 
 def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
-    Ensure the baseline builtin tools exist (ask_user, date, memory, browser).
+    Ensure the baseline builtin tools exist:
+    - ask_user, date, memory, browser, webapp
+    - plus discover SearXNG, Judge0, CalDAV when available
 
     Returns a dict mapping logical names to Tool instances.
     """
@@ -171,6 +174,15 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
         subtype="browser",
         name="Browser",
         description="Navigate and fetch content from the web.",
+        summary=summary,
+    )
+
+    # WebApp (builtin, if registered)
+    tools["webapp"] = _get_or_create_builtin_tool(
+        user,
+        subtype="webapp",
+        name="WebApp",
+        description="Create and serve per-thread web applications.",
         summary=summary,
     )
 
@@ -427,9 +439,13 @@ def ensure_nova_agent(
         defaults={
             "llm_provider": provider,
             "system_prompt": (
-                "You are Nova, an AI agent. Use available tools and sub-agents to answer user "
-                "queries; do not fabricate abilities. Default to the user’s language and reply "
-                "concisely unless detailed explanations are requested."
+                "You are Nova, an AI agent. Use available tools and sub‑agents to answer user "
+                "queries; do not fabricate abilities or offer services beyond your tools. "
+                "Default to the user’s language and reply in Markdown. Keep answers concise "
+                "unless the user requests detailed explanations. If you can read/store user "
+                "data, persist relevant information and consult it before replying; only "
+                "retrieve themes pertinent to the current query (e.g., check stored location "
+                "when asked the time). Current date and time is {today}"
             ),
             "recursion_limit": 25,
             "is_tool": False,
@@ -460,6 +476,11 @@ def ensure_nova_agent(
         tool = tools.get(key)
         if tool and not agent.tools.filter(pk=tool.pk).exists():
             agent.tools.add(tool)
+
+    # Attach WebApp tool if available (README-agents default)
+    webapp_tool = tools.get("webapp")
+    if webapp_tool and not agent.tools.filter(pk=webapp_tool.pk).exists():
+        agent.tools.add(webapp_tool)
 
     # Attach sub-agents as tools
     for sub in (internet_agent, calendar_agent, code_agent):

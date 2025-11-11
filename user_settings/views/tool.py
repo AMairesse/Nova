@@ -60,15 +60,26 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         return super().get_template_names()
 
     def get_queryset(self):
-        # Ensure the system tools exists
+        # Ensure the system tools exist
         check_and_create_searxng_tool()
         check_and_create_judge0_tool()
-        # Return the user's tools and the system's one with agent count annotation
-        return Tool.objects.filter(
+
+        # Limit tools to current user + system tools
+        base_qs = Tool.objects.filter(
             Q(user=self.request.user) | Q(user__isnull=True)
-        ).annotate(
-            agent_count=Count('agents', distinct=True)
-        ).order_by('user', 'name')
+        )
+
+        # Annotate how many of THIS user's agents use each tool.
+        #
+        # For user-owned tools: count all related agents (they already belong to this user).
+        # For system tools: count only agents of the current user.
+        return base_qs.annotate(
+            agent_count=Count(
+                "agents",
+                filter=Q(agents__user=self.request.user),
+                distinct=True,
+            )
+        ).order_by("user", "name")
 
 
 # ---------------------------------------------------------------------------#
