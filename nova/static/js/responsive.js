@@ -1,5 +1,5 @@
 /* nova/static/js/responsive.js - Bootstrap-native responsive behavior */
-(function() {
+(function () {
   'use strict';
 
   class ResponsiveManager {
@@ -32,7 +32,7 @@
       window.addEventListener('resize', this.debounce(() => {
         const wasDesktop = this.isDesktop;
         this.isDesktop = window.innerWidth >= 992;
-        
+
         if (wasDesktop !== this.isDesktop) {
           this.syncMobileContent();
           // Reset files visibility when switching between desktop/mobile
@@ -85,15 +85,15 @@
       if (filesSidebar && messageArea) {
         filesSidebar.classList.add('files-hidden');
         messageArea.setAttribute('data-files-visible', 'false');
-        
+
         if (toggleBtn) {
           toggleBtn.setAttribute('aria-expanded', 'false');
         }
-        
+
         if (toggleIcon) {
           toggleIcon.className = 'bi bi-layout-sidebar-inset';
         }
-        
+
         this.filesVisible = false;
       }
     }
@@ -107,17 +107,17 @@
       if (filesSidebar && messageArea) {
         filesSidebar.classList.remove('files-hidden');
         messageArea.setAttribute('data-files-visible', 'true');
-        
+
         if (toggleBtn) {
           toggleBtn.setAttribute('aria-expanded', 'true');
         }
-        
+
         if (toggleIcon) {
           toggleIcon.className = 'bi bi-layout-sidebar-inset-reverse';
         }
-        
+
         this.filesVisible = true;
-        
+
         // When showing files panel, update FileManager for current thread
         if (window.FileManager && window.FileManager.currentThreadId) {
           setTimeout(() => {
@@ -130,25 +130,17 @@
     syncMobileContent() {
       // Sync files content between desktop and mobile
       this.syncFilesContent();
-      
+
       // Sync upload button functionality
       this.syncUploadButtons();
-      
-      // Initialize FileManager if not already done
+
+      // Ensure FileManager is initialized once
       this.initializeFileManager();
     }
 
     initializeFileManager() {
-      if (window.FileManager && !window.FileManager.initialized) {
-        // Load sidebar content and initialize FileManager
-        window.FileManager.loadSidebarContent().then(() => {
-          // Get current thread ID from localStorage or thread management
-          const currentThreadId = localStorage.getItem('lastThreadId');
-          if (currentThreadId) {
-            window.FileManager.updateForThread(currentThreadId);
-          }
-        });
-        window.FileManager.initialized = true;
+      if (window.FileManager && !window.FileManager._initialized && typeof window.FileManager.init === 'function') {
+        window.FileManager.init();
       }
     }
 
@@ -179,7 +171,7 @@
           desktopUploadBtn.click();
         };
       }
-      
+
       // Sync upload directory button
       if (desktopDirBtn && mobileDirBtn) {
         mobileDirBtn.onclick = (e) => {
@@ -192,7 +184,7 @@
     syncThreadLists() {
       const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
       const mobileThreadList = document.querySelector('#threadsOffcanvas .list-group');
-      
+
       if (desktopThreadList && mobileThreadList) {
         mobileThreadList.innerHTML = desktopThreadList.innerHTML;
       }
@@ -202,19 +194,19 @@
       // Sync content when offcanvas is shown
       const threadsOffcanvas = document.getElementById('threadsOffcanvas');
       const filesOffcanvas = document.getElementById('filesOffcanvas');
-      
+
       if (threadsOffcanvas) {
         threadsOffcanvas.addEventListener('show.bs.offcanvas', () => {
           this.syncThreadLists();
         });
       }
-      
+
       if (filesOffcanvas) {
         filesOffcanvas.addEventListener('show.bs.offcanvas', () => {
           this.syncFilesContent();
         });
       }
-      
+
       // Auto-close threads offcanvas when thread is selected on mobile
       document.addEventListener('click', (e) => {
         if (e.target.closest('#threadsOffcanvas .thread-link') && !this.isDesktop) {
@@ -266,7 +258,7 @@
   // Initialize when DOM is ready
   document.addEventListener('DOMContentLoaded', () => {
     window.ResponsiveManager = new ResponsiveManager();
-    
+
     // Listen for file content updates and sync to mobile
     document.addEventListener('fileContentUpdated', () => {
       if (window.ResponsiveManager) {
