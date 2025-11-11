@@ -144,9 +144,9 @@ def markdown_to_html(markdown_text: str) -> str:
     return mark_safe(clean_html)
 
 
-def compute_webapp_public_url(slug: str) -> str:
+def compute_external_base() -> str | None:
     """
-    Compute a robust public URL for a WebApp.
+    Compute a robust external base URL for this deployment.
 
     Preference order:
     1. First CSRF_TRUSTED_ORIGIN (if set), e.g. "https://example.com"
@@ -155,9 +155,10 @@ def compute_webapp_public_url(slug: str) -> str:
        - else:
          - https when SECURE_SSL_REDIRECT or not DEBUG
          - http otherwise
-    3. Fallback to relative path: /apps/<slug>/
 
-    Always returns a URL ending with "/apps/<slug>/".
+    Returns:
+        Absolute base URL without trailing slash, or None when no suitable
+        configuration is found.
     """
     base = None
 
@@ -178,7 +179,22 @@ def compute_webapp_public_url(slug: str) -> str:
                 scheme = "https" if use_https else "http"
                 base = f"{scheme}://{host}".rstrip("/")
 
-    # 3) Fallback: relative URL only
+    return base
+
+
+def compute_webapp_public_url(slug: str) -> str:
+    """
+    Compute a robust public URL for a WebApp using compute_external_base().
+
+    Preference order:
+    1. External base (CSRF_TRUSTED_ORIGINS / ALLOWED_HOSTS heuristic)
+    2. Fallback to relative path: /apps/<slug>/
+
+    Always returns a URL ending with "/apps/<slug>/".
+    """
+    base = compute_external_base()
+
+    # Fallback: relative URL only
     if not base:
         return f"/apps/{slug}/"
 

@@ -9,6 +9,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from nova.utils import compute_external_base
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,9 +58,6 @@ class UserFile(models.Model):
             self.delete()
             raise ValueError("File expired and deleted.")
 
-        # Get external base from trusted origins (includes port like :8080)
-        external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip('/')
-
         s3_client = boto3.client(
             's3',
             endpoint_url=settings.MINIO_ENDPOINT_URL,
@@ -76,8 +75,11 @@ class UserFile(models.Model):
                 ExpiresIn=expires_in
             )
 
-            # Change the URL to include the external base
-            url = url.replace(settings.MINIO_ENDPOINT_URL, external_base)
+            # Optionally rewrite to external base when configured.
+            # If no external base is found, keep the MinIO URL as-is.
+            external_base = compute_external_base()
+            if external_base:
+                url = url.replace(settings.MINIO_ENDPOINT_URL.rstrip('/'), external_base.rstrip('/'))
 
             return url
         except ClientError as e:
