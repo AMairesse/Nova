@@ -38,15 +38,20 @@ def serve_webapp(request, slug: str, path: str | None = None):
     mime = _guess_mime(path)
     response = HttpResponse(file_obj.content, content_type=f"{mime}; charset=utf-8")
 
-    # Tight CSP for agent-authored static apps (no XHR/fetch, only inline and same-origin assets)
+    # Tight CSP for agent-authored static apps:
+    # - No outbound XHR/fetch (connect-src 'none')
+    # - Only same-origin/https scripts and styles (inline allowed to keep UX simple)
+    # - Restricted framing to same-origin only
     csp = (
         "default-src 'self' https:; "
         "style-src 'self' 'unsafe-inline' https:; "
         "script-src 'self' 'unsafe-inline' https:; "
         "img-src 'self' data: https:; "
-        "connect-src 'none';"
+        "connect-src 'none'; "
+        "frame-ancestors 'self';"
     )
     response.headers['Content-Security-Policy'] = csp
+    # Keep X-Frame-Options for compatibility; CSP frame-ancestors is the primary control.
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['Cache-Control'] = 'no-store'
     return response

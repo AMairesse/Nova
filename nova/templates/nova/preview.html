@@ -109,13 +109,30 @@
     }
     // Ensure preview pane visible and initialize split
     const previewPane = document.getElementById('preview-pane');
-    if (previewPane) previewPane.classList.remove('d-none');
-    document.dispatchEvent(new CustomEvent('webapp_preview_activate', { detail: { slug: "{{ webapp.slug }}", url: "{{ webapp.public_url }}" } }));const navigateBack = () => {
-      if (window.history.length > 1) { window.history.back(); }
-      else { window.location.href = "{% url 'index' %}"; }
+    if (previewPane) {
+      previewPane.classList.remove('d-none');
+    }
+
+    // Announce activation so PreviewManager can sync state
+    document.dispatchEvent(new CustomEvent('webapp_preview_activate', {
+      detail: { slug: "{{ webapp.slug }}", url: "{{ webapp.public_url }}" }
+    }));
+
+    const navigateBack = () => {
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = "{% url 'index' %}";
+      }
     };
-    document.getElementById('webapp-close-btn')?.addEventListener('click', navigateBack);
-    closeFloating?.addEventListener('click', navigateBack);
+
+    const closeBtn = document.getElementById('webapp-close-btn');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', navigateBack);
+    }
+    if (closeFloating) {
+      closeFloating.addEventListener('click', navigateBack);
+    }
   });
 </script>
 

@@ -26,6 +26,47 @@ METADATA = {
 _MAX_TOTAL_BYTES = 600 * 1024  # 600 KB total cap across all files
 
 
+def _compute_public_url(slug: str) -> str:
+    """
+    Compute a robust public URL for a webapp.
+
+    Preference order:
+    1. First CSRF_TRUSTED_ORIGIN (if set), e.g. "https://example.com"
+    2. Single ALLOWED_HOSTS entry (non-wildcard), with scheme:
+       - if value already contains scheme, keep it
+       - else:
+         - https when SECURE_SSL_REDIRECT or not DEBUG
+         - http otherwise
+    3. Fallback to relative path: /apps/<slug>/
+
+    Always returns a URL ending with `/apps/<slug>/`.
+    """
+    base = None
+
+    # 1) CSRF_TRUSTED_ORIGINS
+    origins = getattr(settings, "CSRF_TRUSTED_ORIGINS", None) or []
+    if origins:
+        base = origins[0].rstrip("/")
+
+    # 2) ALLOWED_HOSTS heuristic (single non-wildcard host)
+    if not base:
+        hosts = [h for h in getattr(settings, "ALLOWED_HOSTS", []) if h and "*" not in h]
+        if len(hosts) == 1:
+            host = hosts[0]
+            if host.startswith("http://") or host.startswith("https://"):
+                base = host.rstrip("/")
+            else:
+                use_https = getattr(settings, "SECURE_SSL_REDIRECT", False) or not getattr(settings, "DEBUG", False)
+                scheme = "https" if use_https else "http"
+                base = f"{scheme}://{host}".rstrip("/")
+
+    # 3) Fallback: relative URL only
+    if not base:
+        return f"/apps/{slug}/"
+
+    return f"{base}/apps/{slug}/"
+
+
 # ------------- DB helpers (sync wrapped) -------------------------------------------------
 
 def _get_webapp_by_slug_sync(user, slug: str):
@@ -143,7 +184,7 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
 
     if not thread or not user:
         logger.error("Agent must be bound to a user and a thread to manage a webapp.")
-        return ("Error with the tool.")
+        return ("Webapp operations require a bound user and conversation; retry in an active chat.")
 
     if slug:
         # Fetch existing app, enforce ownership by user
@@ -152,8 +193,14 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
             return ("The webapp slug provided does not exist.")
         # Enforce same thread for stricter isolation (one app per thread context)
         if webapp.thread_id != thread.id:
-            logger.error("WebApp belongs to a different thread.")
-            return ("Error with the tool.")
+            logger.warning(
+                "WebApp slug used in wrong thread",
+                extra={"slug": slug, "expected_thread": webapp.thread_id, "current_thread": thread.id},
+            )
+            return (
+                "The specified webapp belongs to a different conversation. "
+                "Use a webapp slug created in this conversation."
+            )
     else:
         webapp = await sync_to_async(_create_webapp_sync, thread_sensitive=False)(user, thread)
         slug = webapp.slug
@@ -164,8 +211,7 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         if error_msg:
             return error_msg
 
-    external_base = settings.CSRF_TRUSTED_ORIGINS[0].rstrip('/')
-    public_url = f"{external_base}/apps/{slug}/"
+    public_url = _compute_public_url(slug)
 
     # Emit URL and update for live preview setup and refresh
     try:
@@ -184,10 +230,16 @@ async def read_webapp(slug: str, agent: LLMAgent) -> Dict[str, str]:
     webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(agent.user, slug)
     if not webapp:
         return ("The webapp slug provided does not exist.")
-    # Ownership is enforced by query; optional thread affinity check:
+    # Ownership is enforced by query; enforce thread affinity as well:
     if webapp.thread_id != agent.thread.id:
-        logger.error("WebApp belongs to a different thread.")
-        return ("Error with the tool.")
+        logger.warning(
+            "read_webapp used with slug from different thread",
+            extra={"slug": slug, "webapp_thread": webapp.thread_id, "current_thread": agent.thread.id},
+        )
+        return (
+            "The specified webapp belongs to a different conversation. "
+            "Use a webapp slug created in this conversation."
+        )
 
     files = await sync_to_async(_list_files_sync, thread_sensitive=False)(webapp)
     return {item["path"]: item["content"] for item in files}
@@ -204,15 +256,24 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         StructuredTool.from_function(
             coroutine=lambda files: upsert_webapp(None, files, agent),
             name="create_webapp",
-            description="Create a static web-app for the current thread."
-                        "Use only if update is not possible or relevant.",
+            description=(
+                "Create a static web-app for the current conversation. "
+                "Always include at least 'index.html'. "
+                "Paths must be single filenames like 'index.html' or 'styles.css' (no slashes). "
+                "Only .html, .css, .js are allowed. "
+                "Content is raw text of the files; do NOT JSON-escape or HTML-escape it."
+            ),
             args_schema={
                 "type": "object",
                 "properties": {
                     "files": {
                         "type": "object",
-                        "description": "Map of path -> content to upsert (only .html/.css/.js files, "
-                                       "do not escape chars)",
+                        "description": (
+                            "Object mapping filename -> content. "
+                            "Filenames MUST NOT contain '/', must end with .html, .css or .js, "
+                            "and should typically include 'index.html' as entrypoint. "
+                            "Values are the exact file contents as strings."
+                        ),
                         "additionalProperties": {"type": "string"},
                     },
                 },
@@ -222,18 +283,27 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         StructuredTool.from_function(
             coroutine=lambda slug, files: upsert_webapp(slug, files, agent),
             name="update_webapp",
-            description="Update an existing static web-app for the current thread."
-                        "Partial update supported.",
+            description=(
+                "Update an existing static web-app for the current conversation (partial upsert). "
+                "Use this when you already know the webapp slug for this conversation. "
+                "Only .html, .css, .js files are allowed; other files are rejected."
+            ),
             args_schema={
                 "type": "object",
                 "properties": {
                     "slug": {
                         "type": "string",
-                        "description": "Existing app slug to update",
+                        "description": (
+                            "Slug of the existing webapp to update. "
+                        ),
                     },
                     "files": {
                         "type": "object",
-                        "description": "Map of path -> content to upsert (only .html/.css/.js files)",
+                        "description": (
+                            "Object mapping filename -> content to upsert. "
+                            "Filenames MUST be single-level (no '/'), end with .html/.css/.js. "
+                            "Only listed files are created/updated; others are left untouched."
+                        ),
                         "additionalProperties": {"type": "string"},
                     },
                 },
@@ -243,13 +313,15 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         StructuredTool.from_function(
             coroutine=lambda slug: read_webapp(slug, agent),
             name="read_webapp",
-            description="Return all files of a web-app (path -> content).",
+            description=(
+                "Return all files of a webapp (path -> content) for this conversation. "
+            ),
             args_schema={
                 "type": "object",
                 "properties": {
                     "slug": {
                         "type": "string",
-                        "description": "Slug of the web-app to read",
+                        "description": "Slug of the webapp to read (must be from this conversation).",
                     }
                 },
                 "required": ["slug"],
