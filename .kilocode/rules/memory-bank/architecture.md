@@ -99,6 +99,7 @@ Nova is a **Django-based multi-tenant AI agent platform** with real-time capabil
   - Date/time utilities
   - Memory (user preferences)
   - Code execution (Judge0)
+  - Webapps
 - [`agent_tool_wrapper.py`](nova/tools/agent_tool_wrapper.py) - Wraps agents as tools
 - [`files.py`](nova/tools/files.py) - File-related tool functions
 

@@ -2,67 +2,66 @@
 
 ## Current Work Focus
 
-Memory bank initialization completed and verified by user. All core memory bank files are accurate and ready for use.
+Implemented webapps preview with a dedicated page and simplified regular layout. Sidebar lists webapps with compact actions. Debounced iframe refresh on updates. State persists per thread.
 
 ## Recent Changes
 
-**2025-11-02:**
-- Initialized memory bank with comprehensive project documentation
-- Created `product.md` - Product vision and user experience
-- Created `architecture.md` - System architecture and design patterns
-- Created `tech.md` - Technology stack and development setup
-- Created `context.md` - Current project state
-- User verified memory bank accuracy
-- User corrected test command to use `--settings nova.settings_test`
-- Added password change feature to user settings General panel
-  - Inline HTMX form requiring current password
-  - Uses Django's PasswordChangeForm with session persistence
-  - Added unit tests and integration test documentation
+2025-11-10/11:
+- Added dedicated preview URL and page: [preview.html](nova/templates/nova/preview.html)
+- New view and route: [webapp_views.py](nova/views/webapp_views.py) → preview_webapp, and URL added in [urls.py](nova/urls.py)
+- Sidebar “Preview” now navigates to the new page: [files.js](nova/static/js/files.js)
+- Regular index page no longer contains split/resizer UI; only message container remains: [index.html](nova/templates/nova/index.html)
+- Preview page renders 30/70 split with resizer; persists width per thread; mobile overlay supported via existing JS
+- Iframe sandbox updated to allow scripts + same-origin so webapp JS runs; CSP for served webapp responses remains strict (connect-src 'none'): [index.html](nova/templates/nova/index.html), [webapp_views.py](nova/views/webapp_views.py)
+- Debounced 400ms refresh on webapp_update with spinner and cache-buster handled by PreviewManager in [thread_management.js](nova/static/js/thread_management.js)
+- Webapps list UI: compact buttons and name|slug display: [webapps_list.html](nova/templates/nova/files/webapps_list.html)
+
+Fixes:
+- Remove split-container and split-resizer from regular 3-pane view
+- Ensure preview pane is visible on preview page init (remove d-none and dispatch webapp_preview_activate)
+
+## Preview Architecture Summary
+
+Flow:
+- User clicks Preview in sidebar → navigates to /apps/preview/<thread_id>/<slug>/
+- View preview_webapp resolves thread and webapp and renders preview.html with:
+  - Left pane: chat UI (messages for selected thread loaded via message_list)
+  - Right pane: iframe pointing to /apps/<slug>/ (or external_base variant)
+- Close buttons navigate back to index (history.back fallback)
+
+URLs:
+- /apps/preview/<thread_id>/<slug>/ → dedicated split page
+- /apps/<slug>/ and /apps/<slug>/<path>/ → static file serving with strict CSP
+
+Client state:
+- lastThreadId and lastPreviewSlug:<thread_id> persisted in localStorage
+- splitWidth:<thread_id> persisted
+
+Realtime:
+- task_update message types webapp_public_url and webapp_update already implemented by webapp tool publisher
+- webapp_update triggers 400ms debounced iframe reload when slug matches current preview
+
+## Key Decisions
+
+- Use a dedicated preview page to keep index page simple and avoid always rendering split UI
+- Keep CSP strict for served webapp responses; allow-same-origin on iframe so client-side JS executes
+- Reuse existing PreviewManager and web socket plumbing; initialize from preview page via webapp_preview_activate event
 
 ## Next Steps
 
-1. Memory bank is now the foundation for all future development work
-2. Any new features or changes will be documented here
-3. Context will be updated as work progresses
-
-## Key Findings from Analysis
-
-**Project Type:** Django-based multi-tenant AI agent platform
-
-**Core Technologies:**
-- Django 5.2 + Django Channels for WebSocket
-- Celery + Redis for async processing
-- PostgreSQL for data storage  
-- MinIO for file storage
-- LangChain/LangGraph for agent orchestration
-- FastMCP for tool integration
-
-**Key Features:**
-- Multi-tenant architecture with user isolation
-- Real-time agent execution via WebSocket
-- Support for multiple LLM providers (local and cloud)
-- Extensible tool system (built-in, MCP, REST, agent-as-tool)
-- File attachment support with MinIO
-- Agent checkpoint management for state persistence
-
-**Architecture Patterns:**
-- Factory pattern for LLM provider abstraction
-- Plugin architecture for tool system
-- Composite pattern for agent-as-tool
-- Pub/Sub for real-time updates
-- Message queue for async processing
-
-## Important Notes
-
-- All models use user foreign key for multi-tenancy
-- API keys encrypted at rest with Fernet
-- File paths sanitized for security
-- Agent recursion limited to prevent infinite loops
-- WebSocket channels for real-time progress updates
-- Docker Compose for deployment with optional services
+- Fixes and enhancements:
+  - Remove legacy in-page split code paths that are no longer used on index (keep only code needed for preview page)
+  - Manage local storage removal when needed to avoid too much storage usage
+  - Add name field to WebApp model and populate list and preview title with name
+  - Make the webapp list available on mobile
+- Tests:
+  - Unit test preview_webapp view authorization and 404 cases
+  - Template render test for preview.html
+  - JS integration test for debounced refresh and cache-busting (if feasible)
+- Document the new endpoints and UI flow in developer docs
 
 ## Testing Guidelines
 
 - Unit tests run with: `python manage.py test --settings nova.settings_test`
-- **Do not launch the application** - user handles all app testing
+- Do not launch the application in this environment; manual testing is performed by the user
 - Focus on code analysis, planning, and documentation
