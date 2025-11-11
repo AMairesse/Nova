@@ -104,10 +104,10 @@ The central agent that delegates to sub-agents.
 | --- | --- |
 | Name | `Nova` |
 | Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
-| Prompt | `You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries; do not fabricate abilities or offer services beyond your tools. Default to the user’s language and reply in Markdown. Keep answers concise unless the user requests detailed explanations. If you can read/store user data, persist relevant information and consult it before replying; only retrieve themes pertinent to the current query (e.g., check stored location when asked the time).` |
+| Prompt | `You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries; do not fabricate abilities or offer services beyond your tools. Default to the user’s language and reply in Markdown. Keep answers concise unless the user requests detailed explanations. If you can read/store user data, persist relevant information and consult it before replying; only retrieve themes pertinent to the current query (e.g., check stored location when asked the time). Current date and time is {today}` |
 | Recursion limit | `25` |
 | Use as a tool | `No` |
-| Associated tools | `Ask user`, `Date / Time`, `Memory` |
+| Associated tools | `Ask user`, `Date / Time`, `Memory`, `WebApp` |
 | Agents as tools | `Internet Agent`, `Calendar Agent`, `Code Agent` |
 
 ## 4. Run Your Agent

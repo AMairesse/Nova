@@ -13,7 +13,8 @@ from user_settings.views.agent import (
     AgentCreateView,
     AgentUpdateView,
     AgentDeleteView,
-    make_default_agent
+    make_default_agent,
+    bootstrap_defaults,
 )
 from user_settings.views.tool import (
     ToolListView,
@@ -48,6 +49,7 @@ urlpatterns += [
     path("agents/<int:pk>/edit/", AgentUpdateView.as_view(), name="agent-edit"),
     path("agents/<int:pk>/delete/", AgentDeleteView.as_view(), name="agent-delete"),
     path("agents/make_default/<int:agent_id>/", make_default_agent, name="make_default_agent"),
+    path("agents/bootstrap-defaults/", bootstrap_defaults, name="agents-bootstrap-defaults"),
 ]
 
 urlpatterns += [
