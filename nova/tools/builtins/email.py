@@ -43,48 +43,63 @@ async def get_imap_client(user, tool_id):
 
 def decode_str(text):
     """Decode email header text"""
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
     if text:
-        decoded_parts = decode_header(text)
-        result = ""
-        for part, encoding in decoded_parts:
-            if isinstance(part, bytes):
-                if encoding:
-                    result += part.decode(encoding)
+        try:
+            decoded_parts = decode_header(text)
+            result = ""
+            for part, encoding in decoded_parts:
+                if isinstance(part, bytes):
+                    if encoding:
+                        result += part.decode(encoding, errors='ignore')
+                    else:
+                        result += part.decode('utf-8', errors='ignore')
                 else:
-                    result += part.decode('utf-8', errors='ignore')
-            else:
-                result += str(part)
-        return result
+                    result += str(part)
+            return result
+        except Exception:
+            return text  # Return as-is if decoding fails
     return ""
 
 
-def format_email_summary(msg_id, envelope):
-    """Format email envelope as summary string"""
-    if not envelope:
-        return f"ID: {msg_id} | [Envelope not available]"
+def safe_get(data, key):
+    """Get value from dict, handling both string and bytes keys"""
+    if isinstance(key, str):
+        return data.get(key) or data.get(key.encode('utf-8'))
+    else:
+        return data.get(key) or data.get(key.decode('utf-8'))
 
-    subject = decode_str(envelope.subject) if envelope.subject else "[No subject]"
-    sender = decode_str(envelope.sender) if envelope.sender else "[No sender]"
-    date = envelope.date.strftime('%Y-%m-%d %H:%M') if envelope.date else "Unknown"
+
+def format_email_info(msg_id, envelope):
+    """Format email information from envelope"""
+    if not envelope:
+        return f"ID: {msg_id} | [No envelope data]"
+
+    subject = "[No subject]"
+    if hasattr(envelope, 'subject') and envelope.subject:
+        subject = decode_str(envelope.subject)
+
+    sender = "[No sender]"
+    if hasattr(envelope, 'sender') and envelope.sender:
+        sender = decode_str(envelope.sender)
+
+    date = "Unknown"
+    if hasattr(envelope, 'date') and envelope.date:
+        try:
+            date = envelope.date.strftime('%Y-%m-%d %H:%M')
+        except Exception:
+            date = "Invalid date"
+
     return f"ID: {msg_id} | From: {sender} | Subject: {subject} | Date: {date}"
 
 
 async def list_emails(user, tool_id, folder: str = "INBOX", limit: int = 10) -> str:
-    """ List recent emails from specified folder.
-    Args:
-        user: the Django user
-        tool_id: ID of the email tool
-        folder: mailbox folder name (default: INBOX)
-        limit: maximum number of emails to return (default: 10)
-
-    Returns:
-        Formatted list of email summaries
-    """
+    """ List recent emails from specified folder. """
     try:
         client = await get_imap_client(user, tool_id)
         client.select_folder(folder)
 
-        # Get recent message IDs
         messages = client.search(['ALL'])
         if not messages:
             client.logout()
@@ -95,49 +110,36 @@ async def list_emails(user, tool_id, folder: str = "INBOX", limit: int = 10) -> 
         recent_messages = messages[:limit]
 
         # Fetch envelopes
-        envelopes = client.fetch(recent_messages, ['ENVELOPE'])
+        fetch_data = client.fetch(recent_messages, ['ENVELOPE'])
 
         result = _("Recent emails in {folder}:\n").format(folder=folder)
         for msg_id in recent_messages:
-            if msg_id in envelopes and 'ENVELOPE' in envelopes[msg_id]:
-                envelope = envelopes[msg_id]['ENVELOPE']
-                result += format_email_summary(msg_id, envelope) + "\n"
-            else:
-                result += f"ID: {msg_id} | [Envelope not available]\n"
+            msg_data = fetch_data.get(msg_id, {})
+            envelope = safe_get(msg_data, 'ENVELOPE')
+            result += format_email_info(msg_id, envelope) + "\n"
 
         client.logout()
         return result
 
-    except (ValueError, imapclient.IMAPClient.Error) as e:
-        return _("IMAP error: {error}. Check credentials and server settings.").format(error=str(e))
     except Exception as e:
-        return _("Unexpected error when retrieving emails: {error}").format(error=str(e))
+        logger.error(f"Error in list_emails: {e}")
+        return _("Error retrieving emails: {error}").format(error=str(e))
 
 
 async def read_email(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
-    """ Read full email content by message ID.
-    Args:
-        user: the Django user
-        tool_id: ID of the email tool
-        message_id: IMAP message ID
-        folder: mailbox folder name (default: INBOX)
-
-    Returns:
-        Formatted email content
-    """
+    """ Read full email content by message ID. """
     try:
         client = await get_imap_client(user, tool_id)
         client.select_folder(folder)
 
-        # Fetch message
         messages = client.fetch([message_id], ['ENVELOPE', 'BODY[]'])
         if message_id not in messages:
             client.logout()
             return _("Email with ID {id} not found.").format(id=message_id)
 
         msg_data = messages[message_id]
-        envelope = msg_data.get('ENVELOPE')
-        body = msg_data.get('BODY[]')
+        envelope = safe_get(msg_data, 'ENVELOPE')
+        body = safe_get(msg_data, 'BODY[]')
 
         if not body:
             client.logout()
@@ -151,13 +153,21 @@ async def read_email(user, tool_id, message_id: int, folder: str = "INBOX") -> s
         result = _("Email Details:\n")
 
         if envelope:
-            result += _("From: {sender}\n").format(sender=decode_str(envelope.sender))
-            result += _("To: {to}\n").format(to=decode_str(envelope.to[0]) if envelope.to else "Unknown")
-            result += _("Subject: {subject}\n").format(subject=decode_str(envelope.subject))
-            date_str = envelope.date.strftime('%Y-%m-%d %H:%M') if envelope.date else "Unknown"
-            result += _("Date: {date}\n").format(date=date_str)
+            sender = decode_str(getattr(envelope, 'sender', None))
+            to_addr = decode_str(getattr(envelope, 'to', [None])[0] if getattr(envelope, 'to', None) else None)
+            subject = decode_str(getattr(envelope, 'subject', None))
+            if hasattr(envelope, 'date') and envelope.date:
+                date = envelope.date.strftime('%Y-%m-%d %H:%M')
+            else:
+                date = "Unknown"
+
+            result += _("From: {sender}\n").format(sender=sender)
+            result += _("To: {to}\n").format(to=to_addr)
+            result += _("Subject: {subject}\n").format(subject=subject)
+            result += _("Date: {date}\n").format(date=date)
         else:
             result += _("From: [Not available]\nTo: [Not available]\nSubject: [Not available]\nDate: [Not available]\n")
+
         result += "\n" + _("Content:\n")
 
         # Extract text content
@@ -174,36 +184,20 @@ async def read_email(user, tool_id, message_id: int, folder: str = "INBOX") -> s
         client.logout()
         return result
 
-    except (ValueError, imapclient.IMAPClient.Error) as e:
-        return _("IMAP error: {error}. Check credentials and server settings.").format(error=str(e))
     except Exception as e:
-        return _("Unexpected error when reading email: {error}").format(error=str(e))
+        logger.error(f"Error in read_email: {e}")
+        return _("Error reading email: {error}").format(error=str(e))
 
 
 async def search_emails(user, tool_id, query: str, folder: str = "INBOX", limit: int = 10) -> str:
-    """ Search emails by subject or sender.
-    Args:
-        user: the Django user
-        tool_id: ID of the email tool
-        query: search term
-        folder: mailbox folder name (default: INBOX)
-        limit: maximum number of results (default: 10)
-
-    Returns:
-        Formatted list of matching emails
-    """
+    """ Search emails by subject or sender. """
     try:
         client = await get_imap_client(user, tool_id)
         client.select_folder(folder)
 
-        # Search by subject or from
-        subject_criteria = ['SUBJECT', query]
-        from_criteria = ['FROM', query]
+        subject_results = client.search(['SUBJECT', query])
+        from_results = client.search(['FROM', query])
 
-        subject_results = client.search(subject_criteria)
-        from_results = client.search(from_criteria)
-
-        # Combine and deduplicate
         all_results = list(set(subject_results + from_results))
         all_results.sort(reverse=True)
         limited_results = all_results[:limit]
@@ -212,24 +206,20 @@ async def search_emails(user, tool_id, query: str, folder: str = "INBOX", limit:
             client.logout()
             return _("No emails found matching '{query}'").format(query=query)
 
-        # Fetch envelopes
-        envelopes = client.fetch(limited_results, ['ENVELOPE'])
+        fetch_data = client.fetch(limited_results, ['ENVELOPE'])
 
         result = _("Emails matching '{query}':\n").format(query=query)
         for msg_id in limited_results:
-            if msg_id in envelopes and 'ENVELOPE' in envelopes[msg_id]:
-                envelope = envelopes[msg_id]['ENVELOPE']
-                result += format_email_summary(msg_id, envelope) + "\n"
-            else:
-                result += f"ID: {msg_id} | [Envelope not available]\n"
+            msg_data = fetch_data.get(msg_id, {})
+            envelope = safe_get(msg_data, 'ENVELOPE')
+            result += format_email_info(msg_id, envelope) + "\n"
 
         client.logout()
         return result
 
-    except (ValueError, imapclient.IMAPClient.Error) as e:
-        return _("IMAP error: {error}. Check credentials and server settings.").format(error=str(e))
     except Exception as e:
-        return _("Unexpected error when searching emails: {error}").format(error=str(e))
+        logger.error(f"Error in search_emails: {e}")
+        return _("Error searching emails: {error}").format(error=str(e))
 
 
 async def test_imap_access(user, tool_id):
