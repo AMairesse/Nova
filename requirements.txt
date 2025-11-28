@@ -71,6 +71,7 @@ huggingface_hub==1.1.6
 hyperlink==21.0.0
 icalendar==6.3.2
 idna==3.11
+imapclient==2.3.1
 importlib_metadata==8.7.0
 Incremental==24.11.0
 isodate==0.7.2
