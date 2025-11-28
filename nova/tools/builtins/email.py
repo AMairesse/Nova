@@ -32,6 +32,9 @@ async def get_imap_client(user, tool_id):
         client = imapclient.IMAPClient(imap_server, port=imap_port, ssl=use_ssl)
         client.login(username, password)
 
+        # Store server capabilities for later use
+        client._server_capabilities = client.capabilities()
+
         return client
 
     except ToolCredential.DoesNotExist:
@@ -69,6 +72,27 @@ def safe_get(data, key):
         return data.get(key) or data.get(key.encode('utf-8'))
     else:
         return data.get(key) or data.get(key.decode('utf-8'))
+
+
+def has_capability(client, capability):
+    """Check if IMAP server supports a specific capability"""
+    return capability.upper() in getattr(client, '_server_capabilities', [])
+
+
+def folder_exists(client, folder_name):
+    """Check if a mailbox folder exists"""
+    try:
+        mailboxes = client.list_folders()
+        folder_names = []
+        for mailbox in mailboxes:
+            if isinstance(mailbox, tuple) and len(mailbox) >= 3:
+                flags, delimiter, name = mailbox
+                folder_names.append(name)
+            else:
+                folder_names.append(str(mailbox))
+        return folder_name in folder_names
+    except Exception:
+        return False
 
 
 def format_email_info(msg_id, envelope):
@@ -126,13 +150,14 @@ async def list_emails(user, tool_id, folder: str = "INBOX", limit: int = 10) -> 
         return _("Error retrieving emails: {error}").format(error=str(e))
 
 
-async def read_email(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
-    """ Read full email content by message ID. """
+async def read_email(user, tool_id, message_id: int, folder: str = "INBOX", preview_only: bool = True) -> str:
+    """ Read email content by message ID. Use preview_only=True for headers + content preview. """
     try:
         client = await get_imap_client(user, tool_id)
         client.select_folder(folder)
 
-        messages = client.fetch([message_id], ['ENVELOPE', 'BODY[]'])
+        # Use BODY.PEEK[] to avoid marking as read
+        messages = client.fetch([message_id], ['ENVELOPE', 'BODY.PEEK[]'])
         if message_id not in messages:
             client.logout()
             return _("Email with ID {id} not found.").format(id=message_id)
@@ -168,18 +193,38 @@ async def read_email(user, tool_id, message_id: int, folder: str = "INBOX") -> s
         else:
             result += _("From: [Not available]\nTo: [Not available]\nSubject: [Not available]\nDate: [Not available]\n")
 
-        result += "\n" + _("Content:\n")
+        if preview_only:
+            result += "\n" + _("Content Preview (first 500 characters):\n")
+            # Extract text content preview
+            content = ""
+            if email_message.is_multipart():
+                for part in email_message.walk():
+                    if part.get_content_type() == "text/plain":
+                        charset = part.get_content_charset() or 'utf-8'
+                        content = part.get_payload(decode=True).decode(charset, errors='ignore')
+                        break
+            else:
+                charset = email_message.get_content_charset() or 'utf-8'
+                content = email_message.get_payload(decode=True).decode(charset, errors='ignore')
 
-        # Extract text content
-        if email_message.is_multipart():
-            for part in email_message.walk():
-                if part.get_content_type() == "text/plain":
-                    charset = part.get_content_charset() or 'utf-8'
-                    result += part.get_payload(decode=True).decode(charset, errors='ignore')
-                    break
+            # Truncate to 500 characters
+            if len(content) > 500:
+                result += content[:500] + "..."
+                result += _("\n\n[Content truncated. Use preview_only=False to read full email]")
+            else:
+                result += content
         else:
-            charset = email_message.get_content_charset() or 'utf-8'
-            result += email_message.get_payload(decode=True).decode(charset, errors='ignore')
+            result += "\n" + _("Full Content:\n")
+            # Extract full text content
+            if email_message.is_multipart():
+                for part in email_message.walk():
+                    if part.get_content_type() == "text/plain":
+                        charset = part.get_content_charset() or 'utf-8'
+                        result += part.get_payload(decode=True).decode(charset, errors='ignore')
+                        break
+            else:
+                charset = email_message.get_content_charset() or 'utf-8'
+                result += email_message.get_payload(decode=True).decode(charset, errors='ignore')
 
         client.logout()
         return result
@@ -220,6 +265,185 @@ async def search_emails(user, tool_id, query: str, folder: str = "INBOX", limit:
     except Exception as e:
         logger.error(f"Error in search_emails: {e}")
         return _("Error searching emails: {error}").format(error=str(e))
+
+
+async def list_mailboxes(user, tool_id) -> str:
+    """ List all available mailbox folders. """
+    try:
+        client = await get_imap_client(user, tool_id)
+
+        mailboxes = client.list_folders()
+
+        result = _("Available mailboxes:\n")
+        for mailbox in mailboxes:
+            # mailbox is typically a tuple: (flags, delimiter, name)
+            if isinstance(mailbox, tuple) and len(mailbox) >= 3:
+                flags, delimiter, name = mailbox
+                result += f"- {name}\n"
+            else:
+                result += f"- {mailbox}\n"
+
+        client.logout()
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in list_mailboxes: {e}")
+        return _("Error listing mailboxes: {error}").format(error=str(e))
+
+
+async def get_server_capabilities(user, tool_id) -> str:
+    """ Get server capabilities and supported features. """
+    try:
+        client = await get_imap_client(user, tool_id)
+
+        capabilities = getattr(client, '_server_capabilities', [])
+
+        result = _("Server capabilities:\n")
+        for cap in sorted(capabilities):
+            result += f"- {cap}\n"
+
+        # Add some derived information
+        result += _("\nDerived features:\n")
+        result += f"- MOVE command: {'Yes' if has_capability(client, 'MOVE') else 'No (will use COPY+DELETE)'}\n"
+        result += f"- QUOTA support: {'Yes' if has_capability(client, 'QUOTA') else 'No'}\n"
+        result += f"- UIDPLUS: {'Yes' if has_capability(client, 'UIDPLUS') else 'No'}\n"
+
+        client.logout()
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in get_server_capabilities: {e}")
+        return _("Error getting server capabilities: {error}").format(error=str(e))
+
+
+async def move_email_to_folder(user, tool_id, message_id: int,
+                               source_folder: str = "INBOX", target_folder: str = "Junk") -> str:
+    """ Move an email to a different folder. """
+    try:
+        client = await get_imap_client(user, tool_id)
+
+        # Check if source folder exists
+        if not folder_exists(client, source_folder):
+            client.logout()
+            return _("Source folder '{folder}' does not exist.").format(folder=source_folder)
+
+        client.select_folder(source_folder)
+
+        # Check if message exists
+        messages = client.fetch([message_id], ['ENVELOPE'])
+        if message_id not in messages:
+            client.logout()
+            return _("Email with ID {id} not found in {folder}.").format(id=message_id, folder=source_folder)
+
+        # Check if target folder exists
+        if not folder_exists(client, target_folder):
+            client.logout()
+            error_msg = _("Target folder '{folder}' does not exist.").format(folder=target_folder)
+            error_msg += _(" Use list_mailboxes() to see available folders.")
+            return error_msg
+
+        # Try MOVE command first (preferred)
+        if has_capability(client, 'MOVE'):
+            try:
+                client.move([message_id], target_folder)
+                client.logout()
+                msg = _("Email {id} moved from {source} to {target}.").format(
+                    id=message_id, source=source_folder, target=target_folder)
+                return msg
+            except Exception as move_error:
+                logger.warning(f"MOVE failed, trying alternative method: {move_error}")
+
+        # Fallback: COPY + DELETE + EXPUNGE
+        try:
+            # Copy to target folder
+            client.copy([message_id], target_folder)
+            # Mark as deleted in source folder
+            client.delete_messages([message_id])
+            # Expunge to permanently remove
+            client.expunge()
+
+            client.logout()
+            msg = _("Email {id} moved from {source} to {target}.").format(
+                id=message_id, source=source_folder, target=target_folder)
+            return msg
+
+        except Exception as fallback_error:
+            client.logout()
+            logger.error(f"Fallback move method failed: {fallback_error}")
+            return _("Error moving email with fallback method: {error}").format(error=str(fallback_error))
+
+    except Exception as e:
+        logger.error(f"Error in move_email_to_folder: {e}")
+        return _("Error moving email: {error}").format(error=str(e))
+
+
+async def mark_email_as_read(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
+    """ Mark an email as read. """
+    try:
+        client = await get_imap_client(user, tool_id)
+        client.select_folder(folder)
+
+        # Check if message exists
+        messages = client.fetch([message_id], ['ENVELOPE'])
+        if message_id not in messages:
+            client.logout()
+            return _("Email with ID {id} not found.").format(id=message_id)
+
+        # Mark as read by adding \Seen flag
+        client.add_flags([message_id], [imapclient.SEEN])
+
+        client.logout()
+        return _("Email {id} marked as read.").format(id=message_id)
+
+    except Exception as e:
+        logger.error(f"Error in mark_email_as_read: {e}")
+        return _("Error marking email as read: {error}").format(error=str(e))
+
+
+async def mark_email_as_unread(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
+    """ Mark an email as unread. """
+    try:
+        client = await get_imap_client(user, tool_id)
+        client.select_folder(folder)
+
+        # Check if message exists
+        messages = client.fetch([message_id], ['ENVELOPE'])
+        if message_id not in messages:
+            client.logout()
+            return _("Email with ID {id} not found.").format(id=message_id)
+
+        # Mark as unread by removing \Seen flag
+        client.remove_flags([message_id], [imapclient.SEEN])
+
+        client.logout()
+        return _("Email {id} marked as unread.").format(id=message_id)
+
+    except Exception as e:
+        logger.error(f"Error in mark_email_as_unread: {e}")
+        return _("Error marking email as unread: {error}").format(error=str(e))
+
+
+async def delete_email(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
+    """ Delete an email (move to Trash or delete permanently depending on server). """
+    try:
+        client = await get_imap_client(user, tool_id)
+        client.select_folder(folder)
+
+        # Check if message exists
+        messages = client.fetch([message_id], ['ENVELOPE'])
+        if message_id not in messages:
+            client.logout()
+            return _("Email with ID {id} not found.").format(id=message_id)
+
+        # Delete the message (server may move to Trash)
+        client.delete_messages([message_id])
+
+        client.logout()
+        return _("Email {id} deleted.").format(id=message_id)
+
+    except Exception as e:
+        logger.error(f"Error in delete_email: {e}")
+        return _("Error deleting email: {error}").format(error=str(e))
 
 
 async def test_imap_access(user, tool_id):
@@ -278,6 +502,26 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
 
     async def search_emails_wrapper(query: str, folder: str = "INBOX", limit: int = 10) -> str:
         return await search_emails(user, tool_id, query, folder, limit)
+
+    async def list_mailboxes_wrapper() -> str:
+        return await list_mailboxes(user, tool_id)
+
+    async def move_email_to_folder_wrapper(message_id: int,
+                                           source_folder: str = "INBOX",
+                                           target_folder: str = "Junk") -> str:
+        return await move_email_to_folder(user, tool_id, message_id, source_folder, target_folder)
+
+    async def mark_email_as_read_wrapper(message_id: int, folder: str = "INBOX") -> str:
+        return await mark_email_as_read(user, tool_id, message_id, folder)
+
+    async def mark_email_as_unread_wrapper(message_id: int, folder: str = "INBOX") -> str:
+        return await mark_email_as_unread(user, tool_id, message_id, folder)
+
+    async def delete_email_wrapper(message_id: int, folder: str = "INBOX") -> str:
+        return await delete_email(user, tool_id, message_id, folder)
+
+    async def get_server_capabilities_wrapper() -> str:
+        return await get_server_capabilities(user, tool_id)
 
     return [
         StructuredTool.from_function(
@@ -344,6 +588,111 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
                     }
                 },
                 "required": ["query"]
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=list_mailboxes_wrapper,
+            name="list_mailboxes",
+            description="List all available mailbox folders on the email server",
+            args_schema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=move_email_to_folder_wrapper,
+            name="move_email_to_folder",
+            description="Move an email to a different folder (useful for marking as spam)",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "integer",
+                        "description": "IMAP message ID to move"
+                    },
+                    "source_folder": {
+                        "type": "string",
+                        "description": "source mailbox folder name",
+                        "default": "INBOX"
+                    },
+                    "target_folder": {
+                        "type": "string",
+                        "description": "target mailbox folder name",
+                        "default": "Junk"
+                    }
+                },
+                "required": ["message_id"]
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=mark_email_as_read_wrapper,
+            name="mark_email_as_read",
+            description="Mark an email as read",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "integer",
+                        "description": "IMAP message ID"
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "mailbox folder name",
+                        "default": "INBOX"
+                    }
+                },
+                "required": ["message_id"]
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=mark_email_as_unread_wrapper,
+            name="mark_email_as_unread",
+            description="Mark an email as unread",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "integer",
+                        "description": "IMAP message ID"
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "mailbox folder name",
+                        "default": "INBOX"
+                    }
+                },
+                "required": ["message_id"]
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=delete_email_wrapper,
+            name="delete_email",
+            description="Delete an email",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "integer",
+                        "description": "IMAP message ID"
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "mailbox folder name",
+                        "default": "INBOX"
+                    }
+                },
+                "required": ["message_id"]
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=get_server_capabilities_wrapper,
+            name="get_server_capabilities",
+            description="Get IMAP server capabilities and supported features",
+            args_schema={
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         )
     ]
