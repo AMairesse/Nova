@@ -4,7 +4,6 @@ import base64
 import logging
 from asgiref.sync import sync_to_async
 from botocore.exceptions import ClientError
-from functools import partial
 from langchain_core.tools import StructuredTool
 from typing import Tuple, Any
 
@@ -251,9 +250,25 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     if thread_id is None:
         return []
 
+    # Create wrapper functions as langchain 1.1 does not support partial() anymore
+    async def list_files_wrapper() -> str:
+        return await list_files(thread_id, user)
+
+    async def read_file_wrapper(file_id: int) -> str:
+        return await read_file(agent, file_id)
+
+    async def reaf_file_chunk_wrapper(file_id: int, start: int = 0, chunk_size: int = 4096) -> str:
+        return await read_file_chunk(agent, file_id, start, chunk_size)
+
+    async def create_file_wrapper(content: str, filename: str) -> str:
+        return await create_file(thread_id, user, content, filename)
+
+    async def read_image_wrapper(file_id: int) -> str:
+        return await read_image(agent, file_id)
+
     return [
         StructuredTool.from_function(
-            coroutine=partial(list_files, thread_id, user),
+            coroutine=list_files_wrapper,
             name="list_files",
             description="List all files in the current thread (no parameters needed)",
             args_schema={"type": "object", "properties": {}, "required": []}
@@ -265,13 +280,13 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
         ),
         StructuredTool.from_function(
-            coroutine=partial(read_file, agent),
+            coroutine=read_file_wrapper,
             name="read_file",
             description="Read the full content of a text file. Checks context limit first.",
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
         ),
         StructuredTool.from_function(
-            coroutine=partial(read_file_chunk, agent),
+            coroutine=reaf_file_chunk_wrapper,
             name="read_file_chunk",
             description="Read a chunk of a file (for large/binary files). Params: start (byte offset, default 0), \
                 chunk_size (bytes, default 4096).",
@@ -282,7 +297,7 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
             }, "required": ["file_id"]}
         ),
         StructuredTool.from_function(
-            coroutine=partial(create_file, thread_id, user),
+            coroutine=create_file_wrapper,
             name="create_file",
             description="Create a new file in the current thread with content",
             args_schema={"type": "object", "properties": {
@@ -297,7 +312,7 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
         ),
         StructuredTool.from_function(
-            coroutine=partial(read_image, agent),
+            coroutine=read_image_wrapper,
             name="read_image",
             description="Read an image file and return base64-encoded content for processing.",
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]},

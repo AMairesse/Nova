@@ -2,7 +2,6 @@
 import caldav
 import logging
 from datetime import datetime, timedelta, timezone
-from functools import partial
 from icalendar import Event as iCalEvent
 from typing import Optional, List
 
@@ -319,9 +318,25 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     user = await sync_to_async(lambda: tool.user, thread_sensitive=False)()
     tool_id = await sync_to_async(lambda: tool.id, thread_sensitive=False)()
 
+    # Create wrapper functions as langchain 1.1 does not support partial() anymore
+    async def list_calendars_wrapper() -> str:
+        return await list_calendars(user, tool_id)
+
+    async def list_events_to_come_wrapper(days_ahead: int = 7, calendar_name: str = None) -> str:
+        return await list_events_to_come(user, tool_id, days_ahead, calendar_name)
+
+    async def list_events_wrapper(start_date: str, end_date: str, calendar_name: str = None) -> str:
+        return await list_events(user, tool_id, start_date, end_date, calendar_name)
+
+    async def get_event_detail_wrapper(event_id: str, calendar_name: str = None) -> str:
+        return await get_event_detail(user, tool_id, event_id, calendar_name)
+
+    async def search_events_wrapper(query: str, calendar_name: str = None) -> str:
+        return await search_events(user, tool_id, query, calendar_name)
+
     return [
         StructuredTool.from_function(
-            coroutine=partial(list_calendars, user, tool_id),
+            coroutine=list_calendars_wrapper,
             name="list_calendars",
             description="List all available calendars",
             args_schema={
@@ -331,7 +346,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
             }
         ),
         StructuredTool.from_function(
-            coroutine=partial(list_events_to_come, user, tool_id),
+            coroutine=list_events_to_come_wrapper,
             name="list_events_to_come",
             description="List events for the next days_ahead.",
             args_schema={
@@ -351,7 +366,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
             }
         ),
         StructuredTool.from_function(
-            coroutine=partial(list_events, user, tool_id),
+            coroutine=list_events_wrapper,
             name="list_events",
             description="List events between start_date and end_date.",
             args_schema={
@@ -374,7 +389,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
             }
         ),
         StructuredTool.from_function(
-            coroutine=partial(get_event_detail, user, tool_id),
+            coroutine=get_event_detail_wrapper,
             name="get_event_detail",
             description="Get en event's details.",
             args_schema={
@@ -393,7 +408,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
             }
         ),
         StructuredTool.from_function(
-            coroutine=partial(search_events, user, tool_id),
+            coroutine=search_events_wrapper,
             name="search_events",
             description="Search for events containing the query",
             args_schema={

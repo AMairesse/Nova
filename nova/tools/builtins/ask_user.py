@@ -1,5 +1,4 @@
 # nova/tools/ask_user.py
-from functools import partial
 from typing import Optional, Dict, Any
 from langchain_core.tools import StructuredTool
 from langgraph.types import interrupt
@@ -57,10 +56,17 @@ async def _ask_user(agent: LLMAgent, question: str, schema: Optional[Dict[str, A
 
 async def get_functions(tool: Tool, agent: LLMAgent) -> list[StructuredTool]:
     """Expose ask_user as a single StructuredTool, loaded unconditionally."""
+
+    # Create a wrapper function that captures the agent as langchain 1.1 does not
+    # support partial() anymore
+    async def ask_user_wrapper(question: str, schema: Optional[Dict[str, Any]] = None,
+                               agent_name: Optional[str] = None) -> str:
+        return await _ask_user(agent, question, schema, agent_name)
+
     return [
         StructuredTool.from_function(
             func=None,
-            coroutine=partial(_ask_user, agent),
+            coroutine=ask_user_wrapper,
             name="ask_user",
             description=_(
                 "Ask the end-user a clarification question and pause execution. "
