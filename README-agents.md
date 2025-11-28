@@ -49,6 +49,7 @@ Add these default tools to your Nova workspace:
 
 Configure private tools:
 - `CalDAV`: For calendar access. Go to the "Configure" panel to set the URL, username, and password. Note: Access is read-only by default.
+- `Email`: For comprehensive email management. Configure IMAP settings (server, port, credentials) and optionally SMTP settings for sending emails. You can specify custom folder names for sent emails and drafts. Enable sending only if you want the agent to be able to send emails (drafts are always available).
 
 ## 3. Create Your Agents
 
@@ -82,7 +83,21 @@ This agent manages calendar queries with read-only access.
 | Tool description | `Use this agent to retrieve information from the user's calendar. Access is read-only.` |
 | Associated tools | `Date / Time`, `CalDAV` |
 
-### 3.3 Code Agent
+### 3.3 Email Agent
+
+This agent manages your email with comprehensive IMAP/SMTP capabilities including reading, sending, organizing, and drafting emails.
+
+| Field | Value |
+| --- | --- |
+| Name | `Email Agent` |
+| Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
+| Prompt | `You are an AI Agent specialized in managing the user's email with full IMAP/SMTP capabilities. CORE RULES: 1) Read emails in preview mode by default to save context. 2) NEVER send emails with missing information - always ask for clarification first. 3) Send emails ONLY when you have ALL required details: recipient, subject, complete body, and any specific formatting requests. 4) Use save_draft for user review before sending important emails. 5) Respect privacy - never send unsolicited emails. 6) Use list_mailboxes before organizing emails.` |
+| Recursion limit | `25` |
+| Use as a tool | `Yes` |
+| Tool description | `Use this agent for comprehensive email management: reading, searching, organizing, drafting, and sending emails. The agent has full access to IMAP/SMTP functions but requires complete email details for sending operations. Supports email threading, folder management, and automatic archiving of sent messages.` |
+| Associated tools | `Date / Time`, `Email` |
+
+### 3.4 Code Agent
 
 This agent writes and executes code in a sandboxed environment.
 
@@ -108,7 +123,7 @@ The central agent that delegates to sub-agents.
 | Recursion limit | `25` |
 | Use as a tool | `No` |
 | Associated tools | `Ask user`, `Memory`, `WebApp` |
-| Agents as tools | `Internet Agent`, `Calendar Agent`, `Code Agent` |
+| Agents as tools | `Internet Agent`, `Calendar Agent`, `Email Agent`, `Code Agent` |
 
 ## 4. Run Your Agent
 
@@ -120,6 +135,7 @@ The main agent will handle queries and delegate as needed.
 Test your setup with these scenarios:
 - **Internet Agent**: Ask "What's the weather in Paris?" – It should use search tools.
 - **Calendar Agent**: Ask "Any events tomorrow?" – It queries CalDAV.
+- **Email Agent**: Ask "Check my recent emails" – It should list emails using preview mode, or "Send an email to test@example.com with subject 'Test' and body 'Hello'" – It should ask for confirmation and save to sent folder.
 - **Code Agent**: Ask "Sum numbers in this list: [1,2,3]" – It executes simple Python code.
 - **Main Agent**: Ask "Write code to fetch a webpage" – It delegates to Code Agent. Monitor recursion and errors in the logs.
 

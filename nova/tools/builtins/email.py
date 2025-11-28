@@ -329,13 +329,14 @@ async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Option
         username = credential.config.get('username')
         password = credential.config.get('password')
         smtp_use_tls = credential.config.get('smtp_use_tls', True)
+        from_address = credential.config.get('from_address', username)
 
         if not smtp_server:
             return _("SMTP server not configured. Please add SMTP settings to your email tool configuration.")
 
         # Create message
         msg = MIMEMultipart()
-        msg['From'] = username
+        msg['From'] = from_address
         msg['To'] = to
         msg['Subject'] = subject
 
@@ -362,6 +363,40 @@ async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Option
         server.sendmail(username, recipients, msg.as_string())
         server.quit()
 
+        # Save copy to Sent folder if configured
+        sent_folder = credential.config.get('sent_folder', 'Sent')
+        try:
+            # Get IMAP client for saving sent email
+            imap_client = await get_imap_client(user, tool_id)
+
+            # Check if sent folder exists
+            if folder_exists(imap_client, sent_folder):
+                # Add timestamp to message for sent folder
+                import email.utils
+                msg['Date'] = email.utils.formatdate()
+
+                # Save to sent folder
+                imap_client.append(sent_folder, msg.as_string())
+                imap_client.logout()
+            else:
+                # Try common alternative names
+                alt_names = ['Sent Items', 'Envoyés', 'Sent Messages']
+                saved = False
+                for alt_name in alt_names:
+                    if folder_exists(imap_client, alt_name):
+                        msg['Date'] = email.utils.formatdate()
+                        imap_client.append(alt_name, msg.as_string())
+                        saved = True
+                        break
+                imap_client.logout()
+
+                if not saved:
+                    logger.warning(f"Sent folder '{sent_folder}' not found and no alternatives available")
+
+        except Exception as save_error:
+            logger.warning(f"Failed to save email to sent folder: {save_error}")
+            # Don't fail the send operation if saving to sent folder fails
+
         return _("Email sent successfully to {to}").format(to=to)
 
     except ToolCredential.DoesNotExist:
@@ -377,9 +412,9 @@ async def save_draft(user, tool_id, to: str, subject: str, body: str,
     try:
         client = await get_imap_client(user, tool_id)
 
-        # Get username from credentials
+        # Get from_address from credentials (fallback to username)
         credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
-        username = credential.config.get('username')
+        from_address = credential.config.get('from_address', credential.config.get('username'))
 
         # Check if draft folder exists
         if not folder_exists(client, draft_folder):
@@ -388,7 +423,7 @@ async def save_draft(user, tool_id, to: str, subject: str, body: str,
 
         # Create message
         msg = MIMEMultipart()
-        msg['From'] = username  # From credentials
+        msg['From'] = from_address  # From credentials
         msg['To'] = to
         msg['Subject'] = subject
 
@@ -541,7 +576,7 @@ async def delete_email(user, tool_id, message_id: int, folder: str = "INBOX") ->
         return _("Error deleting email: {error}").format(error=str(e))
 
 
-async def test_imap_access(user, tool_id):
+async def test_email_access(user, tool_id):
     try:
         # Test IMAP connection
         imap_result = await list_emails(user, tool_id, limit=1)
@@ -576,6 +611,22 @@ async def test_imap_access(user, tool_id):
                     server.login(username, password)
                     server.quit()
 
+                    # Check if sent folder exists
+                    sent_folder = credential.config.get('sent_folder', 'Sent')
+                    imap_client = await get_imap_client(user, tool_id)
+                    if not folder_exists(imap_client, sent_folder):
+                        # Try alternative names
+                        alt_names = ['Sent Items', 'Envoyés', 'Sent Messages']
+                        sent_exists = any(folder_exists(imap_client, name) for name in alt_names)
+
+                        if not sent_exists:
+                            imap_client.logout()
+                            return {
+                                "status": "partial",
+                                "message": _("IMAP and SMTP OK, but no sent folder found. Sent emails won't be saved.")
+                            }
+
+                    imap_client.logout()
                     return {
                         "status": "success",
                         "message": _("IMAP and SMTP connections successful")
@@ -633,11 +684,15 @@ METADATA = {
         {'name': 'use_ssl', 'type': 'boolean', 'label': _('Use SSL for IMAP'), 'required': False, 'default': True},
         {'name': 'enable_sending', 'type': 'boolean',
          'label': _('Enable email sending (drafts always available)'), 'required': False, 'default': False},
+        {'name': 'from_address', 'type': 'text', 'label': _('From Address (needed if username is not an email)'),
+         'required': False},
+        {'name': 'sent_folder', 'type': 'text', 'label': _('Sent Folder Name (to move sent emails to)'),
+         'required': False, 'default': 'Sent'},
         {'name': 'smtp_server', 'type': 'text', 'label': _('SMTP Server'), 'required': False},
         {'name': 'smtp_port', 'type': 'integer', 'label': _('SMTP Port'), 'required': False, 'default': 587},
         {'name': 'smtp_use_tls', 'type': 'boolean', 'label': _('Use TLS for SMTP'), 'required': False, 'default': True},
     ],
-    'test_function': test_imap_access,
+    'test_function': test_email_access,
     'test_function_args': ['user', 'tool_id'],
 }
 
