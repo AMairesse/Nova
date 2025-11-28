@@ -1,7 +1,10 @@
 # nova/tools/builtins/email.py
 import imapclient
 import logging
-from typing import List
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from typing import List, Optional
 from email.header import decode_header
 
 from asgiref.sync import sync_to_async  # For async-safe ORM accesses
@@ -316,6 +319,98 @@ async def get_server_capabilities(user, tool_id) -> str:
         return _("Error getting server capabilities: {error}").format(error=str(e))
 
 
+async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Optional[str] = None) -> str:
+    """ Send an email via SMTP. """
+    try:
+        # Get SMTP configuration
+        credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
+        smtp_server = credential.config.get('smtp_server')
+        smtp_port = credential.config.get('smtp_port', 587)
+        username = credential.config.get('username')
+        password = credential.config.get('password')
+        smtp_use_tls = credential.config.get('smtp_use_tls', True)
+
+        if not smtp_server:
+            return _("SMTP server not configured. Please add SMTP settings to your email tool configuration.")
+
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = username
+        msg['To'] = to
+        msg['Subject'] = subject
+
+        if cc:
+            msg['Cc'] = cc
+
+        # Add body
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Connect to SMTP server
+        if smtp_use_tls:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+        else:
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+
+        server.login(username, password)
+
+        # Send email
+        recipients = [to]
+        if cc:
+            recipients.extend(cc.split(','))
+
+        server.sendmail(username, recipients, msg.as_string())
+        server.quit()
+
+        return _("Email sent successfully to {to}").format(to=to)
+
+    except ToolCredential.DoesNotExist:
+        return _("No email credential found for tool {tool_id}").format(tool_id=tool_id)
+    except Exception as e:
+        logger.error(f"Error in send_email: {e}")
+        return _("Error sending email: {error}").format(error=str(e))
+
+
+async def save_draft(user, tool_id, to: str, subject: str, body: str,
+                     cc: Optional[str] = None, draft_folder: str = "Drafts") -> str:
+    """ Save an email as draft in the specified folder. """
+    try:
+        client = await get_imap_client(user, tool_id)
+
+        # Get username from credentials
+        credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
+        username = credential.config.get('username')
+
+        # Check if draft folder exists
+        if not folder_exists(client, draft_folder):
+            client.logout()
+            return _("Draft folder '{folder}' does not exist.").format(folder=draft_folder)
+
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = username  # From credentials
+        msg['To'] = to
+        msg['Subject'] = subject
+
+        if cc:
+            msg['Cc'] = cc
+
+        # Add body
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Save as draft using APPEND
+        client.append(draft_folder, msg.as_string(), flags=[imapclient.DRAFT])
+
+        client.logout()
+        return _("Draft saved successfully in {folder}").format(folder=draft_folder)
+
+    except ToolCredential.DoesNotExist:
+        return _("No email credential found for tool {tool_id}").format(tool_id=tool_id)
+    except Exception as e:
+        logger.error(f"Error in save_draft: {e}")
+        return _("Error saving draft: {error}").format(error=str(e))
+
+
 async def move_email_to_folder(user, tool_id, message_id: int,
                                source_folder: str = "INBOX", target_folder: str = "Junk") -> str:
     """ Move an email to a different folder. """
@@ -448,14 +543,75 @@ async def delete_email(user, tool_id, message_id: int, folder: str = "INBOX") ->
 
 async def test_imap_access(user, tool_id):
     try:
-        result = await list_emails(user, tool_id, limit=1)
-        if "error" in result.lower():
-            return {"status": "error", "message": result}
-        else:
+        # Test IMAP connection
+        imap_result = await list_emails(user, tool_id, limit=1)
+        imap_success = "error" not in imap_result.lower()
+
+        if not imap_success:
+            return {"status": "error", "message": _("IMAP: %(result)s") % {"result": imap_result}}
+
+        # Check if SMTP should be tested
+        try:
+            credential = await sync_to_async(
+                ToolCredential.objects.get, thread_sensitive=False
+            )(user=user, tool_id=tool_id)
+            enable_sending = credential.config.get('enable_sending', False)
+            smtp_server = credential.config.get('smtp_server')
+
+            if enable_sending and smtp_server:
+                # Test SMTP connection
+                smtp_port = credential.config.get('smtp_port', 587)
+                smtp_use_tls = credential.config.get('smtp_use_tls', True)
+                username = credential.config.get('username')
+                password = credential.config.get('password')
+
+                try:
+                    # Test SMTP with timeout and better error handling
+                    if smtp_use_tls:
+                        server = smtplib.SMTP(smtp_server, smtp_port, timeout=5)
+                        server.starttls()
+                    else:
+                        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=5)
+
+                    server.login(username, password)
+                    server.quit()
+
+                    return {
+                        "status": "success",
+                        "message": _("IMAP and SMTP connections successful")
+                    }
+                except smtplib.SMTPConnectError:
+                    return {
+                        "status": "partial",
+                        "message": _("IMAP: OK, SMTP: Connection failed - check server/port")
+                    }
+                except smtplib.SMTPAuthenticationError:
+                    return {
+                        "status": "partial",
+                        "message": _("IMAP: OK, SMTP: Authentication failed - check credentials")
+                    }
+                except smtplib.SMTPException as e:
+                    return {
+                        "status": "partial",
+                        "message": _("IMAP: OK, SMTP: %(error)s") % {"error": str(e)}
+                    }
+                except Exception as smtp_error:
+                    return {
+                        "status": "partial",
+                        "message": _("IMAP: OK, SMTP: Unexpected error - %(error)s") % {"error": str(smtp_error)}
+                    }
+            else:
+                return {
+                    "status": "success",
+                    "message": _("IMAP connection successful")
+                }
+
+        except ToolCredential.DoesNotExist:
             return {
                 "status": "success",
                 "message": _("IMAP connection successful")
             }
+
     except Exception as e:
         return {
             "status": "error",
@@ -464,15 +620,22 @@ async def test_imap_access(user, tool_id):
 
 
 METADATA = {
-    'name': 'Email (IMAP)',
-    'description': 'Read emails from IMAP server',
+    'name': 'Email (IMAP/SMTP)',
+    'description': 'Read, send emails and manage drafts via IMAP/SMTP',
     'requires_config': True,
     'config_fields': [
         {'name': 'imap_server', 'type': 'text', 'label': _('IMAP Server'), 'required': True},
         {'name': 'imap_port', 'type': 'integer', 'label': _('IMAP Port'), 'required': False, 'default': 993},
+        {'name': 'smtp_server', 'type': 'text', 'label': _('SMTP Server'), 'required': False},
+        {'name': 'smtp_port', 'type': 'integer', 'label': _('SMTP Port'), 'required': False, 'default': 587},
         {'name': 'username', 'type': 'text', 'label': _('Username'), 'required': True},
         {'name': 'password', 'type': 'password', 'label': _('Password'), 'required': True},
-        {'name': 'use_ssl', 'type': 'boolean', 'label': _('Use SSL'), 'required': False, 'default': True},
+        {'name': 'use_ssl', 'type': 'boolean', 'label': _('Use SSL for IMAP'), 'required': False, 'default': True},
+        {'name': 'enable_sending', 'type': 'boolean',
+         'label': _('Enable email sending (drafts always available)'), 'required': False, 'default': False},
+        {'name': 'smtp_server', 'type': 'text', 'label': _('SMTP Server'), 'required': False},
+        {'name': 'smtp_port', 'type': 'integer', 'label': _('SMTP Port'), 'required': False, 'default': 587},
+        {'name': 'smtp_use_tls', 'type': 'boolean', 'label': _('Use TLS for SMTP'), 'required': False, 'default': True},
     ],
     'test_function': test_imap_access,
     'test_function_args': ['user', 'tool_id'],
@@ -492,6 +655,14 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     # Wrap ORM accesses for user/id
     user = await sync_to_async(lambda: tool.user, thread_sensitive=False)()
     tool_id = await sync_to_async(lambda: tool.id, thread_sensitive=False)()
+
+    # Check if sending is enabled
+    enable_sending = False
+    try:
+        credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
+        enable_sending = credential.config.get('enable_sending', False)
+    except ToolCredential.DoesNotExist:
+        pass  # Will use default False
 
     # Create wrapper functions as langchain 1.1 does not support partial() anymore
     async def list_emails_wrapper(folder: str = "INBOX", limit: int = 10) -> str:
@@ -523,7 +694,15 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def get_server_capabilities_wrapper() -> str:
         return await get_server_capabilities(user, tool_id)
 
-    return [
+    async def send_email_wrapper(to: str, subject: str, body: str, cc: Optional[str] = None) -> str:
+        return await send_email(user, tool_id, to, subject, body, cc)
+
+    async def save_draft_wrapper(to: str, subject: str, body: str,
+                                 cc: Optional[str] = None, draft_folder: str = "Drafts") -> str:
+        return await save_draft(user, tool_id, to, subject, body, cc, draft_folder)
+
+    # Base tools always available
+    tools = [
         StructuredTool.from_function(
             coroutine=list_emails_wrapper,
             name="list_emails",
@@ -694,5 +873,138 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
                 "properties": {},
                 "required": []
             }
+        ),
+        StructuredTool.from_function(
+            coroutine=send_email_wrapper,
+            name="send_email",
+            description="Send an email via SMTP",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "recipient email address"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "email subject"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "email body content"
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "CC recipients (comma-separated)",
+                        "default": None
+                    }
+                },
+                "required": ["to", "subject", "body"]
+            }
+        ),
+        StructuredTool.from_function(
+            coroutine=save_draft_wrapper,
+            name="save_draft",
+            description="Save an email as draft in the specified folder",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "recipient email address"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "email subject"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "email body content"
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "CC recipients (comma-separated)",
+                        "default": None
+                    },
+                    "draft_folder": {
+                        "type": "string",
+                        "description": "folder to save draft in",
+                        "default": "Drafts"
+                    }
+                },
+                "required": ["to", "subject", "body"]
+            }
         )
     ]
+
+    # Draft saving is always available (uses IMAP only)
+    tools.append(
+        StructuredTool.from_function(
+            coroutine=save_draft_wrapper,
+            name="save_draft",
+            description="Save an email as draft in the specified folder",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "recipient email address"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "email subject"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "email body content"
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "CC recipients (comma-separated)",
+                        "default": None
+                    },
+                    "draft_folder": {
+                        "type": "string",
+                        "description": "folder to save draft in",
+                        "default": "Drafts"
+                    }
+                },
+                "required": ["to", "subject", "body"]
+            }
+        )
+    )
+
+    # Email sending only if enabled (requires SMTP configuration)
+    if enable_sending:
+        tools.append(
+            StructuredTool.from_function(
+                coroutine=send_email_wrapper,
+                name="send_email",
+                description="Send an email via SMTP",
+                args_schema={
+                    "type": "object",
+                    "properties": {
+                        "to": {
+                            "type": "string",
+                            "description": "recipient email address"
+                        },
+                        "subject": {
+                            "type": "string",
+                            "description": "email subject"
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "email body content"
+                        },
+                        "cc": {
+                            "type": "string",
+                            "description": "CC recipients (comma-separated)",
+                            "default": None
+                        }
+                    },
+                    "required": ["to", "subject", "body"]
+                }
+            )
+        )
+
+    return tools
