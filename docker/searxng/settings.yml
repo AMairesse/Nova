@@ -388,25 +388,6 @@ engines:
     timeout: 6
     disabled: true
 
-  - name: alexandria
-    engine: json_engine
-    shortcut: alx
-    categories: general
-    paging: true
-    search_url: https://api.alexandria.org/?a=1&q={query}&p={pageno}
-    results_query: results
-    title_query: title
-    url_query: url
-    content_query: snippet
-    timeout: 1.5
-    disabled: true
-    about:
-      website: https://alexandria.org/
-      official_api_documentation: https://github.com/alexandria-org/alexandria-api/raw/master/README.md
-      use_official_api: true
-      require_api_key: false
-      results: JSON
-
   - name: astrophysics data system
     engine: astrophysics_data_system
     shortcut: ads
@@ -735,6 +716,11 @@ engines:
   - name: deviantart
     engine: deviantart
     shortcut: da
+    timeout: 3.0
+
+  - name: devicons
+    engine: devicons
+    shortcut: di
     timeout: 3.0
 
   - name: ddg definitions
@@ -1072,6 +1058,12 @@ engines:
     shortcut: gpm
     play_categ: movies
     disabled: true
+
+  - name: grokipedia
+    engine: grokipedia
+    shortcut: gp
+    disabled: true
+    inactive: true
 
   - name: material icons
     engine: material_icons
@@ -1434,22 +1426,6 @@ engines:
       use_official_api: true
       require_api_key: false
       results: JSON
-
-  # https://docs.searxng.org/dev/engines/online/mullvad_leta.html
-  - name: mullvadleta
-    engine: mullvad_leta
-    disabled: true
-    leta_engine: google
-    categories: [general, web]
-    shortcut: ml
-
-  - name: mullvadleta brave
-    engine: mullvad_leta
-    network: mullvadleta
-    disabled: true
-    leta_engine: brave
-    categories: [general, web]
-    shortcut: mlb
 
   - name: odysee
     engine: odysee
@@ -2135,22 +2111,21 @@ engines:
     search_type: web
     shortcut: yd
     disabled: true
-    inactive: true
 
   - name: yandex images
     engine: yandex
+    network: yandex
     categories: images
     search_type: images
     shortcut: ydi
     disabled: true
-    inactive: true
 
   - name: yandex music
     engine: yandex_music
+    network: yandex
     shortcut: ydm
     disabled: true
     # https://yandex.com/support/music/access.html
-    inactive: true
 
   - name: yahoo
     engine: yahoo
