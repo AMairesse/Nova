@@ -692,7 +692,7 @@ METADATA = {
         {'name': 'smtp_port', 'type': 'integer', 'label': _('SMTP Port'), 'required': False, 'default': 587},
         {'name': 'smtp_use_tls', 'type': 'boolean', 'label': _('Use TLS for SMTP'), 'required': False, 'default': True},
     ],
-    'test_function': test_email_access,
+    'test_function': 'test_email_access',
     'test_function_args': ['user', 'tool_id'],
 }
 
