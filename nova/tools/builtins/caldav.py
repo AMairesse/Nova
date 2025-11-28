@@ -331,8 +331,8 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def get_event_detail_wrapper(event_id: str, calendar_name: str = None) -> str:
         return await get_event_detail(user, tool_id, event_id, calendar_name)
 
-    async def search_events_wrapper(query: str, calendar_name: str = None) -> str:
-        return await search_events(user, tool_id, query, calendar_name)
+    async def search_events_wrapper(query: str, days_range: int = 30) -> str:
+        return await search_events(user, tool_id, query, days_range)
 
     return [
         StructuredTool.from_function(

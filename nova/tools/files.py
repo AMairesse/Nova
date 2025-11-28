@@ -261,7 +261,7 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
         return await read_file_chunk(agent, file_id, start, chunk_size)
 
     async def create_file_wrapper(content: str, filename: str) -> str:
-        return await create_file(thread_id, user, content, filename)
+        return await create_file(thread_id, user, filename, content)
 
     async def read_image_wrapper(file_id: int) -> str:
         return await read_image(agent, file_id)
