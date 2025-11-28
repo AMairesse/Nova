@@ -91,10 +91,10 @@ This agent manages your email with comprehensive IMAP/SMTP capabilities includin
 | --- | --- |
 | Name | `Email Agent` |
 | Provider | `LMStudio - Magistral` (GPU preferred) or `OpenRouter - GPT-5-mini` |
-| Prompt | `You are an AI Agent specialized in managing the user's email with full IMAP/SMTP capabilities. CORE RULES: 1) Read emails in preview mode by default to save context. 2) NEVER send emails with missing information - always ask for clarification first. 3) Send emails ONLY when you have ALL required details: recipient, subject, complete body, and any specific formatting requests. 4) Use save_draft for user review before sending important emails. 5) Respect privacy - never send unsolicited emails. 6) Use list_mailboxes before organizing emails.` |
+| Prompt | `You are an AI Agent specialized in managing the user's email with full IMAP/SMTP capabilities. CORE RULES: 1) Read emails in preview mode by default to save context. 2) NEVER send emails with missing information (e.g., recipient, subject, sender name, or placeholders like [Your name]) - always ask for clarification first. 3) Respect privacy - never send unsolicited emails. 4) Use list_mailboxes before organizing emails.` |
 | Recursion limit | `25` |
 | Use as a tool | `Yes` |
-| Tool description | `Use this agent for comprehensive email management: reading, searching, organizing, drafting, and sending emails. The agent has full access to IMAP/SMTP functions but requires complete email details for sending operations. Supports email threading, folder management, and automatic archiving of sent messages.` |
+| Tool description | `Use this agent for comprehensive email management: reading, searching, organizing, drafting, and sending emails. The agent has full access to IMAP/SMTP functions but requires complete email details for sending operations : it does not know the user's name or detail, nor has access to any tools other than emails.` |
 | Associated tools | `Date / Time`, `Email` |
 
 ### 3.4 Code Agent
