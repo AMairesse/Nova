@@ -299,7 +299,7 @@ METADATA = {
         {'name': 'username', 'type': 'text', 'label': _('Username'), 'required': True},
         {'name': 'password', 'type': 'password', 'label': _('Password'), 'required': True},
     ],
-    'test_function': test_caldav_access,
+    'test_function': 'test_caldav_access',
     'test_function_args': ['user', 'tool_id'],
 }
 

@@ -442,6 +442,7 @@ def ensure_nova_agent(
     internet_agent: Optional[AgentConfig],
     calendar_agent: Optional[AgentConfig],
     code_agent: Optional[AgentConfig],
+    email_agent: Optional[AgentConfig],
     summary: BootstrapSummary,
 ) -> Optional[AgentConfig]:
     required = ["ask_user", "memory"]
@@ -504,7 +505,7 @@ def ensure_nova_agent(
         agent.tools.add(webapp_tool)
 
     # Attach sub-agents as tools
-    for sub in (internet_agent, calendar_agent, code_agent):
+    for sub in (internet_agent, calendar_agent, code_agent, email_agent):
         if sub and not agent.agent_tools.filter(pk=sub.pk).exists():
             agent.agent_tools.add(sub)
 
@@ -514,6 +515,89 @@ def ensure_nova_agent(
         profile.default_agent = agent
         profile.save()
         summary.notes.append("Set 'Nova' as default agent for this user.")
+
+    return agent
+
+
+def ensure_email_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
+    required = ["date_time"]
+    # Email tool is required but checked separately since it needs credentials
+    email_tool = _find_tool("email", user, require_user_cred=True)
+    if not email_tool:
+        summary.skipped_agents.append({
+            "name": "Email Agent",
+            "reason": "Email tool not configured (missing credentials)",
+        })
+        return None
+
+    missing = [k for k in required if not tools.get(k)]
+    if missing:
+        summary.skipped_agents.append({
+            "name": "Email Agent",
+            "reason": f"Missing tools: {', '.join(missing)}",
+        })
+        return None
+
+    agent, created = AgentConfig.objects.get_or_create(
+        user=user,
+        name="Email Agent",
+        defaults={
+            "llm_provider": provider,
+            "system_prompt": (
+                "You are an AI Agent specialized in managing the user's email with full IMAP/SMTP capabilities."
+                "CORE RULES: 1) Read emails in preview mode by default to save context. 2) NEVER send emails "
+                "with missing information (e.g., recipient, subject, sender name, or placeholders like [Your name]) "
+                "- always ask for clarification first. 3) Respect privacy - never send unsolicited emails. "
+                "4) Use list_mailboxes before organizing emails."
+            ),
+            "recursion_limit": 25,
+            "is_tool": True,
+            "tool_description": (
+                "Use this agent for comprehensive email management: reading, searching, organizing, drafting, and "
+                "sending emails. The agent has full access to IMAP/SMTP functions but requires complete email details "
+                "for sending operations : it does not know the user's name or detail, nor has access to any tools "
+                "other than emails."
+            ),
+        },
+    )
+
+    changed = False
+
+    if agent.llm_provider_id != provider.id:
+        agent.llm_provider = provider
+        changed = True
+
+    if not agent.is_tool:
+        agent.is_tool = True
+        changed = True
+
+    if not agent.tool_description:
+        agent.tool_description = (
+            "Use this agent for comprehensive email management: reading, searching, organizing, drafting, "
+            "and sending emails. The agent has full access to IMAP/SMTP functions but requires complete "
+            "email details for sending operations. Supports email threading, folder management, and "
+            "automatic archiving of sent messages."
+        )
+        changed = True
+
+    if agent.recursion_limit < 25:
+        agent.recursion_limit = 25
+        changed = True
+
+    if changed:
+        agent.save()
+        if not created:
+            summary.updated_agents.append("Email Agent")
+
+    # Attach required tools
+    for key in required:
+        tool = tools.get(key)
+        if tool and not agent.tools.filter(pk=tool.pk).exists():
+            agent.tools.add(tool)
+
+    # Attach email tool
+    if not agent.tools.filter(pk=email_tool.pk).exists():
+        agent.tools.add(email_tool)
 
     return agent
 
@@ -546,8 +630,9 @@ def bootstrap_default_setup(user) -> Dict:
     internet_agent = ensure_internet_agent(user, provider, tools, summary)
     calendar_agent = ensure_calendar_agent(user, provider, tools, summary)
     code_agent = ensure_code_agent(user, provider, tools, summary)
+    email_agent = ensure_email_agent(user, provider, tools, summary)
     nova_agent = ensure_nova_agent(
-        user, provider, tools, internet_agent, calendar_agent, code_agent, summary
+        user, provider, tools, internet_agent, calendar_agent, code_agent, email_agent, summary
     )
     if nova_agent is None:
         logger.info(

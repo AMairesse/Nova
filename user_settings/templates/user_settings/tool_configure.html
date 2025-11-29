@@ -20,7 +20,7 @@
     {% endif %}
     {% crispy form %}
 
-    {% if tool.tool_type == 'builtin' and tool.tool_subtype == 'caldav' or tool.tool_type == 'mcp' or tool.tool_subtype == 'code_execution' %}
+    {% if tool.tool_type == 'builtin' and metadata.requires_config or tool.tool_type == 'mcp' %}
       <button type="button" class="btn btn-outline-primary ms-2"
               id="testBtn"
               data-test-url="{% url 'user_settings:tool-test' tool.pk %}">
@@ -31,7 +31,7 @@
     {% endif %}
 
     <div class="mt-4">
-      {% if tool.tool_type == 'builtin' and tool.tool_subtype == 'caldav' or tool.tool_subtype == 'searxng' or tool.tool_type == 'mcp' or tool.tool_subtype == 'code_execution' %}
+      {% if tool.tool_type == 'builtin' and metadata.requires_config or tool.tool_type == 'mcp' %}
       <button class="btn btn-primary me-2" type="submit">
         <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
       </button>

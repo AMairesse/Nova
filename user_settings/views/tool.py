@@ -28,7 +28,7 @@ from user_settings.mixins import (
 )
 from user_settings.forms import ToolForm, ToolCredentialForm
 from nova.models.Tool import Tool, ToolCredential
-from nova.tools import get_metadata
+from nova.tools import get_metadata, import_module
 from nova.models.Tool import check_and_create_searxng_tool, check_and_create_judge0_tool
 from nova.mcp.client import MCPClient
 
@@ -269,6 +269,8 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["tool"] = self.tool
+        if self.tool.tool_type == Tool.ToolType.BUILTIN:
+            ctx["metadata"] = get_metadata(self.tool.python_path)
         return ctx
 
 
@@ -283,11 +285,6 @@ async def tool_test_connection(request, pk: int):
     try:
         # Extract POST payload
         payload = request.POST
-        auth_type = payload.get("auth_type", "basic")
-        username = payload.get("username", "")
-        password = payload.get("password", "")
-        token = payload.get("token", "")
-        caldav_url = payload.get("caldav_url", "")
 
         # Get or create credential
         cred, created = await sync_to_async(
@@ -295,46 +292,75 @@ async def tool_test_connection(request, pk: int):
         )(
             user=request.user,
             tool=tool,
-            defaults={
-                "auth_type": auth_type,
-                "username": username,
-                "password": password,
-                "token": token,
-                "config": {
-                    "caldav_url": caldav_url,
-                    "username": username,
-                    "password": password,
-                },
-            },
+            defaults={"auth_type": "basic"},
         )
-        if not created:
-            cred.auth_type = auth_type
-            if username:
-                cred.username = username
-            if password:
-                cred.password = password
-            if token:
-                cred.token = token
-            cred.config.update(
-                {
-                    "caldav_url": caldav_url,
-                    "username": username,
-                    "password": password or cred.config.get("password", ""),
-                }
-            )
-            await sync_to_async(cred.save)()
 
-        # Built-in CalDav
-        if tool.tool_subtype == "caldav":
-            from nova.tools.builtins.caldav import test_caldav_access
-            result = await test_caldav_access(request.user, tool.id)
-            return JsonResponse(result)
+        # For built-in tools, extract config from metadata fields
+        if tool.tool_type == Tool.ToolType.BUILTIN:
+            meta = get_metadata(tool.python_path)
+            if meta and meta.get("config_fields"):
+                # Start with existing config
+                config_data = cred.config.copy()
 
-        # Built-in Code_execution
-        if tool.tool_subtype == "code_execution":
-            from nova.tools.builtins.code_execution import test_judge0_access
-            result = await test_judge0_access(tool)
-            return JsonResponse(result)
+                # Secret fields (passwords, tokens) are not sent in POST if not modified
+                secret_fields = ("password", "token", "client_secret", "refresh_token", "access_token")
+
+                # Update with form data if provided
+                for field in meta["config_fields"]:
+                    field_name = field["name"]
+                    if field_name in payload:
+                        # For secret fields, preserve existing value if POST value is empty
+                        if field_name in secret_fields and payload[field_name] == "" and field_name in cred.config:
+                            config_data[field_name] = cred.config[field_name]
+                        else:
+                            config_data[field_name] = payload[field_name]
+
+                # Update credential config
+                cred.config = config_data
+                await sync_to_async(cred.save)()
+        else:
+            # For MCP/API tools, use existing logic
+            auth_type = payload.get("auth_type", "basic")
+            username = payload.get("username", "")
+            password = payload.get("password", "")
+            token = payload.get("token", "")
+
+            if not created:
+                cred.auth_type = auth_type
+                if username:
+                    cred.username = username
+                if password:
+                    cred.password = password
+                if token:
+                    cred.token = token
+                await sync_to_async(cred.save)()
+
+        # Built-in tools with test function
+        if tool.tool_type == Tool.ToolType.BUILTIN:
+            meta = get_metadata(tool.python_path)
+            if meta and meta.get("test_function"):
+                test_func = meta["test_function"]
+                test_args = meta.get("test_function_args", [])
+
+                # Handle string function names (import from module)
+                if isinstance(test_func, str):
+                    module = import_module(tool.python_path)
+                    if module and hasattr(module, test_func):
+                        test_func = getattr(module, test_func)
+                    else:
+                        return JsonResponse({
+                            "status": "error",
+                            "message": f"Test function {test_func} not found"
+                        })
+
+                # Call the test function with the specified arguments
+                if test_args == ['user', 'tool_id']:
+                    result = await test_func(request.user, tool.id)
+                elif test_args == ['tool']:
+                    result = await test_func(tool)
+                else:
+                    result = await test_func()
+                return JsonResponse(result)
 
         # MCP
         if tool.tool_type == Tool.ToolType.MCP:
