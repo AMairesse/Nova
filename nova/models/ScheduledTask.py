@@ -96,3 +96,12 @@ class ScheduledTask(models.Model):
                 periodic_task.save()
             except PeriodicTask.DoesNotExist:
                 pass
+
+    def delete(self, *args, **kwargs):
+        # Delete associated PeriodicTask
+        try:
+            periodic_task = PeriodicTask.objects.get(name=f"scheduled_task_{self.id}")
+            periodic_task.delete()
+        except PeriodicTask.DoesNotExist:
+            pass
+        super().delete(*args, **kwargs)

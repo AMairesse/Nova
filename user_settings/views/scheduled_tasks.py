@@ -6,6 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from django.forms import ModelForm
 from nova.models.ScheduledTask import ScheduledTask
 from nova.models.AgentConfig import AgentConfig
+from nova.tasks.tasks import run_scheduled_agent_task
 
 
 class ScheduledTaskForm(ModelForm):
@@ -119,7 +120,6 @@ def scheduled_task_run_now(request, pk):
     """Manually run a scheduled task."""
     task = get_object_or_404(ScheduledTask, pk=pk, user=request.user)
     # Trigger the Celery task
-    from nova.tasks.tasks import run_scheduled_agent_task
     run_scheduled_agent_task.delay(task.id)
     messages.success(request, _("Scheduled task execution started."))
     return redirect('user_settings:scheduled_tasks')
