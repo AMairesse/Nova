@@ -52,6 +52,11 @@
                     <i class="bi bi-gear me-2"></i>{% trans "Settings" %}
                   </a>
                 </li>
+                <li>
+                  <a class="dropdown-item" href="{% url 'user_settings:scheduled_tasks' %}">
+                    <i class="bi bi-clock me-2"></i>{% trans "Scheduled Tasks" %}
+                  </a>
+                </li>
                 {% if user.is_superuser %}
                 <li>
                   <a class="dropdown-item" href="{% url 'admin:index' %}">

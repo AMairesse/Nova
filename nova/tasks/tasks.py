@@ -329,6 +329,10 @@ def run_scheduled_agent_task(self, scheduled_task_id):
             subject=scheduled_task.name
         )
 
+        # Add the prompt as a user message if thread will be kept
+        if scheduled_task.keep_thread:
+            thread.add_message(scheduled_task.prompt, Actor.USER, "standard")
+
         # Create a Task instance for consistency with other agent executions
         task = Task.objects.create(
             user=scheduled_task.user,
