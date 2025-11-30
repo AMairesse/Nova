@@ -32,6 +32,14 @@ services:
       context: ../
       dockerfile: docker/Dockerfile
 
+  celery-beat:
+    extends:
+      file: docker-compose.base.yml
+      service: celery-beat
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+
   web:
     extends:
       file: docker-compose.base.yml

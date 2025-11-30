@@ -29,6 +29,11 @@ services:
       file: docker-compose.base.yml
       service: celery-worker
 
+  celery-beat:
+    extends:
+      file: docker-compose.base.yml
+      service: celery-beat
+
   web:
     extends:
       file: docker-compose.base.yml

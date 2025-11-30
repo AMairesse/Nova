@@ -16,7 +16,7 @@ autobahn==25.11.1
 Automat==25.4.16
 backoff==2.2.1
 beartype==0.22.6
-beautifulsoup4==4.14.2
+beautifulsoup4==4.14.3
 billiard==4.2.3
 bleach==6.3.0
 boto3==1.40.61
@@ -37,6 +37,8 @@ click-repl==0.3.0
 constantly==23.10.4
 coverage==7.12.0
 crispy-bootstrap5==2025.6
+cron_descriptor==2.0.6
+croniter==6.0.0
 cryptography==46.0.3
 cyclopts==4.3.0
 daphne==4.2.1
@@ -45,8 +47,10 @@ debugpy==1.8.17
 diskcache==5.6.3
 distro==1.9.0
 Django==5.2.8
+django-celery-beat==2.8.1
 django-crispy-forms==2.5
 django-encrypted-model-fields==0.6.5
+django-timezone-field==7.1
 djangorestframework==3.16.1
 dnspython==2.8.0
 docstring_parser==0.17.0
@@ -71,7 +75,7 @@ huggingface_hub==1.1.6
 hyperlink==21.0.0
 icalendar==6.3.2
 idna==3.11
-imapclient==2.3.1
+IMAPClient==3.0.1
 importlib_metadata==8.7.0
 Incremental==24.11.0
 isodate==0.7.2
@@ -163,10 +167,12 @@ Pygments==2.19.2
 PyJWT==2.10.1
 pyOpenSSL==25.3.0
 pyperclip==1.11.0
+python-crontab==3.3.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 python-magic==0.4.27
 python-multipart==0.0.20
+pytz==2025.2
 PyYAML==6.0.3
 qh3==1.5.6
 recurring-ical-events==3.8.0

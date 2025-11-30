@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'channels',
     "crispy_forms",
     "crispy_bootstrap5",
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
