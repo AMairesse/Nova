@@ -75,7 +75,7 @@ class ScheduledTask(models.Model):
             periodic_task, created = PeriodicTask.objects.get_or_create(
                 name=task_name,
                 defaults={
-                    'task': 'nova.tasks.scheduled_tasks.run_scheduled_agent_task',
+                    'task': 'nova.tasks.tasks.run_scheduled_agent_task',
                     'crontab': crontab,
                     'args': f'[{self.id}]',
                     'enabled': True,

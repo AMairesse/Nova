@@ -26,12 +26,12 @@ class Task(models.Model):
                                on_delete=models.CASCADE,
                                related_name='tasks',
                                verbose_name=_("Thread"))
-    agent = models.ForeignKey('AgentConfig',
-                              on_delete=models.SET_NULL,
-                              null=True,
-                              blank=True,
-                              related_name='tasks',
-                              verbose_name=_("AgentConfig"))
+    agent_config = models.ForeignKey('AgentConfig',
+                                     on_delete=models.SET_NULL,
+                                     null=True,
+                                     blank=True,
+                                     related_name='tasks',
+                                     verbose_name=_("AgentConfig"))
     status = models.CharField(max_length=20,
                               choices=TaskStatus.choices,
                               default=TaskStatus.PENDING)

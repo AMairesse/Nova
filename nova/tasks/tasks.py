@@ -6,6 +6,7 @@ from asgiref.sync import sync_to_async
 from celery import shared_task
 
 from django.contrib.auth.models import User
+from django.utils import timezone
 from langchain_core.messages import BaseMessage
 
 from nova.llm.checkpoints import get_checkpointer
@@ -14,7 +15,8 @@ from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
-from nova.models.Task import Task
+from nova.models.ScheduledTask import ScheduledTask
+from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.utils import markdown_to_html
@@ -306,3 +308,62 @@ def resume_ai_task_celery(self, interaction_pk: int):
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")
         raise self.retry(countdown=30, exc=e)
+
+
+@shared_task(bind=True, name="run_scheduled_agent_task")
+def run_scheduled_agent_task(self, scheduled_task_id):
+    """
+    Celery task to execute a scheduled agent task.
+    """
+    try:
+        # Get the scheduled task
+        scheduled_task = ScheduledTask.objects.get(id=scheduled_task_id)
+
+        if not scheduled_task.is_active:
+            logger.info(f"Scheduled task {scheduled_task.name} is not active, skipping.")
+            return
+
+        # Create a new thread for this execution
+        thread = Thread.objects.create(
+            user=scheduled_task.user,
+            subject=scheduled_task.name
+        )
+
+        # Create a Task instance for consistency with other agent executions
+        task = Task.objects.create(
+            user=scheduled_task.user,
+            thread=thread,
+            agent_config=scheduled_task.agent,
+            status=TaskStatus.RUNNING
+        )
+
+        # Use AgentTaskExecutor for consistent execution
+        executor = AgentTaskExecutor(task, scheduled_task.user, thread, scheduled_task.agent, scheduled_task.prompt)
+        asyncio.run(executor.execute_or_resume())
+
+        # Mark task as completed
+        task.status = TaskStatus.COMPLETED
+        task.save()
+
+        # Update last run time
+        scheduled_task.last_run_at = timezone.now()
+        scheduled_task.last_error = None  # Clear any previous error
+        scheduled_task.save()
+
+        # Optionally delete the thread
+        if not scheduled_task.keep_thread:
+            thread.delete()
+
+        logger.info(f"Scheduled task {scheduled_task.name} executed successfully.")
+
+    except Exception as e:
+        logger.error(f"Error executing scheduled task {scheduled_task_id}: {e}", exc_info=True)
+
+        # Update the scheduled task with the error
+        try:
+            scheduled_task = ScheduledTask.objects.get(id=scheduled_task_id)
+            scheduled_task.last_error = str(e)
+            scheduled_task.last_run_at = timezone.now()
+            scheduled_task.save()
+        except Exception as inner_e:
+            logger.error(f"Failed to update scheduled task with error: {inner_e}")

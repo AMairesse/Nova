@@ -383,7 +383,7 @@ class MessageModelsTest(BaseTestCase):
         Test Message model with interaction relationships.
         Ensures that messages can be linked to agent-user interactions.
         """
-        task = Task.objects.create(user=self.user, thread=self.thread, agent=None)
+        task = Task.objects.create(user=self.user, thread=self.thread, agent_config=None)
         provider = create_provider(self.user)
         agent = create_agent(self.user, provider)
         interaction = Interaction.objects.create(
