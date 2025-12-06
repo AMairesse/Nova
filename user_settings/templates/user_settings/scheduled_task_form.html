@@ -1,7 +1,13 @@
 {% extends "base.html" %}
-{% load i18n crispy_forms_tags %}
+{% load i18n crispy_forms_tags static %}
 
 {% block title %}{{ title }}{% endblock %}
+
+{% block extra_head %}
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<link rel="stylesheet" href="{% static 'css/jquery-cron.css' %}">
+<link rel="stylesheet" href="{% static 'css/jquery-gentleSelect.css' %}">
+{% endblock %}
 
 {% block content %}
 <div class="container mt-4">
@@ -15,6 +21,10 @@
                     <form method="post">
                         {% csrf_token %}
                         {{ form|crispy }}
+                        <div class="mb-3">
+                            <label for="cron_builder" class="form-label">{% trans "Schedule" %}</label>
+                            <div id="cron_builder"></div>
+                        </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="keep_thread" name="keep_thread" {% if form.instance.keep_thread %}checked{% endif %}>
                             <label class="form-check-label" for="keep_thread">
@@ -32,21 +42,22 @@
                 </div>
             </div>
 
-            <div class="card mt-4">
-                <div class="card-header">
-                    <h6 class="mb-0">{% trans "Cron Expression Help" %}</h6>
-                </div>
-                <div class="card-body">
-                    <p class="mb-2">{% trans "Cron expressions consist of 5 fields: minute hour day month day_of_week" %}</p>
-                    <ul class="mb-0 small">
-                        <li><code>* * * * *</code> - {% trans "Every minute" %}</li>
-                        <li><code>0 7 * * 1-5</code> - {% trans "Every weekday at 7:00 AM" %}</li>
-                        <li><code>0 9 * * 1</code> - {% trans "Every Monday at 9:00 AM" %}</li>
-                        <li><code>0 0 1 * *</code> - {% trans "1st of every month at midnight" %}</li>
-                    </ul>
-                </div>
-            </div>
         </div>
     </div>
 </div>
+
+<script src="{% static 'js/jquery-gentleSelect.js' %}"></script>
+<script src="{% static 'js/jquery-cron.js' %}"></script>
+<script>
+$(document).ready(function() {
+    // Initialize cron builder
+    $('#cron_builder').cron({
+        initial: "{{ form.instance.cron_expression|default:'* * * * *' }}",
+        onChange: function() {
+            var cron = $(this).cron("value");
+            $('#id_cron_expression').val(cron);
+        }
+    });
+});
+</script>
 {% endblock %}

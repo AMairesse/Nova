@@ -4,6 +4,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
 import croniter
+from cron_descriptor import get_description
 from django_celery_beat.models import PeriodicTask, CrontabSchedule
 
 
@@ -38,6 +39,13 @@ class ScheduledTask(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.user.username})"
+
+    def get_schedule_description(self):
+        """Return a human-readable description of the cron schedule."""
+        try:
+            return get_description(self.cron_expression)
+        except Exception:
+            return _("Invalid cron expression")
 
     def clean(self):
         super().clean()

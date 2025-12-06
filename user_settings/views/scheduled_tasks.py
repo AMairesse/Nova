@@ -3,6 +3,7 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
+from django import forms
 from django.forms import ModelForm
 from nova.models.ScheduledTask import ScheduledTask
 from nova.models.AgentConfig import AgentConfig
@@ -13,6 +14,9 @@ class ScheduledTaskForm(ModelForm):
     class Meta:
         model = ScheduledTask
         fields = ['name', 'agent', 'prompt', 'cron_expression', 'timezone']
+        widgets = {
+            'cron_expression': forms.HiddenInput(),
+        }
 
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user', None)
