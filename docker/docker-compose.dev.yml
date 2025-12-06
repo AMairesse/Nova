@@ -44,6 +44,24 @@ services:
     ports:
       - "5679:5678"  # Debug remote celery
 
+
+  celery-beat:
+    extends:
+      file: docker-compose.base.yml
+      service: celery-beat
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    command: >
+      celery -A nova.celery beat -l info
+    volumes:
+      - ../nova:/app/nova  # Hot-reload code app nova
+      - ../user_settings:/app/user_settings  # Hot-reload code app user_settings
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "5680:5678"  # Debug remote celery
+
   web:
     extends:
       file: docker-compose.base.yml

@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'channels',
     "crispy_forms",
     "crispy_bootstrap5",
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -233,3 +234,5 @@ CELERY_RESULT_BACKEND = None
 CELERY_TASK_ACKS_LATE = True
 CELERYD_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_TRACK_STARTED = True
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_BEAT_SCHEDULE = {}

@@ -193,7 +193,7 @@ class MainViewsTests(TestCase):
         task = Task.objects.get(id=task_id)
         self.assertEqual(task.user, self.user)
         self.assertEqual(task.thread_id, thread_id)
-        self.assertEqual(task.agent_id, agent.id)
+        self.assertEqual(task.agent_config_id, agent.id)
         self.assertEqual(task.status, TaskStatus.PENDING)
 
     # ------------ running_tasks -----------------------------------------

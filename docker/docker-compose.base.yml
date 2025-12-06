@@ -118,6 +118,19 @@ services:
     env_file:
       - .env
 
+  celery-beat:
+    image: amairesse/nova:latest
+    restart: unless-stopped
+    command: >
+      celery -A nova.celery beat -l info
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+
   web:
     image: amairesse/nova:latest
     restart: unless-stopped

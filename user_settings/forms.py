@@ -371,6 +371,7 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         required=False,
         help_text=_("CalDav server URL"),
         empty_value=None,
+        assume_scheme='https',
     )
 
     class Meta:

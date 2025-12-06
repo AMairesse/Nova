@@ -254,7 +254,7 @@ def add_message(request):
 
     task = Task.objects.create(
         user=request.user, thread=thread,
-        agent=agent_config, status=TaskStatus.PENDING
+        agent_config=agent_config, status=TaskStatus.PENDING
     )
 
     run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id)
@@ -293,7 +293,7 @@ def compact_thread(request, thread_id):
     task = Task.objects.create(
         user=request.user,
         thread=thread,
-        agent=agent_config,
+        agent_config=agent_config,
         status=TaskStatus.PENDING
     )
 
