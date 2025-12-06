@@ -40,7 +40,7 @@ Nova is a **privacy-first personal AI workspace** that enables users to create a
 - Agent can ask clarifying questions (interactions) during processing
 
 **Tool Management**:
-- Built-in tools: Pre-configured utilities (CalDAV, web search, file management, date/time, memory)
+- Built-in tools: Pre-configured utilities (CalDAV, web search, file management, date/time, memory, code execution, webapps)
 - MCP tools: Connect to Model Context Protocol servers for external capabilities
 - API tools: Integrate custom REST endpoints
 - Agent tools: Use other agents as specialized sub-agents

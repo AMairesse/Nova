@@ -251,7 +251,6 @@ Nova/
 │   ├── migrations/       # DB migrations
 │   ├── models/           # Data models
 │   ├── static/           # CSS/JS
-│   ├── tasks/            # Celery tasks
 │   ├── templates/        # HTML templates
 │   ├── tests/            # Test suite
 │   ├── tools/            # Tool implementations

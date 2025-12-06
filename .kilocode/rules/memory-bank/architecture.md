@@ -236,7 +236,7 @@ users/{user_id}/threads/{thread_id}/{user_path}
 - Upload: `file_utils.py` → `upload_file_to_minio()` (async, multipart for large files)
 - Download: Pre-signed URLs via MinIO client
 - Context: Files auto-included in agent context
-- Cleanup: Signals delete from MinIO when thread deleted
+- Cleanup: Signals delete from MinIO when thread deleted (via Django signals)
 
 ### 5. Checkpoint Management
 
@@ -318,7 +318,7 @@ elif provider_type == ProviderType.MISTRAL:
 **Docker Compose Services:**
 - `db` - PostgreSQL 16
 - `redis` - Redis (channel layer + Celery broker)
-- `minio` - S3-compatible file storage
+- `minio` - MinIO object storage
 - `web` - Django/Daphne (main app)
 - `celery-worker` - Background task execution
 - `nginx` - Reverse proxy + static files
