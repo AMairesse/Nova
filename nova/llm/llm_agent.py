@@ -252,7 +252,8 @@ class LLMAgent:
                 )
                 # Store client reference for cleanup
                 self._langfuse_client = langfuse
-                langfuse_handler = CallbackHandler(langfuse_client=langfuse)
+                langfuse_handler = CallbackHandler(public_key=langfuse_public_key)
+                self._langfuse_handler = langfuse_handler
 
                 if langfuse.auth_check():
                     self.config = {"callbacks": [langfuse_handler],
