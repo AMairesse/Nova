@@ -235,12 +235,19 @@ body {
 #threads-sidebar,
 #files-sidebar,
 #file-sidebar-content,
-#file-sidebar-content-mobile,
+#file-sidebar-content-mobile {
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 100%;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+}
+
+/* Thread containers: simple scrollable container */
 #threads-container,
 #mobile-threads-container {
     overflow-y: auto;
     overflow-x: hidden;
-    height: 100%;
     -webkit-overflow-scrolling: touch;
     scroll-behavior: smooth;
 }
@@ -251,17 +258,11 @@ body {
     height: 100%;
 }
 
-/* Ensure thread groups don't interfere with scrolling */
-.thread-group {
-    flex-shrink: 0;
-}
-
-/* Ensure load more button is properly positioned */
+/* Load more button container */
 #load-more-container,
 #mobile-load-more-container {
-    flex-shrink: 0;
-    position: relative;
-    z-index: 1;
+    padding: 0.75rem;
+    text-align: center;
 }
 
 /* Message Input Area */
