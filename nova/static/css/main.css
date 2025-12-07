@@ -210,20 +210,13 @@ body {
        COMPACT CONTEXT INDICATOR
        ============================================ */
 
+    /* Compact context consumption text on mobile */
     .card-footer-consumption {
-        display: none;
-        /* Hide by default on mobile */
-    }
-
-    /* Show compact progress indicator instead */
-    .card-footer {
-        position: relative;
-    }
-
-    .card-footer::before {
-        content: '';
-        display: none;
-        /* Will be activated via JS for context display */
+        font-size: 0.65rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 150px;
     }
 
     /* Compact thread button */
@@ -238,36 +231,6 @@ body {
 
     .compact-thread-btn .btn-text {
         display: none;
-    }
-
-    /* Context progress bar - compact mobile version */
-    .context-progress-mobile {
-        display: flex;
-        align-items: center;
-        gap: 0.25rem;
-        font-size: 0.7rem;
-    }
-
-    .context-progress-bar {
-        width: 40px;
-        height: 4px;
-        background-color: var(--bs-gray-300);
-        border-radius: 2px;
-        overflow: hidden;
-    }
-
-    .context-progress-bar-fill {
-        height: 100%;
-        background-color: var(--bs-primary);
-        transition: width 0.3s ease;
-    }
-
-    .context-progress-bar-fill.warning {
-        background-color: var(--bs-warning);
-    }
-
-    .context-progress-bar-fill.danger {
-        background-color: var(--bs-danger);
     }
 }
 
