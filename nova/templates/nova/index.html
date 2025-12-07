@@ -3,23 +3,8 @@
 
 {% block content %}
 <div class="container-fluid h-100 p-0" style="overflow: hidden;">
-  <!-- Mobile Navigation (visible on small screens only) -->
-  <nav class="navbar navbar-expand-lg d-lg-none bg-light border-bottom">
-    <div class="container-fluid">
-      <button class="btn btn-outline-secondary me-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#threadsOffcanvas" aria-controls="threadsOffcanvas">
-        <i class="bi bi-chat-dots"></i>
-        <span class="d-none d-sm-inline ms-1">{% trans "Threads" %}</span>
-      </button>
-      <span class="navbar-brand mb-0 h1 flex-grow-1 text-center">{% trans "Messages" %}</span>
-      <button class="btn btn-outline-secondary" type="button" data-bs-toggle="offcanvas" data-bs-target="#filesOffcanvas" aria-controls="filesOffcanvas">
-        <i class="bi bi-files"></i>
-        <span class="d-none d-sm-inline ms-1">{% trans "Files" %}</span>
-      </button>
-    </div>
-  </nav>
-
   <!-- Main Content Area -->
-  <div class="row g-0" style="height: calc(100vh - 76px); min-height: 0;">
+  <div class="row g-0 main-content-row">
     <!-- Threads Sidebar (Desktop) -->
     <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100 overflow-hidden" id="threads-sidebar">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">

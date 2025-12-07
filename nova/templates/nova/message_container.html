@@ -104,22 +104,36 @@
           <!-- Context indication -->
           {% if message.internal_data.max_context %}
           <div class="card-footer py-1 text-muted small text-end d-flex justify-content-end align-items-center">
+            <!-- Desktop: Full text display -->
             <div class="card-footer-consumption me-2">
               {% if message.internal_data.real_tokens is not None %}
                 {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
               {% elif message.internal_data.approx_tokens %}
                 {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
-              {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
+              {% elif message.internal_data.context_tokens %}
                 {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
               {% endif %}
             </div>
+            <!-- Mobile: Compact progress bar (only show if we have token data) -->
+            {% with tokens=message.internal_data.real_tokens|default:message.internal_data.approx_tokens|default:message.internal_data.context_tokens|default:0 %}
+            {% if tokens %}
+            {% widthratio tokens message.internal_data.max_context 100 as percent %}
+            <div class="context-progress-mobile d-sm-none me-2" title="{% trans 'Context' %}: {{ tokens }} / {{ message.internal_data.max_context }}">
+              <div class="context-progress-bar">
+                <div class="context-progress-bar-fill {% if percent > 80 %}danger{% elif percent > 60 %}warning{% endif %}" style="width: {{ percent }}%;"></div>
+              </div>
+              <span>{{ percent }}%</span>
+            </div>
+            {% endif %}
+            {% endwith %}
             {% if forloop.last %}
               <button
                 type="button"
                 class="btn btn-link btn-sm text-decoration-none compact-thread-btn"
                 data-thread-id="{{ thread_id|default_if_none:'' }}"
+                title="{% trans 'Compact thread' %}"
               >
-                <i class="bi bi-filter-circle me-1"></i>{% trans "Compact" %}
+                <i class="bi bi-filter-circle me-1"></i><span class="btn-text">{% trans "Compact" %}</span>
               </button>
             {% endif %}
           </div>
