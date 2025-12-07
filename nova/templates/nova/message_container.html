@@ -9,7 +9,7 @@
 
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
-  <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
+  <div id="conversation-container" class="flex-grow-1 overflow-auto p-2 p-sm-3" style="min-height: 0;">
     <!-- Messages list container -->
     <div id="messages-list">
       {% for message in messages %}
@@ -191,7 +191,7 @@
     </a>
   </div>
   {% else %}
-  <div class="message-input-area p-3">
+  <div class="message-input-area p-2 p-sm-3">
     <form id="message-form" method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <input

@@ -1,43 +1,47 @@
 <!-- templates/nova/files/sidebar_panel.html -->
 {% load i18n %}
 <div class="file-panel d-flex flex-column h-100">
-  <!-- Tabs: Files | Webapps -->
+  <!-- Tabs: Files | Webapps - Using Bootstrap native tabs -->
   <ul class="nav nav-tabs px-2 pt-2" role="tablist" id="files-webapps-tabs">
     <li class="nav-item" role="presentation">
-      <button class="nav-link active" id="tab-files" data-bs-toggle="tab" data-tab-target="files" type="button" role="tab" aria-controls="files" aria-selected="true">
+      <button class="nav-link active" id="tab-files" data-bs-toggle="tab" data-bs-target="#pane-files" type="button" role="tab" aria-controls="pane-files" aria-selected="true">
         <i class="bi bi-files me-1"></i>{% trans "Files" %}
       </button>
     </li>
     <li class="nav-item" role="presentation">
-      <button class="nav-link" id="tab-webapps" data-bs-toggle="tab" data-tab-target="webapps" type="button" role="tab" aria-controls="webapps" aria-selected="false">
+      <button class="nav-link" id="tab-webapps" data-bs-toggle="tab" data-bs-target="#pane-webapps" type="button" role="tab" aria-controls="pane-webapps" aria-selected="false">
         <i class="bi bi-window me-1"></i>{% trans "Webapps" %}
       </button>
     </li>
   </ul>
 
-  <!-- Toolbar (visible for Files only) -->
-  <div class="d-flex justify-content-between align-items-center px-2 py-2 border-bottom bg-light" id="files-toolbar">
-    <div class="small text-muted">{% trans "Upload files" %}</div>
-    <div>
-      <button id="upload-files-btn" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
-        <i class="bi bi-upload"></i>
-      </button>
-      <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
-        <i class="bi bi-folder-plus"></i>
-      </button>
+  <!-- Tab content using Bootstrap native tab-pane -->
+  <div class="tab-content flex-grow-1 overflow-auto">
+    <!-- Files pane -->
+    <div class="tab-pane fade show active h-100" id="pane-files" role="tabpanel" aria-labelledby="tab-files">
+      <!-- Toolbar -->
+      <div class="d-flex justify-content-between align-items-center px-2 py-2 border-bottom bg-light" id="files-toolbar">
+        <small class="text-muted">{% trans "Upload files" %}</small>
+        <div>
+          <button id="upload-files-btn" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
+            <i class="bi bi-upload"></i>
+          </button>
+          <button id="upload-directory-btn" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
+            <i class="bi bi-folder-plus"></i>
+          </button>
+        </div>
+      </div>
+      <!-- Files container -->
+      <div id="file-tree-container" class="p-2">
+        <p class="text-muted mb-0">{% trans "Loading files..." %}</p>
+      </div>
     </div>
-  </div>
 
-  <!-- Panel body -->
-  <div class="file-panel-body flex-grow-1 overflow-auto">
-    <!-- Files container -->
-    <div id="file-tree-container" class="p-2">
-      <p class="text-muted mb-0">{% trans "Loading files..." %}</p>
-    </div>
-
-    <!-- Webapps container (hidden by default) -->
-    <div id="webapps-list-container" class="p-2 d-none" aria-hidden="true">
-      <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
+    <!-- Webapps pane -->
+    <div class="tab-pane fade h-100" id="pane-webapps" role="tabpanel" aria-labelledby="tab-webapps">
+      <div id="webapps-list-container" class="p-2">
+        <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
+      </div>
     </div>
   </div>
 
