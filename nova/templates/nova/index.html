@@ -125,6 +125,37 @@
   </div>
 </div>
 
+<!-- Mobile Message Context Menu (Action Sheet) -->
+<div class="offcanvas offcanvas-bottom d-lg-none" tabindex="-1" id="messageContextMenu" aria-labelledby="messageContextMenuLabel">
+  <div class="offcanvas-header py-2 border-bottom">
+    <h6 class="offcanvas-title" id="messageContextMenuLabel">{% trans "Message Options" %}</h6>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="{% trans 'Close' %}"></button>
+  </div>
+  <div class="offcanvas-body">
+    <!-- Context info (populated by JS) -->
+    <div id="context-menu-info" class="context-info-item d-none">
+      <span class="context-info-label">{% trans "Context" %}</span>
+      <span class="context-info-value" id="context-menu-tokens"></span>
+    </div>
+    
+    <!-- Actions -->
+    <div class="d-grid gap-1">
+      <button type="button" class="action-sheet-btn" id="context-menu-copy">
+        <i class="bi bi-clipboard"></i>
+        {% trans "Copy message" %}
+      </button>
+      <button type="button" class="action-sheet-btn d-none" id="context-menu-regenerate">
+        <i class="bi bi-arrow-clockwise"></i>
+        {% trans "Regenerate response" %}
+      </button>
+      <button type="button" class="action-sheet-btn d-none" id="context-menu-compact">
+        <i class="bi bi-filter-circle"></i>
+        {% trans "Compact thread" %}
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Scroll to bottom button -->
 <button id="scroll-to-bottom" class="btn btn-primary position-fixed bottom-0 end-0 m-3 rounded-circle d-none" style="z-index: 1050;">
   <i class="bi bi-arrow-down"></i>

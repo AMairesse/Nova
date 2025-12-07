@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA
-const CACHE_NAME = 'nova-v2';
+const CACHE_NAME = 'nova-v3';
 const urlsToCache = [
   '/',
   '/static/css/main.css',

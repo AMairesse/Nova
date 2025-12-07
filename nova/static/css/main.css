@@ -160,6 +160,11 @@ body {
         padding: 0.25rem 0.5rem !important;
     }
 
+    /* Hide context indicator on mobile - accessible via long press */
+    .message .card-footer {
+        display: none !important;
+    }
+
     /* ============================================
        CHAT BUBBLE STYLING (Mobile only)
        ============================================ */
@@ -534,4 +539,85 @@ body {
 #split-resizer:focus {
     outline: 2px solid var(--bs-primary);
     outline-offset: -2px;
+}
+
+/* ============================================
+   MOBILE MESSAGE CONTEXT MENU (Action Sheet)
+   ============================================ */
+
+/* Action sheet offcanvas styling */
+#messageContextMenu {
+    --bs-offcanvas-height: auto;
+    max-height: 50vh;
+    border-radius: 16px 16px 0 0;
+}
+
+#messageContextMenu .offcanvas-body {
+    padding: 0.5rem;
+}
+
+/* Action sheet buttons */
+.action-sheet-btn {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: none;
+    background: transparent;
+    color: var(--bs-body-color);
+    font-size: 1rem;
+    text-align: left;
+    border-radius: 8px;
+    transition: background-color 0.2s;
+}
+
+.action-sheet-btn:hover,
+.action-sheet-btn:focus {
+    background-color: var(--bs-light);
+}
+
+.action-sheet-btn i {
+    font-size: 1.25rem;
+    margin-right: 0.75rem;
+    width: 24px;
+    text-align: center;
+}
+
+.action-sheet-btn.text-danger:hover,
+.action-sheet-btn.text-danger:focus {
+    background-color: rgba(220, 53, 69, 0.1);
+}
+
+/* Context info in action sheet */
+.context-info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background-color: var(--bs-light);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+}
+
+.context-info-label {
+    font-size: 0.875rem;
+    color: var(--bs-secondary);
+}
+
+.context-info-value {
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+/* Visual feedback during long press */
+.message.long-press-active .card {
+    transform: scale(0.98);
+    transition: transform 0.15s ease-out;
+}
+
+/* Divider in action sheet */
+.action-sheet-divider {
+    height: 1px;
+    background-color: var(--bs-border-color);
+    margin: 0.5rem 0;
 }

@@ -12,6 +12,13 @@
             this.currentThreadId = null;
             this.voiceRecognition = null;
             this.initVoiceRecognition();
+
+            // Long press context menu state
+            this.longPressTimer = null;
+            this.longPressDuration = 500; // ms
+            this.longPressTarget = null;
+            this.touchStartPos = null;
+            this.contextMenuOffcanvas = null;
         }
 
         init() {
@@ -21,6 +28,9 @@
 
             // Handle server-rendered interaction cards and check for pending interactions
             this.checkPendingInteractions();
+
+            // Initialize long press context menu (mobile only)
+            this.initLongPressContextMenu();
         }
 
         attachEventHandlers() {
@@ -541,6 +551,218 @@
             // In a production app, you might want to show a toast notification
             console.warn('Voice recognition:', message);
             alert(message);
+        }
+
+        // ============================================================================
+        // LONG PRESS CONTEXT MENU (Mobile only)
+        // ============================================================================
+
+        initLongPressContextMenu() {
+            // Only initialize on touch devices
+            if (!('ontouchstart' in window)) return;
+
+            const conversationContainer = document.getElementById('conversation-container');
+            if (!conversationContainer) return;
+
+            // Initialize Bootstrap offcanvas
+            const offcanvasEl = document.getElementById('messageContextMenu');
+            if (offcanvasEl) {
+                this.contextMenuOffcanvas = new bootstrap.Offcanvas(offcanvasEl);
+            }
+
+            // Touch event listeners on conversation container (event delegation)
+            conversationContainer.addEventListener('touchstart', (e) => this.handleTouchStart(e), { passive: true });
+            conversationContainer.addEventListener('touchend', (e) => this.handleTouchEnd(e));
+            conversationContainer.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: true });
+            conversationContainer.addEventListener('touchcancel', (e) => this.handleTouchCancel(e));
+
+            // Context menu action handlers
+            this.initContextMenuActions();
+        }
+
+        handleTouchStart(e) {
+            const messageCard = e.target.closest('.message .card');
+            if (!messageCard) return;
+
+            // Store starting position to detect scroll
+            const touch = e.touches[0];
+            this.touchStartPos = { x: touch.clientX, y: touch.clientY };
+            this.longPressTarget = messageCard;
+
+            // Add visual feedback class
+            const messageEl = messageCard.closest('.message');
+
+            // Start long press timer
+            this.longPressTimer = setTimeout(() => {
+                if (messageEl) messageEl.classList.add('long-press-active');
+
+                // Trigger haptic feedback if available
+                if (window.navigator && window.navigator.vibrate) {
+                    window.navigator.vibrate(50);
+                }
+
+                // Show context menu after a short delay for visual feedback
+                setTimeout(() => {
+                    if (messageEl) messageEl.classList.remove('long-press-active');
+                    this.showMessageContextMenu(messageCard);
+                }, 100);
+            }, this.longPressDuration);
+        }
+
+        handleTouchEnd(e) {
+            this.cancelLongPress();
+        }
+
+        handleTouchMove(e) {
+            if (!this.touchStartPos) return;
+
+            const touch = e.touches[0];
+            const dx = Math.abs(touch.clientX - this.touchStartPos.x);
+            const dy = Math.abs(touch.clientY - this.touchStartPos.y);
+
+            // Cancel long press if user scrolls (threshold: 10px)
+            if (dx > 10 || dy > 10) {
+                this.cancelLongPress();
+            }
+        }
+
+        handleTouchCancel(e) {
+            this.cancelLongPress();
+        }
+
+        cancelLongPress() {
+            if (this.longPressTimer) {
+                clearTimeout(this.longPressTimer);
+                this.longPressTimer = null;
+            }
+
+            // Remove visual feedback
+            const activeEl = document.querySelector('.message.long-press-active');
+            if (activeEl) activeEl.classList.remove('long-press-active');
+
+            this.touchStartPos = null;
+        }
+
+        showMessageContextMenu(messageCard) {
+            if (!this.contextMenuOffcanvas) return;
+
+            const messageEl = messageCard.closest('.message');
+            if (!messageEl) return;
+
+            // Store reference to current message for actions
+            this.currentContextMessage = messageEl;
+
+            // Extract message content for copy
+            const cardBody = messageCard.querySelector('.card-body');
+            this.currentMessageText = cardBody ? cardBody.textContent.trim() : '';
+
+            // Check if this is the last agent message (for compact/regenerate options)
+            const isAgentMessage = messageCard.classList.contains('border-secondary');
+            const isLastMessage = this.isLastAgentMessage(messageEl);
+
+            // Update context info if available
+            const contextInfo = document.getElementById('context-menu-info');
+            const tokensEl = document.getElementById('context-menu-tokens');
+
+            // Try to find context info in the hidden card-footer
+            const cardFooter = messageCard.querySelector('.card-footer-consumption');
+            if (cardFooter && cardFooter.textContent.trim()) {
+                // Parse context info from footer text
+                const footerText = cardFooter.textContent.trim();
+                if (tokensEl) tokensEl.textContent = footerText.replace('Context consumption:', '').trim();
+                if (contextInfo) contextInfo.classList.remove('d-none');
+            } else {
+                if (contextInfo) contextInfo.classList.add('d-none');
+            }
+
+            // Show/hide regenerate button (only for last agent message)
+            const regenerateBtn = document.getElementById('context-menu-regenerate');
+            if (regenerateBtn) {
+                regenerateBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
+            }
+
+            // Show/hide compact button (only for last agent message)
+            const compactBtn = document.getElementById('context-menu-compact');
+            if (compactBtn) {
+                compactBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
+            }
+
+            // Show the offcanvas
+            this.contextMenuOffcanvas.show();
+        }
+
+        isLastAgentMessage(messageEl) {
+            const messagesList = document.getElementById('messages-list');
+            if (!messagesList) return false;
+
+            // Get all agent messages
+            const agentMessages = messagesList.querySelectorAll('.message .card.border-secondary');
+            if (agentMessages.length === 0) return false;
+
+            // Check if this message contains the last agent message card
+            const lastAgentCard = agentMessages[agentMessages.length - 1];
+            return messageEl.contains(lastAgentCard);
+        }
+
+        initContextMenuActions() {
+            // Copy message
+            const copyBtn = document.getElementById('context-menu-copy');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', () => {
+                    this.copyMessageToClipboard();
+                    this.contextMenuOffcanvas.hide();
+                });
+            }
+
+            // Regenerate response (placeholder - would need backend support)
+            const regenerateBtn = document.getElementById('context-menu-regenerate');
+            if (regenerateBtn) {
+                regenerateBtn.addEventListener('click', () => {
+                    // TODO: Implement regenerate functionality
+                    console.log('Regenerate not yet implemented');
+                    this.contextMenuOffcanvas.hide();
+                });
+            }
+
+            // Compact thread
+            const compactBtn = document.getElementById('context-menu-compact');
+            if (compactBtn) {
+                compactBtn.addEventListener('click', () => {
+                    if (this.currentThreadId) {
+                        this.compactThread(this.currentThreadId);
+                    }
+                    this.contextMenuOffcanvas.hide();
+                });
+            }
+        }
+
+        async copyMessageToClipboard() {
+            if (!this.currentMessageText) return;
+
+            try {
+                await navigator.clipboard.writeText(this.currentMessageText);
+                // Optional: Show brief success feedback
+                console.log('Message copied to clipboard');
+            } catch (err) {
+                console.error('Failed to copy message:', err);
+                // Fallback for older browsers
+                this.fallbackCopyToClipboard(this.currentMessageText);
+            }
+        }
+
+        fallbackCopyToClipboard(text) {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-9999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand('copy');
+            } catch (err) {
+                console.error('Fallback copy failed:', err);
+            }
+            document.body.removeChild(textArea);
         }
     };
 })();
