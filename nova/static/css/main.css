@@ -19,13 +19,15 @@ body {
     overflow: hidden;
 }
 
-/* Ensure the container-fluid inside main-container fills it */
-.main-container>.container-fluid {
+/* The content block wrapper inside main-container */
+.main-container>.container-fluid,
+.main-container>div {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
     height: 100%;
+    overflow: hidden;
 }
 
 /* ============================================
@@ -68,7 +70,9 @@ body {
 .main-content-row {
     flex: 1;
     min-height: 0;
+    height: 100%;
     flex-wrap: nowrap;
+    overflow: hidden;
 }
 
 /* Ensure message container fills available space and positions input at bottom */
@@ -231,8 +235,7 @@ body {
     flex-grow: 1;
 }
 
-/* Ensure sidebars allow inner overflow containers to scroll */
-#threads-sidebar,
+/* File sidebar containers - scrollable */
 #files-sidebar,
 #file-sidebar-content,
 #file-sidebar-content-mobile {
@@ -243,13 +246,30 @@ body {
     scroll-behavior: smooth;
 }
 
-/* Thread containers: simple scrollable container */
+/* Sidebar flex containers - ensure proper height constraints */
+#threads-sidebar {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Thread containers: scrollable within flex parent */
 #threads-container,
 #mobile-threads-container {
+    flex: 1 1 0;
+    min-height: 0;
+    max-height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
+}
+
+/* Files sidebar */
+#files-sidebar {
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* Ensure file tree container allows proper scrolling */
