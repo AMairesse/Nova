@@ -250,7 +250,9 @@ class LLMAgent:
                     secret_key=langfuse_secret_key,
                     host=langfuse_host,
                 )
-                langfuse_handler = CallbackHandler()
+                # Store client reference for cleanup
+                self._langfuse_client = langfuse
+                langfuse_handler = CallbackHandler(langfuse_client=langfuse)
 
                 if langfuse.auth_check():
                     self.config = {"callbacks": [langfuse_handler],
@@ -298,7 +300,16 @@ class LLMAgent:
         self._loaded_builtin_modules = []
 
     async def cleanup(self):
-        """Async cleanup method to close resources for loaded builtin modules."""
+        """Async cleanup method to close resources for loaded builtin modules and Langfuse client."""
+        # Cleanup Langfuse client
+        if hasattr(self, '_langfuse_client') and self._langfuse_client:
+            try:
+                self._langfuse_client.flush()
+                self._langfuse_client.shutdown()
+            except Exception as e:
+                logger.warning(f"Failed to cleanup Langfuse client: {e}")
+
+        # Cleanup builtin modules
         for module in self._loaded_builtin_modules:
             if hasattr(module, 'close'):
                 await module.close(self)
