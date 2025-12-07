@@ -50,7 +50,13 @@
                     const container = document.querySelector(containerSelector);
                     if (container) {
                         // Merge incoming groups into existing ones instead of duplicating headers
-                        mergeThreadGroupsFromHtml(data.html, container);
+                        if (window.ThreadUIUtils && typeof window.ThreadUIUtils.mergeThreadGroupsFromHtml === 'function') {
+                            window.ThreadUIUtils.mergeThreadGroupsFromHtml(data.html, container);
+                        } else {
+                            console.error('ThreadUIUtils.mergeThreadGroupsFromHtml not found');
+                            // Fallback: just append the HTML
+                            container.insertAdjacentHTML('beforeend', data.html);
+                        }
 
                         if (data.has_more) {
                             button.dataset.offset = data.next_offset;

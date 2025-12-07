@@ -3,32 +3,17 @@
 
 {% block content %}
 <div class="container-fluid h-100 p-0" style="overflow: hidden;">
-  <!-- Mobile Navigation (visible on small screens only) -->
-  <nav class="navbar navbar-expand-lg d-lg-none bg-light border-bottom">
-    <div class="container-fluid">
-      <button class="btn btn-outline-secondary me-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#threadsOffcanvas" aria-controls="threadsOffcanvas">
-        <i class="bi bi-chat-dots"></i>
-        <span class="d-none d-sm-inline ms-1">{% trans "Threads" %}</span>
-      </button>
-      <span class="navbar-brand mb-0 h1 flex-grow-1 text-center">{% trans "Messages" %}</span>
-      <button class="btn btn-outline-secondary" type="button" data-bs-toggle="offcanvas" data-bs-target="#filesOffcanvas" aria-controls="filesOffcanvas">
-        <i class="bi bi-files"></i>
-        <span class="d-none d-sm-inline ms-1">{% trans "Files" %}</span>
-      </button>
-    </div>
-  </nav>
-
   <!-- Main Content Area -->
-  <div class="row g-0" style="height: calc(100vh - 76px); min-height: 0;">
+  <div class="row g-0 main-content-row">
     <!-- Threads Sidebar (Desktop) -->
-    <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100 overflow-hidden" id="threads-sidebar">
+    <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100" id="threads-sidebar">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
         <h5 class="mb-0">{% trans "Threads" %}</h5>
         <button class="btn btn-sm btn-outline-primary create-thread-btn">
           <i class="bi bi-plus"></i>
         </button>
       </div>
-      <div class="flex-grow-1" id="threads-container" style="min-height: 0; overflow-y: auto;">
+      <div id="threads-container">
         <div id="threads-list">
           {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
         </div>
@@ -57,7 +42,7 @@
     </div>
     
     <!-- Files Sidebar (Desktop) -->
-    <div class="col-lg-2 d-none d-lg-block border-start d-flex flex-column h-100 overflow-hidden" id="files-sidebar">
+    <div class="col-lg-2 d-none d-lg-block border-start d-flex flex-column h-100" id="files-sidebar">
       <div id="file-sidebar-content" class="flex-grow-1 overflow-auto" style="min-height: 0;"></div>
     </div>
   </div>
@@ -74,7 +59,7 @@
       </div>
     </div>
     <div class="offcanvas-body p-0 d-flex flex-column" style="min-height: 0;">
-      <div id="mobile-threads-container" class="flex-grow-1" style="min-height: 0; overflow-y: auto;">
+      <div id="mobile-threads-container">
         <div id="mobile-threads-list">
           {% include 'nova/partials/_thread_groups.html' with grouped_threads=grouped_threads %}
         </div>
@@ -136,6 +121,37 @@
           <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Mobile Message Context Menu (Action Sheet) -->
+<div class="offcanvas offcanvas-bottom d-lg-none" tabindex="-1" id="messageContextMenu" aria-labelledby="messageContextMenuLabel">
+  <div class="offcanvas-header py-2 border-bottom">
+    <h6 class="offcanvas-title" id="messageContextMenuLabel">{% trans "Message Options" %}</h6>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="{% trans 'Close' %}"></button>
+  </div>
+  <div class="offcanvas-body">
+    <!-- Context info (populated by JS) -->
+    <div id="context-menu-info" class="context-info-item d-none">
+      <span class="context-info-label">{% trans "Context" %}</span>
+      <span class="context-info-value" id="context-menu-tokens"></span>
+    </div>
+    
+    <!-- Actions -->
+    <div class="d-grid gap-1">
+      <button type="button" class="action-sheet-btn" id="context-menu-copy">
+        <i class="bi bi-clipboard"></i>
+        {% trans "Copy message" %}
+      </button>
+      <button type="button" class="action-sheet-btn d-none" id="context-menu-regenerate">
+        <i class="bi bi-arrow-clockwise"></i>
+        {% trans "Regenerate response" %}
+      </button>
+      <button type="button" class="action-sheet-btn d-none" id="context-menu-compact">
+        <i class="bi bi-filter-circle"></i>
+        {% trans "Compact thread" %}
+      </button>
     </div>
   </div>
 </div>

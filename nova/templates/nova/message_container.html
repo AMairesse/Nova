@@ -9,7 +9,7 @@
 
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
-  <div id="conversation-container" class="flex-grow-1 overflow-auto p-3" style="min-height: 0;">
+  <div id="conversation-container" class="flex-grow-1 overflow-auto p-2 p-sm-3" style="min-height: 0;">
     <!-- Messages list container -->
     <div id="messages-list">
       {% for message in messages %}
@@ -109,7 +109,7 @@
                 {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
               {% elif message.internal_data.approx_tokens %}
                 {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
-              {% elif message.internal_data.context_tokens %} <!-- for backward compatibility -->
+              {% elif message.internal_data.context_tokens %}
                 {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
               {% endif %}
             </div>
@@ -118,8 +118,9 @@
                 type="button"
                 class="btn btn-link btn-sm text-decoration-none compact-thread-btn"
                 data-thread-id="{{ thread_id|default_if_none:'' }}"
+                title="{% trans 'Compact thread' %}"
               >
-                <i class="bi bi-filter-circle me-1"></i>{% trans "Compact" %}
+                <i class="bi bi-filter-circle me-1"></i><span class="btn-text">{% trans "Compact" %}</span>
               </button>
             {% endif %}
           </div>
@@ -190,7 +191,7 @@
     </a>
   </div>
   {% else %}
-  <div class="message-input-area p-3">
+  <div class="message-input-area p-2 p-sm-3">
     <form id="message-form" method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <input

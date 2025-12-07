@@ -3,8 +3,10 @@
 /* Layout Structure - Using Bootstrap flex utilities where possible */
 body {
     min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .main-container {
@@ -12,31 +14,103 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    height: 0;
+    /* This forces the flex item to respect flex: 1 properly */
+    overflow: hidden;
 }
 
-/* Mobile Navigation Height Adjustment */
-@media (max-width: 991.98px) {
-    .container-fluid>.row {
-        height: calc(100vh - 76px - 56px) !important;
-    }
+/* The content block wrapper inside main-container */
+.main-container>.container-fluid,
+.main-container>div {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
 }
 
-/* Touch-friendly improvements for mobile devices */
+/* ============================================
+   MOBILE UNIFIED NAVBAR STYLES
+   ============================================ */
+
+/* Mobile navbar - compact unified design */
+.mobile-navbar {
+    min-height: 44px;
+    max-height: 48px;
+}
+
+.mobile-navbar .navbar-brand {
+    font-size: 1rem;
+}
+
+.mobile-navbar .navbar-brand img {
+    height: 20px;
+}
+
+.mobile-nav-btn {
+    padding: 0.25rem 0.5rem;
+    min-width: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mobile-nav-btn i {
+    font-size: 1.1rem;
+}
+
+/* Remove dropdown caret on mobile user button for cleaner look */
+.mobile-navbar .dropdown-toggle::after {
+    display: none;
+}
+
+/* Main content area height calculation - use flex instead of fixed vh */
+.main-content-row {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+/* Ensure message container fills available space and positions input at bottom */
+#message-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+#message-container>.d-flex.flex-column.h-100 {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+/* ============================================
+   TOUCH-FRIENDLY IMPROVEMENTS
+   ============================================ */
+
 @media (hover: none) and (pointer: coarse) {
-    .btn {
+
+    /* Standard touch targets but allow smaller for specific UI elements */
+    .btn:not(.btn-sm):not(.mobile-nav-btn) {
         min-height: 44px;
         min-width: 44px;
     }
 
     .file-item-content {
-        padding: 0.75rem;
-        min-height: 44px;
+        padding: 0.5rem;
+        min-height: 40px;
     }
 
     .auto-resize-textarea {
         font-size: 16px;
         /* Prevents zoom on iOS */
-        min-height: 44px;
+        min-height: 40px;
     }
 
     .file-item-actions {
@@ -45,22 +119,78 @@ body {
     }
 
     .file-delete-btn {
-        padding: 6px 8px;
-        min-height: 32px;
-        min-width: 32px;
+        padding: 4px 6px;
+        min-height: 28px;
+        min-width: 28px;
     }
 }
 
-/* Small screen optimizations */
+/* ============================================
+   MOBILE PADDING & SPACING OPTIMIZATIONS
+   ============================================ */
+
 @media (max-width: 575.98px) {
-    .btn-sm {
-        padding: 0.5rem 0.75rem;
-        font-size: 0.9rem;
+
+    /* Compact message cards on mobile */
+    .message {
+        margin-bottom: 0.5rem !important;
     }
 
-    .message-input-area {
-        padding: 0.75rem !important;
+    .message .card-body {
+        padding: 0.5rem 0.75rem !important;
     }
+
+    /* Hide context indicator on mobile - accessible via long press */
+    .message .card-footer {
+        display: none !important;
+    }
+
+    /* ============================================
+       CHAT BUBBLE STYLING (Mobile only)
+       ============================================ */
+
+    /* User messages - right-aligned bubble */
+    .message .card.border-primary {
+        border: none !important;
+        border-radius: 16px 16px 4px 16px;
+        background-color: var(--bs-primary);
+        color: white;
+        margin-left: 15%;
+    }
+
+    .message .card.border-primary .card-body {
+        color: white;
+    }
+
+    .message .card.border-primary .card-body strong.text-primary {
+        color: white !important;
+    }
+
+    .message .card.border-primary .text-muted {
+        color: rgba(255, 255, 255, 0.8) !important;
+    }
+
+    /* Agent messages - left-aligned bubble */
+    .message .card.border-secondary {
+        border: none !important;
+        border-radius: 16px 16px 16px 4px;
+        background-color: var(--bs-light);
+        margin-right: 10%;
+    }
+
+    /* Interaction cards - keep minimal border for distinction */
+    .message .card.border-warning,
+    .message .card.border-success {
+        border-width: 1px !important;
+        border-radius: 12px;
+    }
+
+    /* System messages - subtle styling */
+    .message .card.border-light {
+        border: none !important;
+        background-color: transparent;
+    }
+
 }
 
 /* Desktop Layout Responsive Columns */
@@ -105,18 +235,41 @@ body {
     flex-grow: 1;
 }
 
-/* Ensure sidebars allow inner overflow containers to scroll */
-#threads-sidebar,
+/* File sidebar containers - scrollable */
 #files-sidebar,
 #file-sidebar-content,
-#file-sidebar-content-mobile,
-#threads-container,
-#mobile-threads-container {
+#file-sidebar-content-mobile {
     overflow-y: auto;
     overflow-x: hidden;
     height: 100%;
     -webkit-overflow-scrolling: touch;
     scroll-behavior: smooth;
+}
+
+/* Sidebar flex containers - ensure proper height constraints */
+#threads-sidebar {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Thread containers: scrollable within flex parent */
+#threads-container,
+#mobile-threads-container {
+    flex: 1 1 0;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Files sidebar */
+#files-sidebar {
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* Ensure file tree container allows proper scrolling */
@@ -125,17 +278,11 @@ body {
     height: 100%;
 }
 
-/* Ensure thread groups don't interfere with scrolling */
-.thread-group {
-    flex-shrink: 0;
-}
-
-/* Ensure load more button is properly positioned */
+/* Load more button container */
 #load-more-container,
 #mobile-load-more-container {
-    flex-shrink: 0;
-    position: relative;
-    z-index: 1;
+    padding: 0.75rem;
+    text-align: center;
 }
 
 /* Message Input Area */
@@ -348,4 +495,85 @@ body {
 #split-resizer:focus {
     outline: 2px solid var(--bs-primary);
     outline-offset: -2px;
+}
+
+/* ============================================
+   MOBILE MESSAGE CONTEXT MENU (Action Sheet)
+   ============================================ */
+
+/* Action sheet offcanvas styling */
+#messageContextMenu {
+    --bs-offcanvas-height: auto;
+    max-height: 50vh;
+    border-radius: 16px 16px 0 0;
+}
+
+#messageContextMenu .offcanvas-body {
+    padding: 0.5rem;
+}
+
+/* Action sheet buttons */
+.action-sheet-btn {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: none;
+    background: transparent;
+    color: var(--bs-body-color);
+    font-size: 1rem;
+    text-align: left;
+    border-radius: 8px;
+    transition: background-color 0.2s;
+}
+
+.action-sheet-btn:hover,
+.action-sheet-btn:focus {
+    background-color: var(--bs-light);
+}
+
+.action-sheet-btn i {
+    font-size: 1.25rem;
+    margin-right: 0.75rem;
+    width: 24px;
+    text-align: center;
+}
+
+.action-sheet-btn.text-danger:hover,
+.action-sheet-btn.text-danger:focus {
+    background-color: rgba(220, 53, 69, 0.1);
+}
+
+/* Context info in action sheet */
+.context-info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background-color: var(--bs-light);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+}
+
+.context-info-label {
+    font-size: 0.875rem;
+    color: var(--bs-secondary);
+}
+
+.context-info-value {
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+/* Visual feedback during long press */
+.message.long-press-active .card {
+    transform: scale(0.98);
+    transition: transform 0.15s ease-out;
+}
+
+/* Divider in action sheet */
+.action-sheet-divider {
+    height: 1px;
+    background-color: var(--bs-border-color);
+    margin: 0.5rem 0;
 }

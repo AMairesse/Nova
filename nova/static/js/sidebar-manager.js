@@ -1,4 +1,5 @@
 // static/nova/js/sidebar-manager.js
+// Simplified version using Bootstrap native tabs
 (function () {
     'use strict';
 
@@ -19,14 +20,13 @@
                 const html = await response.text();
                 contentEl.innerHTML = html;
 
-                // Bind tabs and file actions after content injection
-                this.bindSidebarTabs();
+                // Bootstrap handles tabs natively via data-bs-toggle="tab"
+                // We just need to bind event listeners for persistence and lazy loading
+                this.bindTabEvents();
                 window.FileManager.attachSidebarEventHandlers();
 
-                // Apply saved tab for current thread
-                const threadId = window.FileManager.currentThreadId || window.StorageUtils.getThreadId() || null;
-                const savedTab = threadId ? window.StorageUtils.getItem(window.StorageUtils.getSidebarTabKey(threadId), 'files') : 'files';
-                this.applySidebarTabState(threadId, savedTab);
+                // Restore saved tab for current thread
+                this.restoreSavedTab();
 
                 window.FileManager.sidebarContentLoaded = true;
             } catch (error) {
@@ -35,67 +35,41 @@
             }
         },
 
-        // Bind Files | Webapps tabs inside the sidebar
-        bindSidebarTabs() {
+        // Bind Bootstrap tab events for persistence and lazy loading
+        bindTabEvents() {
             const tabsEl = document.getElementById('files-webapps-tabs');
             if (!tabsEl) return;
 
-            const filesEl = document.getElementById('file-tree-container');
-            const appsEl = document.getElementById('webapps-list-container');
-            const toolbar = document.getElementById('files-toolbar');
-
-            // Determine persisted tab per thread
-            const threadId = window.FileManager.currentThreadId || window.StorageUtils.getThreadId() || null;
-            const savedTab = threadId ? window.StorageUtils.getItem(window.StorageUtils.getSidebarTabKey(threadId), 'files') : 'files';
-
-            // Initialize state from storage
-            this.applySidebarTabState(threadId, savedTab);
-
-            // Delegate click inside tabs header
-            tabsEl.addEventListener('click', (e) => {
-                const btn = e.target.closest('.nav-link');
-                if (!btn) return;
-                const target = btn.getAttribute('data-tab-target');
-                if (!target) return;
+            // Listen for Bootstrap tab shown events
+            tabsEl.addEventListener('shown.bs.tab', (e) => {
+                const target = e.target.getAttribute('data-bs-target');
+                const tabName = target === '#pane-webapps' ? 'webapps' : 'files';
 
                 // Persist selection per thread
-                const tid = window.FileManager.currentThreadId || window.StorageUtils.getThreadId() || null;
-                if (tid) window.StorageUtils.setItem(window.StorageUtils.getSidebarTabKey(tid), target);
+                const threadId = window.FileManager.currentThreadId || window.StorageUtils.getThreadId();
+                if (threadId) {
+                    window.StorageUtils.setItem(window.StorageUtils.getSidebarTabKey(threadId), tabName);
+                }
 
-                // Apply state (active class + containers + toolbar)
-                this.applySidebarTabState(tid, target);
+                // Lazy load webapps on first show
+                if (tabName === 'webapps' && typeof window.WebappIntegration?.loadWebappsList === 'function') {
+                    window.WebappIntegration.loadWebappsList();
+                }
             });
         },
 
-        // Apply active tab and containers visibility based on provided tab ('files' | 'webapps')
-        applySidebarTabState(threadId, tab) {
-            const tabsEl = document.getElementById('files-webapps-tabs');
-            const filesEl = document.getElementById('file-tree-container');
-            const appsEl = document.getElementById('webapps-list-container');
-            const toolbar = document.getElementById('files-toolbar');
+        // Restore the saved tab using Bootstrap Tab API
+        restoreSavedTab() {
+            const threadId = window.FileManager.currentThreadId || window.StorageUtils.getThreadId();
+            if (!threadId) return;
 
-            if (!tabsEl) return;
-
-            const isWebapps = tab === 'webapps';
-
-            // Active state on header buttons
-            tabsEl.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-            const activeBtn = tabsEl.querySelector(`.nav-link[data-tab-target="${isWebapps ? 'webapps' : 'files'}"]`);
-            if (activeBtn) activeBtn.classList.add('active');
-
-            // Toggle containers
-            if (filesEl) filesEl.classList.toggle('d-none', isWebapps);
-            if (appsEl) {
-                appsEl.classList.toggle('d-none', !isWebapps);
-                appsEl.setAttribute('aria-hidden', isWebapps ? 'false' : 'true');
-            }
-
-            // Toggle toolbar (only for Files)
-            if (toolbar) toolbar.classList.toggle('d-none', isWebapps);
-
-            // Load webapps list on first show
-            if (isWebapps && typeof window.WebappIntegration.loadWebappsList === 'function') {
-                window.WebappIntegration.loadWebappsList();
+            const savedTab = window.StorageUtils.getItem(window.StorageUtils.getSidebarTabKey(threadId), 'files');
+            if (savedTab === 'webapps') {
+                const webappsTabEl = document.getElementById('tab-webapps');
+                if (webappsTabEl) {
+                    const tab = new bootstrap.Tab(webappsTabEl);
+                    tab.show();
+                }
             }
         },
 
@@ -133,7 +107,7 @@
 
             const filesColumn = document.getElementById('files-sidebar');
             if (!filesColumn || filesColumn.classList.contains('files-hidden')) {
-                if (window.WebSocketManager && window.WebSocketManager.ws) {
+                if (window.WebSocketManager?.ws) {
                     window.WebSocketManager.ws.close();
                     window.WebSocketManager.ws = null;
                 }
@@ -142,17 +116,15 @@
 
             await this.loadSidebarContent();
 
-            if (window.WebSocketManager && window.WebSocketManager.ws) {
+            if (window.WebSocketManager?.ws) {
                 window.WebSocketManager.ws.close();
                 window.WebSocketManager.ws = null;
             }
 
             await this.loadTree();
 
-            // Re-apply saved tab for this thread
-            const tid = window.FileManager.currentThreadId || window.StorageUtils.getThreadId() || null;
-            const savedTab = tid ? window.StorageUtils.getItem(window.StorageUtils.getSidebarTabKey(tid), 'files') : 'files';
-            this.applySidebarTabState(tid, savedTab);
+            // Restore saved tab for this thread using Bootstrap Tab API
+            this.restoreSavedTab();
 
             if (window.ResponsiveManager) {
                 window.ResponsiveManager.syncFilesContent();
@@ -161,8 +133,7 @@
             if (window.WebSocketManager) {
                 window.WebSocketManager.connectWebSocket();
             }
-        },
-
+        }
     };
 
 })();
