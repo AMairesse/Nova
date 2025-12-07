@@ -19,15 +19,22 @@ body {
     overflow: hidden;
 }
 
-/* The content block wrapper inside main-container */
-.main-container>.container-fluid,
-.main-container>div {
+/* Chat page layout - full height with internal scrolling */
+.main-container>.container-fluid {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
     height: 100%;
     overflow: hidden;
+}
+
+/* Configuration/settings pages - allow full page scrolling */
+.main-container>.container {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* ============================================
