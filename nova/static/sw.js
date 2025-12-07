@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA
-const CACHE_NAME = 'nova-v1';
+const CACHE_NAME = 'nova-v2';
 const urlsToCache = [
   '/',
   '/static/css/main.css',
@@ -28,7 +28,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
   const isStatic = url.pathname.startsWith('/static/')
-                || url.origin.startsWith('https://cdn.jsdelivr.net');
+    || url.origin.startsWith('https://cdn.jsdelivr.net');
 
   if (!isStatic) return; // let network handle
 
