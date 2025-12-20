@@ -196,6 +196,9 @@ class LLMAgent:
             llm_provider=llm_provider
         )
 
+        # Store checkpointer for cleanup
+        agent.checkpointer = checkpointer
+
         # Load tools async after init (extracted to llm_tools.py)
         tools = await load_tools(agent)
 
@@ -299,9 +302,10 @@ class LLMAgent:
         # Initialize resources and loaded modules tracker
         self._resources = {}
         self._loaded_builtin_modules = []
+        self.checkpointer = None
 
     async def cleanup(self):
-        """Async cleanup method to close resources for loaded builtin modules and Langfuse client."""
+        """Async cleanup method to close resources for loaded builtin modules, Langfuse client, and checkpointer."""
         # Cleanup Langfuse client
         if hasattr(self, '_langfuse_client') and self._langfuse_client:
             try:
@@ -309,6 +313,13 @@ class LLMAgent:
                 self._langfuse_client.shutdown()
             except Exception as e:
                 logger.warning(f"Failed to cleanup Langfuse client: {e}")
+
+        # Cleanup checkpointer
+        if self.checkpointer:
+            try:
+                await self.checkpointer.aclose()
+            except Exception as e:
+                logger.warning(f"Failed to cleanup checkpointer: {e}")
 
         # Cleanup builtin modules
         for module in self._loaded_builtin_modules:

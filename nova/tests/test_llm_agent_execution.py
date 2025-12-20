@@ -247,3 +247,49 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
 
         mock_get_or_create.assert_called_once()
         self.assertIsInstance(agent, llm_agent_mod.LLMAgent)
+
+    async def test_cleanup_closes_checkpointer(self):
+        """Test that cleanup properly closes the checkpointer."""
+        mock_checkpointer = MagicMock()
+        mock_checkpointer.aclose = MagicMock()
+
+        agent = llm_agent_mod.LLMAgent(
+            user=self.create_mock_user(),
+            thread=self.create_mock_thread(),
+            langgraph_thread_id="fake_id",
+            agent_config=None,
+            system_prompt=None,
+            llm_provider=self.create_mock_provider(),
+        )
+        agent.checkpointer = mock_checkpointer
+
+        # Mock Langfuse client
+        agent._langfuse_client = MagicMock()
+        agent._langfuse_client.flush = MagicMock()
+        agent._langfuse_client.shutdown = MagicMock()
+
+        await agent.cleanup()
+
+        # Verify checkpointer.aclose was called
+        mock_checkpointer.aclose.assert_called_once()
+
+        # Verify Langfuse cleanup was called
+        agent._langfuse_client.flush.assert_called_once()
+        agent._langfuse_client.shutdown.assert_called_once()
+
+    async def test_cleanup_handles_missing_checkpointer(self):
+        """Test that cleanup handles cases where checkpointer is None."""
+        agent = llm_agent_mod.LLMAgent(
+            user=self.create_mock_user(),
+            thread=self.create_mock_thread(),
+            langgraph_thread_id="fake_id",
+            agent_config=None,
+            system_prompt=None,
+            llm_provider=self.create_mock_provider(),
+        )
+        agent.checkpointer = None
+
+        # Should not raise exception
+        await agent.cleanup()
+
+        # No assertions needed, just ensure no exception

@@ -93,33 +93,36 @@ class ContextConsumptionTracker:
         """
         config = agent.config
         checkpointer = await get_checkpointer()
-        checkpoint_tuple = await checkpointer.aget_tuple(config)
+        try:
+            checkpoint_tuple = await checkpointer.aget_tuple(config)
 
-        real_tokens = None
-        approx_tokens = None
+            real_tokens = None
+            approx_tokens = None
 
-        if checkpoint_tuple:
-            state = checkpoint_tuple.checkpoint
-            memory = state.get('channel_values', {}).get('messages', [])
+            if checkpoint_tuple:
+                state = checkpoint_tuple.checkpoint
+                memory = state.get('channel_values', {}).get('messages', [])
 
-            # Try to get real token count from last response
-            if memory:
-                last_response = memory[-1]
-                usage_metadata = getattr(last_response, 'usage_metadata', None)
-                if usage_metadata:
-                    real_tokens = usage_metadata.get('total_tokens')
+                # Try to get real token count from last response
+                if memory:
+                    last_response = memory[-1]
+                    usage_metadata = getattr(last_response, 'usage_metadata', None)
+                    if usage_metadata:
+                        real_tokens = usage_metadata.get('total_tokens')
 
-            # Fallback to approximation
-            if real_tokens is None:
-                approx_tokens = ContextConsumptionTracker._approximate_tokens(memory)
+                # Fallback to approximation
+                if real_tokens is None:
+                    approx_tokens = ContextConsumptionTracker._approximate_tokens(memory)
 
-        # Get max context from provider
-        max_context = await sync_to_async(
-            lambda: agent_config.llm_provider.max_context_tokens,
-            thread_sensitive=False
-        )()
+            # Get max context from provider
+            max_context = await sync_to_async(
+                lambda: agent_config.llm_provider.max_context_tokens,
+                thread_sensitive=False
+            )()
 
-        return real_tokens, approx_tokens, max_context
+            return real_tokens, approx_tokens, max_context
+        finally:
+            await checkpointer.aclose()
 
     @staticmethod
     def _approximate_tokens(memory):
@@ -183,7 +186,10 @@ class CompactTaskExecutor (TaskExecutor):
         # Remove old checkpoints
         thread_id = config['configurable']['thread_id']
         checkpointer = await get_checkpointer()
-        await checkpointer.adelete_thread(thread_id)
+        try:
+            await checkpointer.adelete_thread(thread_id)
+        finally:
+            await checkpointer.aclose()
 
         # Inject the summary
         from langchain_core.messages import AIMessage
@@ -217,7 +223,10 @@ class CompactTaskExecutor (TaskExecutor):
 
 async def delete_checkpoints(ckp_id):
     checkpointer = await get_checkpointer()
-    await checkpointer.adelete_thread(ckp_id)
+    try:
+        await checkpointer.adelete_thread(ckp_id)
+    finally:
+        await checkpointer.aclose()
 
 
 @shared_task(bind=True, name="compact_conversation")

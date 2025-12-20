@@ -1,6 +1,6 @@
 # nova/tests/test_checkpoints.py
 import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from django.test import TestCase
 
 from nova.llm.checkpoints import _make_conn_str, _bootstrap_tables, get_checkpointer
@@ -10,7 +10,6 @@ class CheckpointsTest(TestCase):
     def setUp(self):
         # Reset global state before each test
         from nova.llm import checkpoints
-        checkpoints._checkpointers.clear()
         checkpoints._bootstrap_done = False
 
     @patch('nova.llm.checkpoints.settings')
@@ -121,28 +120,12 @@ class CheckpointsTest(TestCase):
         mock_pool.assert_not_called()
         mock_saver.assert_not_called()
 
-    @patch('nova.llm.checkpoints.get_checkpointer')
-    async def test_get_checkpointer_cache_hit(self, mock_get_checkpointer):
-        """Test get_checkpointer returns cached instance for same loop."""
-        # Setup existing checkpointer
-        from nova.llm import checkpoints
-        loop = asyncio.get_running_loop()
-        mock_saver = MagicMock()
-        checkpoints._checkpointers[loop] = mock_saver
-
-        # Call get_checkpointer
-        result = await get_checkpointer()
-
-        # Verify cached instance returned
-        self.assertEqual(result, mock_saver)
-        mock_get_checkpointer.assert_not_called()
-
     @patch('nova.llm.checkpoints.AsyncConnectionPool')
     @patch('nova.llm.checkpoints.AsyncPostgresSaver')
     @patch('nova.llm.checkpoints._bootstrap_tables')
     @patch('nova.llm.checkpoints._make_conn_str')
-    async def test_get_checkpointer_cache_miss(self, mock_make_conn_str, mock_bootstrap, mock_saver, mock_pool):
-        """Test get_checkpointer creates new instance when not cached."""
+    async def test_get_checkpointer(self, mock_make_conn_str, mock_bootstrap, mock_saver, mock_pool):
+        """Test get_checkpointer creates new instance."""
         # Setup mocks
         mock_make_conn_str.return_value = "postgresql://test"
         mock_pool_instance = AsyncMock()
@@ -165,8 +148,3 @@ class CheckpointsTest(TestCase):
 
         # Verify result
         self.assertEqual(result, mock_saver_instance)
-
-        # Verify cached
-        from nova.llm import checkpoints
-        loop = asyncio.get_running_loop()
-        self.assertEqual(checkpoints._checkpointers[loop], mock_saver_instance)

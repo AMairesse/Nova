@@ -6,7 +6,6 @@ from django.conf import settings
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 # --- global state --------------------------------------------------------
-_checkpointers: dict[asyncio.AbstractEventLoop, AsyncPostgresSaver] = {}
 _bootstrap_done: bool = False
 _bootstrap_lock = asyncio.Lock()        # to avoid concurrent bootstraps
 # -------------------------------------------------------------------------
@@ -38,14 +37,9 @@ async def _bootstrap_tables(conn_str: str) -> None:
 
 
 async def get_checkpointer() -> AsyncPostgresSaver:
-    loop = asyncio.get_running_loop()
-    if loop in _checkpointers:
-        return _checkpointers[loop]
-
     conn_str = _make_conn_str()
     await _bootstrap_tables(conn_str)
 
     runtime_pool = AsyncConnectionPool(conninfo=conn_str, timeout=10)
     saver = AsyncPostgresSaver(runtime_pool)
-    _checkpointers[loop] = saver
     return saver
