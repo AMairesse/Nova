@@ -162,6 +162,9 @@
 
                 // Handle server-rendered interaction cards and check for pending interactions
                 this.checkPendingInteractions();
+
+                // Check for running tasks and reconnect to streaming if needed
+                this.checkAndReconnectRunningTasks();
             } catch (error) {
                 console.error('Error loading messages:', error);
             }
@@ -261,7 +264,7 @@
                 // Scroll to position the message at the top
                 this.scrollToMessage(data.message.id);
 
-                // Register streaming for agent response
+                // Register streaming for agent response (this will disable input area)
                 this.streamingManager.registerStream(data.task_id, {
                     id: data.task_id,
                     actor: 'agent',
@@ -275,8 +278,7 @@
                 }
             } catch (error) {
                 console.error("Error sending message:", error);
-            } finally {
-                // Re-enable send button
+                // Re-enable send button on error
                 if (sendBtn) {
                     sendBtn.disabled = false;
                     sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
@@ -386,6 +388,31 @@
             const pendingCards = document.querySelectorAll('[data-interaction-id]');
             if (pendingCards.length > 0) {
                 this.streamingManager.setInputAreaDisabled(true);
+            }
+        }
+
+        // Check for running tasks and reconnect to streaming if needed
+        async checkAndReconnectRunningTasks() {
+            if (!this.currentThreadId) return;
+
+            try {
+                const response = await fetch(
+                    `${window.NovaApp.urls.runningTasksBase}${this.currentThreadId}/`
+                );
+                const data = await response.json();
+
+                if (data.running_tasks && data.running_tasks.length > 0) {
+                    // Reconnect to each running task with state
+                    for (const task of data.running_tasks) {
+                        this.streamingManager.reconnectToTask(
+                            task.id,
+                            task.current_response,
+                            task.last_progress
+                        );
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking running tasks:', error);
             }
         }
 

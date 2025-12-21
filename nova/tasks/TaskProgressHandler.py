@@ -2,6 +2,7 @@
 import logging
 from uuid import UUID
 from typing import Any, Dict, List, Optional
+from asgiref.sync import sync_to_async
 
 from langchain_core.callbacks import AsyncCallbackHandler
 
@@ -19,6 +20,8 @@ class TaskProgressHandler(AsyncCallbackHandler):
         self.current_tool = None
         self.tool_depth = 0
         self.token_count = 0
+        self._last_persist_count = 0
+        self._persist_interval = 50  # Persist every 50 tokens
 
     async def publish_update(self, message_type, data):
         await self.channel_layer.group_send(
@@ -120,6 +123,12 @@ class TaskProgressHandler(AsyncCallbackHandler):
                 full_response = ''.join(self.final_chunks)
                 clean_html = markdown_to_html(full_response)
                 await self.on_chunk(clean_html)
+
+                # Persist periodically for recovery
+                self.token_count += 1
+                if self.token_count - self._last_persist_count >= self._persist_interval:
+                    await self._persist_current_response(clean_html)
+                    self._last_persist_count = self.token_count
             else:
                 # If a sub agent is generating a response,
                 # send it as a progress update every 100 tokens
@@ -184,3 +193,14 @@ class TaskProgressHandler(AsyncCallbackHandler):
                 await self.on_progress("Sub-agent finished")
         except Exception as e:
             logger.error(f"Error in on_chat_model_start: {e}")
+
+    async def _persist_current_response(self, html_content):
+        """Persist current response to database for recovery."""
+        from nova.models.Task import Task
+        try:
+            await sync_to_async(
+                Task.objects.filter(id=self.task_id).update,
+                thread_sensitive=False
+            )(current_response=html_content)
+        except Exception as e:
+            logger.error(f"Error persisting current response: {e}")
