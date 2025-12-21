@@ -218,7 +218,8 @@ class MainViewsTests(TestCase):
         self.client.login(username="alice", password="pass")
         resp = self.client.get(reverse("running_tasks", args=[thread.id]))
         self.assertEqual(resp.status_code, 200)
-        ids = set(resp.json().get("running_task_ids", []))
+        tasks_data = resp.json().get("running_tasks", [])
+        ids = {task['id'] for task in tasks_data}
         self.assertEqual(ids, {t_run1.id, t_run2.id})
 
         # Non-owner should get 404 when querying someone else's thread

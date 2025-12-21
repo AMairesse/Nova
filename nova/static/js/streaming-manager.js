@@ -65,13 +65,12 @@
                 return;
             }
 
-            // Create the message element if it doesn't exist
-            var messageElement = stream.element
-            if (!messageElement) {
-                messageElement = this.createMessageElement(taskId);
-                stream.element = messageElement;
+            // Create the message element if it doesn't exist (including on reconnect)
+            if (!stream.element) {
+                stream.element = this.createMessageElement(taskId);
+                stream.status = 'streaming';
             }
-            const contentEl = messageElement.querySelector('.streaming-content')
+            const contentEl = stream.element.querySelector('.streaming-content');
 
             // The server is already sending HTML chunks, so we don't need to process them as Markdown
             // Replace the entire content since server sends complete paragraph updates
@@ -243,6 +242,50 @@
             }
 
             // Start WebSocket connection for progress updates
+            this.startWebSocket(taskId);
+        }
+
+        // Reconnect to an existing task (when user returns to page)
+        reconnectToTask(taskId, currentResponse, lastProgress) {
+            // Check if already connected
+            if (this.activeStreams.has(taskId)) {
+                return;
+            }
+
+            // Register the stream with reconnect flag
+            this.activeStreams.set(taskId, {
+                messageId: taskId,
+                element: null,
+                status: 'reconnecting',
+                isReconnect: true,
+                lastChunk: currentResponse || ''
+            });
+
+            // Show progress area
+            const progressDiv = document.getElementById('task-progress');
+            if (progressDiv) {
+                progressDiv.classList.remove('d-none');
+                const spinner = progressDiv.querySelector('.spinner-border');
+                if (spinner) {
+                    spinner.classList.remove('d-none');
+                }
+            }
+
+            // Set last known progress message
+            const progressLogs = document.getElementById('progress-logs');
+            if (progressLogs && lastProgress) {
+                progressLogs.textContent = lastProgress.step || 'Reconnecting...';
+            }
+
+            // If we have current response, show it immediately
+            if (currentResponse) {
+                const stream = this.activeStreams.get(taskId);
+                stream.element = this.createMessageElement(taskId);
+                const contentEl = stream.element.querySelector('.streaming-content');
+                contentEl.innerHTML = currentResponse;
+            }
+
+            // Start WebSocket connection for live updates
             this.startWebSocket(taskId);
         }
 

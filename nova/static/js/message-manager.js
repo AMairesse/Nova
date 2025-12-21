@@ -162,6 +162,9 @@
 
                 // Handle server-rendered interaction cards and check for pending interactions
                 this.checkPendingInteractions();
+
+                // Check for running tasks and reconnect to streaming if needed
+                this.checkAndReconnectRunningTasks();
             } catch (error) {
                 console.error('Error loading messages:', error);
             }
@@ -386,6 +389,31 @@
             const pendingCards = document.querySelectorAll('[data-interaction-id]');
             if (pendingCards.length > 0) {
                 this.streamingManager.setInputAreaDisabled(true);
+            }
+        }
+
+        // Check for running tasks and reconnect to streaming if needed
+        async checkAndReconnectRunningTasks() {
+            if (!this.currentThreadId) return;
+
+            try {
+                const response = await fetch(
+                    `${window.NovaApp.urls.runningTasksBase}${this.currentThreadId}/`
+                );
+                const data = await response.json();
+
+                if (data.running_tasks && data.running_tasks.length > 0) {
+                    // Reconnect to each running task with state
+                    for (const task of data.running_tasks) {
+                        this.streamingManager.reconnectToTask(
+                            task.id,
+                            task.current_response,
+                            task.last_progress
+                        );
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking running tasks:', error);
             }
         }
 

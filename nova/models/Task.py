@@ -37,6 +37,8 @@ class Task(models.Model):
                               default=TaskStatus.PENDING)
     # List of dicts, e.g., [{"step": "Calling tool X", "timestamp": "2025-07-28T03:58:00Z"}]
     progress_logs = models.JSONField(default=list, blank=True)
+    # Current streaming content (HTML) - updated during streaming for reconnection
+    current_response = models.TextField(blank=True, null=True)
     # Final output or error message
     result = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
