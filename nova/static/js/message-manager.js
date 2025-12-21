@@ -264,7 +264,7 @@
                 // Scroll to position the message at the top
                 this.scrollToMessage(data.message.id);
 
-                // Register streaming for agent response
+                // Register streaming for agent response (this will disable input area)
                 this.streamingManager.registerStream(data.task_id, {
                     id: data.task_id,
                     actor: 'agent',
@@ -278,8 +278,7 @@
                 }
             } catch (error) {
                 console.error("Error sending message:", error);
-            } finally {
-                // Re-enable send button
+                // Re-enable send button on error
                 if (sendBtn) {
                     sendBtn.disabled = false;
                     sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';

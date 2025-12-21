@@ -48,6 +48,9 @@
                 }
             }
 
+            // Disable input area while agent is working
+            this.setInputAreaDisabled(true);
+
             // Start WebSocket connection
             this.startWebSocket(taskId);
         }
@@ -99,6 +102,9 @@
                         progressDiv.classList.add('d-none');
                     }, 3000); // Hide progress after 3 seconds
                 }
+
+                // Re-enable input area when task completes
+                this.setInputAreaDisabled(false);
             }
             this.activeStreams.delete(taskId);
         }
@@ -277,6 +283,9 @@
                 progressLogs.textContent = lastProgress.step || 'Reconnecting...';
             }
 
+            // Disable input area while task is running
+            this.setInputAreaDisabled(true);
+
             // If we have current response, show it immediately
             if (currentResponse) {
                 const stream = this.activeStreams.get(taskId);
@@ -412,6 +421,8 @@
             if (progressLogs) {
                 progressLogs.textContent = error.message;
             }
+            // Re-enable input area on error
+            this.setInputAreaDisabled(false);
         }
     };
 
