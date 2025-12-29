@@ -100,4 +100,4 @@ async def _delete_checkpoints_async(checkpoint_links):
 
         return deleted, failed
     finally:
-        saver.conn.close()
+        await saver.conn.close()
