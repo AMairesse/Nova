@@ -41,5 +41,6 @@ async def get_checkpointer() -> AsyncPostgresSaver:
     await _bootstrap_tables(conn_str)
 
     runtime_pool = AsyncConnectionPool(conninfo=conn_str, timeout=10)
+    await runtime_pool.open()
     saver = AsyncPostgresSaver(runtime_pool)
     return saver

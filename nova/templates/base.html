@@ -147,7 +147,15 @@
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('SW registered:', reg.scope))
+            .then(reg => {
+              console.log('SW registered:', reg.scope);
+              // Send debug status to service worker
+              reg.active?.postMessage({
+                type: 'SET_CONFIG',
+                debug: {{ debug|lower }},
+                cacheMaxAge: 3 * 24 * 60 * 60 * 1000  // 3 days in ms
+              });
+            })
             .catch(err => console.error('SW registration failed:', err));
         });
       }

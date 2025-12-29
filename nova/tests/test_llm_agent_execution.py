@@ -251,7 +251,7 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
     async def test_cleanup_closes_checkpointer(self):
         """Test that cleanup properly closes the checkpointer."""
         mock_checkpointer = MagicMock()
-        mock_checkpointer.aclose = MagicMock()
+        mock_checkpointer.conn.close = MagicMock()
 
         agent = llm_agent_mod.LLMAgent(
             user=self.create_mock_user(),
@@ -270,8 +270,8 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
 
         await agent.cleanup()
 
-        # Verify checkpointer.aclose was called
-        mock_checkpointer.aclose.assert_called_once()
+        # Verify checkpointer.conn.close was called
+        mock_checkpointer.conn.close.assert_called_once()
 
         # Verify Langfuse cleanup was called
         agent._langfuse_client.flush.assert_called_once()

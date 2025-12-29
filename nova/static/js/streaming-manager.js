@@ -48,6 +48,9 @@
                 }
             }
 
+            // Disable input area while agent is working
+            this.setInputAreaDisabled(true);
+
             // Start WebSocket connection
             this.startWebSocket(taskId);
         }
@@ -65,13 +68,12 @@
                 return;
             }
 
-            // Create the message element if it doesn't exist
-            var messageElement = stream.element
-            if (!messageElement) {
-                messageElement = this.createMessageElement(taskId);
-                stream.element = messageElement;
+            // Create the message element if it doesn't exist (including on reconnect)
+            if (!stream.element) {
+                stream.element = this.createMessageElement(taskId);
+                stream.status = 'streaming';
             }
-            const contentEl = messageElement.querySelector('.streaming-content')
+            const contentEl = stream.element.querySelector('.streaming-content');
 
             // The server is already sending HTML chunks, so we don't need to process them as Markdown
             // Replace the entire content since server sends complete paragraph updates
@@ -100,6 +102,9 @@
                         progressDiv.classList.add('d-none');
                     }, 3000); // Hide progress after 3 seconds
                 }
+
+                // Re-enable input area when task completes
+                this.setInputAreaDisabled(false);
             }
             this.activeStreams.delete(taskId);
         }
@@ -246,6 +251,53 @@
             this.startWebSocket(taskId);
         }
 
+        // Reconnect to an existing task (when user returns to page)
+        reconnectToTask(taskId, currentResponse, lastProgress) {
+            // Check if already connected
+            if (this.activeStreams.has(taskId)) {
+                return;
+            }
+
+            // Register the stream with reconnect flag
+            this.activeStreams.set(taskId, {
+                messageId: taskId,
+                element: null,
+                status: 'reconnecting',
+                isReconnect: true,
+                lastChunk: currentResponse || ''
+            });
+
+            // Show progress area
+            const progressDiv = document.getElementById('task-progress');
+            if (progressDiv) {
+                progressDiv.classList.remove('d-none');
+                const spinner = progressDiv.querySelector('.spinner-border');
+                if (spinner) {
+                    spinner.classList.remove('d-none');
+                }
+            }
+
+            // Set last known progress message
+            const progressLogs = document.getElementById('progress-logs');
+            if (progressLogs && lastProgress) {
+                progressLogs.textContent = lastProgress.step || 'Reconnecting...';
+            }
+
+            // Disable input area while task is running
+            this.setInputAreaDisabled(true);
+
+            // If we have current response, show it immediately
+            if (currentResponse) {
+                const stream = this.activeStreams.get(taskId);
+                stream.element = this.createMessageElement(taskId);
+                const contentEl = stream.element.querySelector('.streaming-content');
+                contentEl.innerHTML = currentResponse;
+            }
+
+            // Start WebSocket connection for live updates
+            this.startWebSocket(taskId);
+        }
+
         // Handle real-time message updates like system messages
         onNewMessage(messageData, thread_id) {
             // Create message element for the new message
@@ -369,6 +421,8 @@
             if (progressLogs) {
                 progressLogs.textContent = error.message;
             }
+            // Re-enable input area on error
+            this.setInputAreaDisabled(false);
         }
     };
 

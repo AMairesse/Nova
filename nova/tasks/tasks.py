@@ -122,7 +122,7 @@ class ContextConsumptionTracker:
 
             return real_tokens, approx_tokens, max_context
         finally:
-            await checkpointer.aclose()
+            await checkpointer.conn.close()
 
     @staticmethod
     def _approximate_tokens(memory):
@@ -189,7 +189,7 @@ class CompactTaskExecutor (TaskExecutor):
         try:
             await checkpointer.adelete_thread(thread_id)
         finally:
-            await checkpointer.aclose()
+            await checkpointer.conn.close()
 
         # Inject the summary
         from langchain_core.messages import AIMessage
@@ -226,7 +226,7 @@ async def delete_checkpoints(ckp_id):
     try:
         await checkpointer.adelete_thread(ckp_id)
     finally:
-        await checkpointer.aclose()
+        await checkpointer.conn.close()
 
 
 @shared_task(bind=True, name="compact_conversation")
