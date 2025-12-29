@@ -13,6 +13,8 @@ services:
     extends:
       file: docker-compose.base.yml
       service: nginx
+    environment:
+      STATIC_CACHE_DURATION: 0
   
   minio:
     extends:

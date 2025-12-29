@@ -1,6 +1,9 @@
 server {
     listen 80;
 
+    # Set nginx variable from environment
+    set $static_cache_duration "${STATIC_CACHE_DURATION}";
+
     location / {
         proxy_pass http://web;
         proxy_set_header Host "localhost";
@@ -26,14 +29,28 @@ server {
 
     location /static/ {
         alias /app/static/;
-        expires 30d;
-        add_header Cache-Control "public";
+        if ($static_cache_duration != "0") {
+            expires $static_cache_duration;
+            add_header Cache-Control "public";
+        }
+        if ($static_cache_duration = "0") {
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
+            add_header Pragma "no-cache";
+            add_header Expires "0";
+        }
     }
 
     location /media/ {
         alias /app/media/;
-        expires 30d;
-        add_header Cache-Control "public";
+        if ($static_cache_duration != "0") {
+            expires $static_cache_duration;
+            add_header Cache-Control "public";
+        }
+        if ($static_cache_duration = "0") {
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
+            add_header Pragma "no-cache";
+            add_header Expires "0";
+        }
     }
 
     # Proxy for MinIO API (S3-compatible)
