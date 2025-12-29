@@ -88,13 +88,16 @@ def cleanup_thread(sender, instance: Thread, **kwargs):
 # --------------------------------------------------------------------------
 async def _delete_checkpoints_async(checkpoint_links):
     saver = await get_checkpointer()
-    deleted, failed = [], []
+    try:
+        deleted, failed = [], []
 
-    for cp in checkpoint_links:
-        try:
-            await saver.adelete_thread(cp.checkpoint_id)
-            deleted.append(cp)
-        except Exception as exc:
-            failed.append((cp, str(exc)))
+        for cp in checkpoint_links:
+            try:
+                await saver.adelete_thread(cp.checkpoint_id)
+                deleted.append(cp)
+            except Exception as exc:
+                failed.append((cp, str(exc)))
 
-    return deleted, failed
+        return deleted, failed
+    finally:
+        saver.conn.close()
