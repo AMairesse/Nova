@@ -317,7 +317,7 @@ class LLMAgent:
         # Cleanup checkpointer
         if self.checkpointer:
             try:
-                await self.checkpointer.aclose()
+                await self.checkpointer.conn.close()
             except Exception as e:
                 logger.warning(f"Failed to cleanup checkpointer: {e}")
 
