@@ -142,6 +142,9 @@ class CheckpointsTest(TestCase):
         # Verify bootstrap was called
         mock_bootstrap.assert_called_once_with("postgresql://test")
 
+        # Verify pool was opened
+        mock_pool_instance.open.assert_called_once()
+
         # Verify new saver was created
         mock_pool.assert_called_once_with(conninfo="postgresql://test", timeout=10)
         mock_saver.assert_called_once_with(mock_pool_instance)
