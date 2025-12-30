@@ -1,59 +1,59 @@
 # Tasks Documentation
 
-## SummarizationMiddleware Refactor: Checkpoint Injection Implementation
+## Manual Thread Summarization Improvements
 **Last performed:** 2025-12-30
-**Status:** ✅ Completed
+**Status:** 🔄 In Progress
 
 **Description:**
-Implemented automatic conversation summarization with LangGraph checkpoint injection to prevent context overflow in long conversations. Replaces manual "compact" functionality with intelligent, automatic context management.
+Implementing three key improvements to the manual thread summarization feature:
+1. Compact link only appears on the last AI message footer
+2. Summarization runs asynchronously via Celery worker
+3. Summarization settings moved to AgentConfig with auto_summarize=False by default
+
+**Current Phase:** Data Model Migration (Phase 1 of 3)
+
+**Requirements:**
+- Compact link visible even when auto-summarization is disabled
+- Summarization settings are per-agent
+- Collapsible UI section collapsed by default
+- Drop existing SummarizationConfig records (development phase, no migration needed)
 
 **Files to modify:**
-- `nova/llm/summarization_middleware.py` - Core middleware implementation
-- `nova/tests/test_summarization_middleware.py` - Comprehensive test suite
-- `.kilocode/rules/memory-bank/context.md` - Updated work status
+- `nova/models/AgentConfig.py` - Add summarization fields
+- `nova/models/SummarizationConfig.py` - Remove model
+- Migration file - Add summarization fields to AgentConfig
+- `nova/llm/summarization_middleware.py` - Update to use agent config
+- `nova/tests/test_summarization_middleware.py` - Update tests
+- Agent settings form/template - Add collapsible summarization section
 
-**Steps:**
-1. **Added SystemMessage import** for summary message creation
-2. **Implemented `_inject_summary_into_checkpoint()` method** that:
-   - Creates SystemMessage containing conversation summary
-   - Combines summary + preserved recent messages
-   - Saves new checkpoint via AsyncPostgresSaver.aput()
-   - Maintains thread continuity and metadata
-3. **Replaced TODO placeholder** with working checkpoint injection logic
-4. **Created comprehensive test suite** with 7 unit tests covering:
-   - Token threshold detection
-   - Checkpoint injection logic
-   - LLM summarization (with mocking)
-   - Error handling and fallbacks
-5. **Validated integration** with Django system checks and SQLite test database
-
-**Important considerations:**
-- **Async-first design**: All operations use async/await for LangGraph compatibility
-- **Checkpoint continuity**: New checkpoints maintain thread_id and namespace for proper agent resumption
-- **Error resilience**: LLM failures fall back to simple text-based summarization
-- **Real-time feedback**: Integrates with existing WebSocket progress system
-- **Testing isolation**: Uses proper mocking to avoid database dependencies in unit tests
-
-**Integration points:**
-- Hooks into `AgentMiddleware.after_message()` for automatic triggering
-- Uses `AsyncPostgresSaver` for checkpoint persistence
-- Compatible with existing `SummarizationConfig` model settings
-- Maintains backward compatibility with manual agent workflows
-
-**Example implementation:**
+**Summarization Fields to Add to AgentConfig:**
 ```python
-async def _inject_summary_into_checkpoint(
-    self,
-    summary: str,
-    preserved_messages: List[BaseMessage],
-    current_checkpoint,
-    checkpointer
-) -> None:
-    # Create summary message + preserved messages
-    # Save via checkpointer.aput() with proper config/metadata
+auto_summarize = models.BooleanField(default=False, help_text="Enable automatic summarization when token threshold is reached")
+token_threshold = models.IntegerField(default=100, help_text="Token count threshold for triggering summarization")
+preserve_recent = models.IntegerField(default=2, help_text="Number of recent messages to preserve")
+strategy = models.CharField(default='conversation', max_length=20, help_text="Summarization strategy: conversation, topic, temporal, hybrid")
+max_summary_length = models.IntegerField(default=500, help_text="Maximum length of generated summary in words")
+summary_model = models.CharField(blank=True, null=True, max_length=100, help_text="Optional LLM model override for summarization")
 ```
 
-This implementation enables truly scalable AI agent conversations by automatically managing context size while preserving conversation coherence and providing real-time user feedback.</content>
+**Next Phases:**
+1. ✅ **Data Model Migration** (Current)
+2. **Celery Async Processing** - Create Celery task for manual summarization
+3. **UI Improvements** - Compact link visibility and agent settings form
+
+**Important considerations:**
+- **Backward Compatibility**: Existing code should continue working during transition
+- **Default Behavior**: Auto-summarization disabled by default for safety
+- **UI Integration**: Collapsible section in agent settings, collapsed by default
+- **Testing**: Update all tests to use new config location
+- **Cleanup**: Remove SummarizationConfig model after migration
+
+**Implementation Notes:**
+- No data migration needed (development phase)
+- Agent-specific settings allow fine-grained control
+- Compact link always visible for manual control
+- Async processing prevents web request timeouts
+</content>
 </xai:function_call">---
 
 <xai:function_call name="attempt_completion">
