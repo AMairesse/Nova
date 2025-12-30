@@ -1,8 +1,8 @@
 # nova/llm/llm_agent.py
-from datetime import date
 import uuid
 import logging
 from typing import Any, Callable, List
+from dataclasses import dataclass
 from django.conf import settings
 
 # Load the langchain tools
@@ -17,10 +17,9 @@ from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
-from nova.models.UserFile import UserFile
-from nova.models.UserObjects import UserInfo
 from nova.llm.checkpoints import get_checkpointer
-from nova.utils import extract_final_answer, get_theme_content
+from nova.llm.prompts import nova_system_prompt
+from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 
@@ -100,6 +99,13 @@ register_provider(
 # Example: Adding a new provider (can be done anywhere, even in a plugin)
 # register_provider(ProviderType.ANTHROPIC, lambda p: ChatAnthropic(...))
 # --------------------------------------------------------------------- #
+@dataclass
+class AgentContext:
+    agent_config: AgentConfig
+    user: settings.AUTH_USER_MODEL
+    thread: Thread
+
+
 class LLMAgent:
     @classmethod
     def fetch_user_params_sync(cls, user):
@@ -203,16 +209,24 @@ class LLMAgent:
         tools = await load_tools(agent)
 
         llm = agent.create_llm_agent()
-        system_prompt = await agent.build_system_prompt()
 
-        # Create the ReAct agent
+        # Create the ReAct agent with dynamic prompt middleware
+        middleware = [nova_system_prompt]
         if checkpointer:
-            agent.langchain_agent = create_agent(llm, tools=tools,
-                                                 system_prompt=system_prompt,
-                                                 checkpointer=checkpointer)
+            agent.langchain_agent = create_agent(
+                llm,
+                tools=tools,
+                middleware=middleware,
+                context_schema=AgentContext,
+                checkpointer=checkpointer
+            )
         else:
-            agent.langchain_agent = create_agent(llm, tools=tools,
-                                                 system_prompt=system_prompt)
+            agent.langchain_agent = create_agent(
+                llm,
+                tools=tools,
+                middleware=middleware,
+                context_schema=AgentContext
+            )
 
         agent.tools = tools
 
@@ -326,71 +340,6 @@ class LLMAgent:
             if hasattr(module, 'close'):
                 await module.close(self)
 
-    @sync_to_async
-    def _get_thread_file_count(self, thread_id: int) -> int:
-        # Single DB round-trip
-        return UserFile.objects.filter(thread_id=thread_id).count()
-
-    async def build_system_prompt(self):
-        """
-        Build the system prompt.
-        """
-        today = date.today().strftime("%A %d of %B, %Y")
-
-        base_prompt = ""
-        if self._system_prompt:
-            base_prompt = self._system_prompt
-            if "{today}" in base_prompt:
-                base_prompt = base_prompt.format(today=today)
-        else:
-            base_prompt = (
-                f"You are a helpful assistant. Today is {today}. "
-                "Be concise and direct. If you need to display "
-                "structured information, use markdown."
-            )
-
-        # Check if memory tool is enabled and inject user memory
-        memory_tool_enabled = any(
-            tool.tool_subtype == 'memory' and tool.is_active
-            for tool in self.builtin_tools
-        )
-
-        if memory_tool_enabled:
-            try:
-                user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
-                themes = await sync_to_async(user_info.get_themes)()
-
-                # Always include global_user_preferences content if it exists
-                global_content = ""
-                if themes and "global_user_preferences" in themes:
-                    global_content = get_theme_content(user_info.markdown_content, "global_user_preferences")
-                    if global_content.strip():
-                        global_content = f"\n\nGlobal user's preferences:\n{global_content}"
-
-                if themes:
-                    memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
-                    base_prompt += global_content + memory_block
-            except UserInfo.DoesNotExist:
-                # UserInfo should exist due to signal, but handle gracefully
-                pass
-            except Exception as e:
-                logger.warning(f"Failed to load user memory: {e}")
-
-        # Add information about files available in discussion
-        if self.thread is not None:
-            file_count = await self._get_thread_file_count(self.thread.id)
-            if file_count:
-                files_context = f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
-            else:
-                files_context = "\nNo attached files available."
-        else:
-            # When no thread is associated (e.g. /api/ask/), skip DB access
-            # and explicitly state that there are no attached files.
-            files_context = "\nNo attached files available."
-        base_prompt += files_context
-
-        return base_prompt
-
     def create_llm_agent(self):
         if not self._llm_provider:
             raise Exception("No LLM provider configured")
@@ -409,13 +358,21 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
+        # Create context for middleware
+        context = AgentContext(
+            agent_config=self.agent_config,
+            user=self.user,
+            thread=self.thread
+        )
+
         full_question = f"{question}"
         message = HumanMessage(content=full_question)
 
         while True:
             result = await self.langchain_agent.ainvoke(
                 {"messages": message},
-                config=config
+                config=config,
+                context=context
             )
 
             # If the result contains an interruption then stop processing and
@@ -484,10 +441,18 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
+        # Create context for middleware
+        context = AgentContext(
+            agent_config=self.agent_config,
+            user=self.user,
+            thread=self.thread
+        )
+
         while True:
             result = await self.langchain_agent.ainvoke(
                 command,
-                config=config
+                config=config,
+                context=context
             )
 
             # If the result contains an interruption then stop processing and
