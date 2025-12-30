@@ -125,6 +125,11 @@ async def handle_tool_errors(request, handler):
         return await handler(request)
 
     except Exception as original_error:
+        # Don't catch GraphInterrupt - it's a control flow mechanism, not an error
+        from langgraph.errors import GraphInterrupt
+        if isinstance(original_error, GraphInterrupt):
+            raise
+
         category = categorize_error(original_error)
         user_message = get_user_friendly_message(category, tool_name, original_error)
 
