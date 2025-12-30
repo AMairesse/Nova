@@ -21,7 +21,7 @@ class TokenCounter:
         """Count tokens in current conversation context."""
         checkpointer = await get_checkpointer()
         try:
-            checkpoint = await checkpointer.aget_tuple(agent.agent_config)
+            checkpoint = await checkpointer.aget_tuple(agent.config)
             if checkpoint:
                 messages = checkpoint.checkpoint.get('channel_values', {}).get('messages', [])
                 return await agent.count_tokens(messages)
@@ -36,12 +36,17 @@ class SummarizerAgent:
     def __init__(self, model_name: str = None, agent=None):
         self.model_name = model_name
         self.agent = agent
+        self.agent_llm = None  # Will be set by LLMAgent.create()
         self.llm = self._create_llm()
 
     def _create_llm(self):
         """Create LLM for summarization."""
+        # First priority: use the LLM passed from LLMAgent.create()
+        if self.agent_llm:
+            return self.agent_llm
+
+        # Second priority: create custom LLM with specific model
         if self.model_name and self.agent:
-            # Create LLM with specific model for summarization
             provider = self.agent._llm_provider
             if provider:
                 # Import here to avoid circular import
@@ -60,8 +65,9 @@ class SummarizerAgent:
                 factory = _provider_factories.get(provider.provider_type)
                 if factory:
                     return factory(provider_copy)
-        # Fallback to agent's LLM
-        return self.agent.llm if self.agent else None
+
+        # Fallback: None (will use simple text-based summarization)
+        return None
 
     async def summarize_conversation(
         self,
@@ -157,7 +163,7 @@ class SummarizationMiddleware(BaseAgentMiddleware):
 
             # Get current messages
             checkpointer = await get_checkpointer()
-            checkpoint = await checkpointer.aget_tuple(self.agent.agent_config)
+            checkpoint = await checkpointer.aget_tuple(self.agent.config)
             if not checkpoint:
                 return
 
