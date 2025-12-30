@@ -57,6 +57,13 @@ class AgentToolWrapper:
             try:
                 result = await agent_llm.ainvoke(question)
                 return result
+            except Exception as e:
+                # Return a readable error string including agent name and message
+                error_msg = _("Error in sub-agent %(name)s: %(error)s") % {
+                    "name": self.agent_config.name,
+                    "error": str(e)
+                }
+                return error_msg + _(" Check connections or config.")
             finally:
                 try:
                     # Generic cleanup (handles browser if assigned as builtin)
