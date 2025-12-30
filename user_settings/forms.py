@@ -19,7 +19,6 @@ from crispy_forms.layout import Layout, Div, Field
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import ProviderType, LLMProvider
-from nova.models.SummarizationConfig import SummarizationConfig
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserInfo, UserParameters
 from user_settings.mixins import SecretPreserveMixin
@@ -118,62 +117,6 @@ class AgentForm(forms.ModelForm):
         label=_("Agents to use as tools"),
     )
 
-    # Summarization configuration fields
-    auto_summarize = forms.BooleanField(
-        required=False,
-        initial=True,
-        label=_("Enable automatic summarization"),
-        help_text=_("Automatically summarize conversations to manage context size")
-    )
-    token_threshold = forms.IntegerField(
-        required=False,
-        initial=3000,
-        min_value=1000,
-        label=_("Token threshold"),
-        help_text=_("Trigger summarization when context exceeds this many tokens")
-    )
-    summary_model = forms.CharField(
-        required=False,
-        max_length=100,
-        label=_("Summary model"),
-        help_text=_("Optional model for summarization (leave blank to use agent model)")
-    )
-    preserve_recent = forms.IntegerField(
-        required=False,
-        initial=5,
-        min_value=1,
-        max_value=20,
-        label=_("Preserve recent messages"),
-        help_text=_("Number of recent messages to keep unsummarized")
-    )
-    strategy = forms.ChoiceField(
-        required=False,
-        choices=[
-            ('conversation', _('Conversation Summary')),
-            ('topic', _('Topic-based Summary')),
-            ('temporal', _('Temporal Summary')),
-            ('hybrid', _('Hybrid Summary')),
-        ],
-        initial='conversation',
-        label=_("Summarization strategy"),
-        help_text=_("How to summarize the conversation")
-    )
-    max_summary_length = forms.IntegerField(
-        required=False,
-        initial=1000,
-        min_value=100,
-        label=_("Max summary length"),
-        help_text=_("Maximum length of summary in words")
-    )
-    compression_ratio = forms.FloatField(
-        required=False,
-        initial=0.3,
-        min_value=0.1,
-        max_value=0.9,
-        label=_("Compression ratio"),
-        help_text=_("Target size reduction (0.3 = 30% of original)")
-    )
-
     class Meta:
         model = AgentConfig
         fields = [
@@ -185,6 +128,12 @@ class AgentForm(forms.ModelForm):
             "tools",
             "agent_tools",
             "tool_description",
+            "auto_summarize",
+            "token_threshold",
+            "preserve_recent",
+            "strategy",
+            "max_summary_length",
+            "summary_model",
         ]
 
     # ------------------------------------------------------------------ #
@@ -210,20 +159,13 @@ class AgentForm(forms.ModelForm):
         if self.instance.pk:
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
 
-        # Set summarization config initials
-        if self.instance.pk:
-            try:
-                summarization_config = self.instance.summarization_config
-                self.fields["auto_summarize"].initial = summarization_config.auto_summarize
-                self.fields["token_threshold"].initial = summarization_config.token_threshold
-                self.fields["summary_model"].initial = summarization_config.summary_model
-                self.fields["preserve_recent"].initial = summarization_config.preserve_recent
-                self.fields["strategy"].initial = summarization_config.strategy
-                self.fields["max_summary_length"].initial = summarization_config.max_summary_length
-                self.fields["compression_ratio"].initial = summarization_config.compression_ratio
-            except SummarizationConfig.DoesNotExist:
-                # Use defaults
-                pass
+        # Make summarization fields not required (they have model defaults)
+        self.fields["auto_summarize"].required = False
+        self.fields["token_threshold"].required = False
+        self.fields["preserve_recent"].required = False
+        self.fields["strategy"].required = False
+        self.fields["max_summary_length"].required = False
+        self.fields["summary_model"].required = False
 
         # Crispy-forms helper
         #
@@ -254,11 +196,10 @@ class AgentForm(forms.ModelForm):
             Div(
                 Field("auto_summarize"),
                 Field("token_threshold"),
-                Field("summary_model"),
                 Field("preserve_recent"),
                 Field("strategy"),
                 Field("max_summary_length"),
-                Field("compression_ratio"),
+                Field("summary_model"),
                 css_class="mt-4 p-3 border rounded",
                 css_id="summarization-settings",
             ),

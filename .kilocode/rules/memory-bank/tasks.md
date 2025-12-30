@@ -10,7 +10,7 @@ Implementing three key improvements to the manual thread summarization feature:
 2. Summarization runs asynchronously via Celery worker
 3. Summarization settings moved to AgentConfig with auto_summarize=False by default
 
-**Current Phase:** Data Model Migration (Phase 1 of 3)
+**Current Phase:** Celery Async Processing (Phase 2 of 3)
 
 **Requirements:**
 - Compact link visible even when auto-summarization is disabled
@@ -19,14 +19,14 @@ Implementing three key improvements to the manual thread summarization feature:
 - Drop existing SummarizationConfig records (development phase, no migration needed)
 
 **Files to modify:**
-- `nova/models/AgentConfig.py` - Add summarization fields
-- `nova/models/SummarizationConfig.py` - Remove model
-- Migration file - Add summarization fields to AgentConfig
-- `nova/llm/summarization_middleware.py` - Update to use agent config
-- `nova/tests/test_summarization_middleware.py` - Update tests
-- Agent settings form/template - Add collapsible summarization section
+- `nova/models/AgentConfig.py` - ✅ Add summarization fields
+- `nova/models/SummarizationConfig.py` - ✅ Remove model
+- Migration file - ✅ Add summarization fields to AgentConfig
+- `nova/llm/summarization_middleware.py` - ✅ Update to use agent config
+- `nova/tests/test_summarization_middleware.py` - ✅ Update tests
+- Agent settings form/template - ✅ Add collapsible summarization section
 
-**Summarization Fields to Add to AgentConfig:**
+**Summarization Fields Added to AgentConfig:**
 ```python
 auto_summarize = models.BooleanField(default=False, help_text="Enable automatic summarization when token threshold is reached")
 token_threshold = models.IntegerField(default=100, help_text="Token count threshold for triggering summarization")
@@ -37,7 +37,7 @@ summary_model = models.CharField(blank=True, null=True, max_length=100, help_tex
 ```
 
 **Next Phases:**
-1. ✅ **Data Model Migration** (Current)
+1. ✅ **Data Model Migration** (Completed)
 2. **Celery Async Processing** - Create Celery task for manual summarization
 3. **UI Improvements** - Compact link visibility and agent settings form
 

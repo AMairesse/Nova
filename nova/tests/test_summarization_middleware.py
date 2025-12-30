@@ -5,26 +5,25 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from nova.llm.summarization_middleware import SummarizationMiddleware, SummarizerAgent, TokenCounter
 from nova.llm.agent_middleware import AgentContext
-from nova.models.SummarizationConfig import SummarizationConfig
 from nova.tests.base import BaseTestCase
 
 
 class SummarizationMiddlewareTest(BaseTestCase):
     def setUp(self):
         super().setUp()
-        self.config = SummarizationConfig(
-            auto_summarize=True,
-            token_threshold=100,
-            preserve_recent=2,
-            strategy='conversation',
-            max_summary_length=500
-        )
+        self.agent_config = MagicMock()
+        self.agent_config.auto_summarize = True
+        self.agent_config.token_threshold = 100
+        self.agent_config.preserve_recent = 2
+        self.agent_config.strategy = 'conversation'
+        self.agent_config.max_summary_length = 500
+        self.agent_config.summary_model = None
         self.agent = MagicMock()
-        self.middleware = SummarizationMiddleware(self.config, self.agent)
+        self.middleware = SummarizationMiddleware(self.agent_config, self.agent)
 
     def test_should_summarize_disabled(self):
         """Test that summarization is not triggered when disabled."""
-        self.config.auto_summarize = False
+        self.agent_config.auto_summarize = False
         context = AgentContext(agent_config=MagicMock(), user=self.user, thread=MagicMock())
 
         # Mock token counter to return high count

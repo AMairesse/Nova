@@ -7,7 +7,6 @@ from typing import Any, List
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from nova.llm.agent_middleware import BaseAgentMiddleware, AgentContext
-from nova.models.SummarizationConfig import SummarizationConfig
 from nova.llm.checkpoints import get_checkpointer
 
 logger = logging.getLogger(__name__)
@@ -139,10 +138,10 @@ Summary:"""
 class SummarizationMiddleware(BaseAgentMiddleware):
     """Middleware for automatic conversation summarization."""
 
-    def __init__(self, config: SummarizationConfig, agent=None):
-        self.config = config
+    def __init__(self, agent_config, agent=None):
+        self.agent_config = agent_config
         self.agent = agent
-        self.summarizer = SummarizerAgent(config.summary_model or None, agent)
+        self.summarizer = SummarizerAgent(agent_config.summary_model or None, agent)
 
     async def after_message(self, context: AgentContext, result: Any) -> None:
         """Check if summarization is needed after message processing."""
@@ -151,12 +150,12 @@ class SummarizationMiddleware(BaseAgentMiddleware):
 
     async def _should_summarize(self, context: AgentContext) -> bool:
         """Determine if summarization should be triggered."""
-        if not self.config.auto_summarize:
+        if not self.agent_config.auto_summarize:
             return False
 
         token_count = await TokenCounter.count_context_tokens(self.agent)
         max_tokens = self.agent.agent_config.llm_provider.max_context_tokens
-        threshold = min(self.config.token_threshold, max_tokens * 0.8)  # 80% safety margin
+        threshold = min(self.agent_config.token_threshold, max_tokens * 0.8)  # 80% safety margin
         return token_count > threshold
 
     async def _perform_summarization(self, context: AgentContext) -> None:
@@ -173,22 +172,22 @@ class SummarizationMiddleware(BaseAgentMiddleware):
                 return
 
             messages = checkpoint.checkpoint.get('channel_values', {}).get('messages', [])
-            if len(messages) <= self.config.preserve_recent:
+            if len(messages) <= self.agent_config.preserve_recent:
                 return  # Not enough messages to summarize
 
             # Count original tokens
             original_tokens = await self.agent.count_tokens(messages)
 
             # Split messages: preserve recent, summarize older
-            preserved_messages = messages[-self.config.preserve_recent:]
-            messages_to_summarize = messages[:-self.config.preserve_recent]
+            preserved_messages = messages[-self.agent_config.preserve_recent:]
+            messages_to_summarize = messages[:-self.agent_config.preserve_recent]
 
             # Generate summary
             summary = await self.summarizer.summarize_conversation(
                 messages_to_summarize,
-                self.config.strategy,
-                self.config.max_summary_length,
-                self.config.preserve_recent
+                self.agent_config.strategy,
+                self.agent_config.max_summary_length,
+                self.agent_config.preserve_recent
             )
 
             # Count summary tokens (approximate)
@@ -212,7 +211,7 @@ class SummarizationMiddleware(BaseAgentMiddleware):
                     summary_text=summary,
                     original_tokens=original_tokens,
                     summary_tokens=int(summary_tokens),
-                    strategy=self.config.strategy
+                    strategy=self.agent_config.strategy
                 )
 
         except Exception as e:

@@ -47,6 +47,35 @@ class AgentConfig(models.Model):
         help_text=_("Description of this agent when used as a tool (required if is_tool=True)")
     )
 
+    # Summarization settings
+    auto_summarize = models.BooleanField(
+        default=False,
+        help_text="Enable automatic summarization when token threshold is reached"
+    )
+    token_threshold = models.IntegerField(
+        default=100,
+        help_text="Token count threshold for triggering summarization"
+    )
+    preserve_recent = models.IntegerField(
+        default=2,
+        help_text="Number of recent messages to preserve"
+    )
+    strategy = models.CharField(
+        default='conversation',
+        max_length=20,
+        help_text="Summarization strategy: conversation, topic, temporal, hybrid"
+    )
+    max_summary_length = models.IntegerField(
+        default=500,
+        help_text="Maximum length of generated summary in words"
+    )
+    summary_model = models.CharField(
+        blank=True,
+        null=True,
+        max_length=100,
+        help_text="Optional LLM model override for summarization"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

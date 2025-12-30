@@ -15,7 +15,6 @@ from django.views.generic import ListView
 from nova.bootstrap import bootstrap_default_setup
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
-from nova.models.SummarizationConfig import SummarizationConfig
 from nova.models.UserObjects import UserProfile
 from user_settings.forms import AgentForm
 from user_settings.mixins import (
@@ -92,30 +91,6 @@ class _AgentBaseView(DashboardRedirectMixin, LoginRequiredMixin):
         # 2) many-to-many
         if hasattr(form, "save_m2m"):
             form.save_m2m()
-
-        # 3) summarization config
-        summarization_config, created = SummarizationConfig.objects.get_or_create(
-            agent=obj,
-            defaults={
-                'auto_summarize': True,
-                'token_threshold': 3000,
-                'summary_model': '',
-                'preserve_recent': 5,
-                'strategy': 'conversation',
-                'max_summary_length': 1000,
-                'compression_ratio': 0.3,
-            }
-        )
-        if not created:
-            # Update existing with form data or defaults
-            summarization_config.auto_summarize = form.cleaned_data.get('auto_summarize', True)
-            summarization_config.token_threshold = form.cleaned_data.get('token_threshold', 3000)
-            summarization_config.summary_model = form.cleaned_data.get('summary_model', '')
-            summarization_config.preserve_recent = form.cleaned_data.get('preserve_recent', 5)
-            summarization_config.strategy = form.cleaned_data.get('strategy', 'conversation')
-            summarization_config.max_summary_length = form.cleaned_data.get('max_summary_length', 1000)
-            summarization_config.compression_ratio = form.cleaned_data.get('compression_ratio', 0.3)
-            summarization_config.save()
 
         self.object = obj
         return HttpResponseRedirect(self.get_success_url())
