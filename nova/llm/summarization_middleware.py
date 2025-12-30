@@ -4,7 +4,7 @@ SummarizationMiddleware for automatic conversation summarization.
 """
 import logging
 from typing import Any, List
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 
 from nova.llm.agent_middleware import BaseAgentMiddleware, AgentContext
 from nova.models.SummarizationConfig import SummarizationConfig
@@ -102,7 +102,6 @@ Conversation:
 Summary:"""
 
         try:
-            from langchain_core.messages import HumanMessage
             response = await self.llm.ainvoke([HumanMessage(content=prompt)])
             return response.content.strip()
         except Exception as e:
@@ -184,8 +183,11 @@ class SummarizationMiddleware(BaseAgentMiddleware):
             # Count summary tokens (approximate)
             summary_tokens = len(summary.split()) * 1.3  # Rough token estimate
 
-            # TODO: Inject summary into checkpoint
-            # For now, just log and send real-time feedback
+            # Inject summary into checkpoint
+            await self._inject_summary_into_checkpoint(
+                summary, preserved_messages, checkpoint, checkpointer
+            )
+
             logger.info(
                 f"Summarization completed for agent {context.agent_config.name}: "
                 f"summarized {len(messages_to_summarize)} messages ({original_tokens} tokens) "
@@ -210,3 +212,44 @@ class SummarizationMiddleware(BaseAgentMiddleware):
         finally:
             if 'checkpointer' in locals():
                 await checkpointer.conn.close()
+
+    async def _inject_summary_into_checkpoint(
+        self,
+        summary: str,
+        preserved_messages: List[BaseMessage],
+        current_checkpoint,
+        checkpointer
+    ) -> None:
+        """Inject summary into the checkpoint by creating a new checkpoint with summarized messages."""
+        try:
+            # Create summary message
+            summary_message = SystemMessage(
+                content=f"Previous conversation summary: {summary}"
+            )
+
+            # Create new messages list: summary + preserved recent messages
+            new_messages = [summary_message] + preserved_messages
+
+            # Create new checkpoint with updated messages
+            new_checkpoint = current_checkpoint.checkpoint.copy()
+            new_checkpoint["channel_values"] = new_checkpoint["channel_values"].copy()
+            new_checkpoint["channel_values"]["messages"] = new_messages
+
+            # Create new config for the checkpoint (same thread, new checkpoint ID)
+            new_config = {
+                "configurable": {
+                    "thread_id": current_checkpoint.config["configurable"]["thread_id"],
+                    "checkpoint_ns": current_checkpoint.config["configurable"].get("checkpoint_ns", ""),
+                }
+            }
+
+            # Save the new checkpoint
+            await checkpointer.aput(
+                config=new_config,
+                checkpoint=new_checkpoint,
+                metadata=current_checkpoint.metadata
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to inject summary into checkpoint: {e}")
+            raise

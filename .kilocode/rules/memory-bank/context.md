@@ -2,9 +2,13 @@
 
 ## Current Work Focus
 
-WebApp tool: agents can create per-thread static mini webapps (HTML/CSS/JS) that are securely served under /apps/<slug>/ and previewed side-by-side with the chat. Implementation spans:
+**Completed: SummarizationMiddleware Refactor** - Automatic conversation summarization with checkpoint injection:
 
-- Backend models: WebApp + WebAppFile with strict constraints.
-- Builtin tool: WebApp for create/update/read with WebSocket announcements.
-- Views/URLs: secure serving, listing, and dedicated preview page.
-- Frontend: sidebar Webapps tab, webapps_list partial, and PreviewManager integration.
+- **SummarizationConfig Model**: Per-agent configuration for auto-summarization, token thresholds, strategies
+- **SummarizationMiddleware**: Automatic context management that triggers at 80% token usage
+- **Checkpoint Injection**: Creates new LangGraph checkpoints with summarized messages (summary + recent messages)
+- **Real-time Feedback**: WebSocket notifications showing token savings and summarization events
+- **Legacy Cleanup**: Removed manual "compact" functionality from views, tasks, templates, and JavaScript
+- **Testing**: Comprehensive unit tests for middleware logic and checkpoint injection
+
+**Next**: WebApp tool implementation for per-thread static mini webapps.
