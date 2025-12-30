@@ -2,7 +2,6 @@
 import uuid
 import logging
 from typing import Any, Callable, List
-from dataclasses import dataclass
 from django.conf import settings
 
 # Load the langchain tools
@@ -20,7 +19,7 @@ from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
 from nova.llm.tool_error_handling import handle_tool_errors
-from nova.llm.agent_middleware import AgentMiddleware, AgentContext
+from nova.llm.agent_middleware import AgentContext
 from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
@@ -166,7 +165,7 @@ class LLMAgent:
         builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, \
             system_prompt, recursion_limit, \
             llm_provider, summarization_config = await sync_to_async(cls.fetch_agent_data_sync,
-                                                                       thread_sensitive=False)(agent_config, user)
+                                                                     thread_sensitive=False)(agent_config, user)
 
         # If there is a thread into the call then link a checkpoint to it
         if thread:
@@ -210,6 +209,9 @@ class LLMAgent:
 
         llm = agent.create_llm_agent()
 
+        # Store LLM reference for token counting
+        agent.llm = llm
+
         # Update middleware with LLM
         for mw in agent.middleware:
             if hasattr(mw, 'summarizer') and mw.summarizer.agent_llm is None:
@@ -238,22 +240,22 @@ class LLMAgent:
         return agent
 
     def __init__(self, user: settings.AUTH_USER_MODEL,
-                  thread: Thread,
-                  langgraph_thread_id,
-                  agent_config=None,
-                  callbacks: List[BaseCallbackHandler] = None,
-                  allow_langfuse=False,
-                  langfuse_public_key=None,
-                  langfuse_secret_key=None,
-                  langfuse_host=None,
-                  builtin_tools=None,  # Pre-fetched params
-                  mcp_tools_data=None,
-                  agent_tools=None,
-                  has_agent_tools=False,
-                  system_prompt=None,
-                  recursion_limit=None,
-                  llm_provider=None,
-                  summarization_config=None):
+                 thread: Thread,
+                 langgraph_thread_id,
+                 agent_config=None,
+                 callbacks: List[BaseCallbackHandler] = None,
+                 allow_langfuse=False,
+                 langfuse_public_key=None,
+                 langfuse_secret_key=None,
+                 langfuse_host=None,
+                 builtin_tools=None,  # Pre-fetched params
+                 mcp_tools_data=None,
+                 agent_tools=None,
+                 has_agent_tools=False,
+                 system_prompt=None,
+                 recursion_limit=None,
+                 llm_provider=None,
+                 summarization_config=None):
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
@@ -503,9 +505,27 @@ class LLMAgent:
         """Count tokens in messages using the agent's LLM."""
         if hasattr(self, 'llm') and self.llm:
             try:
-                return await self.llm.count_tokens(messages)
-            except AttributeError:
-                # Fallback: rough estimate
-                total_chars = sum(len(str(msg.content)) for msg in messages)
-                return total_chars // 4  # Rough estimate: 4 chars per token
+                # Try async count_tokens first
+                if hasattr(self.llm, 'count_tokens'):
+                    return await self.llm.count_tokens(messages)
+            except (AttributeError, TypeError):
+                pass
+
+            try:
+                # Try sync count_tokens
+                if hasattr(self.llm, 'count_tokens'):
+                    return self.llm.count_tokens(messages)
+            except (AttributeError, TypeError):
+                pass
+
+            # Fallback: rough estimate based on model
+            total_chars = sum(len(str(msg.content)) for msg in messages)
+            # Adjust estimate based on model type (GPT models are more token-efficient)
+            model_name = getattr(self.llm, 'model_name', '') or getattr(self.llm, 'model', '')
+            if 'gpt-4' in model_name.lower():
+                return total_chars // 3  # GPT-4 is more efficient
+            elif 'gpt-3.5' in model_name.lower():
+                return total_chars // 4  # Standard estimate
+            else:
+                return total_chars // 5  # Conservative estimate for other models
         return 0
