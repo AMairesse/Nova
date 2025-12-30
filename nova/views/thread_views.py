@@ -13,7 +13,7 @@ from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
-from nova.tasks.tasks import run_ai_task_celery, compact_conversation_celery
+from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
 import logging
 
@@ -278,29 +278,3 @@ def add_message(request):
     })
 
 
-@require_POST
-@login_required(login_url='login')
-def compact_thread(request, thread_id):
-    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-
-    # Get agent (default or from profile)
-    try:
-        agent_config = request.user.userprofile.default_agent
-    except UserProfile.DoesNotExist:
-        agent_config = None
-
-    # Create task
-    task = Task.objects.create(
-        user=request.user,
-        thread=thread,
-        agent_config=agent_config,
-        status=TaskStatus.PENDING
-    )
-
-    # Queue task (system message will be added by CompactTaskExecutor after completion)
-    compact_conversation_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None)
-
-    return JsonResponse({
-        'status': 'queued',
-        'task_id': task.id
-    })

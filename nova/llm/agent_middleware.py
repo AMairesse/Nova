@@ -16,6 +16,7 @@ class AgentContext:
     agent_config: Any  # AgentConfig
     user: Any  # User model
     thread: Any  # Thread model
+    progress_handler: Any = None  # TaskProgressHandler for real-time updates
 
 
 class AgentMiddleware(ABC):

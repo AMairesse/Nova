@@ -207,6 +207,9 @@
 
                 'task_error': (data) => {
                     this.onTaskError(taskId, data);
+                },
+                'summarization_complete': (data) => {
+                    this.onSummarizationComplete(data);
                 }
             };
 
@@ -423,6 +426,37 @@
             }
             // Re-enable input area on error
             this.setInputAreaDisabled(false);
+        }
+
+        onSummarizationComplete(data) {
+            // Show summarization notification
+            const { summary, original_tokens, summary_tokens, strategy } = data;
+
+            // Create a toast notification or system message
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-info alert-dismissible fade show position-fixed';
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+            notification.innerHTML = `
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>Conversation summarized</strong><br>
+                <small>Reduced from ${original_tokens} to ~${summary_tokens} tokens using ${strategy} strategy</small>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+
+            document.body.appendChild(notification);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+
+            // Update progress logs
+            const progressLogs = document.getElementById('progress-logs');
+            if (progressLogs) {
+                progressLogs.textContent = `Conversation summarized (${original_tokens} → ${summary_tokens} tokens)`;
+            }
         }
     };
 

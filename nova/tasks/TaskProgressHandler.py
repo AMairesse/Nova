@@ -84,6 +84,18 @@ class TaskProgressHandler(AsyncCallbackHandler):
                                                               'created_at': created_at
                                                               }})
 
+    async def on_summarization_complete(self, summary_text, original_tokens, summary_tokens, strategy):
+        '''
+        Send a message to the client when summarization is completed
+        '''
+        await self.publish_update('summarization_complete', {
+            'summary': summary_text,
+            'original_tokens': original_tokens,
+            'summary_tokens': summary_tokens,
+            'strategy': strategy,
+            'timestamp': None  # Will be set by client
+        })
+
     async def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], *, run_id: UUID,
                              parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None,
                              metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:

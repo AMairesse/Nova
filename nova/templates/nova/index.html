@@ -148,10 +148,6 @@
         <i class="bi bi-arrow-clockwise"></i>
         {% trans "Regenerate response" %}
       </button>
-      <button type="button" class="action-sheet-btn d-none" id="context-menu-compact">
-        <i class="bi bi-filter-circle"></i>
-        {% trans "Compact thread" %}
-      </button>
     </div>
   </div>
 </div>
@@ -172,7 +168,6 @@
     createThread: "{% url 'create_thread' %}",
     deleteThread: "{% url 'delete_thread' 0 %}",
     loadMoreThreads: "{% url 'load_more_threads' %}",
-    compactThread: "{% url 'compact_thread' 0 %}",
     fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",

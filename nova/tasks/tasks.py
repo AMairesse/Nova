@@ -11,7 +11,6 @@ from langchain_core.messages import BaseMessage
 
 from nova.llm.checkpoints import get_checkpointer
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
@@ -19,7 +18,6 @@ from nova.models.ScheduledTask import ScheduledTask
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.tasks.TaskExecutor import TaskExecutor
-from nova.utils import markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -152,73 +150,6 @@ class ContextConsumptionTracker:
         return total_bytes // 4 + 1
 
 
-class CompactTaskExecutor (TaskExecutor):
-    """
-    Encapsulates the execution of a compact task
-    """
-
-    async def _create_prompt(self):
-        # Emit progress update for analysis phase
-        await self.handler.on_progress("Analyzing conversation...")
-
-        # Retrieve context consumption
-        real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
-            self.agent_config, self.llm
-        )
-
-        target_tokens = int(real_tokens or approx_tokens * 0.3)
-        target_words = int(target_tokens / 0.75)
-
-        # Prompt for summary (partie sync, inchangée)
-        prompt = f"""Summarize the conversation to a maximum of {target_words} words,
-                     Capture key points, user intent, and outcomes without adding new information.
-                     Use the same language as the conversation's language and reply in Markdown."""
-        return prompt
-
-    async def _process_result(self, result):
-        await super()._process_result(result)
-
-        # Emit progress update for checkpoint update
-        await self.handler.on_progress("Updating context")
-
-        config = self.llm.config
-
-        # Remove old checkpoints
-        thread_id = config['configurable']['thread_id']
-        checkpointer = await get_checkpointer()
-        try:
-            await checkpointer.adelete_thread(thread_id)
-        finally:
-            await checkpointer.conn.close()
-
-        # Inject the summary
-        from langchain_core.messages import AIMessage
-        dummy_input = {"messages": [AIMessage(content=result, additional_kwargs={'summary': True})]}
-
-        graph = self.llm.langchain_agent
-        await graph.ainvoke(dummy_input, config=config)
-
-        # Add system message with summary details
-        system_message_text = "ℹ️ Conversation compacted"
-        system_message = await sync_to_async(self.thread.add_message, thread_sensitive=False)(
-            system_message_text, actor=Actor.SYSTEM
-        )
-        system_message.internal_data = {
-            'type': 'compact_complete',
-            'summary': result
-        }
-        await sync_to_async(system_message.save, thread_sensitive=False)()
-
-        # Process markdown to HTML server-side before sending the message
-        system_message.internal_data['summary'] = markdown_to_html(system_message.internal_data['summary'])
-
-        # Broadcast the new message to all connected WebSocket clients for real-time UI updates
-        if hasattr(system_message.created_at, 'isoformat'):
-            created_at = system_message.created_at.isoformat()
-        else:
-            created_at = str(system_message.created_at)
-        await self.handler.on_new_message(system_message.id, system_message.text, system_message.actor,
-                                          system_message.internal_data, created_at)
 
 
 async def delete_checkpoints(ckp_id):
@@ -229,36 +160,6 @@ async def delete_checkpoints(ckp_id):
         await checkpointer.conn.close()
 
 
-@shared_task(bind=True, name="compact_conversation")
-def compact_conversation_celery(self, task_pk, user_pk, thread_pk, agent_pk):
-    """
-    Celery task to summarize conversation and update checkpoint.
-    """
-    try:
-        # Fetch objects
-        task = Task.objects.select_related('user', 'thread').get(pk=task_pk)
-        user = User.objects.get(pk=user_pk)
-        thread = Thread.objects.select_related('user').get(pk=thread_pk)
-        agent_config = AgentConfig.objects.select_related('llm_provider').get(pk=agent_pk) if agent_pk else None
-
-        # Call the agent
-        executor = CompactTaskExecutor(task, user, thread, agent_config, "")
-        asyncio.run(executor.execute_or_resume())
-
-        # Find and delete sub-agents' checkpoints
-        other_agents_ckp = CheckpointLink.objects.filter(thread=thread).exclude(agent=agent_config)
-        for ckp in other_agents_ckp:
-            # Get the checkpoint_id
-            checkpoint_id = ckp.checkpoint_id
-            # Delete the checkpoint
-            logger.info(f"Deleting checkpoint {checkpoint_id}")
-            asyncio.run(delete_checkpoints(checkpoint_id))
-            ckp.delete()
-
-    except Exception as e:
-        logger.error(f"Celery task {task_pk} failed: {e}")
-        # Let Celery handle retry logic
-        raise self.retry(countdown=60, exc=e)
 
 
 @shared_task(bind=True, name="run_ai_task")

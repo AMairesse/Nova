@@ -65,12 +65,6 @@
                         dropdownButton.setAttribute('title', label);
                     }
                 },
-                '.compact-thread-btn': (e, target) => {
-                    e.preventDefault();
-                    const btn = target.closest('.compact-thread-btn');
-                    const threadId = btn.dataset.threadId;
-                    this.compactThread(threadId, btn);
-                },
                 '.interaction-answer-btn': (e, target) => {
                     e.preventDefault();
                     const btn = target.closest(".interaction-answer-btn");
@@ -170,23 +164,6 @@
             }
         }
 
-        async compactThread(threadId, btnEl) {
-            const clickedBtn = btnEl || document.querySelector(`.compact-thread-btn[data-thread-id="${threadId}"]`);
-            if (!clickedBtn || clickedBtn.disabled) return;
-            const originalHtml = clickedBtn.innerHTML;
-            clickedBtn.disabled = true;
-            clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
-            try {
-                const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
-                if (!response.ok) throw new Error('Server error');
-                const data = await response.json();
-                if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
-            } catch (error) {
-                console.error('Error compacting thread:', error);
-                clickedBtn.disabled = false;
-                clickedBtn.innerHTML = originalHtml;
-            }
-        }
 
         async answerInteraction(interactionId, answer) {
             const clickedBtn = document.querySelector(`.interaction-answer-btn[data-interaction-id="${interactionId}"]`);
@@ -708,11 +685,6 @@
                 regenerateBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
             }
 
-            // Show/hide compact button (only for last agent message)
-            const compactBtn = document.getElementById('context-menu-compact');
-            if (compactBtn) {
-                compactBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
-            }
 
             // Show the offcanvas
             this.contextMenuOffcanvas.show();
@@ -751,16 +723,6 @@
                 });
             }
 
-            // Compact thread
-            const compactBtn = document.getElementById('context-menu-compact');
-            if (compactBtn) {
-                compactBtn.addEventListener('click', () => {
-                    if (this.currentThreadId) {
-                        this.compactThread(this.currentThreadId);
-                    }
-                    this.contextMenuOffcanvas.hide();
-                });
-            }
         }
 
         async copyMessageToClipboard() {

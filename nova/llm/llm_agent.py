@@ -20,7 +20,7 @@ from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
 from nova.llm.tool_error_handling import handle_tool_errors
-from nova.llm.agent_middleware import AgentMiddleware
+from nova.llm.agent_middleware import AgentMiddleware, AgentContext
 from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
@@ -102,11 +102,6 @@ register_provider(
 # Example: Adding a new provider (can be done anywhere, even in a plugin)
 # register_provider(ProviderType.ANTHROPIC, lambda p: ChatAnthropic(...))
 # --------------------------------------------------------------------- #
-@dataclass
-class AgentContext:
-    agent_config: AgentConfig
-    user: settings.AUTH_USER_MODEL
-    thread: Thread
 
 
 class LLMAgent:
@@ -376,10 +371,18 @@ class LLMAgent:
             config.update({"recursion_limit": self.recursion_limit})
 
         # Create context for middleware
+        # Find progress handler from callbacks if available
+        progress_handler = None
+        for callback in self.config.get('callbacks', []):
+            if hasattr(callback, 'on_summarization_complete'):  # Check if it's our TaskProgressHandler
+                progress_handler = callback
+                break
+
         agent_context = AgentContext(
             agent_config=self.agent_config,
             user=self.user,
-            thread=self.thread
+            thread=self.thread,
+            progress_handler=progress_handler
         )
 
         full_question = f"{question}"
@@ -463,10 +466,18 @@ class LLMAgent:
             config.update({"recursion_limit": self.recursion_limit})
 
         # Create context for middleware
+        # Find progress handler from callbacks if available
+        progress_handler = None
+        for callback in self.config.get('callbacks', []):
+            if hasattr(callback, 'on_summarization_complete'):  # Check if it's our TaskProgressHandler
+                progress_handler = callback
+                break
+
         context = AgentContext(
             agent_config=self.agent_config,
             user=self.user,
-            thread=self.thread
+            thread=self.thread,
+            progress_handler=progress_handler
         )
 
         while True:
