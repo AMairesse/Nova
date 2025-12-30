@@ -426,25 +426,20 @@
 
                 const data = await response.json();
 
-                if (data.status === 'OK') {
-                    // Show success message on all links
-                    compactLinks.forEach(link => {
-                        link.innerHTML = '<i class="bi bi-check-circle me-1"></i>' + gettext('Started!');
-                        link.classList.add('text-success');
+                if (data.status === 'OK' && data.task_id) {
+                    // Register streaming for the summarization task (this will disable input area)
+                    this.streamingManager.registerStream(data.task_id, {
+                        id: data.task_id,
+                        actor: 'system',  // Summarization is a system operation
+                        text: ''
                     });
 
-                    // Show a brief message that summarization is in progress
-                    this.showToast('Summarization started. This may take a few moments.', 'info');
+                    // Update compact links to show it's running
+                    compactLinks.forEach(link => {
+                        link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Running...');
+                    });
 
-                    // Reset links after 3 seconds
-                    setTimeout(() => {
-                        compactLinks.forEach((link, index) => {
-                            link.innerHTML = originalHtmls[index];
-                            link.style.pointerEvents = '';
-                            link.style.opacity = '';
-                            link.classList.remove('text-success');
-                        });
-                    }, 3000);
+                    // Note: Links will be reset when streaming completes via WebSocket events
                 } else {
                     throw new Error(data.message || 'Summarization failed');
                 }

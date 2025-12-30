@@ -59,8 +59,6 @@ class SummarizationMiddlewareTest(BaseTestCase):
         """Test that checkpoint injection creates new checkpoint with summarized messages."""
         # Setup mocks
         mock_checkpointer = AsyncMock()
-        mock_graph = AsyncMock()
-        self.agent.langchain_agent = mock_graph
 
         # Create mock checkpoint
         mock_checkpoint = MagicMock()
@@ -88,6 +86,10 @@ class SummarizationMiddlewareTest(BaseTestCase):
             HumanMessage(content="Recent message"),
             AIMessage(content="Recent response")
         ]
+
+        # Mock the agent's langchain_agent (the graph)
+        mock_graph = AsyncMock()
+        self.agent.langchain_agent = mock_graph
 
         # Call the method
         await self.middleware._inject_summary_into_checkpoint(

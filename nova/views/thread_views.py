@@ -305,7 +305,7 @@ def add_message(request):
 def summarize_thread(request, thread_id):
     """Manually trigger conversation summarization for a thread."""
     # Verify thread exists and user has access
-    get_object_or_404(Thread, id=thread_id, user=request.user)
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
 
     # Get the agent's summarization config
     agent_config = getattr(request.user.userprofile, "default_agent", None)
@@ -315,18 +315,19 @@ def summarize_thread(request, thread_id):
             "message": "No default agent configured"
         }, status=400)
 
-    try:
-        # Trigger async summarization task
-        summarize_thread_task.delay(thread_id, request.user.id, agent_config.id)
+    # Create a task for tracking the summarization
+    task = Task.objects.create(
+        user=request.user,
+        thread=thread,
+        agent_config=agent_config,
+        status=TaskStatus.PENDING
+    )
 
-        return JsonResponse({
-            "status": "OK",
-            "message": "Thread summarization started. This may take a few moments."
-        })
+    # Trigger async summarization task
+    summarize_thread_task.delay(thread_id, request.user.id, agent_config.id, task.id)
 
-    except Exception as e:
-        logger.error(f"Failed to start summarization task for thread {thread_id}: {e}")
-        return JsonResponse({
-            "status": "ERROR",
-            "message": f"Failed to start summarization: {str(e)}"
-        }, status=500)
+    return JsonResponse({
+        "status": "OK",
+        "task_id": task.id,
+        "message": "Thread summarization started."
+    })

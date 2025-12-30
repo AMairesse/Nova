@@ -462,6 +462,16 @@
             if (progressLogs) {
                 progressLogs.textContent = `Conversation summarized (${original_tokens} → ${summary_tokens} tokens)`;
             }
+
+            // Find the task ID from active streams and complete it (re-enables input)
+            // Since we don't know which task this is for, complete all active streams
+            // This is a bit of a hack, but works for the current use case
+            for (const [taskId, stream] of this.activeStreams) {
+                if (stream.status === 'streaming') {
+                    this.onStreamComplete(taskId);
+                    break; // Only complete one stream (the summarization task)
+                }
+            }
         }
     };
 

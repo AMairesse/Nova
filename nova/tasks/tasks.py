@@ -217,55 +217,69 @@ def resume_ai_task_celery(self, interaction_pk: int):
 
 
 @shared_task(bind=True, name="summarize_thread_task")
-def summarize_thread_task(self, thread_id, user_id, agent_config_id):
+def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id):
     """
     Celery task to manually summarize a thread.
     """
     try:
-        from nova.llm.summarization_middleware import SummarizationMiddleware
+        from nova.tasks.TaskProgressHandler import TaskProgressHandler
+        from nova.llm.agent_middleware import AgentContext
 
         # Get objects
         thread = Thread.objects.get(id=thread_id, user_id=user_id)
         user = User.objects.get(id=user_id)
         agent_config = AgentConfig.objects.get(id=agent_config_id, user=user)
+        task = Task.objects.get(id=task_id)
 
-        # Create middleware directly (simpler than full LLMAgent for manual summarization)
-        # For manual summarization, we create a minimal agent just for LLM access
-        from nova.llm.llm_agent import LLMAgent
-        minimal_agent = LLMAgent(
-            user=user,
-            thread=None,
-            langgraph_thread_id=None,
-            agent_config=agent_config,
-            llm_provider=agent_config.llm_provider
-        )
-        minimal_agent.llm = minimal_agent.create_llm_agent()
-        middleware = SummarizationMiddleware(agent_config, minimal_agent)
-        # Set the LLM reference for the summarizer
-        middleware.summarizer.agent_llm = minimal_agent.llm
+        # Create progress handler for WebSocket updates
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+        progress_handler = TaskProgressHandler(task.id, channel_layer)
 
-        # Create a simple context for middleware
-        from nova.llm.agent_middleware import AgentContext
-        context = AgentContext(
-            agent_config=agent_config,
-            user=user,
-            thread=thread
-        )
+        # Update task status
+        task.status = TaskStatus.RUNNING
+        task.save()
 
-        # No progress handler for manual summarization (no WebSocket connection)
-        context.progress_handler = None
+        try:
+            # Create the full agent (same as automatic summarization)
+            from nova.llm.llm_agent import LLMAgent
+            llm_agent = asyncio.run(LLMAgent.create(user, thread, agent_config))
 
-        # Perform manual summarization and get result
-        # Note: This runs synchronously to avoid async database connection issues
-        result = asyncio.run(middleware.manual_summarize(context))
+            # Create context for middleware
+            context = AgentContext(
+                agent_config=agent_config,
+                user=user,
+                thread=thread,
+                progress_handler=progress_handler
+            )
 
-        if result["status"] == "success":
-            logger.info(f"Thread {thread_id} summarization completed successfully")
-            # Note: User notification would need to be handled via WebSocket or email
-            # since Celery tasks don't have request context for Django messages
-        else:
-            logger.warning(f"Thread {thread_id} summarization failed: {result['message']}")
-            # Note: User notification would need to be handled via WebSocket or email
+            # Find the summarization middleware and call manual_summarize
+            middleware = None
+            for mw in llm_agent.middleware:
+                if hasattr(mw, 'manual_summarize'):
+                    middleware = mw
+                    break
+
+            if not middleware:
+                raise ValueError("SummarizationMiddleware not found on agent")
+
+            # Perform manual summarization using the same logic as automatic
+            result = asyncio.run(middleware.manual_summarize(context))
+
+            if result["status"] == "success":
+                logger.info(f"Thread {thread_id} summarization completed successfully")
+                # Mark task as completed
+                task.status = TaskStatus.COMPLETED
+                task.save()
+            else:
+                raise ValueError(f"Summarization failed: {result['message']}")
+
+        except Exception as e:
+            # Mark task as failed
+            task.status = TaskStatus.FAILED
+            task.save()
+            asyncio.run(progress_handler.on_progress(f"Summarization failed: {str(e)}"))
+            raise
 
     except Exception as e:
         logger.error(f"Summarization task failed for thread {thread_id}: {e}")
