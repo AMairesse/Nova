@@ -58,17 +58,32 @@ class SummarizerAgent:
             return await self._summarize_conversation(messages, target_length)
 
     async def _summarize_conversation(self, messages: List[BaseMessage], target_length: int) -> str:
-        """Basic conversation summarization."""
-        # Simple implementation: extract key points
-        human_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
-        ai_messages = [msg for msg in messages if isinstance(msg, AIMessage)]
+        """Basic conversation summarization using LLM."""
+        if not self.agent_llm:
+            # Fallback to simple summary
+            human_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
+            ai_messages = [msg for msg in messages if isinstance(msg, AIMessage)]
+            return f"Conversation with {len(human_messages)} user messages and {len(ai_messages)} AI responses."
 
-        summary = f"Conversation with {len(human_messages)} user messages and {len(ai_messages)} AI responses."
-        if len(messages) > 10:
-            summary += " The discussion covered multiple topics and interactions."
+        # Create summarization prompt
+        conversation_text = "\n".join([f"{msg.type}: {msg.content}" for msg in messages])
 
-        # TODO: Use LLM for better summarization
-        return summary
+        prompt = f"""Please summarize the following conversation in about {target_length} words or less.
+Focus on the key points, decisions made, and current status.
+
+Conversation:
+{conversation_text}
+
+Summary:"""
+
+        try:
+            from langchain_core.messages import HumanMessage
+            response = await self.agent_llm.ainvoke([HumanMessage(content=prompt)])
+            return response.content.strip()
+        except Exception as e:
+            logger.warning(f"LLM summarization failed: {e}")
+            # Fallback
+            return f"Summary of {len(messages)} messages (LLM failed)."
 
     async def _summarize_by_topic(self, messages: List[BaseMessage], target_length: int) -> str:
         """Summarize by grouping messages by topic."""
@@ -104,14 +119,10 @@ class SummarizationMiddleware(BaseAgentMiddleware):
         if not self.config.auto_summarize:
             return False
 
-        # TODO: Implement token counting
-        # token_count = await TokenCounter.count_context_tokens(context.agent)
-        # threshold = min(self.config.token_threshold,
-        #                context.agent.max_tokens * 0.8)  # 80% safety margin
-        # return token_count > threshold
-
-        # For now, always return False
-        return False
+        token_count = await TokenCounter.count_context_tokens(self.agent)
+        max_tokens = self.agent.agent_config.llm_provider.max_context_tokens
+        threshold = min(self.config.token_threshold, max_tokens * 0.8)  # 80% safety margin
+        return token_count > threshold
 
     async def _perform_summarization(self, context: AgentContext) -> None:
         """Perform conversation summarization."""
