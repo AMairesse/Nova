@@ -18,6 +18,21 @@
     <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
     {% crispy form %}
 
+    {# Add header for summarization section if present #}
+    {% if form.fields.auto_summarize %}
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          const summarizationDiv = document.getElementById('summarization-settings');
+          if (summarizationDiv) {
+            const header = document.createElement('h5');
+            header.className = 'mb-3';
+            header.textContent = '{% trans "Summarization Settings" %}';
+            summarizationDiv.insertBefore(header, summarizationDiv.firstChild);
+          }
+        });
+      </script>
+    {% endif %}
+
     <div class="mt-4">
       <button class="btn btn-primary me-2" type="submit">
         <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}

@@ -20,6 +20,8 @@ from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
 from nova.llm.tool_error_handling import handle_tool_errors
+from nova.llm.agent_middleware import AgentMiddleware
+from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
@@ -148,9 +150,10 @@ class LLMAgent:
         system_prompt = agent_config.system_prompt
         recursion_limit = agent_config.recursion_limit
         llm_provider = agent_config.llm_provider
+        summarization_config = getattr(agent_config, 'summarization_config', None)
         return builtin_tools, mcp_tools_data, agent_tools, \
             has_agent_tools, system_prompt, recursion_limit, \
-            llm_provider
+            llm_provider, summarization_config
 
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
@@ -167,8 +170,8 @@ class LLMAgent:
 
         builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, \
             system_prompt, recursion_limit, \
-            llm_provider = await sync_to_async(cls.fetch_agent_data_sync,
-                                               thread_sensitive=False)(agent_config, user)
+            llm_provider, summarization_config = await sync_to_async(cls.fetch_agent_data_sync,
+                                                                       thread_sensitive=False)(agent_config, user)
 
         # If there is a thread into the call then link a checkpoint to it
         if thread:
@@ -200,7 +203,8 @@ class LLMAgent:
             has_agent_tools=has_agent_tools,
             system_prompt=system_prompt,
             recursion_limit=recursion_limit,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
+            summarization_config=summarization_config
         )
 
         # Store checkpointer for cleanup
@@ -210,6 +214,11 @@ class LLMAgent:
         tools = await load_tools(agent)
 
         llm = agent.create_llm_agent()
+
+        # Update middleware with LLM
+        for mw in agent.middleware:
+            if hasattr(mw, 'summarizer') and mw.summarizer.agent_llm is None:
+                mw.summarizer.agent_llm = llm
 
         # Create the ReAct agent with middleware
         middleware = [nova_system_prompt, handle_tool_errors]
@@ -234,21 +243,22 @@ class LLMAgent:
         return agent
 
     def __init__(self, user: settings.AUTH_USER_MODEL,
-                 thread: Thread,
-                 langgraph_thread_id,
-                 agent_config=None,
-                 callbacks: List[BaseCallbackHandler] = None,
-                 allow_langfuse=False,
-                 langfuse_public_key=None,
-                 langfuse_secret_key=None,
-                 langfuse_host=None,
-                 builtin_tools=None,  # Pre-fetched params
-                 mcp_tools_data=None,
-                 agent_tools=None,
-                 has_agent_tools=False,
-                 system_prompt=None,
-                 recursion_limit=None,
-                 llm_provider=None):
+                  thread: Thread,
+                  langgraph_thread_id,
+                  agent_config=None,
+                  callbacks: List[BaseCallbackHandler] = None,
+                  allow_langfuse=False,
+                  langfuse_public_key=None,
+                  langfuse_secret_key=None,
+                  langfuse_host=None,
+                  builtin_tools=None,  # Pre-fetched params
+                  mcp_tools_data=None,
+                  agent_tools=None,
+                  has_agent_tools=False,
+                  system_prompt=None,
+                  recursion_limit=None,
+                  llm_provider=None,
+                  summarization_config=None):
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
@@ -313,11 +323,17 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self.recursion_limit = recursion_limit
         self._llm_provider = llm_provider
+        self.summarization_config = summarization_config
 
         # Initialize resources and loaded modules tracker
         self._resources = {}
         self._loaded_builtin_modules = []
         self.checkpointer = None
+        self.middleware = []  # Agent middleware list
+
+        # Add summarization middleware if configured
+        if self.summarization_config:
+            self.middleware.append(SummarizationMiddleware(self.summarization_config, self))
 
     async def cleanup(self):
         """Async cleanup method to close resources for loaded builtin modules, Langfuse client, and checkpointer."""
@@ -360,7 +376,7 @@ class LLMAgent:
             config.update({"recursion_limit": self.recursion_limit})
 
         # Create context for middleware
-        context = AgentContext(
+        agent_context = AgentContext(
             agent_config=self.agent_config,
             user=self.user,
             thread=self.thread
@@ -373,8 +389,12 @@ class LLMAgent:
             result = await self.langchain_agent.ainvoke(
                 {"messages": message},
                 config=config,
-                context=context
+                context=agent_context
             )
+
+            # Call after_message middleware
+            for middleware in self.middleware:
+                await middleware.after_message(agent_context, result)
 
             # If the result contains an interruption then stop processing and
             # return the interruption
@@ -467,3 +487,14 @@ class LLMAgent:
 
     async def get_langgraph_state(self):
         return await sync_to_async(self.langchain_agent.get_state, thread_sensitive=False)(self.config)
+
+    async def count_tokens(self, messages):
+        """Count tokens in messages using the agent's LLM."""
+        if hasattr(self, 'llm') and self.llm:
+            try:
+                return await self.llm.count_tokens(messages)
+            except AttributeError:
+                # Fallback: rough estimate
+                total_chars = sum(len(str(msg.content)) for msg in messages)
+                return total_chars // 4  # Rough estimate: 4 chars per token
+        return 0

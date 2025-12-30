@@ -5,6 +5,7 @@ from django.contrib.auth.models import User
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction
+from nova.models.SummarizationConfig import SummarizationConfig
 from nova.models.Task import Task
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
@@ -18,6 +19,7 @@ from nova.models.WebAppFile import WebAppFile
 
 admin.site.site_header = "Nova Admin"
 admin.site.register(AgentConfig)
+admin.site.register(SummarizationConfig)
 admin.site.register(Tool)
 admin.site.register(ToolCredential)
 admin.site.register(UserInfo)
