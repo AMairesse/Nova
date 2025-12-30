@@ -60,6 +60,8 @@ class SummarizationMiddlewareTest(BaseTestCase):
         """Test that checkpoint injection creates new checkpoint with summarized messages."""
         # Setup mocks
         mock_checkpointer = AsyncMock()
+        mock_graph = AsyncMock()
+        self.agent.langchain_agent = mock_graph
 
         # Create mock checkpoint
         mock_checkpoint = MagicMock()
@@ -93,21 +95,18 @@ class SummarizationMiddlewareTest(BaseTestCase):
             summary, preserved_messages, mock_checkpoint, mock_checkpointer
         )
 
-        # Verify checkpointer.aput was called
-        mock_checkpointer.aput.assert_called_once()
-
-        # Get the call arguments
-        call_args = mock_checkpointer.aput.call_args
-        config_arg = call_args[1]['config']
-        checkpoint_arg = call_args[1]['checkpoint']
-        metadata_arg = call_args[1]['metadata']
+        # Verify graph.ainvoke was called with correct arguments
+        mock_graph.ainvoke.assert_called_once()
+        call_args = mock_graph.ainvoke.call_args
+        dummy_input = call_args[0][0]
+        config = call_args[1]['config']
 
         # Verify config
-        self.assertEqual(config_arg['configurable']['thread_id'], 'test-thread')
-        self.assertEqual(config_arg['configurable']['checkpoint_ns'], '')
+        self.assertEqual(config['configurable']['thread_id'], 'test-thread')
+        self.assertEqual(config['configurable']['checkpoint_ns'], '')
 
-        # Verify checkpoint has new messages
-        messages = checkpoint_arg['channel_values']['messages']
+        # Verify dummy input has new messages
+        messages = dummy_input['messages']
         self.assertEqual(len(messages), 3)  # summary + 2 preserved
 
         # First message should be the summary
@@ -118,9 +117,6 @@ class SummarizationMiddlewareTest(BaseTestCase):
         # Remaining messages should be preserved
         self.assertEqual(messages[1], preserved_messages[0])
         self.assertEqual(messages[2], preserved_messages[1])
-
-        # Verify metadata is preserved
-        self.assertEqual(metadata_arg, mock_checkpoint.metadata)
 
 
 class SummarizerAgentTest(BaseTestCase):

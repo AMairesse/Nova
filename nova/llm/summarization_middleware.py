@@ -37,7 +37,8 @@ class SummarizerAgent:
         self.model_name = model_name
         self.agent = agent
         self.agent_llm = None  # Will be set by LLMAgent.create()
-        self.llm = self._create_llm()
+        # Don't create LLM here - it will be created when needed
+        self.llm = None
 
     def _create_llm(self):
         """Create LLM for summarization."""
@@ -90,6 +91,10 @@ class SummarizerAgent:
 
     async def _summarize_conversation(self, messages: List[BaseMessage], target_length: int) -> str:
         """Basic conversation summarization using LLM."""
+        # Ensure LLM is available (it might have been set after initialization)
+        if not self.llm:
+            self.llm = self._create_llm()
+
         if not self.llm:
             # Fallback to simple summary
             human_messages = [msg for msg in messages if isinstance(msg, HumanMessage)]
@@ -226,7 +231,7 @@ class SummarizationMiddleware(BaseAgentMiddleware):
         current_checkpoint,
         checkpointer
     ) -> None:
-        """Inject summary into the checkpoint by creating a new checkpoint with summarized messages."""
+        """Inject summary into the checkpoint using the graph's normal flow."""
         try:
             # Create summary message
             summary_message = SystemMessage(
@@ -236,29 +241,22 @@ class SummarizationMiddleware(BaseAgentMiddleware):
             # Create new messages list: summary + preserved recent messages
             new_messages = [summary_message] + preserved_messages
 
-            # Create new checkpoint with updated messages
-            new_checkpoint = current_checkpoint.checkpoint.copy()
-            new_checkpoint["channel_values"] = new_checkpoint["channel_values"].copy()
-            new_checkpoint["channel_values"]["messages"] = new_messages
+            # Use the graph's ainvoke to properly update the checkpoint
+            # This ensures all internal LangGraph state is updated correctly
+            config = current_checkpoint.config.copy()
 
-            # Create new config for the checkpoint (same thread, new checkpoint ID)
-            new_config = {
-                "configurable": {
-                    "thread_id": current_checkpoint.config["configurable"]["thread_id"],
-                    "checkpoint_ns": current_checkpoint.config["configurable"].get("checkpoint_ns", ""),
-                }
-            }
+            # Create a dummy input with the summarized messages
+            # The graph will process this and create a proper checkpoint
+            dummy_input = {"messages": new_messages}
 
-            # Save the new checkpoint
-            # new_versions indicates which channels have new values in this write
-            new_versions = {"messages": 1}  # Messages channel has been updated with summary
+            # Get the graph from the agent
+            graph = self.agent.langchain_agent
 
-            await checkpointer.aput(
-                config=new_config,
-                checkpoint=new_checkpoint,
-                metadata=current_checkpoint.metadata,
-                new_versions=new_versions
-            )
+            # Invoke the graph with the summarized messages
+            # This will create a new checkpoint with the summarized state
+            await graph.ainvoke(dummy_input, config=config)
+
+            logger.info("Injected summary into checkpoint using graph flow")
 
         except Exception as e:
             logger.error(f"Failed to inject summary into checkpoint: {e}")
