@@ -1,7 +1,7 @@
 # nova/tests/test_summarization_middleware.py
 import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 from nova.llm.summarization_middleware import SummarizationMiddleware, SummarizerAgent, TokenCounter
 from nova.llm.agent_middleware import AgentContext
@@ -95,6 +95,9 @@ class SummarizationMiddlewareTest(BaseTestCase):
             summary, preserved_messages, mock_checkpoint, mock_checkpointer
         )
 
+        # Verify checkpointer.adelete_thread was called
+        mock_checkpointer.adelete_thread.assert_called_once_with('test-thread')
+
         # Verify graph.ainvoke was called with correct arguments
         mock_graph.ainvoke.assert_called_once()
         call_args = mock_graph.ainvoke.call_args
@@ -110,9 +113,9 @@ class SummarizationMiddlewareTest(BaseTestCase):
         self.assertEqual(len(messages), 3)  # summary + 2 preserved
 
         # First message should be the summary
-        self.assertIsInstance(messages[0], SystemMessage)
-        self.assertIn("Previous conversation summary", messages[0].content)
-        self.assertIn(summary, messages[0].content)
+        self.assertIsInstance(messages[0], AIMessage)
+        self.assertEqual(messages[0].content, summary)
+        self.assertEqual(messages[0].additional_kwargs, {'summary': True})
 
         # Remaining messages should be preserved
         self.assertEqual(messages[1], preserved_messages[0])

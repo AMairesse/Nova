@@ -4,7 +4,7 @@ SummarizationMiddleware for automatic conversation summarization.
 """
 import logging
 from typing import Any, List
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from nova.llm.agent_middleware import BaseAgentMiddleware, AgentContext
 from nova.models.SummarizationConfig import SummarizationConfig
@@ -231,32 +231,35 @@ class SummarizationMiddleware(BaseAgentMiddleware):
         current_checkpoint,
         checkpointer
     ) -> None:
-        """Inject summary into the checkpoint using the graph's normal flow."""
+        """Inject summary into the checkpoint by replacing old messages."""
         try:
             # Create summary message
-            summary_message = SystemMessage(
-                content=f"Previous conversation summary: {summary}"
+            from langchain_core.messages import AIMessage
+            summary_message = AIMessage(
+                content=summary,
+                additional_kwargs={'summary': True}
             )
 
             # Create new messages list: summary + preserved recent messages
             new_messages = [summary_message] + preserved_messages
 
-            # Use the graph's ainvoke to properly update the checkpoint
-            # This ensures all internal LangGraph state is updated correctly
-            config = current_checkpoint.config.copy()
+            # Delete old checkpoints for this thread to clear history
+            thread_id = current_checkpoint.config['configurable']['thread_id']
+            await checkpointer.adelete_thread(thread_id)
 
-            # Create a dummy input with the summarized messages
-            # The graph will process this and create a proper checkpoint
+            # Use the graph's ainvoke to create new checkpoint with summarized messages
+            config = current_checkpoint.config.copy()
             dummy_input = {"messages": new_messages}
 
             # Get the graph from the agent
             graph = self.agent.langchain_agent
 
-            # Invoke the graph with the summarized messages
-            # This will create a new checkpoint with the summarized state
+            # Invoke the graph to create new checkpoint
             await graph.ainvoke(dummy_input, config=config)
 
-            logger.info("Injected summary into checkpoint using graph flow")
+            old_count = len(current_checkpoint.checkpoint.get('channel_values', {}).get('messages', []))
+            logger.info(f"Injected summary into checkpoint, replaced {old_count} messages "
+                        f"with summary + {len(preserved_messages)} preserved messages")
 
         except Exception as e:
             logger.error(f"Failed to inject summary into checkpoint: {e}")
