@@ -250,10 +250,14 @@ class SummarizationMiddleware(BaseAgentMiddleware):
             }
 
             # Save the new checkpoint
+            # new_versions indicates which channels have new values in this write
+            new_versions = {"messages": 1}  # Messages channel has been updated with summary
+
             await checkpointer.aput(
                 config=new_config,
                 checkpoint=new_checkpoint,
-                metadata=current_checkpoint.metadata
+                metadata=current_checkpoint.metadata,
+                new_versions=new_versions
             )
 
         except Exception as e:
