@@ -55,10 +55,8 @@ class AgentToolWrapper:
             )
 
             try:
-                return await agent_llm.ainvoke(question)
-            except Exception as e:
-                logger.error(f"Sub-agent {self.agent_config.name} failed: {str(e)}")
-                return f"Error in sub-agent {self.agent_config.name}: {str(e)} (Check connections or config)"
+                result = await agent_llm.ainvoke(question)
+                return result
             finally:
                 try:
                     # Generic cleanup (handles browser if assigned as builtin)

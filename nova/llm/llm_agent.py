@@ -19,6 +19,7 @@ from nova.models.Thread import Thread
 from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
+from nova.llm.tool_error_handling import handle_tool_errors
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
@@ -210,8 +211,8 @@ class LLMAgent:
 
         llm = agent.create_llm_agent()
 
-        # Create the ReAct agent with dynamic prompt middleware
-        middleware = [nova_system_prompt]
+        # Create the ReAct agent with middleware
+        middleware = [nova_system_prompt, handle_tool_errors]
         if checkpointer:
             agent.langchain_agent = create_agent(
                 llm,

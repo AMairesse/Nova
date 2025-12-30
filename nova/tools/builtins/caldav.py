@@ -61,24 +61,18 @@ async def list_calendars(user, tool_id) -> str:
     Returns:
         Formatted list of calendars
     """
-    try:
-        client = await get_caldav_client(user, tool_id)
-        principal = client.principal()
-        calendars = principal.calendars()
+    client = await get_caldav_client(user, tool_id)
+    principal = client.principal()
+    calendars = principal.calendars()
 
-        if not calendars:
-            return _("No calendars available.")
+    if not calendars:
+        return _("No calendars available.")
 
-        result = _("Available calendars :\n")
-        for cal in calendars:
-            result += f"- {cal.name}\n"
+    result = _("Available calendars :\n")
+    for cal in calendars:
+        result += f"- {cal.name}\n"
 
-        return result
-
-    except (ValueError, ConnectionError) as e:  # Specific handling
-        return _("CalDav error: {error}. Check credentials and server URL.").format(error=str(e))
-    except Exception as e:
-        return _("Unexpected error when retrieving calendars: {error}").format(error=str(e))
+    return result
 
 
 def describe_events(events: List[iCalEvent]) -> List[str]:
@@ -122,16 +116,11 @@ async def list_events_to_come(user, tool_id, days_ahead: int = 7, calendar_name:
     Returns:
         Formatted list of events
     """
-    try:
-        start_date = datetime.now(timezone.utc)
-        end_date = start_date + timedelta(days=days_ahead)
+    start_date = datetime.now(timezone.utc)
+    end_date = start_date + timedelta(days=days_ahead)
 
-        return await list_events(user, tool_id, start_date.strftime('%Y-%m-%d'),
-                                 end_date.strftime('%Y-%m-%d'), calendar_name)
-
-    except Exception as e:
-        error_message = _("Error when retrieving events : {}")
-        return error_message.format(e)
+    return await list_events(user, tool_id, start_date.strftime('%Y-%m-%d'),
+                             end_date.strftime('%Y-%m-%d'), calendar_name)
 
 
 async def list_events(user, tool_id, start_date: str, end_date: str, calendar_name: Optional[str] = None) -> str:
@@ -146,43 +135,38 @@ async def list_events(user, tool_id, start_date: str, end_date: str, calendar_na
     Returns:
         Formatted list of events between start_date and end_date
     """
-    try:
-        client = await get_caldav_client(user, tool_id)
-        principal = client.principal()
+    client = await get_caldav_client(user, tool_id)
+    principal = client.principal()
 
-        if calendar_name:
-            calendars = [cal for cal in principal.calendars() if cal.name == calendar_name]
-            if not calendars:
-                return _("Calendar '{calendar_name}' not found.").format(calendar_name=calendar_name)
-        else:
-            calendars = principal.calendars()
-
+    if calendar_name:
+        calendars = [cal for cal in principal.calendars() if cal.name == calendar_name]
         if not calendars:
-            return _("No calendars available.")
+            return _("Calendar '{calendar_name}' not found.").format(calendar_name=calendar_name)
+    else:
+        calendars = principal.calendars()
 
-        # Define search period
-        start_date = datetime.strptime(start_date, '%Y-%m-%d')
-        end_date = datetime.strptime(end_date, '%Y-%m-%d')
-        # Set start_date to the beginning of the day
-        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    if not calendars:
+        return _("No calendars available.")
 
-        # Set end_date to the end of the day
-        end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # Define search period
+    start_date = datetime.strptime(start_date, '%Y-%m-%d')
+    end_date = datetime.strptime(end_date, '%Y-%m-%d')
+    # Set start_date to the beginning of the day
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        all_events = []
+    # Set end_date to the end of the day
+    end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-        for cal in calendars:
-            events_fetched = cal.search(start=start_date, end=end_date, event=True, expand=True)
-            all_events.extend(describe_events(events_fetched))
+    all_events = []
 
-        # If the list is empty, return a message for the LLM
-        if not all_events:
-            all_events.append(_("No events found"))
-        return str(all_events)
+    for cal in calendars:
+        events_fetched = cal.search(start=start_date, end=end_date, event=True, expand=True)
+        all_events.extend(describe_events(events_fetched))
 
-    except Exception as e:
-        error_message = _("Error when retrieving events : {}")
-        return error_message.format(e)
+    # If the list is empty, return a message for the LLM
+    if not all_events:
+        all_events.append(_("No events found"))
+    return str(all_events)
 
 
 async def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional[str] = None) -> str:
@@ -196,29 +180,24 @@ async def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional
     Returns:
         A string containing the event's details
     """
-    try:
-        client = await get_caldav_client(user, tool_id)
-        principal = client.principal()
+    client = await get_caldav_client(user, tool_id)
+    principal = client.principal()
 
-        if calendar_name:
-            calendars = [cal for cal in principal.calendars() if cal.name == calendar_name]
-            if not calendars:
-                return _("Calendar '{calendar_name}' not found.").format(calendar_name=calendar_name)
-        else:
-            calendars = principal.calendars()
-
+    if calendar_name:
+        calendars = [cal for cal in principal.calendars() if cal.name == calendar_name]
         if not calendars:
-            return _("No calendars available.")
+            return _("Calendar '{calendar_name}' not found.").format(calendar_name=calendar_name)
+    else:
+        calendars = principal.calendars()
 
-        for calendar in calendars:
-            event = calendar.search(uid=event_id, event=True, expand=False)
-            if event:
-                return str(event)
-        return _("Event not found.")
+    if not calendars:
+        return _("No calendars available.")
 
-    except Exception as e:
-        error_message = _("Error when retrieving event's details : {}")
-        return error_message.format(e)
+    for calendar in calendars:
+        event = calendar.search(uid=event_id, event=True, expand=False)
+        if event:
+            return str(event)
+    return _("Event not found.")
 
 
 async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
@@ -232,62 +211,51 @@ async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
     Returns:
         Formatted list of events
     """
-    try:
-        client = await get_caldav_client(user, tool_id)
-        principal = client.principal()
-        calendars = principal.calendars()
+    client = await get_caldav_client(user, tool_id)
+    principal = client.principal()
+    calendars = principal.calendars()
 
-        if not calendars:
-            return _("No calendars available.")
+    if not calendars:
+        return _("No calendars available.")
 
-        # Define search period
-        start_date = datetime.now(timezone.utc) - timedelta(days=days_range)
-        end_date = datetime.now(timezone.utc) + timedelta(days=days_range)
+    # Define search period
+    start_date = datetime.now(timezone.utc) - timedelta(days=days_range)
+    end_date = datetime.now(timezone.utc) + timedelta(days=days_range)
 
-        matching_events = []
+    matching_events = []
 
-        for calendar in calendars:
-            try:
-                # TODO: filter on summary seems to be broken, to investigate
-                events = calendar.search(start=start_date, end=end_date,
-                                         summary=query,
-                                         event=True, expand=True)
-                matching_events.extend(describe_events(events))
-            except Exception as e:
-                error_message = _("Error when searching events : {}")
-                return error_message.format(e)
-        return str(matching_events)
-
-    except Exception as e:
-        error_message = _("Error when searching events : {}")
-        return error_message.format(e)
+    for calendar in calendars:
+        try:
+            # TODO: filter on summary seems to be broken, to investigate
+            events = calendar.search(start=start_date, end=end_date,
+                                     summary=query,
+                                     event=True, expand=True)
+            matching_events.extend(describe_events(events))
+        except Exception as e:
+            error_message = _("Error when searching events : {}")
+            return error_message.format(e)
+    return str(matching_events)
 
 
 async def test_caldav_access(user, tool_id):
-    try:
-        result = await list_calendars(user, tool_id)
+    result = await list_calendars(user, tool_id)
 
-        if "error" in result.lower():
-            return JsonResponse({"status": "error", "message": result})
+    if "error" in result.lower():
+        return JsonResponse({"status": "error", "message": result})
+    else:
+        # Response varies depending on the number of calendars
+        calendar_count = result.count("- ")
+        if calendar_count == 0:
+            return {"status": "success", "message": _("No calendars found")}
         else:
-            # Response varies depending on the number of calendars
-            calendar_count = result.count("- ")
-            if calendar_count == 0:
-                return {"status": "success", "message": _("No calendars found")}
-            else:
-                return {
-                    "status": "success",
-                    "message": ngettext(
-                        "%(count)d calendar found",
-                        "%(count)d calendars found",
-                        calendar_count
-                    ) % {"count": calendar_count}
-                }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": _("Connection error: %(err)s") % {"err": e}
-        }
+            return {
+                "status": "success",
+                "message": ngettext(
+                    "%(count)d calendar found",
+                    "%(count)d calendars found",
+                    calendar_count
+                ) % {"count": calendar_count}
+            }
 
 
 METADATA = {
