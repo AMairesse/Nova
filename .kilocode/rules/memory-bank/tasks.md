@@ -38,8 +38,9 @@ summary_model = models.CharField(blank=True, null=True, max_length=100, help_tex
 
 **Next Phases:**
 1. ✅ **Data Model Migration** (Completed)
-2. **Celery Async Processing** - Create Celery task for manual summarization
-3. **UI Improvements** - Compact link visibility and agent settings form
+2. ✅ **Celery Async Processing** - Create Celery task for manual summarization
+3. ✅ **UI Improvements** - Compact link visibility and agent settings form
+4. ✅ **Manual Summarization Logic** - Skip token threshold check, enforce minimum messages, user notifications
 
 **Important considerations:**
 - **Backward Compatibility**: Existing code should continue working during transition

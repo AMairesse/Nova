@@ -373,7 +373,7 @@
 
             // Update all compact links to loading state
             compactLinks.forEach(link => {
-                link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Summarizing...');
+                link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Starting...');
                 link.style.pointerEvents = 'none';
                 link.style.opacity = '0.6';
             });
@@ -389,14 +389,12 @@
                 if (data.status === 'OK') {
                     // Show success message on all links
                     compactLinks.forEach(link => {
-                        link.innerHTML = '<i class="bi bi-check-circle me-1"></i>' + gettext('Compacted!');
+                        link.innerHTML = '<i class="bi bi-check-circle me-1"></i>' + gettext('Started!');
                         link.classList.add('text-success');
                     });
 
-                    // Reload messages to show the summarized conversation
-                    setTimeout(() => {
-                        this.loadMessages(this.currentThreadId);
-                    }, 1000);
+                    // Show a brief message that summarization is in progress
+                    this.showToast('Summarization started. This may take a few moments.', 'info');
 
                     // Reset links after 3 seconds
                     setTimeout(() => {
@@ -421,8 +419,27 @@
                 });
 
                 // Show error message
-                alert('Failed to summarize thread: ' + error.message);
+                alert('Failed to start summarization: ' + error.message);
             }
+        }
+
+        showToast(message, type = 'info') {
+            // Simple toast implementation - could be enhanced with a proper toast library
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            toast.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(toast);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 5000);
         }
 
         loadInitialThread() {

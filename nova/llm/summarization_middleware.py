@@ -148,6 +148,34 @@ class SummarizationMiddleware(BaseAgentMiddleware):
         if await self._should_summarize(context):
             await self._perform_summarization(context)
 
+    async def manual_summarize(self, context: AgentContext) -> dict:
+        """Perform manual summarization and return status."""
+        try:
+            # Check if we have enough messages
+            checkpointer = await get_checkpointer()
+            checkpoint = await checkpointer.aget_tuple(self.agent.config)
+            if not checkpoint:
+                return {"status": "error", "message": "No conversation history found"}
+
+            messages = checkpoint.checkpoint.get('channel_values', {}).get('messages', [])
+            if len(messages) <= self.agent_config.preserve_recent:
+                min_messages = self.agent_config.preserve_recent + 1
+                message = (
+                    f"Not enough messages to summarize. Need at least {min_messages} "
+                    f"messages, but only have {len(messages)}."
+                )
+                return {"status": "error", "message": message}
+
+            await checkpointer.conn.close()
+
+            # Perform summarization
+            await self._perform_summarization(context)
+            return {"status": "success", "message": "Summarization completed successfully"}
+
+        except Exception as e:
+            logger.error(f"Manual summarization failed: {e}")
+            return {"status": "error", "message": f"Summarization failed: {str(e)}"}
+
     async def _should_summarize(self, context: AgentContext) -> bool:
         """Determine if summarization should be triggered."""
         if not self.agent_config.auto_summarize:

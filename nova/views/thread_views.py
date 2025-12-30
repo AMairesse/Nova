@@ -13,9 +13,8 @@ from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
-from nova.tasks.tasks import run_ai_task_celery
+from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.utils import markdown_to_html
-from nova.llm.summarization_middleware import SummarizationMiddleware
 import logging
 
 from asgiref.sync import async_to_sync
@@ -115,6 +114,14 @@ def message_list(request):
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
             messages = selected_thread.get_messages()
+
+            # Find the last AI message to show compact link
+            last_agent_message_id = None
+            for m in reversed(messages):
+                if m.actor == Actor.AGENT:
+                    last_agent_message_id = m.id
+                    break
+
             for m in messages:
                 m.rendered_html = markdown_to_html(m.text)
                 # Add info about files used
@@ -123,6 +130,8 @@ def message_list(request):
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
+                # Mark if this is the last AI message
+                m.is_last_agent_message = (m.id == last_agent_message_id)
 
             # Fetch pending interactions for server-side rendering
             pending_interactions = Interaction.objects.filter(
@@ -283,7 +292,8 @@ def add_message(request):
 @login_required(login_url='login')
 def summarize_thread(request, thread_id):
     """Manually trigger conversation summarization for a thread."""
-    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    # Verify thread exists and user has access
+    get_object_or_404(Thread, id=thread_id, user=request.user)
 
     # Get the agent's summarization config
     agent_config = getattr(request.user.userprofile, "default_agent", None)
@@ -293,42 +303,18 @@ def summarize_thread(request, thread_id):
             "message": "No default agent configured"
         }, status=400)
 
-    # Check if summarization config exists
-    if not hasattr(agent_config, 'summarization_config') or not agent_config.summarization_config:
-        return JsonResponse({
-            "status": "ERROR",
-            "message": "Summarization not configured for this agent"
-        }, status=400)
-
     try:
-        # Create agent and middleware
-        from nova.llm.llm_agent import LLMAgent
-        from nova.llm.agent_middleware import AgentContext
-
-        llm_agent = async_to_sync(LLMAgent.create)(request.user, None, agent_config)
-        middleware = SummarizationMiddleware(agent_config.summarization_config, llm_agent)
-
-        # Create context for middleware
-        context = AgentContext(
-            agent_config=agent_config,
-            user=request.user,
-            thread=thread
-        )
-
-        # No progress handler for manual summarization (no WebSocket connection)
-        context.progress_handler = None
-
-        # Perform summarization
-        async_to_sync(middleware._perform_summarization)(context)
+        # Trigger async summarization task
+        summarize_thread_task.delay(thread_id, request.user.id, agent_config.id)
 
         return JsonResponse({
             "status": "OK",
-            "message": "Thread summarization completed successfully"
+            "message": "Thread summarization started. This may take a few moments."
         })
 
     except Exception as e:
-        logger.error(f"Summarization failed for thread {thread_id}: {e}")
+        logger.error(f"Failed to start summarization task for thread {thread_id}: {e}")
         return JsonResponse({
             "status": "ERROR",
-            "message": f"Summarization failed: {str(e)}"
+            "message": f"Failed to start summarization: {str(e)}"
         }, status=500)

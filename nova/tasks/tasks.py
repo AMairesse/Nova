@@ -150,16 +150,12 @@ class ContextConsumptionTracker:
         return total_bytes // 4 + 1
 
 
-
-
 async def delete_checkpoints(ckp_id):
     checkpointer = await get_checkpointer()
     try:
         await checkpointer.adelete_thread(ckp_id)
     finally:
         await checkpointer.conn.close()
-
-
 
 
 @shared_task(bind=True, name="run_ai_task")
@@ -218,6 +214,57 @@ def resume_ai_task_celery(self, interaction_pk: int):
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")
         raise self.retry(countdown=30, exc=e)
+
+
+@shared_task(bind=True, name="summarize_thread_task")
+def summarize_thread_task(self, thread_id, user_id, agent_config_id):
+    """
+    Celery task to manually summarize a thread.
+    """
+    try:
+        from nova.llm.llm_agent import LLMAgent
+        from nova.llm.agent_middleware import AgentContext
+        from nova.llm.summarization_middleware import SummarizationMiddleware
+
+        # Get objects
+        thread = Thread.objects.get(id=thread_id, user_id=user_id)
+        user = User.objects.get(id=user_id)
+        agent_config = AgentConfig.objects.get(id=agent_config_id, user=user)
+
+        # Create agent and middleware
+        llm_agent = asyncio.run(LLMAgent.create(user, None, agent_config))
+        middleware = SummarizationMiddleware(agent_config, llm_agent)
+
+        # Create context for middleware
+        context = AgentContext(
+            agent_config=agent_config,
+            user=user,
+            thread=thread
+        )
+
+        # No progress handler for manual summarization (no WebSocket connection)
+        context.progress_handler = None
+
+        # Perform manual summarization and get result
+        result = asyncio.run(middleware.manual_summarize(context))
+
+        if result["status"] == "success":
+            logger.info(f"Thread {thread_id} summarization completed successfully")
+            # Notify user of success
+            from django.contrib import messages
+            from django.utils.translation import gettext as _
+            messages.success(user, _("Conversation summarization completed successfully."))
+        else:
+            logger.warning(f"Thread {thread_id} summarization failed: {result['message']}")
+            # Notify user of failure
+            from django.contrib import messages
+            from django.utils.translation import gettext as _
+            messages.error(user, _(f"Summarization failed: {result['message']}"))
+
+    except Exception as e:
+        logger.error(f"Summarization task failed for thread {thread_id}: {e}")
+        # Let Celery handle retry logic
+        raise self.retry(countdown=60, exc=e)
 
 
 @shared_task(bind=True, name="run_scheduled_agent_task")
