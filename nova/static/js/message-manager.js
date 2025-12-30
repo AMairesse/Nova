@@ -83,6 +83,10 @@
                 '#voice-btn': (e, target) => {
                     e.preventDefault();
                     this.handleVoiceButtonClick();
+                },
+                '.compact-thread-link': (e, target) => {
+                    e.preventDefault();
+                    this.summarizeCurrentThread();
                 }
             };
 
@@ -352,6 +356,72 @@
                 document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: firstThreadId || null } }));
             } catch (error) {
                 console.error('Error deleting thread:', error);
+            }
+        }
+
+        async summarizeCurrentThread() {
+            if (!this.currentThreadId) {
+                alert('No thread selected');
+                return;
+            }
+
+            const compactLinks = document.querySelectorAll('.compact-thread-link');
+            if (compactLinks.length === 0) return;
+
+            // Store original HTML for all links
+            const originalHtmls = Array.from(compactLinks).map(link => link.innerHTML);
+
+            // Update all compact links to loading state
+            compactLinks.forEach(link => {
+                link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Summarizing...');
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.6';
+            });
+
+            try {
+                const response = await window.DOMUtils.csrfFetch(
+                    window.NovaApp.urls.summarizeThread.replace('0', this.currentThreadId),
+                    { method: 'POST' }
+                );
+
+                const data = await response.json();
+
+                if (data.status === 'OK') {
+                    // Show success message on all links
+                    compactLinks.forEach(link => {
+                        link.innerHTML = '<i class="bi bi-check-circle me-1"></i>' + gettext('Compacted!');
+                        link.classList.add('text-success');
+                    });
+
+                    // Reload messages to show the summarized conversation
+                    setTimeout(() => {
+                        this.loadMessages(this.currentThreadId);
+                    }, 1000);
+
+                    // Reset links after 3 seconds
+                    setTimeout(() => {
+                        compactLinks.forEach((link, index) => {
+                            link.innerHTML = originalHtmls[index];
+                            link.style.pointerEvents = '';
+                            link.style.opacity = '';
+                            link.classList.remove('text-success');
+                        });
+                    }, 3000);
+                } else {
+                    throw new Error(data.message || 'Summarization failed');
+                }
+            } catch (error) {
+                console.error('Error summarizing thread:', error);
+
+                // Reset all links on error
+                compactLinks.forEach((link, index) => {
+                    link.innerHTML = originalHtmls[index];
+                    link.style.pointerEvents = '';
+                    link.style.opacity = '';
+                });
+
+                // Show error message
+                alert('Failed to summarize thread: ' + error.message);
             }
         }
 

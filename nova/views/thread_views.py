@@ -15,6 +15,7 @@ from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
+from nova.llm.summarization_middleware import SummarizationMiddleware
 import logging
 
 from asgiref.sync import async_to_sync
@@ -278,3 +279,56 @@ def add_message(request):
     })
 
 
+@require_POST
+@login_required(login_url='login')
+def summarize_thread(request, thread_id):
+    """Manually trigger conversation summarization for a thread."""
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+
+    # Get the agent's summarization config
+    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    if not agent_config:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "No default agent configured"
+        }, status=400)
+
+    # Check if summarization config exists
+    if not hasattr(agent_config, 'summarization_config') or not agent_config.summarization_config:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "Summarization not configured for this agent"
+        }, status=400)
+
+    try:
+        # Create agent and middleware
+        from nova.llm.llm_agent import LLMAgent
+        from nova.llm.agent_middleware import AgentContext
+
+        llm_agent = async_to_sync(LLMAgent.create)(request.user, None, agent_config)
+        middleware = SummarizationMiddleware(agent_config.summarization_config, llm_agent)
+
+        # Create context for middleware
+        context = AgentContext(
+            agent_config=agent_config,
+            user=request.user,
+            thread=thread
+        )
+
+        # No progress handler for manual summarization (no WebSocket connection)
+        context.progress_handler = None
+
+        # Perform summarization
+        async_to_sync(middleware._perform_summarization)(context)
+
+        return JsonResponse({
+            "status": "OK",
+            "message": "Thread summarization completed successfully"
+        })
+
+    except Exception as e:
+        logger.error(f"Summarization failed for thread {thread_id}: {e}")
+        return JsonResponse({
+            "status": "ERROR",
+            "message": f"Summarization failed: {str(e)}"
+        }, status=500)

@@ -5,6 +5,7 @@
   // Configure URLs for the JavaScript modules (for AJAX-loaded content)
   window.NovaApp = window.NovaApp || {};
   window.NovaApp.urls = window.NovaApp.urls || {};
+  window.NovaApp.urls.summarizeThread = "{% url 'summarize_thread' 0 %}";
 </script>
 
 <div class="d-flex flex-column h-100">
@@ -79,8 +80,11 @@
           </div>
           <!-- Context indication -->
           {% if message.internal_data.max_context %}
-          <div class="card-footer py-1 text-muted small text-end d-flex justify-content-end align-items-center">
-            <div class="card-footer-consumption me-2">
+          <div class="card-footer py-1 text-muted small text-end d-flex justify-content-between align-items-center">
+            <a href="#" class="compact-thread-link text-decoration-none small" title="{% trans 'Summarize conversation to save context space' %}">
+              <i class="bi bi-compress me-1"></i>{% trans "Compact" %}
+            </a>
+            <div class="card-footer-consumption">
               {% if message.internal_data.real_tokens is not None %}
                 {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
               {% elif message.internal_data.approx_tokens %}
