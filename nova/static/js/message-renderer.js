@@ -30,7 +30,10 @@
             <div class="card-body py-2">
               <div class="streaming-content">${window.DOMUtils.escapeHTML(messageData.text)}</div>
             </div>
-            <div class="card-footer py-1 text-muted small text-end d-none d-flex justify-content-end align-items-center">
+            <div class="card-footer py-1 text-muted small d-flex justify-content-end align-items-center d-none">
+              <a href="#" class="compact-thread-link text-decoration-none small me-2 d-none" title="${gettext('Summarize conversation to save context space')}">
+                <i class="bi bi-compress me-1"></i>${gettext('Compact')}
+              </a>
               <div class="card-footer-consumption">
               </div>
             </div>

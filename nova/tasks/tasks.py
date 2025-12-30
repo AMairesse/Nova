@@ -222,8 +222,6 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id):
     Celery task to manually summarize a thread.
     """
     try:
-        from nova.llm.llm_agent import LLMAgent
-        from nova.llm.agent_middleware import AgentContext
         from nova.llm.summarization_middleware import SummarizationMiddleware
 
         # Get objects
@@ -231,11 +229,23 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id):
         user = User.objects.get(id=user_id)
         agent_config = AgentConfig.objects.get(id=agent_config_id, user=user)
 
-        # Create agent and middleware
-        llm_agent = asyncio.run(LLMAgent.create(user, None, agent_config))
-        middleware = SummarizationMiddleware(agent_config, llm_agent)
+        # Create middleware directly (simpler than full LLMAgent for manual summarization)
+        # For manual summarization, we create a minimal agent just for LLM access
+        from nova.llm.llm_agent import LLMAgent
+        minimal_agent = LLMAgent(
+            user=user,
+            thread=None,
+            langgraph_thread_id=None,
+            agent_config=agent_config,
+            llm_provider=agent_config.llm_provider
+        )
+        minimal_agent.llm = minimal_agent.create_llm_agent()
+        middleware = SummarizationMiddleware(agent_config, minimal_agent)
+        # Set the LLM reference for the summarizer
+        middleware.summarizer.agent_llm = minimal_agent.llm
 
-        # Create context for middleware
+        # Create a simple context for middleware
+        from nova.llm.agent_middleware import AgentContext
         context = AgentContext(
             agent_config=agent_config,
             user=user,
@@ -246,20 +256,16 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id):
         context.progress_handler = None
 
         # Perform manual summarization and get result
+        # Note: This runs synchronously to avoid async database connection issues
         result = asyncio.run(middleware.manual_summarize(context))
 
         if result["status"] == "success":
             logger.info(f"Thread {thread_id} summarization completed successfully")
-            # Notify user of success
-            from django.contrib import messages
-            from django.utils.translation import gettext as _
-            messages.success(user, _("Conversation summarization completed successfully."))
+            # Note: User notification would need to be handled via WebSocket or email
+            # since Celery tasks don't have request context for Django messages
         else:
             logger.warning(f"Thread {thread_id} summarization failed: {result['message']}")
-            # Notify user of failure
-            from django.contrib import messages
-            from django.utils.translation import gettext as _
-            messages.error(user, _(f"Summarization failed: {result['message']}"))
+            # Note: User notification would need to be handled via WebSocket or email
 
     except Exception as e:
         logger.error(f"Summarization task failed for thread {thread_id}: {e}")

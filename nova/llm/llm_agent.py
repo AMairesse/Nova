@@ -144,10 +144,9 @@ class LLMAgent:
         system_prompt = agent_config.system_prompt
         recursion_limit = agent_config.recursion_limit
         llm_provider = agent_config.llm_provider
-        summarization_config = getattr(agent_config, 'summarization_config', None)
         return builtin_tools, mcp_tools_data, agent_tools, \
             has_agent_tools, system_prompt, recursion_limit, \
-            llm_provider, summarization_config
+            llm_provider
 
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
@@ -164,8 +163,8 @@ class LLMAgent:
 
         builtin_tools, mcp_tools_data, agent_tools, has_agent_tools, \
             system_prompt, recursion_limit, \
-            llm_provider, summarization_config = await sync_to_async(cls.fetch_agent_data_sync,
-                                                                     thread_sensitive=False)(agent_config, user)
+            llm_provider = await sync_to_async(cls.fetch_agent_data_sync,
+                                               thread_sensitive=False)(agent_config, user)
 
         # If there is a thread into the call then link a checkpoint to it
         if thread:
@@ -197,8 +196,7 @@ class LLMAgent:
             has_agent_tools=has_agent_tools,
             system_prompt=system_prompt,
             recursion_limit=recursion_limit,
-            llm_provider=llm_provider,
-            summarization_config=summarization_config
+            llm_provider=llm_provider
         )
 
         # Store checkpointer for cleanup
@@ -254,8 +252,7 @@ class LLMAgent:
                  has_agent_tools=False,
                  system_prompt=None,
                  recursion_limit=None,
-                 llm_provider=None,
-                 summarization_config=None):
+                 llm_provider=None):
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
@@ -320,7 +317,6 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self.recursion_limit = recursion_limit
         self._llm_provider = llm_provider
-        self.summarization_config = summarization_config
 
         # Initialize resources and loaded modules tracker
         self._resources = {}
@@ -329,8 +325,8 @@ class LLMAgent:
         self.middleware = []  # Agent middleware list
 
         # Add summarization middleware if configured
-        if self.summarization_config:
-            self.middleware.append(SummarizationMiddleware(self.summarization_config, self))
+        if hasattr(self.agent_config, 'auto_summarize'):
+            self.middleware.append(SummarizationMiddleware(self.agent_config, self))
 
     async def cleanup(self):
         """Async cleanup method to close resources for loaded builtin modules, Langfuse client, and checkpointer."""

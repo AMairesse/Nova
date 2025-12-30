@@ -161,6 +161,9 @@
                 // Handle server-rendered interaction cards and check for pending interactions
                 this.checkPendingInteractions();
 
+                // Update compact link visibility for existing messages
+                this.updateCompactLinkVisibility();
+
                 // Check for running tasks and reconnect to streaming if needed
                 this.checkAndReconnectRunningTasks();
             } catch (error) {
@@ -275,6 +278,9 @@
                 console.error('Messages list not found!');
             }
 
+            // Update compact link visibility after adding new message
+            this.updateCompactLinkVisibility();
+
             // Auto-scroll to bottom when new messages are added
             this.scrollToBottom();
         }
@@ -315,6 +321,40 @@
                         behavior: 'smooth'
                     });
                 }, 100);
+            }
+        }
+
+        // Update compact link visibility based on message count and position
+        updateCompactLinkVisibility() {
+            const messagesList = document.getElementById('messages-list');
+            if (!messagesList) return;
+
+            // Get all messages and agent messages
+            const allMessages = messagesList.querySelectorAll('.message');
+            const agentMessages = messagesList.querySelectorAll('.message .card.border-secondary');
+
+            // Hide compact link on all agent messages first
+            agentMessages.forEach(card => {
+                const compactLink = card.querySelector('.compact-thread-link');
+                if (compactLink) {
+                    compactLink.classList.add('d-none');
+                }
+            });
+
+            // Show compact link only if:
+            // 1. There are at least 2 messages total (user + agent)
+            // 2. The last message is an agent message
+            if (allMessages.length >= 2 && agentMessages.length > 0) {
+                const lastMessage = allMessages[allMessages.length - 1];
+                const lastAgentCard = agentMessages[agentMessages.length - 1];
+
+                // Check if the last message contains the last agent card
+                if (lastMessage.contains(lastAgentCard)) {
+                    const compactLink = lastAgentCard.querySelector('.compact-thread-link');
+                    if (compactLink) {
+                        compactLink.classList.remove('d-none');
+                    }
+                }
             }
         }
 

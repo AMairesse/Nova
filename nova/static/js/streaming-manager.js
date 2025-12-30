@@ -314,6 +314,11 @@
                 console.error('Messages list not found for new message');
             }
 
+            // Update compact link visibility after adding new message
+            if (this.messageManager) {
+                this.messageManager.updateCompactLinkVisibility();
+            }
+
             // Scroll to bottom to show new message
             this.messageManager.scrollToBottom();
         }
