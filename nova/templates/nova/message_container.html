@@ -80,9 +80,9 @@
           </div>
           <!-- Context indication -->
           {% if message.internal_data.max_context %}
-          <div class="card-footer py-1 text-muted small text-end d-flex justify-content-between align-items-center">
+          <div class="card-footer py-1 text-muted small text-end d-flex align-items-center">
             {% if message.is_last_agent_message %}
-            <a href="#" class="compact-thread-link text-decoration-none small" title="{% trans 'Summarize conversation to save context space' %}">
+            <a href="#" class="compact-thread-link text-decoration-none small me-auto" title="{% trans 'Summarize conversation to save context space' %}">
               <i class="bi bi-compress me-1"></i>{% trans "Compact" %}
             </a>
             {% endif %}
