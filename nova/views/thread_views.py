@@ -115,24 +115,25 @@ def message_list(request):
                                                 user=request.user)
             messages = selected_thread.get_messages()
 
-            # Find the last AI message to show compact link (only if there are enough messages for summarization)
-            last_agent_message_id = None
+            # Get agent config for summarization settings
             agent_config = None
             try:
                 agent_config = request.user.userprofile.default_agent
             except UserProfile.DoesNotExist:
                 pass
 
-            min_messages_for_summarization = 0
-            if agent_config:
-                # Need at least preserve_recent + 1 messages for summarization
-                min_messages_for_summarization = agent_config.preserve_recent + 1
+            # Determine if compact link should be shown
+            last_agent_message_id = None
 
-            if len(messages) >= min_messages_for_summarization:
-                for m in reversed(messages):
-                    if m.actor == Actor.AGENT:
-                        last_agent_message_id = m.id
-                        break
+            if agent_config:
+                # Show compact link if there are enough messages for compaction
+                # (more messages than preserve_recent setting)
+                if len(messages) > agent_config.preserve_recent:
+                    # Find the last agent message to show the compact link
+                    for m in reversed(messages):
+                        if m.actor == Actor.AGENT:
+                            last_agent_message_id = m.id
+                            break
 
             for m in messages:
                 m.rendered_html = markdown_to_html(m.text)
@@ -142,7 +143,7 @@ def message_list(request):
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
-                # Mark if this is the last AI message (only if enough messages for summarization)
+                # Mark if this is the last agent message (for compact link)
                 m.is_last_agent_message = (m.id == last_agent_message_id)
 
             # Fetch pending interactions for server-side rendering
@@ -313,6 +314,18 @@ def summarize_thread(request, thread_id):
         return JsonResponse({
             "status": "ERROR",
             "message": "No default agent configured"
+        }, status=400)
+
+    # Check if there are enough messages for summarization
+    messages = thread.get_messages()
+    min_messages_for_summarization = agent_config.preserve_recent + 1
+    if len(messages) <= agent_config.preserve_recent:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": (
+                f"Not enough messages to summarize. Need at least "
+                f"{min_messages_for_summarization} messages, but only have {len(messages)}."
+            )
         }, status=400)
 
     # Create a task for tracking the summarization

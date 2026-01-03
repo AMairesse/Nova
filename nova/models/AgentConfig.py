@@ -53,7 +53,7 @@ class AgentConfig(models.Model):
         help_text="Enable automatic summarization when token threshold is reached"
     )
     token_threshold = models.IntegerField(
-        default=100,
+        default=10000,
         help_text="Token count threshold for triggering summarization"
     )
     preserve_recent = models.IntegerField(

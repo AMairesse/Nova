@@ -463,6 +463,15 @@
                 progressLogs.textContent = `Conversation summarized (${original_tokens} → ${summary_tokens} tokens)`;
             }
 
+            // Change compact link text to "Compaction done"
+            const compactLinks = document.querySelectorAll('.compact-thread-link');
+            compactLinks.forEach(link => {
+                link.innerHTML = '<i class="bi bi-check-circle me-1"></i>' + gettext('Compaction done');
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.6';
+                link.classList.add('text-success');
+            });
+
             // Find the task ID from active streams and complete it (re-enables input)
             // Since we don't know which task this is for, complete all active streams
             // This is a bit of a hack, but works for the current use case

@@ -341,19 +341,13 @@
                 }
             });
 
-            // Show compact link only if:
-            // 1. There are at least 2 messages total (user + agent)
-            // 2. The last message is an agent message
-            if (allMessages.length >= 2 && agentMessages.length > 0) {
-                const lastMessage = allMessages[allMessages.length - 1];
+            // Show compact link only on the last agent message if there are enough messages for compaction
+            // (more messages than preserve_recent setting - we assume default of 2 for client-side)
+            if (allMessages.length > 2 && agentMessages.length > 0) {  // Need more than preserve_recent messages
                 const lastAgentCard = agentMessages[agentMessages.length - 1];
-
-                // Check if the last message contains the last agent card
-                if (lastMessage.contains(lastAgentCard)) {
-                    const compactLink = lastAgentCard.querySelector('.compact-thread-link');
-                    if (compactLink) {
-                        compactLink.classList.remove('d-none');
-                    }
+                const compactLink = lastAgentCard.querySelector('.compact-thread-link');
+                if (compactLink) {
+                    compactLink.classList.remove('d-none');
                 }
             }
         }

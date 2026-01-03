@@ -99,28 +99,36 @@ class SummarizationMiddlewareTest(BaseTestCase):
         # Verify checkpointer.adelete_thread was called
         mock_checkpointer.adelete_thread.assert_called_once_with('test-thread')
 
-        # Verify graph.ainvoke was called with correct arguments
-        mock_graph.ainvoke.assert_called_once()
-        call_args = mock_graph.ainvoke.call_args
-        dummy_input = call_args[0][0]
-        config = call_args[1]['config']
+        # Verify graph.aupdate_state was called with correct arguments
+        mock_graph.aupdate_state.assert_called_once()
+        call_args = mock_graph.aupdate_state.call_args
+        config = call_args[0][0]
+        state_update = call_args[0][1]
 
         # Verify config
         self.assertEqual(config['configurable']['thread_id'], 'test-thread')
         self.assertEqual(config['configurable']['checkpoint_ns'], '')
 
-        # Verify dummy input has new messages
-        messages = dummy_input['messages']
-        self.assertEqual(len(messages), 3)  # summary + 2 preserved
+        # Verify state_update has new messages
+        messages = state_update['messages']
+        self.assertEqual(len(messages), 4)  # summary (Human) + ack (AI) + 2 preserved
 
-        # First message should be the summary
-        self.assertIsInstance(messages[0], AIMessage)
-        self.assertEqual(messages[0].content, summary)
+        # First message should be the summary (HumanMessage)
+        self.assertIsInstance(messages[0], HumanMessage)
+        self.assertEqual(messages[0].content, "[Previous conversation summary]\nSummary of old messages")
         self.assertEqual(messages[0].additional_kwargs, {'summary': True})
 
+        # Second message should be the AI acknowledgment
+        self.assertIsInstance(messages[1], AIMessage)
+        self.assertEqual(
+            messages[1].content,
+            "I understand the previous conversation summary. How can I help you continue?"
+        )
+        self.assertEqual(messages[1].additional_kwargs, {'summary_ack': True})
+
         # Remaining messages should be preserved
-        self.assertEqual(messages[1], preserved_messages[0])
-        self.assertEqual(messages[2], preserved_messages[1])
+        self.assertEqual(messages[2], preserved_messages[0])
+        self.assertEqual(messages[3], preserved_messages[1])
 
 
 class SummarizerAgentTest(BaseTestCase):
