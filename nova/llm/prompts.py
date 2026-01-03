@@ -24,10 +24,14 @@ async def nova_system_prompt(request: ModelRequest) -> str:
 
     This replaces the static string building in LLMAgent.build_system_prompt().
     """
-    # Get agent config from runtime context
-    agent_config = getattr(request.runtime, 'agent_config', None)
-    user = getattr(request.runtime, 'user', None)
-    thread = getattr(request.runtime, 'thread', None)
+    # Get agent config from runtime.context (AgentContext is nested inside runtime)
+    # request.runtime is a langgraph.runtime.Runtime object
+    # request.runtime.context is our AgentContext dataclass
+    runtime_context = getattr(request.runtime, 'context', None) if request.runtime else None
+
+    agent_config = getattr(runtime_context, 'agent_config', None)
+    user = getattr(runtime_context, 'user', None)
+    thread = getattr(runtime_context, 'thread', None)
 
     if not agent_config:
         # Fallback to basic prompt if no config available
@@ -51,7 +55,7 @@ async def nova_system_prompt(request: ModelRequest) -> str:
         )
 
     # Check if memory tool is enabled and inject user memory
-    memory_tool_enabled = _is_memory_tool_enabled(agent_config)
+    memory_tool_enabled = await _is_memory_tool_enabled(agent_config)
 
     if memory_tool_enabled and user:
         try:
@@ -73,11 +77,15 @@ async def nova_system_prompt(request: ModelRequest) -> str:
     return base_prompt
 
 
-def _is_memory_tool_enabled(agent_config) -> bool:
+async def _is_memory_tool_enabled(agent_config) -> bool:
     """Check if memory tool is enabled for this agent."""
+    # Wrap ORM call in sync_to_async to avoid async context error
+    tools = await sync_to_async(
+        list, thread_sensitive=False
+    )(agent_config.tools.filter(is_active=True, tool_type='BUILTIN'))
     return any(
         tool.tool_subtype == 'memory' and tool.is_active
-        for tool in agent_config.tools.filter(is_active=True, tool_type='BUILTIN')
+        for tool in tools
     )
 
 
