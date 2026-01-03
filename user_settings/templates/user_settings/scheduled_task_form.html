@@ -4,9 +4,7 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block extra_head %}
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<link rel="stylesheet" href="{% static 'css/jquery-cron.css' %}">
-<link rel="stylesheet" href="{% static 'css/jquery-gentleSelect.css' %}">
+<script defer src="{% static 'user_settings/js/scheduled_task_form.js' %}"></script>
 {% endblock %}
 
 {% block content %}
@@ -18,13 +16,68 @@
                     <h5 class="mb-0">{{ title }}</h5>
                 </div>
                 <div class="card-body">
-                    <form method="post">
+                    <form method="post" id="scheduled_task_form" data-cron-preview-url="{% url 'user_settings:scheduled_task_cron_preview' %}">
                         {% csrf_token %}
-                        {{ form|crispy }}
-                        <div class="mb-3">
-                            <label for="cron_builder" class="form-label">{% trans "Schedule" %}</label>
-                            <div id="cron_builder"></div>
+
+                        {{ form.name|as_crispy_field }}
+                        {{ form.agent|as_crispy_field }}
+                        {{ form.prompt|as_crispy_field }}
+
+                        {{ form.cron_expression|as_crispy_field }}
+
+                        <div class="card mb-3" id="cron_helper">
+                            <div class="card-body">
+                                <div class="mb-2">
+                                    <label for="cron_preset" class="form-label mb-1">{% trans "Schedule helper" %}</label>
+                                    <select id="cron_preset" class="form-select">
+                                        <option value="custom">{% trans "Custom cron expression" %}</option>
+                                        <option value="every_n_minutes">{% trans "Every N minutes" %}</option>
+                                        <option value="hourly">{% trans "Hourly" %}</option>
+                                        <option value="daily_at">{% trans "Daily at a specific time" %}</option>
+                                        <option value="weekly_at">{% trans "Weekly at a specific time" %}</option>
+                                        <option value="monthly_at">{% trans "Monthly at a specific time" %}</option>
+                                    </select>
+                                </div>
+
+                                <div id="cron_params" class="row g-2 align-items-end" hidden>
+                                    <div class="col-12 col-md-4" data-cron-param="every_n_minutes">
+                                        <label for="cron_every_minutes" class="form-label">{% trans "Minutes" %}</label>
+                                        <input id="cron_every_minutes" type="number" min="1" max="59" value="5" class="form-control">
+                                    </div>
+
+                                    <div class="col-12 col-md-4" data-cron-param="daily_at weekly_at monthly_at">
+                                        <label for="cron_time" class="form-label">{% trans "Time" %}</label>
+                                        <input id="cron_time" type="time" value="09:00" class="form-control">
+                                    </div>
+
+                                    <div class="col-12 col-md-4" data-cron-param="weekly_at">
+                                        <label for="cron_weekday" class="form-label">{% trans "Weekday" %}</label>
+                                        <select id="cron_weekday" class="form-select">
+                                            <option value="1">{% trans "Monday" %}</option>
+                                            <option value="2">{% trans "Tuesday" %}</option>
+                                            <option value="3">{% trans "Wednesday" %}</option>
+                                            <option value="4">{% trans "Thursday" %}</option>
+                                            <option value="5">{% trans "Friday" %}</option>
+                                            <option value="6">{% trans "Saturday" %}</option>
+                                            <option value="0">{% trans "Sunday" %}</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="col-12 col-md-4" data-cron-param="monthly_at">
+                                        <label for="cron_monthday" class="form-label">{% trans "Day of month" %}</label>
+                                        <input id="cron_monthday" type="number" min="1" max="31" value="1" class="form-control">
+                                    </div>
+                                </div>
+
+                                <div class="mt-2 small" id="cron_preview" aria-live="polite"></div>
+                                <div class="small text-muted mt-1">
+                                    {% trans "The cron expression is validated on save (server-side)." %}
+                                </div>
+                            </div>
                         </div>
+
+                        {{ form.timezone|as_crispy_field }}
+
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="keep_thread" name="keep_thread" {% if form.instance.keep_thread %}checked{% endif %}>
                             <label class="form-check-label" for="keep_thread">
@@ -46,18 +99,4 @@
     </div>
 </div>
 
-<script src="{% static 'js/jquery-gentleSelect.js' %}"></script>
-<script src="{% static 'js/jquery-cron.js' %}"></script>
-<script>
-$(document).ready(function() {
-    // Initialize cron builder
-    $('#cron_builder').cron({
-        initial: "{{ form.instance.cron_expression|default:'* * * * *' }}",
-        onChange: function() {
-            var cron = $(this).cron("value");
-            $('#id_cron_expression').val(cron);
-        }
-    });
-});
-</script>
 {% endblock %}
