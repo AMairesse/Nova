@@ -1,4 +1,4 @@
-/* user_settings/static/user_settings/agent.js */
+/* user_settings/static/user_settings/js/agent.js */
 (function () {
   // ---------------------------------------------------------------------------
   // Toggle tool description when "is_tool" is checked

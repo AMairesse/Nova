@@ -2,9 +2,12 @@
 
 ## Current Work Focus
 
-WebApp tool: agents can create per-thread static mini webapps (HTML/CSS/JS) that are securely served under /apps/<slug>/ and previewed side-by-side with the chat. Implementation spans:
+**Completed: Thread UI refactors (Bootstrap-native + deduplication)**:
 
-- Backend models: WebApp + WebAppFile with strict constraints.
-- Builtin tool: WebApp for create/update/read with WebSocket announcements.
-- Views/URLs: secure serving, listing, and dedicated preview page.
-- Frontend: sidebar Webapps tab, webapps_list partial, and PreviewManager integration.
+- Centralized initialization in `NovaApp.bootstrapThreadUI()`
+- Removed `DOMContentLoaded` auto-init from modules (notably `responsive.js`)
+- Added explicit `bind()` / idempotence guards to avoid duplicate listeners
+- Refactored mobile Files/Webapps tabs to Bootstrap 5 native tabs (`data-bs-toggle="tab"`) and replaced manual switching with a `shown.bs.tab` handler
+- Extracted duplicated user dropdown menu items into reusable template partial `includes/user_menu_items.html`
+
+**Next**: Validate mobile offcanvas behavior (tabs switching, files toolbar visibility, webapps lazy-load), plus thread switching/files sidebar/websocket regressions.

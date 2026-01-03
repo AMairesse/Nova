@@ -24,6 +24,10 @@ CHANNEL_LAYERS = {
 # Override MinIO settings to use local file storage for testing
 MEDIA_ROOT = tempfile.mkdtemp()  # Temporary directory for test files
 
+# Ensure file expiration logic is enabled for model tests by default
+# (production can disable via USERFILE_EXPIRATION_DAYS env var)
+USERFILE_EXPIRATION_DAYS = 30
+
 # Disable MinIO validation for tests
 MINIO_ENDPOINT_URL = 'http://localhost:9000'  # Dummy value
 MINIO_ACCESS_KEY = 'test_access_key'  # Dummy value

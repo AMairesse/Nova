@@ -52,7 +52,7 @@ class LLMAgentTestMixin:
             def __init__(self):
                 self.invocations = []
 
-            async def ainvoke(self, payload, config=None):
+            async def ainvoke(self, payload, config=None, context=None):
                 self.invocations.append((payload, config))
                 return return_value or {"messages": [{"content": "final answer"}]}
 
@@ -155,7 +155,7 @@ class LLMAgentTestMixin:
                 def __init__(self):
                     self.invocations = []
 
-                async def ainvoke(self, payload, config=None):
+                async def ainvoke(self, payload, config=None, context=None):
                     # Mirror the shape expected by ainvoke: include the payload as "messages".
                     self.invocations.append((payload, config))
                     return {

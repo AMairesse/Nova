@@ -4,7 +4,7 @@ from django.urls import include, path
 from django.views.i18n import JavaScriptCatalog
 from nova.views.thread_views import (
     index, message_list, create_thread, delete_thread,
-    add_message, load_more_threads, compact_thread
+    add_message, load_more_threads, summarize_thread, confirm_summarize_thread
 )
 from nova.views.task_views import running_tasks
 from nova.views.files_views import (
@@ -26,8 +26,9 @@ urlpatterns = [
     path("message-list/", message_list, name="message_list"),
     path("create-thread/", create_thread, name="create_thread"),
     path("delete-thread/<int:thread_id>/", delete_thread, name="delete_thread"),
+    path("summarize-thread/<int:thread_id>/", summarize_thread, name="summarize_thread"),
+    path("confirm-summarize-thread/<int:thread_id>/", confirm_summarize_thread, name="confirm_summarize_thread"),
     path("add-message/", add_message, name="add_message"),
-    path("compact-thread/<int:thread_id>/", compact_thread, name="compact_thread"),
     path("load-more-threads/", load_more_threads, name="load_more_threads"),
     path("running-tasks/<int:thread_id>/", running_tasks, name="running_tasks"),
     # API

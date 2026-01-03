@@ -8,6 +8,7 @@
     // Preview split manager for webapp iframe
     window.PreviewManager = (function () {
         let debounceTimer = null;
+        let initialized = false;
 
         function el(id) { return document.getElementById(id); }
         function getThreadId() { return window.StorageUtils.getThreadId(); }
@@ -205,6 +206,9 @@
         }
 
         function init() {
+            if (initialized) return;
+            initialized = true;
+
             attachIframeLoadHandler();
             handleResizeDrag();
             bindControls();
@@ -229,7 +233,12 @@
 
             // Restore on initial load
             const threadId = getThreadId();
-            if (threadId) {
+            const cfg = window.NovaApp && window.NovaApp.previewConfig;
+
+            // Preview page can provide a public URL; prefer it over default /apps/{slug}/
+            if (cfg && cfg.threadId && String(cfg.threadId) === String(threadId) && cfg.slug) {
+                openPreview(cfg.slug, cfg.url || `/apps/${cfg.slug}/`);
+            } else if (threadId) {
                 const slug = window.StorageUtils.getItem(getSlugKey(threadId));
                 if (slug) {
                     openPreview(slug, `/apps/${slug}/`);

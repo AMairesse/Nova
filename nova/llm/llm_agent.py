@@ -1,5 +1,4 @@
 # nova/llm/llm_agent.py
-from datetime import date
 import uuid
 import logging
 from typing import Any, Callable, List
@@ -17,10 +16,12 @@ from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
-from nova.models.UserFile import UserFile
-from nova.models.UserObjects import UserInfo
 from nova.llm.checkpoints import get_checkpointer
-from nova.utils import extract_final_answer, get_theme_content
+from nova.llm.prompts import nova_system_prompt
+from nova.llm.tool_error_handling import handle_tool_errors
+from nova.llm.agent_middleware import AgentContext
+from nova.llm.summarization_middleware import SummarizationMiddleware
+from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 
@@ -100,6 +101,8 @@ register_provider(
 # Example: Adding a new provider (can be done anywhere, even in a plugin)
 # register_provider(ProviderType.ANTHROPIC, lambda p: ChatAnthropic(...))
 # --------------------------------------------------------------------- #
+
+
 class LLMAgent:
     @classmethod
     def fetch_user_params_sync(cls, user):
@@ -203,16 +206,32 @@ class LLMAgent:
         tools = await load_tools(agent)
 
         llm = agent.create_llm_agent()
-        system_prompt = await agent.build_system_prompt()
 
-        # Create the ReAct agent
+        # Store LLM reference for token counting
+        agent.llm = llm
+
+        # Update middleware with LLM
+        for mw in agent.middleware:
+            if hasattr(mw, 'summarizer') and mw.summarizer.agent_llm is None:
+                mw.summarizer.agent_llm = llm
+
+        # Create the ReAct agent with middleware
+        middleware = [nova_system_prompt, handle_tool_errors]
         if checkpointer:
-            agent.langchain_agent = create_agent(llm, tools=tools,
-                                                 system_prompt=system_prompt,
-                                                 checkpointer=checkpointer)
+            agent.langchain_agent = create_agent(
+                llm,
+                tools=tools,
+                middleware=middleware,
+                context_schema=AgentContext,
+                checkpointer=checkpointer
+            )
         else:
-            agent.langchain_agent = create_agent(llm, tools=tools,
-                                                 system_prompt=system_prompt)
+            agent.langchain_agent = create_agent(
+                llm,
+                tools=tools,
+                middleware=middleware,
+                context_schema=AgentContext
+            )
 
         agent.tools = tools
 
@@ -303,6 +322,11 @@ class LLMAgent:
         self._resources = {}
         self._loaded_builtin_modules = []
         self.checkpointer = None
+        self.middleware = []  # Agent middleware list
+
+        # Add summarization middleware if configured
+        if hasattr(self.agent_config, 'auto_summarize'):
+            self.middleware.append(SummarizationMiddleware(self.agent_config, self))
 
     async def cleanup(self):
         """Async cleanup method to close resources for loaded builtin modules, Langfuse client, and checkpointer."""
@@ -326,71 +350,6 @@ class LLMAgent:
             if hasattr(module, 'close'):
                 await module.close(self)
 
-    @sync_to_async
-    def _get_thread_file_count(self, thread_id: int) -> int:
-        # Single DB round-trip
-        return UserFile.objects.filter(thread_id=thread_id).count()
-
-    async def build_system_prompt(self):
-        """
-        Build the system prompt.
-        """
-        today = date.today().strftime("%A %d of %B, %Y")
-
-        base_prompt = ""
-        if self._system_prompt:
-            base_prompt = self._system_prompt
-            if "{today}" in base_prompt:
-                base_prompt = base_prompt.format(today=today)
-        else:
-            base_prompt = (
-                f"You are a helpful assistant. Today is {today}. "
-                "Be concise and direct. If you need to display "
-                "structured information, use markdown."
-            )
-
-        # Check if memory tool is enabled and inject user memory
-        memory_tool_enabled = any(
-            tool.tool_subtype == 'memory' and tool.is_active
-            for tool in self.builtin_tools
-        )
-
-        if memory_tool_enabled:
-            try:
-                user_info = await sync_to_async(UserInfo.objects.get)(user=self.user)
-                themes = await sync_to_async(user_info.get_themes)()
-
-                # Always include global_user_preferences content if it exists
-                global_content = ""
-                if themes and "global_user_preferences" in themes:
-                    global_content = get_theme_content(user_info.markdown_content, "global_user_preferences")
-                    if global_content.strip():
-                        global_content = f"\n\nGlobal user's preferences:\n{global_content}"
-
-                if themes:
-                    memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
-                    base_prompt += global_content + memory_block
-            except UserInfo.DoesNotExist:
-                # UserInfo should exist due to signal, but handle gracefully
-                pass
-            except Exception as e:
-                logger.warning(f"Failed to load user memory: {e}")
-
-        # Add information about files available in discussion
-        if self.thread is not None:
-            file_count = await self._get_thread_file_count(self.thread.id)
-            if file_count:
-                files_context = f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
-            else:
-                files_context = "\nNo attached files available."
-        else:
-            # When no thread is associated (e.g. /api/ask/), skip DB access
-            # and explicitly state that there are no attached files.
-            files_context = "\nNo attached files available."
-        base_prompt += files_context
-
-        return base_prompt
-
     def create_llm_agent(self):
         if not self._llm_provider:
             raise Exception("No LLM provider configured")
@@ -409,14 +368,34 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
+        # Create context for middleware
+        # Find progress handler from callbacks if available
+        progress_handler = None
+        for callback in self.config.get('callbacks', []):
+            if hasattr(callback, 'on_summarization_complete'):  # Check if it's our TaskProgressHandler
+                progress_handler = callback
+                break
+
+        agent_context = AgentContext(
+            agent_config=self.agent_config,
+            user=self.user,
+            thread=self.thread,
+            progress_handler=progress_handler
+        )
+
         full_question = f"{question}"
         message = HumanMessage(content=full_question)
 
         while True:
             result = await self.langchain_agent.ainvoke(
                 {"messages": message},
-                config=config
+                config=config,
+                context=agent_context
             )
+
+            # Call after_message middleware
+            for middleware in self.middleware:
+                await middleware.after_message(agent_context, result)
 
             # If the result contains an interruption then stop processing and
             # return the interruption
@@ -484,10 +463,26 @@ class LLMAgent:
         if self.recursion_limit is not None:
             config.update({"recursion_limit": self.recursion_limit})
 
+        # Create context for middleware
+        # Find progress handler from callbacks if available
+        progress_handler = None
+        for callback in self.config.get('callbacks', []):
+            if hasattr(callback, 'on_summarization_complete'):  # Check if it's our TaskProgressHandler
+                progress_handler = callback
+                break
+
+        context = AgentContext(
+            agent_config=self.agent_config,
+            user=self.user,
+            thread=self.thread,
+            progress_handler=progress_handler
+        )
+
         while True:
             result = await self.langchain_agent.ainvoke(
                 command,
-                config=config
+                config=config,
+                context=context
             )
 
             # If the result contains an interruption then stop processing and
@@ -501,3 +496,32 @@ class LLMAgent:
 
     async def get_langgraph_state(self):
         return await sync_to_async(self.langchain_agent.get_state, thread_sensitive=False)(self.config)
+
+    async def count_tokens(self, messages):
+        """Count tokens in messages using the agent's LLM."""
+        if hasattr(self, 'llm') and self.llm:
+            try:
+                # Try async count_tokens first
+                if hasattr(self.llm, 'count_tokens'):
+                    return await self.llm.count_tokens(messages)
+            except (AttributeError, TypeError):
+                pass
+
+            try:
+                # Try sync count_tokens
+                if hasattr(self.llm, 'count_tokens'):
+                    return self.llm.count_tokens(messages)
+            except (AttributeError, TypeError):
+                pass
+
+            # Fallback: rough estimate based on model
+            total_chars = sum(len(str(msg.content)) for msg in messages)
+            # Adjust estimate based on model type (GPT models are more token-efficient)
+            model_name = getattr(self.llm, 'model_name', '') or getattr(self.llm, 'model', '')
+            if 'gpt-4' in model_name.lower():
+                return total_chars // 3  # GPT-4 is more efficient
+            elif 'gpt-3.5' in model_name.lower():
+                return total_chars // 4  # Standard estimate
+            else:
+                return total_chars // 5  # Conservative estimate for other models
+        return 0

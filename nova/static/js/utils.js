@@ -9,6 +9,20 @@
       return document.getElementById(id);
     },
 
+    // Toggle field visibility using Bootstrap d-none class
+    toggleFieldVisibility: function (selectorOrElement, visible, required = false) {
+      let el;
+      if (selectorOrElement instanceof Element) {
+        el = selectorOrElement;
+      } else {
+        el = document.querySelector(selectorOrElement) || document.getElementById(selectorOrElement);
+      }
+      if (!el) return;
+      el.classList.toggle('d-none', !visible);
+      const input = el.querySelector('input,select,textarea');
+      if (input) input.required = visible && required;
+    },
+
     // Escape HTML for safe insertion
     escapeHTML: function (text) {
       return String(text)

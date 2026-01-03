@@ -5,6 +5,11 @@ from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
 from django import forms
 from django.forms import ModelForm
+from django.http import JsonResponse
+
+import croniter
+from cron_descriptor import get_description
+
 from nova.models.ScheduledTask import ScheduledTask
 from nova.models.AgentConfig import AgentConfig
 from nova.tasks.tasks import run_scheduled_agent_task
@@ -15,14 +20,28 @@ class ScheduledTaskForm(ModelForm):
         model = ScheduledTask
         fields = ['name', 'agent', 'prompt', 'cron_expression', 'timezone']
         widgets = {
-            'cron_expression': forms.HiddenInput(),
+            'cron_expression': forms.TextInput(
+                attrs={
+                    'class': 'form-control',
+                    'placeholder': '* * * * *',
+                    'autocomplete': 'off',
+                    'spellcheck': 'false',
+                }
+            ),
         }
 
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop('user', None)
         super().__init__(*args, **kwargs)
+
         if self.user:
             self.fields['agent'].queryset = AgentConfig.objects.filter(user=self.user)
+
+        # Make this field user-facing (was hidden and driven by legacy jQuery plugins)
+        self.fields['cron_expression'].label = _("Schedule")
+        self.fields['cron_expression'].help_text = _(
+            "Cron format: minute hour day month weekday (e.g. '*/5 * * * *')."
+        )
 
     def clean(self):
         cleaned_data = super().clean()
@@ -137,3 +156,34 @@ def scheduled_task_clear_error(request, pk):
     task.save()
     messages.success(request, _("Error cleared successfully."))
     return redirect('user_settings:scheduled_tasks')
+
+
+@login_required
+def scheduled_task_cron_preview(request):
+    """Validate a cron expression and return a human-readable description (AJAX helper)."""
+    expr = (request.GET.get('cron_expression') or '').strip()
+    if not expr:
+        return JsonResponse(
+            {'valid': False, 'error': str(_("Cron expression is required."))},
+            status=400,
+        )
+
+    try:
+        # Validate expression
+        croniter.croniter(expr)
+
+        # Nova currently requires the standard 5-part cron format
+        cron_parts = expr.split()
+        if len(cron_parts) != 5:
+            return JsonResponse(
+                {
+                    'valid': False,
+                    'error': str(_("Cron expression must have 5 parts: minute hour day month weekday.")),
+                },
+                status=400,
+            )
+
+        description = get_description(expr)
+        return JsonResponse({'valid': True, 'description': description})
+    except Exception as e:
+        return JsonResponse({'valid': False, 'error': str(e)}, status=400)

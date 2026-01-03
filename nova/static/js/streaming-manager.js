@@ -207,6 +207,9 @@
 
                 'task_error': (data) => {
                     this.onTaskError(taskId, data);
+                },
+                'summarization_complete': (data) => {
+                    this.onSummarizationComplete(data);
                 }
             };
 
@@ -309,6 +312,11 @@
                 messagesList.appendChild(messageElement);
             } else {
                 console.error('Messages list not found for new message');
+            }
+
+            // Update compact link visibility after adding new message
+            if (this.messageManager) {
+                this.messageManager.updateCompactLinkVisibility();
             }
 
             // Scroll to bottom to show new message
@@ -423,6 +431,56 @@
             }
             // Re-enable input area on error
             this.setInputAreaDisabled(false);
+        }
+
+        onSummarizationComplete(data) {
+            // Show summarization notification
+            const { summary, original_tokens, summary_tokens, strategy } = data;
+
+            // Create a toast notification or system message
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-info alert-dismissible fade show position-fixed';
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+            notification.innerHTML = `
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>Conversation summarized</strong><br>
+                <small>Reduced from ${original_tokens} to ~${summary_tokens} tokens using ${strategy} strategy</small>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+
+            document.body.appendChild(notification);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+
+            // Update progress logs
+            const progressLogs = document.getElementById('progress-logs');
+            if (progressLogs) {
+                progressLogs.textContent = `Conversation summarized (${original_tokens} → ${summary_tokens} tokens)`;
+            }
+
+            // Change compact link text to "Compaction done"
+            const compactLinks = document.querySelectorAll('.compact-thread-link');
+            compactLinks.forEach(link => {
+                link.innerHTML = '<i class="bi bi-check-circle me-1"></i>' + gettext('Compaction done');
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.6';
+                link.classList.add('text-success');
+            });
+
+            // Find the task ID from active streams and complete it (re-enables input)
+            // Since we don't know which task this is for, complete all active streams
+            // This is a bit of a hack, but works for the current use case
+            for (const [taskId, stream] of this.activeStreams) {
+                if (stream.status === 'streaming') {
+                    this.onStreamComplete(taskId);
+                    break; // Only complete one stream (the summarization task)
+                }
+            }
         }
     };
 

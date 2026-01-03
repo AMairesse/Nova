@@ -33,24 +33,18 @@ METADATA = {
 
 async def test_judge0_access(tool: Tool) -> Dict[str, str]:
     """Test connection to Judge0 by fetching supported languages."""
-    try:
-        host = await get_judge0_host(tool)
-        languages = await fetch_languages(host)
-        count = len(languages)
-        if count > 0:
-            return {
-                "status": "success",
-                "message": _(f"{count} supported languages found")
-            }
-        else:
-            return {
-                "status": "error",
-                "message": _("No languages found - check server configuration")
-            }
-    except Exception as e:
+    host = await get_judge0_host(tool)
+    languages = await fetch_languages(host)
+    count = len(languages)
+    if count > 0:
+        return {
+            "status": "success",
+            "message": _(f"{count} supported languages found")
+        }
+    else:
         return {
             "status": "error",
-            "message": _("Connection error: {err}").format(err=str(e))
+            "message": _("No languages found - check server configuration")
         }
 
 
@@ -119,15 +113,11 @@ async def fetch_languages(host: str) -> List[Dict[str, Union[int, str]]]:
 
 async def list_supported_languages(host: str) -> str:
     """List supported languages with IDs and names."""
-    try:
-        languages = await fetch_languages(host)
-        if not languages:
-            return _("No languages available.")
-        formatted = [f"{lang['id']}: {lang['name']}" for lang in languages]
-        return ", ".join(formatted)
-    except Exception as e:
-        logger.error(f"Error listing languages: {str(e)}")
-        return _("Error listing languages: {error}").format(error=str(e))
+    languages = await fetch_languages(host)
+    if not languages:
+        return _("No languages available.")
+    formatted = [f"{lang['id']}: {lang['name']}" for lang in languages]
+    return ", ".join(formatted)
 
 
 async def get_language_id(host: str, language: Union[str, int]) -> int:
@@ -156,61 +146,76 @@ async def get_language_id(host: str, language: Union[str, int]) -> int:
 
 async def get_execution_status(host: str, token: str) -> str:
     """Get status of a submission."""
-    try:
-        response = await api_request('GET', f"{host}/submissions/{token}?base64_encoded=true")
-        status = response.get('status', {}).get('description', 'Unknown')
-        stdout = response.get('stdout', '')
-        decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
-        stderr = response.get('stderr', '')
-        decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
-        return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
-    except Exception as e:
-        logger.error(f"Error getting status: {str(e)}")
-        return _("Error getting status: {error}").format(error=str(e))
+    response = await api_request('GET', f"{host}/submissions/{token}?base64_encoded=true")
+    status = response.get('status', {}).get('description', 'Unknown')
+    stdout = response.get('stdout', '')
+    decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
+    stderr = response.get('stderr', '')
+    decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
+    return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
 
 
 async def compile_code(host: str, code: str, language: Union[str, int]) -> str:
     """Compile code without execution (for compiled languages)."""
-    try:
-        language_id = await get_language_id(host, language)
-        encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-        data = {
-            "source_code": encoded_code,
-            "language_id": language_id,
-            "compiler_options": "",
-            "command_line_arguments": ""
-        }
-        response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=false", data=data)
-        token = response.get('token')
+    language_id = await get_language_id(host, language)
+    encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+    data = {
+        "source_code": encoded_code,
+        "language_id": language_id,
+        "compiler_options": "",
+        "command_line_arguments": ""
+    }
+    response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=false", data=data)
+    token = response.get('token')
 
-        # Poll for completion
-        for _i in range(10):  # Max 10 attempts
-            status = await get_execution_status(host, token)
-            if "Status: Accepted" in status or "Status: Compilation Error" in status:
-                return status
-            await asyncio.sleep(1)
+    # Poll for completion
+    for _i in range(10):  # Max 10 attempts
+        status = await get_execution_status(host, token)
+        if "Status: Accepted" in status or "Status: Compilation Error" in status:
+            return status
+        await asyncio.sleep(1)
 
-        return _("Compilation timeout")
-    except ValueError as ve:
-        return str(ve)  # Return language not found error
-    except Exception as e:
-        logger.error(f"Error compiling code: {str(e)}")
-        return _("Error compiling code: {error}").format(error=str(e))
+    return _("Compilation timeout")
 
 
 async def execute_code(host: str, code: str, language: Union[str, int] = "python",
                        input_data: Optional[str] = None, timeout: int = 5) -> str:
     """Execute code and return output."""
-    try:
-        language_id = await get_language_id(host, language)
-        encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-        encoded_input_data = base64.b64encode(input_data.encode('utf-8')).decode('utf-8') if input_data else ""
+    language_id = await get_language_id(host, language)
+    encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+    encoded_input_data = base64.b64encode(input_data.encode('utf-8')).decode('utf-8') if input_data else ""
+    data = {
+        "source_code": encoded_code,
+        "language_id": language_id,
+        "stdin": encoded_input_data,
+        "cpu_time_limit": timeout,
+        "memory_limit": 128000  # 128MB default
+    }
+    response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=true", data=data)
+    stdout = response.get('stdout', '')
+    decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
+    stderr = response.get('stderr', '')
+    decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
+    status = response.get('status', {}).get('description', 'Unknown')
+    return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
+
+
+async def run_code_with_input(host: str, code: str, language: Union[str, int] = "python",
+                              inputs: List[str] = None) -> str:
+    """Run code with multiple inputs."""
+    if inputs is None:
+        inputs = []
+    language_id = await get_language_id(host, language)
+    encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
+    results = []
+    for inp in inputs:
+        encoded_input_data = base64.b64encode(inp.encode('utf-8')).decode('utf-8') if inp else ""
         data = {
             "source_code": encoded_code,
             "language_id": language_id,
             "stdin": encoded_input_data,
-            "cpu_time_limit": timeout,
-            "memory_limit": 128000  # 128MB default
+            "cpu_time_limit": 5,  # Use default timeout
+            "memory_limit": 128000
         }
         response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=true", data=data)
         stdout = response.get('stdout', '')
@@ -218,45 +223,8 @@ async def execute_code(host: str, code: str, language: Union[str, int] = "python
         stderr = response.get('stderr', '')
         decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
         status = response.get('status', {}).get('description', 'Unknown')
-        return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
-    except ValueError as ve:
-        return str(ve)  # Return language not found error
-    except Exception as e:
-        logger.error(f"Error executing code: {str(e)}")
-        return _("Error executing code: {error}").format(error=str(e))
-
-
-async def run_code_with_input(host: str, code: str, language: Union[str, int] = "python",
-                              inputs: List[str] = None) -> str:
-    """Run code with multiple inputs."""
-    try:
-        if inputs is None:
-            inputs = []
-        language_id = await get_language_id(host, language)
-        encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-        results = []
-        for inp in inputs:
-            encoded_input_data = base64.b64encode(inp.encode('utf-8')).decode('utf-8') if inp else ""
-            data = {
-                "source_code": encoded_code,
-                "language_id": language_id,
-                "stdin": encoded_input_data,
-                "cpu_time_limit": 5,  # Use default timeout
-                "memory_limit": 128000
-            }
-            response = await api_request('POST', f"{host}/submissions?base64_encoded=true&wait=true", data=data)
-            stdout = response.get('stdout', '')
-            decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
-            stderr = response.get('stderr', '')
-            decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
-            status = response.get('status', {}).get('description', 'Unknown')
-            results.append(f"Input: {inp}\nStatus: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}")
-        return "\n\n".join(results)
-    except ValueError as ve:
-        return str(ve)  # Return language not found error
-    except Exception as e:
-        logger.error(f"Error running code with inputs: {str(e)}")
-        return _("Error running code with inputs: {error}").format(error=str(e))
+        results.append(f"Input: {inp}\nStatus: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}")
+    return "\n\n".join(results)
 
 
 async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:

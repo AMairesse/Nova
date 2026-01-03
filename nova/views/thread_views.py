@@ -8,17 +8,20 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
 from nova.models.AgentConfig import AgentConfig
+from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
-from nova.tasks.tasks import run_ai_task_celery, compact_conversation_celery
+from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.utils import markdown_to_html
 import logging
 
 from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
+from nova.llm.llm_agent import LLMAgent
+from nova.llm.checkpoints import get_checkpointer
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +117,27 @@ def message_list(request):
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
             messages = selected_thread.get_messages()
+
+            # Get agent config for summarization settings
+            agent_config = None
+            try:
+                agent_config = request.user.userprofile.default_agent
+            except UserProfile.DoesNotExist:
+                pass
+
+            # Determine if compact link should be shown
+            last_agent_message_id = None
+
+            if agent_config:
+                # Show compact link if there are enough messages for compaction
+                # (more messages than preserve_recent setting)
+                if len(messages) > agent_config.preserve_recent:
+                    # Find the last agent message to show the compact link
+                    for m in reversed(messages):
+                        if m.actor == Actor.AGENT:
+                            last_agent_message_id = m.id
+                            break
+
             for m in messages:
                 m.rendered_html = markdown_to_html(m.text)
                 # Add info about files used
@@ -122,6 +146,8 @@ def message_list(request):
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
+                # Mark if this is the last agent message (for compact link)
+                m.is_last_agent_message = (m.id == last_agent_message_id)
 
             # Fetch pending interactions for server-side rendering
             pending_interactions = Interaction.objects.filter(
@@ -280,16 +306,74 @@ def add_message(request):
 
 @require_POST
 @login_required(login_url='login')
-def compact_thread(request, thread_id):
+def summarize_thread(request, thread_id):
+    """Manually trigger conversation summarization for a thread."""
+    # Verify thread exists and user has access
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
 
-    # Get agent (default or from profile)
-    try:
-        agent_config = request.user.userprofile.default_agent
-    except UserProfile.DoesNotExist:
-        agent_config = None
+    # Get the agent's summarization config
+    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    if not agent_config:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "No default agent configured"
+        }, status=400)
 
-    # Create task
+    # Check if there are enough messages for summarization
+    messages = thread.get_messages()
+    min_messages_for_summarization = agent_config.preserve_recent + 1
+    if len(messages) <= agent_config.preserve_recent:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": (
+                f"Not enough messages to summarize. Need at least "
+                f"{min_messages_for_summarization} messages, but only have {len(messages)}."
+            )
+        }, status=400)
+
+    # Check for sub-agents with sufficient context
+    sub_agent_links = CheckpointLink.objects.filter(
+        thread=thread
+    ).exclude(agent=agent_config).select_related('agent')
+
+    sub_agents_info = []
+    for link in sub_agent_links:
+        agent = async_to_sync(LLMAgent.create)(request.user, thread, link.agent)
+        try:
+            checkpointer = async_to_sync(get_checkpointer)()
+            checkpoint = async_to_sync(checkpointer.aget_tuple)(agent.config)
+            if checkpoint:
+                checkpoint_messages = checkpoint.checkpoint.get('channel_values', {}).get('messages', [])
+                message_count = len(checkpoint_messages)
+
+                # Check if sub-agent has enough messages for summarization
+                if message_count > link.agent.preserve_recent:
+                    token_count = async_to_sync(agent.count_tokens)(checkpoint_messages)
+                    sub_agents_info.append({
+                        'id': link.agent.id,
+                        'name': link.agent.name,
+                        'token_count': token_count
+                    })
+        finally:
+            async_to_sync(agent.cleanup)()
+            if 'checkpointer' in locals():
+                async_to_sync(checkpointer.conn.close)()
+
+    # If sub-agents have sufficient context, request confirmation
+    if sub_agents_info:
+        return JsonResponse({
+            "status": "CONFIRMATION_NEEDED",
+            "message": f"{len(sub_agents_info)} sub-agent(s) have accumulated context.",
+            "sub_agents": sub_agents_info,
+            "thread_id": thread_id
+        })
+
+    # Otherwise, proceed directly with main agent only
+    return start_summarization(request, thread, agent_config, False)
+
+
+def start_summarization(request, thread, agent_config, include_sub_agents, sub_agent_ids=None):
+    """Helper function to start summarization task."""
     task = Task.objects.create(
         user=request.user,
         thread=thread,
@@ -297,10 +381,37 @@ def compact_thread(request, thread_id):
         status=TaskStatus.PENDING
     )
 
-    # Queue task (system message will be added by CompactTaskExecutor after completion)
-    compact_conversation_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None)
+    # Trigger async summarization task
+    summarize_thread_task.delay(
+        thread.id,
+        request.user.id,
+        agent_config.id,
+        task.id,
+        include_sub_agents,
+        sub_agent_ids or []
+    )
 
     return JsonResponse({
-        'status': 'queued',
-        'task_id': task.id
+        "status": "OK",
+        "task_id": task.id,
+        "message": "Thread summarization started."
     })
+
+
+@require_POST
+@login_required(login_url='login')
+def confirm_summarize_thread(request, thread_id):
+    """Handle user confirmation for sub-agent summarization."""
+    import json
+    include_sub_agents = request.POST.get('include_sub_agents') == 'true'
+    sub_agent_ids = json.loads(request.POST.get('sub_agent_ids', '[]'))
+
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    if not agent_config:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "No default agent configured"
+        }, status=400)
+
+    return start_summarization(request, thread, agent_config, include_sub_agents, sub_agent_ids)

@@ -19,9 +19,16 @@
             this.longPressTarget = null;
             this.touchStartPos = null;
             this.contextMenuOffcanvas = null;
+
+            // Idempotence
+            this._initialized = false;
+            this._handlersBound = false;
         }
 
         init() {
+            if (this._initialized) return;
+            this._initialized = true;
+
             // Attach event handlers
             this.attachEventHandlers();
             this.loadInitialThread();
@@ -34,6 +41,9 @@
         }
 
         attachEventHandlers() {
+            if (this._handlersBound) return;
+            this._handlersBound = true;
+
             // 'click' event mapping
             const eventMappings = {
                 '.thread-link': (e, target) => {
@@ -41,6 +51,14 @@
                     const link = target.closest('.thread-link');
                     const threadId = link.dataset.threadId;
                     this.loadMessages(threadId);
+
+                    // Mobile: close threads offcanvas after selection
+                    if (window.innerWidth < 992) {
+                        const ocEl = document.getElementById('threadsOffcanvas');
+                        if (ocEl && window.bootstrap && bootstrap.Offcanvas) {
+                            bootstrap.Offcanvas.getOrCreateInstance(ocEl).hide();
+                        }
+                    }
                 },
                 '.create-thread-btn': (e, target) => {
                     e.preventDefault();
@@ -65,12 +83,6 @@
                         dropdownButton.setAttribute('title', label);
                     }
                 },
-                '.compact-thread-btn': (e, target) => {
-                    e.preventDefault();
-                    const btn = target.closest('.compact-thread-btn');
-                    const threadId = btn.dataset.threadId;
-                    this.compactThread(threadId, btn);
-                },
                 '.interaction-answer-btn': (e, target) => {
                     e.preventDefault();
                     const btn = target.closest(".interaction-answer-btn");
@@ -89,6 +101,10 @@
                 '#voice-btn': (e, target) => {
                     e.preventDefault();
                     this.handleVoiceButtonClick();
+                },
+                '.compact-thread-link': (e, target) => {
+                    e.preventDefault();
+                    this.summarizeCurrentThread();
                 }
             };
 
@@ -163,6 +179,9 @@
                 // Handle server-rendered interaction cards and check for pending interactions
                 this.checkPendingInteractions();
 
+                // Update compact link visibility for existing messages
+                this.updateCompactLinkVisibility();
+
                 // Check for running tasks and reconnect to streaming if needed
                 this.checkAndReconnectRunningTasks();
             } catch (error) {
@@ -170,23 +189,6 @@
             }
         }
 
-        async compactThread(threadId, btnEl) {
-            const clickedBtn = btnEl || document.querySelector(`.compact-thread-btn[data-thread-id="${threadId}"]`);
-            if (!clickedBtn || clickedBtn.disabled) return;
-            const originalHtml = clickedBtn.innerHTML;
-            clickedBtn.disabled = true;
-            clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
-            try {
-                const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.compactThread.replace('0', threadId), { method: 'POST' });
-                if (!response.ok) throw new Error('Server error');
-                const data = await response.json();
-                if (data.task_id) this.streamingManager.registerBackgroundTask(data.task_id);
-            } catch (error) {
-                console.error('Error compacting thread:', error);
-                clickedBtn.disabled = false;
-                clickedBtn.innerHTML = originalHtml;
-            }
-        }
 
         async answerInteraction(interactionId, answer) {
             const clickedBtn = document.querySelector(`.interaction-answer-btn[data-interaction-id="${interactionId}"]`);
@@ -294,6 +296,9 @@
                 console.error('Messages list not found!');
             }
 
+            // Update compact link visibility after adding new message
+            this.updateCompactLinkVisibility();
+
             // Auto-scroll to bottom when new messages are added
             this.scrollToBottom();
         }
@@ -337,6 +342,34 @@
             }
         }
 
+        // Update compact link visibility based on message count and position
+        updateCompactLinkVisibility() {
+            const messagesList = document.getElementById('messages-list');
+            if (!messagesList) return;
+
+            // Get all messages and agent messages
+            const allMessages = messagesList.querySelectorAll('.message');
+            const agentMessages = messagesList.querySelectorAll('.message .card.border-secondary');
+
+            // Hide compact link on all agent messages first
+            agentMessages.forEach(card => {
+                const compactLink = card.querySelector('.compact-thread-link');
+                if (compactLink) {
+                    compactLink.classList.add('d-none');
+                }
+            });
+
+            // Show compact link only on the last agent message if there are enough messages for compaction
+            // (more messages than preserve_recent setting - we assume default of 2 for client-side)
+            if (allMessages.length > 2 && agentMessages.length > 0) {  // Need more than preserve_recent messages
+                const lastAgentCard = agentMessages[agentMessages.length - 1];
+                const compactLink = lastAgentCard.querySelector('.compact-thread-link');
+                if (compactLink) {
+                    compactLink.classList.remove('d-none');
+                }
+            }
+        }
+
         async createThread() {
             try {
                 const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.createThread, { method: 'POST' });
@@ -344,7 +377,7 @@
                 if (data.threadHtml) {
                     // Use the threads-list container instead of threads-container
                     const container = document.getElementById('threads-list');
-                    const todayGroup = window.ThreadUIUtils.ensureGroupContainer('today', container);
+                    const todayGroup = window.ThreadManager.UIUtils.ensureGroupContainer('today', container);
                     const ul = todayGroup ? todayGroup.querySelector('ul.list-group') : null;
                     if (ul) {
                         ul.insertAdjacentHTML('afterbegin', data.threadHtml);
@@ -376,6 +409,182 @@
             } catch (error) {
                 console.error('Error deleting thread:', error);
             }
+        }
+
+        async summarizeCurrentThread() {
+            if (!this.currentThreadId) {
+                alert('No thread selected');
+                return;
+            }
+
+            const compactLinks = document.querySelectorAll('.compact-thread-link');
+            if (compactLinks.length === 0) return;
+
+            // Store original HTML for all links
+            const originalHtmls = Array.from(compactLinks).map(link => link.innerHTML);
+
+            // Update all compact links to loading state
+            compactLinks.forEach(link => {
+                link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Starting...');
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.6';
+            });
+
+            try {
+                const response = await window.DOMUtils.csrfFetch(
+                    window.NovaApp.urls.summarizeThread.replace('0', this.currentThreadId),
+                    { method: 'POST' }
+                );
+
+                const data = await response.json();
+
+                if (data.status === 'CONFIRMATION_NEEDED') {
+                    // Show confirmation dialog for sub-agents
+                    this.showSubAgentConfirmationDialog(data.sub_agents, data.thread_id);
+
+                    // Reset compact links
+                    compactLinks.forEach((link, index) => {
+                        link.innerHTML = originalHtmls[index];
+                        link.style.pointerEvents = '';
+                        link.style.opacity = '';
+                    });
+                } else if (data.status === 'OK' && data.task_id) {
+                    // Register streaming for the summarization task (this will disable input area)
+                    this.streamingManager.registerStream(data.task_id, {
+                        id: data.task_id,
+                        actor: 'system',  // Summarization is a system operation
+                        text: ''
+                    });
+
+                    // Update compact links to show it's running
+                    compactLinks.forEach(link => {
+                        link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Running...');
+                    });
+
+                    // Note: Links will be reset when streaming completes via WebSocket events
+                } else {
+                    throw new Error(data.message || 'Summarization failed');
+                }
+            } catch (error) {
+                console.error('Error summarizing thread:', error);
+
+                // Reset all links on error
+                compactLinks.forEach((link, index) => {
+                    link.innerHTML = originalHtmls[index];
+                    link.style.pointerEvents = '';
+                    link.style.opacity = '';
+                });
+
+                // Show error message
+                alert('Failed to start summarization: ' + error.message);
+            }
+        }
+
+        showSubAgentConfirmationDialog(subAgents, threadId) {
+            // Populate the modal
+            const list = document.getElementById('subAgentList');
+            if (list) {
+                list.innerHTML = subAgents.map(agent =>
+                    `<li class="list-group-item">${agent.name} (${agent.token_count} ${gettext('tokens')})</li>`
+                ).join('');
+            }
+
+            // Store data for confirmation
+            const modal = document.getElementById('subAgentConfirmationModal');
+            if (modal) {
+                modal.dataset.threadId = threadId;
+                modal.dataset.subAgents = JSON.stringify(subAgents);
+
+                // Show the modal
+                const bsModal = new bootstrap.Modal(modal);
+                bsModal.show();
+            }
+        }
+
+        async confirmSummarize(includeSubAgents) {
+            // Get data from modal
+            const modal = document.getElementById('subAgentConfirmationModal');
+            if (!modal) return;
+
+            const threadId = modal.dataset.threadId;
+            const subAgents = JSON.parse(modal.dataset.subAgents || '[]');
+            const subAgentIds = includeSubAgents ? subAgents.map(a => a.id) : [];
+
+            // Hide the modal
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            if (bsModal) {
+                bsModal.hide();
+            }
+
+            // Show loading state on compact links
+            const compactLinks = document.querySelectorAll('.compact-thread-link');
+            compactLinks.forEach(link => {
+                link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Starting...');
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.6';
+            });
+
+            try {
+                const response = await window.DOMUtils.csrfFetch(
+                    window.NovaApp.urls.confirmSummarizeThread.replace('0', threadId),
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            'include_sub_agents': includeSubAgents,
+                            'sub_agent_ids': JSON.stringify(subAgentIds)
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                if (data.status === 'OK' && data.task_id) {
+                    // Register streaming for the summarization task
+                    this.streamingManager.registerStream(data.task_id, {
+                        id: data.task_id,
+                        actor: 'system',
+                        text: ''
+                    });
+
+                    // Update compact links to show it's running
+                    compactLinks.forEach(link => {
+                        link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Running...');
+                    });
+                } else {
+                    throw new Error(data.message || 'Summarization failed');
+                }
+            } catch (error) {
+                console.error('Error confirming summarization:', error);
+
+                // Reset compact links on error
+                compactLinks.forEach(link => {
+                    link.innerHTML = '<i class="bi bi-compress me-1"></i>' + gettext('Compact');
+                    link.style.pointerEvents = '';
+                    link.style.opacity = '';
+                });
+
+                alert('Failed to start summarization: ' + error.message);
+            }
+        }
+
+        showToast(message, type = 'info') {
+            // Simple toast implementation - could be enhanced with a proper toast library
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            toast.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(toast);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 5000);
         }
 
         loadInitialThread() {
@@ -708,11 +917,6 @@
                 regenerateBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
             }
 
-            // Show/hide compact button (only for last agent message)
-            const compactBtn = document.getElementById('context-menu-compact');
-            if (compactBtn) {
-                compactBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
-            }
 
             // Show the offcanvas
             this.contextMenuOffcanvas.show();
@@ -751,16 +955,6 @@
                 });
             }
 
-            // Compact thread
-            const compactBtn = document.getElementById('context-menu-compact');
-            if (compactBtn) {
-                compactBtn.addEventListener('click', () => {
-                    if (this.currentThreadId) {
-                        this.compactThread(this.currentThreadId);
-                    }
-                    this.contextMenuOffcanvas.hide();
-                });
-            }
         }
 
         async copyMessageToClipboard() {

@@ -100,7 +100,7 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
         return data
 
     class Media:
-        js = ["user_settings/provider.js"]
+        js = ["user_settings/js/provider.js"]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -128,6 +128,12 @@ class AgentForm(forms.ModelForm):
             "tools",
             "agent_tools",
             "tool_description",
+            "auto_summarize",
+            "token_threshold",
+            "preserve_recent",
+            "strategy",
+            "max_summary_length",
+            "summary_model",
         ]
 
     # ------------------------------------------------------------------ #
@@ -152,6 +158,14 @@ class AgentForm(forms.ModelForm):
         # Pre-select sub-agents when editing
         if self.instance.pk:
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
+
+        # Make summarization fields not required (they have model defaults)
+        self.fields["auto_summarize"].required = False
+        self.fields["token_threshold"].required = False
+        self.fields["preserve_recent"].required = False
+        self.fields["strategy"].required = False
+        self.fields["max_summary_length"].required = False
+        self.fields["summary_model"].required = False
 
         # Crispy-forms helper
         #
@@ -179,6 +193,16 @@ class AgentForm(forms.ModelForm):
                 css_class="dual-list-tools-source",
             ),
             "agent_tools",
+            Div(
+                Field("auto_summarize"),
+                Field("token_threshold"),
+                Field("preserve_recent"),
+                Field("strategy"),
+                Field("max_summary_length"),
+                Field("summary_model"),
+                css_class="mt-4 p-3 border rounded",
+                css_id="summarization-settings",
+            ),
         )
 
     # ------------------------------------------------------------------ #
@@ -201,7 +225,7 @@ class AgentForm(forms.ModelForm):
         return data
 
     class Media:
-        js = ["user_settings/agent.js"]
+        js = ["user_settings/js/agent.js"]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -354,7 +378,7 @@ class ToolForm(forms.ModelForm):
         return instance
 
     class Media:
-        js = ["user_settings/tool.js"]
+        js = ["user_settings/js/tool.js"]
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@ from user_settings.views.scheduled_tasks import (
     scheduled_task_toggle_active,
     scheduled_task_run_now,
     scheduled_task_clear_error,
+    scheduled_task_cron_preview,
 )
 
 app_name = 'user_settings'
@@ -92,4 +93,5 @@ urlpatterns += [
     path("scheduled-tasks/<int:pk>/toggle-active/", scheduled_task_toggle_active, name="scheduled_task_toggle_active"),
     path("scheduled-tasks/<int:pk>/run-now/", scheduled_task_run_now, name="scheduled_task_run_now"),
     path("scheduled-tasks/<int:pk>/clear-error/", scheduled_task_clear_error, name="scheduled_task_clear_error"),
+    path("scheduled-tasks/cron-preview/", scheduled_task_cron_preview, name="scheduled_task_cron_preview"),
 ]

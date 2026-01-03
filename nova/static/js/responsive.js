@@ -2,34 +2,50 @@
 (function () {
   'use strict';
 
+  // Keep global namespace (non-module scripts)
+  window.NovaApp = window.NovaApp || {};
+  window.NovaApp.Modules = window.NovaApp.Modules || {};
+
   class ResponsiveManager {
     constructor() {
       this.isDesktop = window.innerWidth >= 992;
       this.filesVisible = true;
-      this.init();
+
+      // Idempotence
+      this._bound = false;
+      this._resizeHandler = null;
+      this._mutationObserver = null;
     }
 
-    init() {
+    /**
+     * Bind all event listeners (idempotent).
+     * NOTE: No module should self-initialize; call from NovaApp.bootstrapThreadUI().
+     */
+    bind() {
+      if (this._bound) return;
+      this._bound = true;
+
       this.setupEventListeners();
-      this.syncMobileContent();
       this.setupFilesToggle();
       this.setupBootstrapEventListeners();
       this.setupMutationObserver();
 
-      // Listen for thread changes to update FileManager
-      document.addEventListener('threadChanged', (event) => {
-        const threadId = event.detail?.threadId;
-        if (threadId !== undefined && window.FileManager) {
-          setTimeout(() => {
-            window.FileManager.updateForThread(threadId);
-          }, 100); // Small delay to ensure thread is loaded
-        }
+      // Listen for file content updates:
+      // This event is dispatched ONLY from syncFilesContent().
+      // To avoid recursion:
+      // - Do NOT call syncMobileContent() here (it used to call syncFilesContent()).
+      // - Just ensure upload buttons are wired for the new DOM.
+      document.addEventListener('fileContentUpdated', () => {
+        this.syncUploadButtons();
       });
+
+      // Initial sync once everything is bound
+      this.syncMobileContent();
     }
 
     setupEventListeners() {
       // Window resize handler
-      window.addEventListener('resize', this.debounce(() => {
+      this._resizeHandler = this.debounce(() => {
         const wasDesktop = this.isDesktop;
         this.isDesktop = window.innerWidth >= 992;
 
@@ -40,35 +56,29 @@
             this.showFiles();
           }
         }
-      }, 250));
+      }, 250);
 
-      // Handle thread selection on mobile - close offcanvas ONLY when a thread link is clicked
-      document.addEventListener('click', (e) => {
-        const threadLink = e.target.closest('.thread-link');
-        if (threadLink && !this.isDesktop) {
-          const threadsOffcanvas = bootstrap.Offcanvas.getInstance(document.getElementById('threadsOffcanvas'));
-          if (threadsOffcanvas) {
-            threadsOffcanvas.hide();
-          }
-        }
-      });
+      window.addEventListener('resize', this._resizeHandler);
 
       // Sync mobile upload buttons with desktop ones
       this.syncUploadButtons();
 
-      // Setup mobile Files/Webapps tab switching
-      this.setupMobileFilesWebappsTabs();
+      // Setup mobile Files/Webapps tab behavior (Bootstrap-native)
+      this.setupMobileFilesWebappsBootstrapTabs();
     }
 
     setupFilesToggle() {
       const toggleBtn = document.getElementById('files-toggle-btn');
-      if (toggleBtn) {
-        toggleBtn.addEventListener('click', () => {
-          if (this.isDesktop) {
-            this.toggleFiles();
-          }
-        });
-      }
+      if (!toggleBtn) return;
+
+      if (toggleBtn._novaBoundFilesToggle) return;
+      toggleBtn._novaBoundFilesToggle = true;
+
+      toggleBtn.addEventListener('click', () => {
+        if (this.isDesktop) {
+          this.toggleFiles();
+        }
+      });
     }
 
     toggleFiles() {
@@ -136,15 +146,6 @@
       // dispatches 'fileContentUpdated', and the global listener calls syncMobileContent().
       // That cycle caused the "too much recursion" error.
       this.syncUploadButtons();
-
-      // Ensure FileManager is initialized once
-      this.initializeFileManager();
-    }
-
-    initializeFileManager() {
-      if (window.FileManager && !window.FileManager._initialized && typeof window.FileManager.init === 'function') {
-        window.FileManager.init();
-      }
     }
 
     syncFilesContent() {
@@ -191,52 +192,44 @@
       }
     }
 
-    setupMobileFilesWebappsTabs() {
-      const tabFiles = document.getElementById('mobile-tab-files');
-      const tabWebapps = document.getElementById('mobile-tab-webapps');
+    setupMobileFilesWebappsBootstrapTabs() {
+      const tabs = document.getElementById('mobile-files-webapps-tabs');
       const toolbar = document.getElementById('mobile-files-toolbar');
-      const filesContainer = document.getElementById('file-sidebar-content-mobile');
       const webappsContainer = document.getElementById('webapps-list-container-mobile');
 
-      if (!tabFiles || !tabWebapps || !filesContainer || !webappsContainer) return;
+      if (!tabs || !toolbar) return;
+      if (tabs._novaBoundBsTabs) return;
+      tabs._novaBoundBsTabs = true;
 
-      const activateFiles = () => {
-        tabFiles.classList.add('active');
-        tabWebapps.classList.remove('active');
-        if (toolbar) toolbar.classList.remove('d-none');
-        filesContainer.classList.remove('d-none');
-        filesContainer.removeAttribute('aria-hidden');
-        webappsContainer.classList.add('d-none');
-        webappsContainer.setAttribute('aria-hidden', 'true');
-      };
+      const updateUIForActiveTab = (tabEl) => {
+        if (!tabEl) return;
 
-      const activateWebapps = () => {
-        tabWebapps.classList.add('active');
-        tabFiles.classList.remove('active');
-        if (toolbar) toolbar.classList.add('d-none');
-        filesContainer.classList.add('d-none');
-        filesContainer.setAttribute('aria-hidden', 'true');
-        webappsContainer.classList.remove('d-none');
-        webappsContainer.removeAttribute('aria-hidden');
+        const targetSelector = tabEl.getAttribute('data-bs-target') || tabEl.getAttribute('href') || '';
+        const isWebapps = targetSelector === '#mobile-webapps-pane' || tabEl.id === 'mobile-tab-webapps';
 
-        // Load mobile webapps list on demand
-        if (window.WebappIntegration && typeof window.WebappIntegration.loadMobileWebappsList === 'function') {
-          window.WebappIntegration.loadMobileWebappsList();
+        // Toggle toolbar visibility (toolbar only makes sense for Files)
+        if (isWebapps) {
+          toolbar.classList.add('d-none');
+        } else {
+          toolbar.classList.remove('d-none');
+        }
+
+        // Lazy-load webapps list when switching to Webapps tab
+        if (isWebapps && webappsContainer) {
+          if (window.WebappIntegration && typeof window.WebappIntegration.loadMobileWebappsList === 'function') {
+            window.WebappIntegration.loadMobileWebappsList();
+          }
         }
       };
 
-      tabFiles.addEventListener('click', (e) => {
-        e.preventDefault();
-        activateFiles();
-      });
+      // Initial state: enforce toolbar visibility based on currently active tab
+      const initialActiveTab = tabs.querySelector('.nav-link.active');
+      updateUIForActiveTab(initialActiveTab);
 
-      tabWebapps.addEventListener('click', (e) => {
-        e.preventDefault();
-        activateWebapps();
+      // Bootstrap-native event fired after a tab is shown
+      tabs.addEventListener('shown.bs.tab', (event) => {
+        updateUIForActiveTab(event.target);
       });
-
-      // Default to Files view
-      activateFiles();
     }
 
     syncThreadLists() {
@@ -253,44 +246,36 @@
       const threadsOffcanvas = document.getElementById('threadsOffcanvas');
       const filesOffcanvas = document.getElementById('filesOffcanvas');
 
-      if (threadsOffcanvas) {
+      if (threadsOffcanvas && !threadsOffcanvas._novaBoundShowSync) {
+        threadsOffcanvas._novaBoundShowSync = true;
         threadsOffcanvas.addEventListener('show.bs.offcanvas', () => {
           this.syncThreadLists();
         });
       }
 
-      if (filesOffcanvas) {
+      if (filesOffcanvas && !filesOffcanvas._novaBoundShowSync) {
+        filesOffcanvas._novaBoundShowSync = true;
         filesOffcanvas.addEventListener('show.bs.offcanvas', () => {
           this.syncFilesContent();
         });
       }
-
-      // Auto-close threads offcanvas when thread is selected on mobile
-      document.addEventListener('click', (e) => {
-        if (e.target.closest('#threadsOffcanvas .thread-link') && !this.isDesktop) {
-          const offcanvasInstance = bootstrap.Offcanvas.getInstance(threadsOffcanvas);
-          if (offcanvasInstance) {
-            offcanvasInstance.hide();
-          }
-        }
-      });
     }
 
     setupMutationObserver() {
       // Watch for changes in desktop thread list and sync to mobile
       const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
-      if (desktopThreadList) {
-        const observer = new MutationObserver(() => {
-          this.syncThreadLists();
-        });
-        observer.observe(desktopThreadList, { childList: true, subtree: true });
-      }
+      if (!desktopThreadList || this._mutationObserver) return;
+
+      this._mutationObserver = new MutationObserver(() => {
+        this.syncThreadLists();
+      });
+      this._mutationObserver.observe(desktopThreadList, { childList: true, subtree: true });
     }
 
     // Utility function for debouncing
     debounce(func, wait) {
       let timeout;
-      return function executedFunction(...args) {
+      return (...args) => {
         const later = () => {
           clearTimeout(timeout);
           func(...args);
@@ -313,37 +298,9 @@
     }
   }
 
-  // Initialize when DOM is ready
-  document.addEventListener('DOMContentLoaded', () => {
-    window.ResponsiveManager = new ResponsiveManager();
+  // Expose via NovaApp namespace (preferred)
+  window.NovaApp.Modules.ResponsiveManager = ResponsiveManager;
 
-    // Listen for file content updates:
-    // This event is dispatched ONLY from syncFilesContent().
-    // To avoid recursion:
-    // - Do NOT call syncMobileContent() here (it used to call syncFilesContent()).
-    // - Just ensure upload buttons and FileManager are wired for the new DOM.
-    document.addEventListener('fileContentUpdated', () => {
-      if (window.ResponsiveManager) {
-        window.ResponsiveManager.syncUploadButtons();
-        window.ResponsiveManager.initializeFileManager();
-      }
-    });
-
-    // Listen for thread changes to update FileManager
-    document.addEventListener('click', (e) => {
-      const threadLink = e.target.closest('.thread-link');
-      if (threadLink) {
-        const threadId = threadLink.dataset.threadId;
-        if (threadId && window.FileManager) {
-          // Update FileManager for the new thread
-          setTimeout(() => {
-            window.FileManager.updateForThread(threadId);
-          }, 100); // Small delay to ensure thread is loaded
-        }
-      }
-    });
-  });
-
-  // Also expose the class for manual initialization if needed
+  // Backward compatibility: some code may import the class from here
   window.ResponsiveManagerClass = ResponsiveManager;
 })();

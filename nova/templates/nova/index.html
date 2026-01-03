@@ -83,21 +83,39 @@
       <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
     </div>
     <div class="offcanvas-body p-0 d-flex flex-column">
-      <!-- Mobile tabs -->
-      <ul class="nav nav-tabs px-2 pt-2" role="tablist" id="mobile-files-webapps-tabs">
+      <!-- Mobile tabs (Bootstrap 5 native tabs) -->
+      <ul class="nav nav-tabs px-2 pt-2" id="mobile-files-webapps-tabs" role="tablist">
         <li class="nav-item" role="presentation">
-          <button class="nav-link active" id="mobile-tab-files" data-view="files" type="button" role="tab" aria-selected="true">
+          <button
+            class="nav-link active"
+            id="mobile-tab-files"
+            data-bs-toggle="tab"
+            data-bs-target="#mobile-files-pane"
+            type="button"
+            role="tab"
+            aria-controls="mobile-files-pane"
+            aria-selected="true"
+          >
             <i class="bi bi-files me-1"></i>{% trans "Files" %}
           </button>
         </li>
         <li class="nav-item" role="presentation">
-          <button class="nav-link" id="mobile-tab-webapps" data-view="webapps" type="button" role="tab" aria-selected="false">
+          <button
+            class="nav-link"
+            id="mobile-tab-webapps"
+            data-bs-toggle="tab"
+            data-bs-target="#mobile-webapps-pane"
+            type="button"
+            role="tab"
+            aria-controls="mobile-webapps-pane"
+            aria-selected="false"
+          >
             <i class="bi bi-window me-1"></i>{% trans "Webapps" %}
           </button>
         </li>
       </ul>
 
-      <!-- Mobile toolbar (shown only for Files view) -->
+      <!-- Mobile toolbar (shown only for Files tab; visibility also enforced via JS on tab change) -->
       <div class="d-flex justify-content-between align-items-center px-2 py-2 border-bottom bg-light" id="mobile-files-toolbar">
         <div class="small text-muted">{% trans "Upload files" %}</div>
         <div>
@@ -110,15 +128,32 @@
         </div>
       </div>
 
-      <!-- Mobile content containers -->
-      <div class="flex-grow-1 overflow-auto">
-        <!-- Files tree clone -->
-        <div id="file-sidebar-content-mobile">
-          <!-- Cloned from desktop sidebar; kept as-is -->
+      <!-- Mobile tab panes -->
+      <div class="tab-content flex-grow-1 overflow-auto" id="mobile-files-webapps-tabcontent">
+        <div
+          class="tab-pane fade show active"
+          id="mobile-files-pane"
+          role="tabpanel"
+          aria-labelledby="mobile-tab-files"
+          tabindex="0"
+        >
+          <!-- Files tree clone -->
+          <div id="file-sidebar-content-mobile">
+            <!-- Cloned from desktop sidebar; kept as-is -->
+          </div>
         </div>
-        <!-- Webapps list -->
-        <div id="webapps-list-container-mobile" class="p-2 d-none" aria-hidden="true">
-          <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
+
+        <div
+          class="tab-pane fade"
+          id="mobile-webapps-pane"
+          role="tabpanel"
+          aria-labelledby="mobile-tab-webapps"
+          tabindex="0"
+        >
+          <!-- Webapps list -->
+          <div id="webapps-list-container-mobile" class="p-2">
+            <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
+          </div>
         </div>
       </div>
     </div>
@@ -148,10 +183,6 @@
         <i class="bi bi-arrow-clockwise"></i>
         {% trans "Regenerate response" %}
       </button>
-      <button type="button" class="action-sheet-btn d-none" id="context-menu-compact">
-        <i class="bi bi-filter-circle"></i>
-        {% trans "Compact thread" %}
-      </button>
     </div>
   </div>
 </div>
@@ -166,13 +197,15 @@
   // Configure URLs for the JavaScript modules
   window.NovaApp = window.NovaApp || {};
   window.NovaApp.urls = {
+    index: "{% url 'index' %}",
     addMessage: "{% url 'add_message' %}",
     messageList: "{% url 'message_list' %}",
     runningTasksBase: "/running-tasks/",
     createThread: "{% url 'create_thread' %}",
     deleteThread: "{% url 'delete_thread' 0 %}",
+    summarizeThread: "{% url 'summarize_thread' 0 %}",
+    confirmSummarizeThread: "{% url 'confirm_summarize_thread' 0 %}",
     loadMoreThreads: "{% url 'load_more_threads' %}",
-    compactThread: "{% url 'compact_thread' 0 %}",
     fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",
@@ -184,14 +217,13 @@
 <script src="{% static 'js/voice_recognition.js' %}" defer></script>
 <script src="{% static 'js/message-renderer.js' %}" defer></script>
 <script src="{% static 'js/streaming-manager.js' %}" defer></script>
-<script src="{% static 'js/thread-utils.js' %}" defer></script>
 <script src="{% static 'js/message-manager.js' %}" defer></script>
 <script src="{% static 'js/preview-manager.js' %}" defer></script>
 <script src="{% static 'js/thread-manager.js' %}" defer></script>
-<script src="{% static 'js/thread_management.js' %}" defer></script>
 <script src="{% static 'js/file-operations.js' %}" defer></script>
 <script src="{% static 'js/sidebar-manager.js' %}" defer></script>
 <script src="{% static 'js/websocket-manager.js' %}" defer></script>
 <script src="{% static 'js/webapp-integration.js' %}" defer></script>
 <script src="{% static 'js/files.js' %}" defer></script>
+<script src="{% static 'js/nova-thread-bootstrap.js' %}" defer></script>
 {% endblock %}

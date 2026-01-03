@@ -187,6 +187,35 @@ Direct exec      FastMCP client    New LLMAgent
                    Continue agent
 ```
 
+**Manual Summarization Flow:**
+```
+User clicks "Compact" → Check main agent message count
+                              ↓
+                       Check sub-agents with context
+                              ↓
+    ┌──────────────────┼──────────────────┐
+    │                  │                  │
+    ▼                  ▼                  ▼
+No sub-agents    Sub-agents found    Insufficient context
+with context     → CONFIRMATION_NEEDED   → Direct summarization
+    │                  ↓                  │
+    └─────────────── User chooses ───────┘
+                              ↓
+    ┌──────────────────┼──────────────────┐
+    │                  │                  │
+    ▼                  ▼                  ▼
+Main agent only   Main + sub-agents   Celery task created
+    ↓                  ↓                  ↓
+Sequential       Sequential processing  Progress via WebSocket
+summarization     with error handling    ↓
+    ↓                  ↓               UI updates
+    └──────────────────┴──────────────────┘
+                        ↓
+               Checkpoint injection
+                        ↓
+               Context optimization complete
+```
+
 ## Critical Implementation Paths
 
 ### 1. Agent Creation and Invocation
