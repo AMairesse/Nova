@@ -8,6 +8,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
 from nova.models.AgentConfig import AgentConfig
+from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
@@ -19,6 +20,8 @@ import logging
 
 from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
+from nova.llm.llm_agent import LLMAgent
+from nova.llm.checkpoints import get_checkpointer
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +331,49 @@ def summarize_thread(request, thread_id):
             )
         }, status=400)
 
-    # Create a task for tracking the summarization
+    # Check for sub-agents with sufficient context
+    sub_agent_links = CheckpointLink.objects.filter(
+        thread=thread
+    ).exclude(agent=agent_config).select_related('agent')
+
+    sub_agents_info = []
+    for link in sub_agent_links:
+        agent = async_to_sync(LLMAgent.create)(request.user, thread, link.agent)
+        try:
+            checkpointer = async_to_sync(get_checkpointer)()
+            checkpoint = async_to_sync(checkpointer.aget_tuple)(agent.config)
+            if checkpoint:
+                checkpoint_messages = checkpoint.checkpoint.get('channel_values', {}).get('messages', [])
+                message_count = len(checkpoint_messages)
+
+                # Check if sub-agent has enough messages for summarization
+                if message_count > link.agent.preserve_recent:
+                    token_count = async_to_sync(agent.count_tokens)(checkpoint_messages)
+                    sub_agents_info.append({
+                        'id': link.agent.id,
+                        'name': link.agent.name,
+                        'token_count': token_count
+                    })
+        finally:
+            async_to_sync(agent.cleanup)()
+            if 'checkpointer' in locals():
+                async_to_sync(checkpointer.conn.close)()
+
+    # If sub-agents have sufficient context, request confirmation
+    if sub_agents_info:
+        return JsonResponse({
+            "status": "CONFIRMATION_NEEDED",
+            "message": f"{len(sub_agents_info)} sub-agent(s) have accumulated context.",
+            "sub_agents": sub_agents_info,
+            "thread_id": thread_id
+        })
+
+    # Otherwise, proceed directly with main agent only
+    return start_summarization(request, thread, agent_config, False)
+
+
+def start_summarization(request, thread, agent_config, include_sub_agents, sub_agent_ids=None):
+    """Helper function to start summarization task."""
     task = Task.objects.create(
         user=request.user,
         thread=thread,
@@ -337,10 +382,36 @@ def summarize_thread(request, thread_id):
     )
 
     # Trigger async summarization task
-    summarize_thread_task.delay(thread_id, request.user.id, agent_config.id, task.id)
+    summarize_thread_task.delay(
+        thread.id,
+        request.user.id,
+        agent_config.id,
+        task.id,
+        include_sub_agents,
+        sub_agent_ids or []
+    )
 
     return JsonResponse({
         "status": "OK",
         "task_id": task.id,
         "message": "Thread summarization started."
     })
+
+
+@require_POST
+@login_required(login_url='login')
+def confirm_summarize_thread(request, thread_id):
+    """Handle user confirmation for sub-agent summarization."""
+    import json
+    include_sub_agents = request.POST.get('include_sub_agents') == 'true'
+    sub_agent_ids = json.loads(request.POST.get('sub_agent_ids', '[]'))
+
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    if not agent_config:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "No default agent configured"
+        }, status=400)
+
+    return start_summarization(request, thread, agent_config, include_sub_agents, sub_agent_ids)

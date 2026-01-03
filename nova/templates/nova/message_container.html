@@ -1,12 +1,6 @@
 <!-- nova/templates/nova/message_container.html -->
 {% load static %} {% load i18n %}
 
-<script>
-  // Configure URLs for the JavaScript modules (for AJAX-loaded content)
-  window.NovaApp = window.NovaApp || {};
-  window.NovaApp.urls = window.NovaApp.urls || {};
-  window.NovaApp.urls.summarizeThread = "{% url 'summarize_thread' 0 %}";
-</script>
 
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
@@ -242,4 +236,29 @@
     </form>
   </div>
   {% endif %} {% endwith %}
+
+  <!-- Sub-agent Summarization Confirmation Modal -->
+  <div class="modal fade" id="subAgentConfirmationModal" tabindex="-1" aria-labelledby="subAgentConfirmationModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="subAgentConfirmationModalLabel">{% trans "Sub-agent summarization" %}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p><strong>{% trans "Sub-agents have accumulated context in this conversation:" %}</strong></p>
+          <ul id="subAgentList" class="list-group mb-3"></ul>
+          <p>{% trans "Do you want to optimize their context as well?" %}</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" onclick="window.NovaApp.messageManager.confirmSummarize(false)">
+            {% trans "No, only main agent" %}
+          </button>
+          <button type="button" class="btn btn-primary" onclick="window.NovaApp.messageManager.confirmSummarize(true)">
+            {% trans "Yes, optimize all" %}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>

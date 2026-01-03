@@ -217,7 +217,8 @@ def resume_ai_task_celery(self, interaction_pk: int):
 
 
 @shared_task(bind=True, name="summarize_thread_task")
-def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id):
+def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id,
+                          include_sub_agents=False, sub_agent_ids=None):
     """
     Celery task to manually summarize a thread.
     Uses SummarizationTaskExecutor following the same pattern as AgentTaskExecutor.
@@ -230,7 +231,7 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id):
         task = Task.objects.get(id=task_id)
 
         # Use the executor pattern (same as AgentTaskExecutor)
-        executor = SummarizationTaskExecutor(task, user, thread, agent_config)
+        executor = SummarizationTaskExecutor(task, user, thread, agent_config, include_sub_agents, sub_agent_ids or [])
         asyncio.run(executor.execute())
 
     except Exception as e:
@@ -245,9 +246,11 @@ class SummarizationTaskExecutor(TaskExecutor):
     Follows the same pattern as AgentTaskExecutor for consistent behavior.
     """
 
-    def __init__(self, task, user, thread, agent_config):
+    def __init__(self, task, user, thread, agent_config, include_sub_agents=False, sub_agent_ids=None):
         # Initialize with empty prompt - summarization doesn't need user input
         super().__init__(task, user, thread, agent_config, "")
+        self.include_sub_agents = include_sub_agents
+        self.sub_agent_ids = sub_agent_ids or []
 
     async def execute(self):
         """Main execution method for summarization."""
@@ -263,33 +266,57 @@ class SummarizationTaskExecutor(TaskExecutor):
 
     async def _perform_summarization(self):
         """Perform the summarization using the middleware."""
-        from nova.llm.agent_middleware import AgentContext
+        if self.include_sub_agents:
+            sub_agent_ids = self.sub_agent_ids
 
-        # Create context for middleware
-        context = AgentContext(
-            agent_config=self.agent_config,
-            user=self.user,
-            thread=self.thread,
-            progress_handler=self.handler
-        )
+            # Summarize main agent first
+            await self._summarize_single_agent(self.agent_config)
 
-        # Find the summarization middleware
-        middleware = None
-        for mw in self.llm.middleware:
-            if hasattr(mw, 'manual_summarize'):
-                middleware = mw
-                break
-
-        if not middleware:
-            raise ValueError("SummarizationMiddleware not found on agent")
-
-        # Perform manual summarization
-        result = await middleware.manual_summarize(context)
-
-        if result["status"] != "success":
-            raise ValueError(f"Summarization failed: {result['message']}")
+            # Then summarize each selected sub-agent
+            for agent_id in sub_agent_ids:
+                sub_agent_config = await sync_to_async(AgentConfig.objects.get, thread_sensitive=False)(
+                    id=agent_id, user=self.user
+                )
+                await self._summarize_single_agent(sub_agent_config)
+        else:
+            await self._summarize_single_agent(self.agent_config)
 
         logger.info(f"Thread {self.thread.id} summarization completed successfully")
+
+    async def _summarize_single_agent(self, agent_config):
+        """Summarize a single agent."""
+        from nova.llm.llm_agent import LLMAgent
+        from nova.llm.agent_middleware import AgentContext
+
+        # Create agent-specific LLMAgent instance
+        agent = await LLMAgent.create(self.user, self.thread, agent_config)
+        try:
+            # Create context for middleware
+            context = AgentContext(
+                agent_config=agent_config,
+                user=self.user,
+                thread=self.thread,
+                progress_handler=self.handler
+            )
+
+            # Find the summarization middleware
+            middleware = None
+            for mw in agent.middleware:
+                if hasattr(mw, 'manual_summarize'):
+                    middleware = mw
+                    break
+
+            if not middleware:
+                raise ValueError(f"SummarizationMiddleware not found for agent {agent_config.name}")
+
+            # Perform manual summarization
+            result = await middleware.manual_summarize(context)
+
+            if result["status"] != "success":
+                raise ValueError(f"Summarization failed for {agent_config.name}: {result['message']}")
+
+        finally:
+            await agent.cleanup()
 
 
 @shared_task(bind=True, name="run_scheduled_agent_task")

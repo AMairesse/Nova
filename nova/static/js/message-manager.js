@@ -420,7 +420,17 @@
 
                 const data = await response.json();
 
-                if (data.status === 'OK' && data.task_id) {
+                if (data.status === 'CONFIRMATION_NEEDED') {
+                    // Show confirmation dialog for sub-agents
+                    this.showSubAgentConfirmationDialog(data.sub_agents, data.thread_id);
+
+                    // Reset compact links
+                    compactLinks.forEach((link, index) => {
+                        link.innerHTML = originalHtmls[index];
+                        link.style.pointerEvents = '';
+                        link.style.opacity = '';
+                    });
+                } else if (data.status === 'OK' && data.task_id) {
                     // Register streaming for the summarization task (this will disable input area)
                     this.streamingManager.registerStream(data.task_id, {
                         id: data.task_id,
@@ -448,6 +458,94 @@
                 });
 
                 // Show error message
+                alert('Failed to start summarization: ' + error.message);
+            }
+        }
+
+        showSubAgentConfirmationDialog(subAgents, threadId) {
+            // Populate the modal
+            const list = document.getElementById('subAgentList');
+            if (list) {
+                list.innerHTML = subAgents.map(agent =>
+                    `<li class="list-group-item">${agent.name} (${agent.token_count} ${gettext('tokens')})</li>`
+                ).join('');
+            }
+
+            // Store data for confirmation
+            const modal = document.getElementById('subAgentConfirmationModal');
+            if (modal) {
+                modal.dataset.threadId = threadId;
+                modal.dataset.subAgents = JSON.stringify(subAgents);
+
+                // Show the modal
+                const bsModal = new bootstrap.Modal(modal);
+                bsModal.show();
+            }
+        }
+
+        async confirmSummarize(includeSubAgents) {
+            // Get data from modal
+            const modal = document.getElementById('subAgentConfirmationModal');
+            if (!modal) return;
+
+            const threadId = modal.dataset.threadId;
+            const subAgents = JSON.parse(modal.dataset.subAgents || '[]');
+            const subAgentIds = includeSubAgents ? subAgents.map(a => a.id) : [];
+
+            // Hide the modal
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            if (bsModal) {
+                bsModal.hide();
+            }
+
+            // Show loading state on compact links
+            const compactLinks = document.querySelectorAll('.compact-thread-link');
+            compactLinks.forEach(link => {
+                link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Starting...');
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.6';
+            });
+
+            try {
+                const response = await window.DOMUtils.csrfFetch(
+                    window.NovaApp.urls.confirmSummarizeThread.replace('0', threadId),
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            'include_sub_agents': includeSubAgents,
+                            'sub_agent_ids': JSON.stringify(subAgentIds)
+                        })
+                    }
+                );
+
+                const data = await response.json();
+
+                if (data.status === 'OK' && data.task_id) {
+                    // Register streaming for the summarization task
+                    this.streamingManager.registerStream(data.task_id, {
+                        id: data.task_id,
+                        actor: 'system',
+                        text: ''
+                    });
+
+                    // Update compact links to show it's running
+                    compactLinks.forEach(link => {
+                        link.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>' + gettext('Running...');
+                    });
+                } else {
+                    throw new Error(data.message || 'Summarization failed');
+                }
+            } catch (error) {
+                console.error('Error confirming summarization:', error);
+
+                // Reset compact links on error
+                compactLinks.forEach(link => {
+                    link.innerHTML = '<i class="bi bi-compress me-1"></i>' + gettext('Compact');
+                    link.style.pointerEvents = '';
+                    link.style.opacity = '';
+                });
+
                 alert('Failed to start summarization: ' + error.message);
             }
         }
