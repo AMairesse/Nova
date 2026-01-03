@@ -932,43 +932,6 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
         )
     ]
 
-    # Draft saving is always available (uses IMAP only)
-    tools.append(
-        StructuredTool.from_function(
-            coroutine=save_draft_wrapper,
-            name="save_draft",
-            description="Save an email as draft in the specified folder",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "string",
-                        "description": "recipient email address"
-                    },
-                    "subject": {
-                        "type": "string",
-                        "description": "email subject"
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "email body content"
-                    },
-                    "cc": {
-                        "type": "string",
-                        "description": "CC recipients (comma-separated)",
-                        "default": None
-                    },
-                    "draft_folder": {
-                        "type": "string",
-                        "description": "folder to save draft in",
-                        "default": "Drafts"
-                    }
-                },
-                "required": ["to", "subject", "body"]
-            }
-        )
-    )
-
     # Email sending only if enabled (requires SMTP configuration)
     if enable_sending:
         tools.append(
