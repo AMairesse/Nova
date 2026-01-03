@@ -59,7 +59,13 @@ def file_download_url(request, file_id):
     if file.thread.user != request.user:  # Extra ownership check
         return JsonResponse({'error': 'Unauthorized'}, status=403)
 
-    url = file.get_download_url(expires_in=3600)  # 1-hour expiry
+    try:
+        url = file.get_download_url(expires_in=3600)  # 1-hour expiry
+    except ValueError as e:
+        # Expected case when retention/expiration is enabled and the file is expired.
+        # Use 410 Gone rather than 500.
+        return JsonResponse({'error': str(e)}, status=410)
+
     if not url:
         return JsonResponse({'error': 'Failed to generate URL'}, status=500)
 

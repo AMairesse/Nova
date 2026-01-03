@@ -200,6 +200,21 @@ MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY')
 MINIO_BUCKET_NAME = os.getenv('MINIO_BUCKET_NAME', 'nova-files')
 MINIO_SECURE = os.getenv('MINIO_SECURE', 'False').lower() == 'true'
 
+# UserFile retention (auto-delete)
+# - Set to an integer (days) to enable expiration (default: 30)
+# - Set to 0 / none / null / empty to disable auto-delete entirely
+_raw_userfile_exp_days = os.getenv('USERFILE_EXPIRATION_DAYS', '30').strip().lower()
+if _raw_userfile_exp_days in ('', 'none', 'null', 'disabled', 'false', 'off'):
+    USERFILE_EXPIRATION_DAYS = None
+else:
+    try:
+        _days = int(_raw_userfile_exp_days)
+        USERFILE_EXPIRATION_DAYS = _days if _days > 0 else None
+    except ValueError as e:
+        raise ValueError(
+            "USERFILE_EXPIRATION_DAYS must be an integer number of days, or 0/none to disable"
+        ) from e
+
 # Validate (fail-fast)
 if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
     raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in .env")

@@ -47,14 +47,21 @@ class UserFile(models.Model):
         super().save(*args, **kwargs)
 
         # Now calculate expiration_date if not already set
-        if not self.expiration_date:
-            self.expiration_date = self.created_at + timedelta(days=30)
+        # Controlled by settings.USERFILE_EXPIRATION_DAYS:
+        # - int days => set expiration_date
+        # - None => do not auto-expire
+        exp_days = getattr(settings, 'USERFILE_EXPIRATION_DAYS', 30)
+        if exp_days and not self.expiration_date:
+            self.expiration_date = self.created_at + timedelta(days=int(exp_days))
             # Save again with updated field
             super().save(update_fields=['expiration_date'])
 
     def get_download_url(self, expires_in=3600):
         """Generate presigned URL for download (expires in seconds)."""
-        if self.expiration_date and self.expiration_date < timezone.now():
+        # If expiration is disabled (settings.USERFILE_EXPIRATION_DAYS is None),
+        # do not auto-delete nor block access even if expiration_date is set.
+        exp_days = getattr(settings, 'USERFILE_EXPIRATION_DAYS', 30)
+        if exp_days is not None and self.expiration_date and self.expiration_date < timezone.now():
             self.delete()
             raise ValueError("File expired and deleted.")
 
