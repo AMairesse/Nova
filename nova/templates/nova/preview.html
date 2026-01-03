@@ -85,6 +85,7 @@
 <script>
   window.NovaApp = window.NovaApp || {};
   window.NovaApp.urls = {
+    index: "{% url 'index' %}",
     addMessage: "{% url 'add_message' %}",
     messageList: "{% url 'message_list' %}",
     runningTasksBase: "/running-tasks/",
@@ -101,55 +102,16 @@
   // Force current thread for this preview page so the chat loads immediately
   // Do this before JS modules init to ensure initial load targets this thread
   try {
-  localStorage.setItem('lastThreadId', "{{ thread.id }}");
-  localStorage.setItem('lastPreviewSlug:{{ thread.id }}', "{{ webapp.slug }}");
-} catch (e) {}
+    localStorage.setItem('lastThreadId', "{{ thread.id }}");
+    localStorage.setItem('lastPreviewSlug:{{ thread.id }}', "{{ webapp.slug }}");
+  } catch (e) {}
 
-  // Set initial URL for iframe and wire close buttons after DOM is ready
-  document.addEventListener('DOMContentLoaded', () => {
-    const iframe = document.getElementById('webapp-iframe');
-    const spinner = document.getElementById('webapp-spinner');
-    const openBtn = document.getElementById('webapp-open-btn');
-    const closeFloating = document.getElementById('preview-close-floating');
-
-    // Set initial iframe src
-    if (iframe) {
-      if (spinner) { spinner.classList.remove('d-none'); spinner.classList.add('d-flex'); }
-      iframe.src = "{{ webapp.public_url }}";
-      iframe.addEventListener('load', () => {
-        if (spinner) { spinner.classList.add('d-none'); spinner.classList.remove('d-flex'); }
-      });
-    }
-    if (openBtn) {
-      openBtn.href = "{{ webapp.public_url }}";
-    }
-    // Ensure preview pane visible and initialize split
-    const previewPane = document.getElementById('preview-pane');
-    if (previewPane) {
-      previewPane.classList.remove('d-none');
-    }
-
-    // Announce activation so PreviewManager can sync state
-    document.dispatchEvent(new CustomEvent('webapp_preview_activate', {
-      detail: { slug: "{{ webapp.slug }}", url: "{{ webapp.public_url }}" }
-    }));
-
-    const navigateBack = () => {
-      if (window.history.length > 1) {
-        window.history.back();
-      } else {
-        window.location.href = "{% url 'index' %}";
-      }
-    };
-
-    const closeBtn = document.getElementById('webapp-close-btn');
-    if (closeBtn) {
-      closeBtn.addEventListener('click', navigateBack);
-    }
-    if (closeFloating) {
-      closeFloating.addEventListener('click', navigateBack);
-    }
-  });
+  // Provide explicit initial preview config (used by PreviewManager + bootstrap)
+  window.NovaApp.previewConfig = {
+    threadId: "{{ thread.id }}",
+    slug: "{{ webapp.slug }}",
+    url: "{{ webapp.public_url }}"
+  };
 </script>
 
 <!-- JS modules -->
@@ -162,4 +124,5 @@
 <script src="{% static 'js/preview-manager.js' %}" defer></script>
 <script src="{% static 'js/thread-manager.js' %}" defer></script>
 <script src="{% static 'js/thread_management.js' %}" defer></script>
+<script src="{% static 'js/nova-thread-bootstrap.js' %}" defer></script>
 {% endblock %}

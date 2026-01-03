@@ -2,13 +2,11 @@
 
 ## Current Work Focus
 
-**Completed: SummarizationMiddleware Refactor** - Automatic conversation summarization with checkpoint injection:
+**Completed: JS Single Entrypoint Refactor (Thread UI)** - single bootstrap + no module auto-init:
 
-- **SummarizationConfig Model**: Per-agent configuration for auto-summarization, token thresholds, strategies
-- **SummarizationMiddleware**: Automatic context management that triggers at 80% token usage
-- **Checkpoint Injection**: Creates new LangGraph checkpoints with summarized messages (summary + recent messages)
-- **Real-time Feedback**: WebSocket notifications showing token savings and summarization events
-- **Legacy Cleanup**: Removed manual "compact" functionality from views, tasks, templates, and JavaScript
-- **Testing**: Comprehensive unit tests for middleware logic and checkpoint injection
+- Centralized initialization in `NovaApp.bootstrapThreadUI()`
+- Removed `DOMContentLoaded` auto-init from modules (notably `responsive.js`)
+- Added explicit `bind()` / idempotence guards to avoid duplicate listeners
+- Added a single deferred bootstrap script loaded last on thread pages
 
-**Next**: Sub-agent confirmation for manual thread summarization - Add user confirmation dialog when summarizing threads with sub-agents that have accumulated context.
+**Next**: Validate regressions (thread switching, files sidebar, mobile offcanvas, websocket connections) and remove any remaining duplicate listeners if discovered during manual testing.

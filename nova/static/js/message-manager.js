@@ -19,9 +19,16 @@
             this.longPressTarget = null;
             this.touchStartPos = null;
             this.contextMenuOffcanvas = null;
+
+            // Idempotence
+            this._initialized = false;
+            this._handlersBound = false;
         }
 
         init() {
+            if (this._initialized) return;
+            this._initialized = true;
+
             // Attach event handlers
             this.attachEventHandlers();
             this.loadInitialThread();
@@ -34,6 +41,9 @@
         }
 
         attachEventHandlers() {
+            if (this._handlersBound) return;
+            this._handlersBound = true;
+
             // 'click' event mapping
             const eventMappings = {
                 '.thread-link': (e, target) => {
@@ -41,6 +51,14 @@
                     const link = target.closest('.thread-link');
                     const threadId = link.dataset.threadId;
                     this.loadMessages(threadId);
+
+                    // Mobile: close threads offcanvas after selection
+                    if (window.innerWidth < 992) {
+                        const ocEl = document.getElementById('threadsOffcanvas');
+                        if (ocEl && window.bootstrap && bootstrap.Offcanvas) {
+                            bootstrap.Offcanvas.getOrCreateInstance(ocEl).hide();
+                        }
+                    }
                 },
                 '.create-thread-btn': (e, target) => {
                     e.preventDefault();

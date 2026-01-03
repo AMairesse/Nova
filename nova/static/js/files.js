@@ -44,7 +44,8 @@
     attachSidebarEventHandlers() {
       // Desktop upload buttons
       const desktopUploadBtn = document.getElementById('upload-files-btn');
-      if (desktopUploadBtn) {
+      if (desktopUploadBtn && !desktopUploadBtn._novaBoundUploadFiles) {
+        desktopUploadBtn._novaBoundUploadFiles = true;
         desktopUploadBtn.addEventListener('click', () => {
           const fileInput = document.getElementById('file-input');
           if (fileInput) fileInput.click();
@@ -52,7 +53,8 @@
       }
 
       const desktopUploadDirectoryBtn = document.getElementById('upload-directory-btn');
-      if (desktopUploadDirectoryBtn) {
+      if (desktopUploadDirectoryBtn && !desktopUploadDirectoryBtn._novaBoundUploadDir) {
+        desktopUploadDirectoryBtn._novaBoundUploadDir = true;
         desktopUploadDirectoryBtn.addEventListener('click', () => {
           const directoryInput = document.getElementById('directory-input');
           if (directoryInput) directoryInput.click();
@@ -61,7 +63,8 @@
 
       // Mobile upload buttons (offcanvas header)
       const mobileUploadBtn = document.getElementById('upload-files-btn-mobile');
-      if (mobileUploadBtn) {
+      if (mobileUploadBtn && !mobileUploadBtn._novaBoundUploadFiles) {
+        mobileUploadBtn._novaBoundUploadFiles = true;
         mobileUploadBtn.addEventListener('click', (e) => {
           e.preventDefault();
           const fileInput = document.getElementById('file-input');
@@ -70,7 +73,8 @@
       }
 
       const mobileUploadDirectoryBtn = document.getElementById('upload-directory-btn-mobile');
-      if (mobileUploadDirectoryBtn) {
+      if (mobileUploadDirectoryBtn && !mobileUploadDirectoryBtn._novaBoundUploadDir) {
+        mobileUploadDirectoryBtn._novaBoundUploadDir = true;
         mobileUploadDirectoryBtn.addEventListener('click', (e) => {
           e.preventDefault();
           const directoryInput = document.getElementById('directory-input');
@@ -80,14 +84,16 @@
 
       // File input handlers (shared)
       const fileInput = document.getElementById('file-input');
-      if (fileInput) {
+      if (fileInput && !fileInput._novaBoundChange) {
+        fileInput._novaBoundChange = true;
         fileInput.addEventListener('change', (e) => {
           window.FileOperations.handleFileUpload(e.target.files);
         });
       }
 
       const directoryInput = document.getElementById('directory-input');
-      if (directoryInput) {
+      if (directoryInput && !directoryInput._novaBoundChange) {
+        directoryInput._novaBoundChange = true;
         directoryInput.addEventListener('change', (e) => {
           window.FileOperations.handleDirectoryUpload(e.target.files);
         });

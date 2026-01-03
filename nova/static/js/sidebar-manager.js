@@ -126,6 +126,21 @@
             // Restore saved tab for this thread using Bootstrap Tab API
             this.restoreSavedTab();
 
+            // If the Webapps tab is currently visible, refresh its list for the new thread.
+            // (shown.bs.tab won't fire if the tab is already active.)
+            const webappsTabEl = document.getElementById('tab-webapps');
+            const isWebappsActive = Boolean(webappsTabEl && webappsTabEl.classList.contains('active'));
+            if (isWebappsActive && typeof window.WebappIntegration?.loadWebappsList === 'function') {
+                await window.WebappIntegration.loadWebappsList();
+            }
+
+            // Mobile: if user is currently on the Webapps view in the offcanvas, refresh it too.
+            const mobileWebappsTab = document.getElementById('mobile-tab-webapps');
+            const isMobileWebappsActive = Boolean(mobileWebappsTab && mobileWebappsTab.classList.contains('active'));
+            if (isMobileWebappsActive && typeof window.WebappIntegration?.loadMobileWebappsList === 'function') {
+                await window.WebappIntegration.loadMobileWebappsList();
+            }
+
             if (window.ResponsiveManager) {
                 window.ResponsiveManager.syncFilesContent();
             }

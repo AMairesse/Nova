@@ -162,6 +162,7 @@
   // Configure URLs for the JavaScript modules
   window.NovaApp = window.NovaApp || {};
   window.NovaApp.urls = {
+    index: "{% url 'index' %}",
     addMessage: "{% url 'add_message' %}",
     messageList: "{% url 'message_list' %}",
     runningTasksBase: "/running-tasks/",
@@ -191,4 +192,5 @@
 <script src="{% static 'js/websocket-manager.js' %}" defer></script>
 <script src="{% static 'js/webapp-integration.js' %}" defer></script>
 <script src="{% static 'js/files.js' %}" defer></script>
+<script src="{% static 'js/nova-thread-bootstrap.js' %}" defer></script>
 {% endblock %}

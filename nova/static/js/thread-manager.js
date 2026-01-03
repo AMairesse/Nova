@@ -8,13 +8,22 @@
     window.ThreadLoadingManager = class ThreadLoadingManager {
         constructor() {
             this.isLoading = false;
+
+            // Idempotence
+            this._handlersBound = false;
+            this._initialized = false;
         }
 
         init() {
+            if (this._initialized) return;
+            this._initialized = true;
             this.attachLoadMoreHandlers();
         }
 
         attachLoadMoreHandlers() {
+            if (this._handlersBound) return;
+            this._handlersBound = true;
+
             // Desktop load more button
             document.addEventListener('click', (e) => {
                 if (e.target.matches('#load-more-threads') || e.target.closest('#load-more-threads')) {
