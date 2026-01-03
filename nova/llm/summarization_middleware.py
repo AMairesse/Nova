@@ -260,15 +260,24 @@ class SummarizationMiddleware(BaseAgentMiddleware):
     ) -> None:
         """Inject summary into the checkpoint by replacing old messages."""
         try:
-            # Create summary message
-            from langchain_core.messages import AIMessage
-            summary_message = AIMessage(
-                content=summary,
+            # Create summary as a HumanMessage (acting as context from previous conversation)
+            # This avoids the "roles must alternate" error since conversations should start
+            # with a user message, not an AI message
+            summary_message = HumanMessage(
+                content=f"[Previous conversation summary]\n{summary}",
                 additional_kwargs={'summary': True}
             )
 
-            # Create new messages list: summary + preserved recent messages
-            new_messages = [summary_message] + preserved_messages
+            # Create an AI acknowledgment to complete the alternation before preserved messages
+            from langchain_core.messages import AIMessage
+            ack_message = AIMessage(
+                content="I understand the previous conversation summary. How can I help you continue?",
+                additional_kwargs={'summary_ack': True}
+            )
+
+            # Create new messages list: summary (Human) + ack (AI) + preserved recent messages
+            # This ensures proper message alternation: Human → AI → ...preserved...
+            new_messages = [summary_message, ack_message] + preserved_messages
 
             # Delete old checkpoints for this thread to clear history
             thread_id = current_checkpoint.config['configurable']['thread_id']
