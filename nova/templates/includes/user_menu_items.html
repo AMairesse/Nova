@@ -1,0 +1,28 @@
+{% load i18n %}
+
+<li>
+  <a class="dropdown-item" href="{% url 'user_settings:dashboard' %}">
+    <i class="bi bi-gear me-2"></i>{% trans "Settings" %}
+  </a>
+</li>
+<li>
+  <a class="dropdown-item" href="{% url 'user_settings:scheduled_tasks' %}">
+    <i class="bi bi-clock me-2"></i>{% trans "Scheduled Tasks" %}
+  </a>
+</li>
+{% if user.is_superuser %}
+<li>
+  <a class="dropdown-item" href="{% url 'admin:index' %}">
+    <i class="bi bi-shield-check me-2"></i>{% trans "Admin" %}
+  </a>
+</li>
+{% endif %}
+<li><hr class="dropdown-divider"></li>
+<li>
+  <form action="{% url 'logout' %}" method="post" class="d-inline">
+    {% csrf_token %}
+    <button class="dropdown-item" type="submit">
+      <i class="bi bi-box-arrow-right me-2"></i>{% trans "Logout" %}
+    </button>
+  </form>
+</li>

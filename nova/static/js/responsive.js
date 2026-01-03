@@ -63,8 +63,8 @@
       // Sync mobile upload buttons with desktop ones
       this.syncUploadButtons();
 
-      // Setup mobile Files/Webapps tab switching
-      this.setupMobileFilesWebappsTabs();
+      // Setup mobile Files/Webapps tab behavior (Bootstrap-native)
+      this.setupMobileFilesWebappsBootstrapTabs();
     }
 
     setupFilesToggle() {
@@ -192,56 +192,44 @@
       }
     }
 
-    setupMobileFilesWebappsTabs() {
-      const tabFiles = document.getElementById('mobile-tab-files');
-      const tabWebapps = document.getElementById('mobile-tab-webapps');
+    setupMobileFilesWebappsBootstrapTabs() {
+      const tabs = document.getElementById('mobile-files-webapps-tabs');
       const toolbar = document.getElementById('mobile-files-toolbar');
-      const filesContainer = document.getElementById('file-sidebar-content-mobile');
       const webappsContainer = document.getElementById('webapps-list-container-mobile');
 
-      if (!tabFiles || !tabWebapps || !filesContainer || !webappsContainer) return;
+      if (!tabs || !toolbar) return;
+      if (tabs._novaBoundBsTabs) return;
+      tabs._novaBoundBsTabs = true;
 
-      if (tabFiles._novaBoundTabs || tabWebapps._novaBoundTabs) return;
-      tabFiles._novaBoundTabs = true;
-      tabWebapps._novaBoundTabs = true;
+      const updateUIForActiveTab = (tabEl) => {
+        if (!tabEl) return;
 
-      const activateFiles = () => {
-        tabFiles.classList.add('active');
-        tabWebapps.classList.remove('active');
-        if (toolbar) toolbar.classList.remove('d-none');
-        filesContainer.classList.remove('d-none');
-        filesContainer.removeAttribute('aria-hidden');
-        webappsContainer.classList.add('d-none');
-        webappsContainer.setAttribute('aria-hidden', 'true');
-      };
+        const targetSelector = tabEl.getAttribute('data-bs-target') || tabEl.getAttribute('href') || '';
+        const isWebapps = targetSelector === '#mobile-webapps-pane' || tabEl.id === 'mobile-tab-webapps';
 
-      const activateWebapps = () => {
-        tabWebapps.classList.add('active');
-        tabFiles.classList.remove('active');
-        if (toolbar) toolbar.classList.add('d-none');
-        filesContainer.classList.add('d-none');
-        filesContainer.setAttribute('aria-hidden', 'true');
-        webappsContainer.classList.remove('d-none');
-        webappsContainer.removeAttribute('aria-hidden');
+        // Toggle toolbar visibility (toolbar only makes sense for Files)
+        if (isWebapps) {
+          toolbar.classList.add('d-none');
+        } else {
+          toolbar.classList.remove('d-none');
+        }
 
-        // Load mobile webapps list on demand
-        if (window.WebappIntegration && typeof window.WebappIntegration.loadMobileWebappsList === 'function') {
-          window.WebappIntegration.loadMobileWebappsList();
+        // Lazy-load webapps list when switching to Webapps tab
+        if (isWebapps && webappsContainer) {
+          if (window.WebappIntegration && typeof window.WebappIntegration.loadMobileWebappsList === 'function') {
+            window.WebappIntegration.loadMobileWebappsList();
+          }
         }
       };
 
-      tabFiles.addEventListener('click', (e) => {
-        e.preventDefault();
-        activateFiles();
-      });
+      // Initial state: enforce toolbar visibility based on currently active tab
+      const initialActiveTab = tabs.querySelector('.nav-link.active');
+      updateUIForActiveTab(initialActiveTab);
 
-      tabWebapps.addEventListener('click', (e) => {
-        e.preventDefault();
-        activateWebapps();
+      // Bootstrap-native event fired after a tab is shown
+      tabs.addEventListener('shown.bs.tab', (event) => {
+        updateUIForActiveTab(event.target);
       });
-
-      // Default to Files view
-      activateFiles();
     }
 
     syncThreadLists() {
