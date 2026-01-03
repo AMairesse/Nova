@@ -377,7 +377,7 @@
                 if (data.threadHtml) {
                     // Use the threads-list container instead of threads-container
                     const container = document.getElementById('threads-list');
-                    const todayGroup = window.ThreadUIUtils.ensureGroupContainer('today', container);
+                    const todayGroup = window.ThreadManager.UIUtils.ensureGroupContainer('today', container);
                     const ul = todayGroup ? todayGroup.querySelector('ul.list-group') : null;
                     if (ul) {
                         ul.insertAdjacentHTML('afterbegin', data.threadHtml);

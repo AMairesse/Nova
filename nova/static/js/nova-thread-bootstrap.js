@@ -3,13 +3,11 @@
 (function () {
     'use strict';
 
-    window.NovaApp = window.NovaApp || {};
-
-    if (typeof window.NovaApp.bootstrapThreadUI !== 'function') {
-        console.error('[NovaApp] bootstrapThreadUI() is not available. Check script load order.');
+    if (typeof window.ThreadManager?.init !== 'function') {
+        console.error('[ThreadManager] init() is not available. Check script load order.');
         return;
     }
 
-    // Guard is inside bootstrapThreadUI; calling here is safe.
-    window.NovaApp.bootstrapThreadUI();
+    // Guard is inside ThreadManager.init(); calling here is safe.
+    window.ThreadManager.init();
 })();

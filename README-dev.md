@@ -38,7 +38,7 @@ Nova
 |  |  ├─ js/                            # JS helpers
 |  |  |  ├─ files.js                    # Files' panel helper
 |  |  |  ├─ responsive.js               # Bootstrap-native responsive behavior
-|  |  |  ├─ thread_management.js        # Thread management helpers
+|  |  |  ├─ thread-manager.js           # Unified thread module (bootstrap + pagination + DOM grouping)
 |  |  |  └─ utils.js                    # VariousJS helpers
 |  |  ├─ favicon.ico                    # Favicon
 |  |  ├─ manifest.json                  # PWA manifest
