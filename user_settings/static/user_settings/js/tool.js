@@ -4,17 +4,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!typeSelect) return;
 
   const hideRow = (id) => {
-    const row = document.getElementById(`div_id_${id}`);
-    if (row) row.style.display = "none";
+    DOMUtils.toggleFieldVisibility(`#div_id_${id}`, false);
   };
   const showRow = (id, required = false) => {
-    const row = document.getElementById(`div_id_${id}`);
-    if (!row) return;
-    row.style.display = "";
-    if (required) {
-      const inp = row.querySelector("input,select,textarea");
-      if (inp) inp.required = true;
-    }
+    DOMUtils.toggleFieldVisibility(`#div_id_${id}`, true, required);
   };
 
   const toggle = () => {

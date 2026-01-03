@@ -12,7 +12,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function sync() {
     const needsKey = !WITHOUT_KEY.has(select.value);
-    if (wrapper) wrapper.classList.toggle("d-none", !needsKey);
+    DOMUtils.toggleFieldVisibility(wrapper, needsKey);
     if (!needsKey) input.value = "";
   }
 
