@@ -11,12 +11,12 @@ Nova
 |  ├─ static/                               # Static files
 |  |  └─ user_settings/                     # Static files for the user settings
 |  |     └─ js/                             # JavaScript files
-|  |        ├─ agents.js                    # JavaScript for the agents page
+|  |        ├─ agent.js                     # JavaScript for the agent form page
 |  │        ├─ dashboard_tabs.js            # JavaScript for the dashboard tabs
 |  │        ├─ provider.js                  # JavaScript for the provider page
 |  │        ├─ scheduled_task_form.js       # JavaScript for the scheduled task form
 |  │        ├─ tool_configure.js            # JavaScript for the tool configuration page
-|  │        └─ tools.js                     # JavaScript for the tools page
+|  │        └─ tool.js                      # JavaScript for the tool form page
 |  ├─ templates/                            # HTML templates
 |  |  ├─ includes/                          # HTML includes
 |  │  |  └─ pagination.html                 # HTML for pagination
