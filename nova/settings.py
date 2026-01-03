@@ -203,17 +203,23 @@ MINIO_SECURE = os.getenv('MINIO_SECURE', 'False').lower() == 'true'
 # UserFile retention (auto-delete)
 # - Set to an integer (days) to enable expiration (default: 30)
 # - Set to 0 / none / null / empty to disable auto-delete entirely
-_raw_userfile_exp_days = os.getenv('USERFILE_EXPIRATION_DAYS', '30').strip().lower()
-if _raw_userfile_exp_days in ('', 'none', 'null', 'disabled', 'false', 'off'):
-    USERFILE_EXPIRATION_DAYS = None
+_raw_userfile_exp_days = os.getenv('USERFILE_EXPIRATION_DAYS')
+# NOTE: an empty string should NOT disable expiration (it would break defaults in some envs).
+# Only explicit values disable expiration.
+if _raw_userfile_exp_days is None or _raw_userfile_exp_days.strip() == '':
+    USERFILE_EXPIRATION_DAYS = 30
 else:
-    try:
-        _days = int(_raw_userfile_exp_days)
-        USERFILE_EXPIRATION_DAYS = _days if _days > 0 else None
-    except ValueError as e:
-        raise ValueError(
-            "USERFILE_EXPIRATION_DAYS must be an integer number of days, or 0/none to disable"
-        ) from e
+    _raw_userfile_exp_days = _raw_userfile_exp_days.strip().lower()
+    if _raw_userfile_exp_days in ('none', 'null', 'disabled', 'false', 'off'):
+        USERFILE_EXPIRATION_DAYS = None
+    else:
+        try:
+            _days = int(_raw_userfile_exp_days)
+            USERFILE_EXPIRATION_DAYS = _days if _days > 0 else None
+        except ValueError as e:
+            raise ValueError(
+                "USERFILE_EXPIRATION_DAYS must be an integer number of days, or 0/none to disable"
+            ) from e
 
 # Validate (fail-fast)
 if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
