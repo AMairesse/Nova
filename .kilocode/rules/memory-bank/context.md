@@ -11,4 +11,4 @@
 - **Legacy Cleanup**: Removed manual "compact" functionality from views, tasks, templates, and JavaScript
 - **Testing**: Comprehensive unit tests for middleware logic and checkpoint injection
 
-**Next**: WebApp tool implementation for per-thread static mini webapps.
+**Next**: Sub-agent confirmation for manual thread summarization - Add user confirmation dialog when summarizing threads with sub-agents that have accumulated context.
