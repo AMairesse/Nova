@@ -1,7 +1,7 @@
-/* user_settings/static/user_settings/provider.js */
+/* user_settings/static/user_settings/js/provider.js */
 document.addEventListener("DOMContentLoaded", function () {
   const select = document.getElementById("id_provider_type");
-  const input  = document.getElementById("id_api_key");
+  const input = document.getElementById("id_api_key");
 
   if (!select || !input) return;
 

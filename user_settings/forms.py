@@ -100,7 +100,7 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
         return data
 
     class Media:
-        js = ["user_settings/provider.js"]
+        js = ["user_settings/js/provider.js"]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ class AgentForm(forms.ModelForm):
         return data
 
     class Media:
-        js = ["user_settings/agent.js"]
+        js = ["user_settings/js/agent.js"]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ class ToolForm(forms.ModelForm):
         return instance
 
     class Media:
-        js = ["user_settings/tool.js"]
+        js = ["user_settings/js/tool.js"]
 
 
 # ────────────────────────────────────────────────────────────────────────────

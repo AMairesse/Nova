@@ -1,4 +1,4 @@
-/* user_settings/static/user_settings/tool.js */
+/* user_settings/static/user_settings/js/tool.js */
 document.addEventListener("DOMContentLoaded", () => {
   const typeSelect = document.querySelector('[name="tool_type"]');
   if (!typeSelect) return;

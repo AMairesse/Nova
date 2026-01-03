@@ -1,4 +1,4 @@
-/* user_settings/static/user_settings/tool_configure.js */
+/* user_settings/static/user_settings/js/tool_configure.js */
 
 document.addEventListener("DOMContentLoaded", () => {
   //------------------------------------------------------------
