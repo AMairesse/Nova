@@ -283,15 +283,15 @@ class SummarizationMiddleware(BaseAgentMiddleware):
             thread_id = current_checkpoint.config['configurable']['thread_id']
             await checkpointer.adelete_thread(thread_id)
 
-            # Use the graph's ainvoke to create new checkpoint with summarized messages
+            # Use the graph's update_state to inject new messages without triggering LLM
             config = current_checkpoint.config.copy()
-            dummy_input = {"messages": new_messages}
 
             # Get the graph from the agent
             graph = self.agent.langchain_agent
 
-            # Invoke the graph to create new checkpoint
-            await graph.ainvoke(dummy_input, config=config)
+            # Use update_state to inject messages directly into the checkpoint
+            # This is cleaner than ainvoke and doesn't trigger the full agent workflow
+            await graph.aupdate_state(config, {"messages": new_messages})
 
             old_count = len(current_checkpoint.checkpoint.get('channel_values', {}).get('messages', []))
             logger.info(f"Injected summary into checkpoint, replaced {old_count} messages "
