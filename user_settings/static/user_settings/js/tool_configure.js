@@ -16,14 +16,16 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     const hideAll = () =>
       document.querySelectorAll("[data-auth-field]").forEach((c) => {
-        c.style.display = "none";
+        const container = c.closest('.mb-3') || c.parentElement;
+        if (container) container.style.display = "none";
         c.querySelectorAll("input").forEach((i) => (i.required = false));
       });
     const show = (names) =>
       names.forEach((n) => {
         const c = document.querySelector(`[data-auth-field="${n}"]`);
         if (c) {
-          c.style.display = "";
+          const container = c.closest('.mb-3') || c.parentElement;
+          if (container) container.style.display = "";
           const i = c.querySelector("input");
           if (i) i.required = true;
         }

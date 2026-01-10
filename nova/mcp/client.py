@@ -107,7 +107,13 @@ class MCPClient:
             transport = self._transport()
             async with FastMCPClient(transport) as client:
                 result = await client.call_tool(tool_name, inputs)
-                cache.set(cache_key, result, timeout=300)
+                # Try to cache, but skip if not picklable
+                try:
+                    import pickle
+                    pickle.dumps(result)
+                    cache.set(cache_key, result, timeout=300)
+                except (pickle.PicklingError, TypeError):
+                    logger.warning(f"Skipping cache for {tool_name} due to non-picklable result")
                 return result
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error calling {tool_name}: {e}")

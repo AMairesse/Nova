@@ -433,34 +433,13 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
                 "caldav_url"
             )
 
-        # Hide irrelevant fields based on auth_type
-        auth_type = (
-            self.instance.auth_type
-            if self.instance.pk
-            else self.initial.get("auth_type", "basic")
-        )
+        # Add data-auth-field attributes for JS visibility control
+        auth_fields = ["username", "password", "token", "token_type", "client_id", "client_secret"]
+        for field_name in auth_fields:
+            if field_name in self.fields:
+                self.fields[field_name].widget.attrs.setdefault('data-auth-field', field_name)
 
-        def hide(fields: list[str]):
-            for fld in fields:
-                self.fields[fld].widget = forms.HiddenInput()
-
-        if auth_type == "none":
-            hide(
-                [
-                    "username",
-                    "password",
-                    "token",
-                    "token_type",
-                    "client_id",
-                    "client_secret",
-                ]
-            )
-        elif auth_type == "basic":
-            hide(["token", "token_type", "client_id", "client_secret"])
-        elif auth_type in {"token", "api_key"}:
-            hide(["username", "password", "client_id", "client_secret"])
-        elif auth_type == "oauth":
-            hide(["username", "password", "token", "token_type"])
+        # Note: JS will handle initial visibility based on auth_type
 
         # Tool-specific requirement
         if self.tool and "CalDav" in self.tool.name:
