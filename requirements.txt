@@ -2,7 +2,7 @@ aioboto3==7.0.0
 aiobotocore==3.0.0
 aiofiles==25.1.0
 aiohappyeyeballs==2.6.1
-aiohttp==3.13.2
+aiohttp==3.13.3
 aioitertools==0.13.0
 aiosignal==1.4.0
 amqp==5.3.1
@@ -155,7 +155,7 @@ playwright==1.57.0
 prometheus_client==0.23.1
 prompt_toolkit==3.0.52
 propcache==0.4.1
-protobuf==6.33.2
+protobuf==6.33.3
 psycopg==3.3.2
 psycopg-binary==3.3.2
 psycopg-pool==3.3.0
@@ -238,5 +238,5 @@ x-wr-timezone==2.0.1
 xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
-zope.interface==8.1.1
+zope.interface==8.2
 zstandard==0.25.0
