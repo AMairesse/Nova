@@ -5,6 +5,7 @@ Tests for LLM agent execution and invocation.
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import MagicMock, patch
+from langgraph.checkpoint.memory import InMemorySaver
 
 import nova.llm.llm_agent as llm_agent_mod
 from .test_llm_agent_mixins import LLMAgentTestMixin
@@ -156,7 +157,7 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                         SimpleNamespace(checkpoint_id="fake_id"),
                         True,
                     )
-                    with patch.object(llm_agent_mod, "get_checkpointer", return_value=MagicMock()):
+                    with patch.object(llm_agent_mod, "get_checkpointer", return_value=InMemorySaver()):
                         agent = await llm_agent_mod.LLMAgent.create(user, thread, agent_config)
 
         self.assertIsInstance(agent, llm_agent_mod.LLMAgent)
@@ -244,7 +245,7 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                         SimpleNamespace(checkpoint_id="existing_id"),
                         False,
                     )
-                    with patch.object(llm_agent_mod, "get_checkpointer", return_value=MagicMock()):
+                    with patch.object(llm_agent_mod, "get_checkpointer", return_value=InMemorySaver()):
                         agent = await llm_agent_mod.LLMAgent.create(user, thread, agent_config)
 
         mock_get_or_create.assert_called_once()

@@ -53,8 +53,8 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'encrypted_model_fields',
     'channels',
-    "crispy_forms",
-    "crispy_bootstrap5",
+    'crispy_forms',
+    'crispy_bootstrap5',
     'django_celery_beat',
 ]
 

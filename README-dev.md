@@ -84,7 +84,15 @@ Nova
 - A Thread contains multiple ```Messages```.
 
 
-## Workflow for specific use cases
+## Requirements
 
-### An agent asks the user for input
+Requirements are defined in the requirements.in file. It can be checked with :
+```deptry .```
+
+Then the requirements.txt file can be generated with :
+```pip-compile pyproject.toml --output-file=requirements.txt```
+
+Install with ```pip install pip-tools deptry```
+
+
 
