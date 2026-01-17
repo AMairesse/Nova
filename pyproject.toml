@@ -17,6 +17,7 @@ dependencies = [
     "crispy-bootstrap5",
     "cron_descriptor",
     "croniter",
+    "daphne",
     "debugpy",
     "Django",
     "django_celery_beat",
@@ -57,6 +58,7 @@ authors = [
 # Ignore packages used via Django INSTALLED_APPS or other string references
 per_rule_ignores = {DEP002 = [
     "crispy-bootstrap5",
+    "daphne",
     "langgraph-checkpoint-postgres",
     "whitenoise",
 ]}
