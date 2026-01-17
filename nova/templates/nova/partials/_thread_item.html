@@ -6,7 +6,8 @@
     <a href="#" class="thread-link" data-thread-id="{{ thread.id }}">{{ thread.subject }}</a>
     <button class="delete-thread-btn"
             data-thread-id="{{ thread.id }}"
-            style="background:none;border:none;padding:0;margin-left:10px;">
+            style="background:none;border:none;padding:0;margin-left:10px;"
+            aria-label="{% trans 'Delete thread' %}">
       <img src="{% static 'images/bin_icon.png' %}"
            width="14" height="14"
            alt="{% trans 'Delete Thread' %}"/>

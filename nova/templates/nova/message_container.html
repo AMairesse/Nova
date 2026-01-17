@@ -76,7 +76,7 @@
           {% if message.internal_data.max_context %}
           <div class="card-footer py-1 text-muted small d-flex justify-content-end align-items-center">
             {% if message.is_last_agent_message %}
-            <a href="#" class="compact-thread-link text-decoration-none small me-2" title="{% trans 'Summarize conversation to save context space' %}">
+            <a href="#" class="compact-thread-link text-decoration-none small me-2" title="{% trans 'Summarize conversation to save context space' %}" aria-label="{% trans 'Summarize conversation to save context space' %}">
               <i class="bi bi-compress me-1"></i>{% trans "Compact" %}
             </a>
             {% endif %}
@@ -119,10 +119,10 @@
               {% endif %}
             </div>
             <div class="d-flex gap-2">
-              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="{{ interaction.id }}">
+              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="{{ interaction.id }}" aria-label="{% trans 'Answer the question' %}">
                 <i class="bi bi-check2-circle me-1"></i>{% trans 'Answer' %}
               </button>
-              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="{{ interaction.id }}">
+              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="{{ interaction.id }}" aria-label="{% trans 'Cancel the question' %}">
                 <i class="bi bi-x-circle me-1"></i>{% trans 'Cancel' %}
               </button>
               <div class="ms-auto small text-muted interaction-status"></div>
@@ -178,6 +178,7 @@
               id="dropdownMenuButton"
               data-bs-placement="top"
               title="{% if default_agent %}{{ default_agent.name }}{% else %}{% trans 'Select an agent' %}{% endif %}"
+              aria-label="{% if default_agent %}{{ default_agent.name }}{% else %}{% trans 'Select an agent' %}{% endif %}"
             >
               <i class="bi bi-robot"></i>
             </button>
