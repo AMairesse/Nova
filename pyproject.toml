@@ -14,6 +14,7 @@ dependencies = [
     "caldav",
     "celery",
     "channels",
+    "channels-redis",
     "crispy-bootstrap5",
     "cron_descriptor",
     "croniter",
@@ -58,11 +59,12 @@ authors = [
 # Ignore packages used via Django INSTALLED_APPS or other string references
 per_rule_ignores = {DEP002 = [
     "crispy-bootstrap5",
+    "channels-redis",
     "daphne",
     "langgraph-checkpoint-postgres",
     "whitenoise",
 ]}
-package_module_name_map = {crispy-bootstrap5 = "crispy_bootstrap5"}
+package_module_name_map = {crispy-bootstrap5 = "crispy_bootstrap5", channels-redis = "channels_redis"}
 
 [tool.coverage.run]
 source = ["nova"]

@@ -33,6 +33,7 @@ anyio==4.12.1
 asgiref==3.11.0
     # via
     #   channels
+    #   channels-redis
     #   daphne
     #   django
     #   nova (pyproject.toml)
@@ -88,6 +89,10 @@ cffi==2.0.0
     #   autobahn
     #   cryptography
 channels==4.3.2
+    # via
+    #   channels-redis
+    #   nova (pyproject.toml)
+channels-redis==4.3.0
     # via nova (pyproject.toml)
 charset-normalizer==3.4.4
     # via
@@ -351,7 +356,9 @@ more-itertools==10.8.0
     #   jaraco-classes
     #   jaraco-functools
 msgpack==1.1.2
-    # via autobahn
+    # via
+    #   autobahn
+    #   channels-redis
 multidict==6.7.0
     # via
     #   aiobotocore
@@ -535,6 +542,7 @@ recurring-ical-events==3.8.0
     #   icalendar-searcher
 redis==7.1.0
     # via
+    #   channels-redis
     #   fakeredis
     #   py-key-value-aio
     #   pydocket
