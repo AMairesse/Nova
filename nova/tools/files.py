@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 async def async_get_object_or_404(model, **kwargs):
-    """Wrapper async pour get_object_or_404."""
+    """Async wrapper for get_object_or_404."""
     return await sync_to_async(get_object_or_404,
                                thread_sensitive=False)(model, **kwargs)
 
@@ -42,7 +42,7 @@ async def async_get_user_id(user):
 
 
 async def async_filter_files(thread):
-    """Wrapper async pour filter et exists."""
+    """Async wrapper for filter and exists."""
     files = await sync_to_async(UserFile.objects.filter,
                                 thread_sensitive=False)(thread=thread)
     files_list = await sync_to_async(list, thread_sensitive=False)(files)
@@ -53,7 +53,7 @@ async def async_filter_files(thread):
 
 
 async def async_create_userfile(user, thread, key, filename, mime_type, size):
-    """Wrapper async pour create."""
+    """Async wrapper for create."""
     return await sync_to_async(UserFile.objects.create,
                                thread_sensitive=False)(
         user=user,
@@ -66,7 +66,7 @@ async def async_create_userfile(user, thread, key, filename, mime_type, size):
 
 
 async def async_delete_file(file_id: int):
-    """Wrapper async pour delete."""
+    """Async wrapper for delete."""
     file = await async_get_object_or_404(UserFile, id=file_id)
     await sync_to_async(file.delete, thread_sensitive=False)()
     return "File deleted."

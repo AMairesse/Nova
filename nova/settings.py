@@ -60,6 +60,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'nova.middleware.AdminIPRestrictionMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -260,6 +261,9 @@ CELERYD_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_TRACK_STARTED = True
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_BEAT_SCHEDULE = {}
+
+# Admin IP restrictions
+ALLOWED_ADMIN_IPS = [ip.strip() for ip in os.getenv('ALLOWED_ADMIN_IPS', '').split(',') if ip.strip()]
 
 # Logging configuration
 LOGGING = {

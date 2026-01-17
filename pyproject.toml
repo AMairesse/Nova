@@ -8,6 +8,7 @@ dependencies = [
     "aioboto3",
     "aiohttp",
     "asgiref",
+    "beautifulsoup4",
     "bleach",
     "boto3",
     "botocore",
@@ -58,6 +59,7 @@ authors = [
 [tool.deptry]
 # Ignore packages used via Django INSTALLED_APPS or other string references
 per_rule_ignores = {DEP002 = [
+    "beautifulsoup4",
     "crispy-bootstrap5",
     "channels-redis",
     "daphne",
