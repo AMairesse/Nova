@@ -51,6 +51,7 @@ if [ ! -z "$DJANGO_SUPERUSER_USERNAME" ] && [ ! -z "$DJANGO_SUPERUSER_PASSWORD" 
     python manage.py createsuperuser --noinput \
         --username "$DJANGO_SUPERUSER_USERNAME" \
         --email "${DJANGO_SUPERUSER_EMAIL:-admin@example.com}" || true  # Ignore if exists
+    echo "IMPORTANT: Change the superuser password immediately after first login for security!"
 fi
 
 # Start Daphne

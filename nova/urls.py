@@ -36,7 +36,7 @@ urlpatterns = [
     # Authentication views
     path("accounts/", include("django.contrib.auth.urls")),
     # Admin
-    path('admin/', admin.site.urls),
+    path('supernova-admin/', admin.site.urls),
     # Service worker
     path('sw.js', service_worker, name='service_worker'),
     # i18n

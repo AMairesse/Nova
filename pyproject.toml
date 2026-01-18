@@ -1,0 +1,81 @@
+[project]
+name = "nova"
+version = "0.1.0"
+description = "Nova is a personal‑AI workspace that puts privacy first."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aioboto3",
+    "aiohttp",
+    "asgiref",
+    "beautifulsoup4",
+    "bleach",
+    "boto3",
+    "botocore",
+    "caldav",
+    "celery",
+    "channels",
+    "channels-redis",
+    "crispy-bootstrap5",
+    "cron_descriptor",
+    "croniter",
+    "daphne",
+    "debugpy",
+    "Django",
+    "django_celery_beat",
+    "django_crispy_forms",
+    "djangorestframework",
+    "django-encrypted-model-fields",
+    "fastmcp",
+    "httpx",
+    "icalendar",
+    "IMAPClient",
+    "langchain",
+    "langgraph-checkpoint-postgres",
+    "langchain_community",
+    "langchain_core",
+    "langchain_mistralai",
+    "langchain_ollama",
+    "langchain_openai",
+    "langfuse",
+    "langgraph",
+    "Markdown",
+    "playwright",
+    "psycopg",
+    "psycopg_pool",
+    "python-dotenv",
+    "python_magic",
+    "whitenoise",
+]
+license = {text = "MIT"}
+authors = [
+    {name = "Antoine Mairesse", email = "antoine.mairesse@free.fr"}
+]
+
+# ============================================
+# Tool Configurations
+# ============================================
+
+[tool.deptry]
+# Ignore packages used via Django INSTALLED_APPS or other string references
+per_rule_ignores = {DEP002 = [
+    "beautifulsoup4",
+    "crispy-bootstrap5",
+    "channels-redis",
+    "daphne",
+    "langgraph-checkpoint-postgres",
+    "whitenoise",
+]}
+package_module_name_map = {crispy-bootstrap5 = "crispy_bootstrap5", channels-redis = "channels_redis"}
+
+[tool.coverage.run]
+source = ["nova"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "nova.settings_test"
+python_files = ["test_*.py", "*_test.py"]

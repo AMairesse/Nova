@@ -23,6 +23,9 @@ RUN chmod +x entrypoint.sh
 RUN playwright install chromium
 RUN playwright install-deps
 
+# Create logs directory
+RUN mkdir -p logs
+
 # Expose port
 EXPOSE 8000
 
