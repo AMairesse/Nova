@@ -143,6 +143,25 @@ class MainViewsTests(TestCase):
         self.assertIn(reverse("index"), resp["Location"])
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    def test_delete_thread_prevents_deletion_with_running_tasks(self, mock_get_checkpointer):
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
+
+        thread = Thread.objects.create(user=self.user, subject="Del")
+        # Create a running task for the thread
+        Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
+
+        self.client.login(username="alice", password="pass")
+        resp = self.client.post(reverse("delete_thread", args=[thread.id]))
+        self.assertEqual(resp.status_code, 400)
+        data = resp.json()
+        self.assertEqual(data["status"], "ERROR")
+        self.assertIn("running tasks", data["message"])
+        # Thread should still exist
+        self.assertTrue(Thread.objects.filter(id=thread.id).exists())
+
     # ------------ add_message -------------------------------------------
 
     @patch("nova.tasks.tasks.run_ai_task_celery.delay")

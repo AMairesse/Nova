@@ -198,6 +198,19 @@ def create_thread(request):
 @login_required(login_url='login')
 def delete_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+
+    # Check for running tasks
+    running_tasks = Task.objects.filter(
+        thread=thread,
+        status__in=[TaskStatus.RUNNING, TaskStatus.AWAITING_INPUT]
+    )
+    if running_tasks.exists():
+        # Return error instead of deleting
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "Cannot delete thread with running tasks. Please wait for tasks to complete."
+        }, status=400)
+
     thread.delete()
     return redirect('index')
 
