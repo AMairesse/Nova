@@ -230,6 +230,8 @@ async def search(
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
             from pgvector.django import CosineDistance
+            from django.db.models.functions import Now
+            from django.db.models import ExpressionWrapper, FloatField
 
             vector = SearchVector("content", config="english")
             q = SearchQuery(query)
@@ -238,16 +240,22 @@ async def search(
 
             if vec is not None:
                 # Hybrid ranking:
-                # - semantic (cosine distance) for items with ready vectors
-                # - still keep FTS rank for exact-token boost
+                # - semantic (cosine distance) when a ready vector exists
+                # - fallback to FTS rank when embedding is missing/pending
+                # - add a small recency tie-breaker
                 qs_ranked = qs_ranked.select_related("embedding").annotate(
-                    distance=CosineDistance("embedding__vector", vec)
-                ).filter(
-                    embedding__vector__isnull=False,
-                    embedding__state="ready",
+                    distance=CosineDistance("embedding__vector", vec),
+                    # age_days is just to make recency ordering explicit/portable
+                    age_days=ExpressionWrapper(
+                        (Now() - F("created_at")) / 86400000000.0,
+                        output_field=FloatField(),
+                    ),
                 ).order_by(
+                    # Put best semantic matches first, but keep items without vectors.
                     F("distance").asc(nulls_last=True),
+                    # Then fall back to lexical rank.
                     F("rank").desc(),
+                    # Finally prefer more recent items.
                     F("created_at").desc(),
                 )
             else:

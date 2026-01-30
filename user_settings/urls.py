@@ -26,6 +26,7 @@ from user_settings.views.tool import (
 )
 from user_settings.views.general import GeneralSettingsView
 from user_settings.views.memory import MemorySettingsView
+from user_settings.views.memory_browser import MemoryItemsListView
 from user_settings.views.api_token import GenerateAPITokenView, DeleteAPITokenView
 from user_settings.views.scheduled_tasks import (
     scheduled_tasks_list,
@@ -82,6 +83,7 @@ urlpatterns += [
 urlpatterns += [
     # Memory
     path("memory/", MemorySettingsView.as_view(), name="memory"),
+    path("memory/items/", MemoryItemsListView.as_view(), name="memory-items"),
 ]
 
 urlpatterns += [

@@ -102,7 +102,7 @@
         id="pane-memory"
         role="tabpanel"
         hx-get="{% url 'user_settings:memory' %}?partial=1"
-        hx-trigger="revealed"
+        hx-trigger="revealed once"
         hx-target="this"
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading memory…" %}</div>

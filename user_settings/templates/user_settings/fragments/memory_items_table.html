@@ -1,0 +1,50 @@
+<!-- user_settings/templates/user_settings/fragments/memory_items_table.html -->
+{% load i18n %}
+
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h6 class="mb-0">{% trans "Memory items" %}</h6>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm table-hover align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>{% trans "Created" %}</th>
+        <th>{% trans "Theme" %}</th>
+        <th>{% trans "Type" %}</th>
+        <th>{% trans "Content" %}</th>
+        <th>{% trans "Embedding" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+        <tr>
+          <td class="text-nowrap">{{ item.created_at|date:"Y-m-d H:i" }}</td>
+          <td>{% if item.theme %}<code>{{ item.theme.slug }}</code>{% endif %}</td>
+          <td><code>{{ item.type }}</code></td>
+          <td style="max-width: 520px;">
+            <div class="text-truncate" style="max-width: 520px;" title="{{ item.content }}">{{ item.content }}</div>
+          </td>
+          <td>
+            {% if item.embedding %}
+              <span class="badge bg-{% if item.embedding.state == 'ready' %}success{% elif item.embedding.state == 'error' %}danger{% else %}secondary{% endif %}">
+                {{ item.embedding.state }}
+              </span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="5" class="text-muted">{% trans "No memory items." %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if is_paginated %}
+  {% include "includes/pagination.html" %}
+{% endif %}
+

@@ -37,6 +37,14 @@ Implemented / in-progress:
   - Celery task skeleton to compute embeddings
 - User configuration direction chosen: **Option A** (dedicated Memory settings in `user_settings/`, stored in `UserParameters`) + a “Test embeddings endpoint” button.
 
+Recent implementation notes:
+
+- **Embeddings provider config is now DB-backed per-user** (read on each call) and applies immediately.
+- **Embeddings dimension mismatch**: vectors smaller than 1024 are now accepted via **zero-padding**; vectors larger than 1024 error.
+- **Provider/model change flow**: Save triggers an inline confirmation (shows count of embeddings to rebuild), Confirm enqueues a background rebuild.
+- **Read-only Memory browser**: added a simple table view (items + embedding state) rendered under the Memory settings form.
+- **pgvector index**: added PostgreSQL-only HNSW cosine index migration for `MemoryItemEmbedding.vector`.
+
 ## 1. Current state (baseline)
 
 What exists today:

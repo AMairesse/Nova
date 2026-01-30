@@ -1,5 +1,4 @@
 from asgiref.sync import async_to_sync
-import logging
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -19,9 +18,6 @@ from nova.tasks.memory_rebuild_tasks import rebuild_user_memory_embeddings_task
 from nova.models.UserObjects import UserParameters
 from user_settings.forms import UserMemoryEmbeddingsForm
 from user_settings.mixins import DashboardRedirectMixin
-
-
-logger = logging.getLogger(__name__)
 
 
 class MemorySettingsView(
@@ -196,18 +192,6 @@ class MemorySettingsView(
 
         signature_changed = old_signature != new_signature
         will_have_embeddings = bool(new_signature[0] and new_signature[1])
-
-        logger.info(
-            "[memory.settings.save] user=%s hx=%s action=%s old=%s new=%s changed=%s will_have=%s post_keys=%s",
-            request.user.id,
-            request.headers.get("HX-Request"),
-            request.POST.get("action"),
-            old_signature,
-            new_signature,
-            signature_changed,
-            will_have_embeddings,
-            sorted(list(request.POST.keys())),
-        )
 
         # If changing to a different provider/model while embeddings are enabled,
         # require confirmation because existing vectors become inconsistent.
