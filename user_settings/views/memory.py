@@ -7,7 +7,11 @@ from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import UpdateView
 
-from nova.llm.embeddings import compute_embedding, get_embeddings_provider
+from nova.llm.embeddings import (
+    compute_embedding,
+    get_custom_http_provider,
+    get_embeddings_provider,
+)
 from nova.models.UserObjects import UserParameters
 from user_settings.forms import UserMemoryEmbeddingsForm
 from user_settings.mixins import DashboardRedirectMixin
@@ -55,13 +59,28 @@ class MemorySettingsView(
     def post(self, request, *args, **kwargs):
         # Handle healthcheck button
         if request.POST.get("action") == "test_embeddings":
-            provider = get_embeddings_provider()
+            # Prefer testing the values currently typed in the form (without saving).
+            # If not present, fall back to the runtime provider selection.
+            form = self.form_class(data=request.POST, instance=self.get_object())
+
+            provider_override = None
+            if form.is_valid() and form.cleaned_data.get("memory_embeddings_enabled"):
+                provider_override = get_custom_http_provider(
+                    base_url=form.cleaned_data.get("memory_embeddings_url"),
+                    model=form.cleaned_data.get("memory_embeddings_model"),
+                    api_key=form.cleaned_data.get("memory_embeddings_api_key"),
+                )
+
+            provider = provider_override or get_embeddings_provider()
             if not provider:
                 messages.warning(request, _("Embeddings provider is not configured."))
                 return self.get(request, *args, **kwargs)
 
             try:
-                vec = async_to_sync(compute_embedding)("healthcheck")
+                vec = async_to_sync(compute_embedding)(
+                    "healthcheck",
+                    provider_override=provider_override,
+                )
                 if vec is None:
                     messages.warning(request, _("Embeddings provider returned no vector (disabled)."))
                 else:
@@ -72,6 +91,14 @@ class MemorySettingsView(
                     )
             except Exception as e:
                 messages.error(request, _("Embeddings test failed: %(err)s") % {"err": str(e)})
+
+            # The Memory settings form is typically posted via HTMX with
+            # `hx-swap="none"`, so the response body is not rendered.
+            # Force a full refresh so Django messages are visible immediately.
+            if request.headers.get("HX-Request") == "true":
+                resp = HttpResponse(status=204)
+                resp["HX-Refresh"] = "true"
+                return resp
 
             return self.get(request, *args, **kwargs)
 

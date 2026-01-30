@@ -31,6 +31,29 @@ class EmbeddingsProvider:
     api_key: str | None = None
 
 
+def get_custom_http_provider(
+    *,
+    base_url: str | None,
+    model: str | None,
+    api_key: str | None,
+) -> Optional[EmbeddingsProvider]:
+    """Build a custom HTTP embeddings provider from raw values.
+
+    This helper exists so UI healthchecks can test the endpoint value currently
+    typed in the form (without saving it).
+    """
+
+    if not base_url:
+        return None
+
+    return EmbeddingsProvider(
+        provider_type="custom_http",
+        base_url=base_url,
+        model=model or "",
+        api_key=api_key,
+    )
+
+
 def get_embeddings_provider() -> Optional[EmbeddingsProvider]:
     """Return the active embeddings provider based on settings.
 
@@ -62,7 +85,11 @@ def get_embeddings_provider() -> Optional[EmbeddingsProvider]:
     return None
 
 
-async def compute_embedding(text: str) -> Optional[List[float]]:
+async def compute_embedding(
+    text: str,
+    *,
+    provider_override: EmbeddingsProvider | None = None,
+) -> Optional[List[float]]:
     """Compute an embedding vector for `text`.
 
     Returns None if embeddings are disabled.
@@ -73,7 +100,7 @@ async def compute_embedding(text: str) -> Optional[List[float]]:
     }
     """
 
-    provider = get_embeddings_provider()
+    provider = provider_override or get_embeddings_provider()
     if not provider:
         return None
 
