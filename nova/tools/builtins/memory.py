@@ -28,6 +28,7 @@ from django.utils import timezone
 from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
+from nova.llm.embeddings import compute_embedding
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemType, MemoryTheme
 
 METADATA = {
@@ -78,7 +79,9 @@ async def add(
 ) -> Dict[str, Any]:
     """Create a new MemoryItem. Embedding will be computed asynchronously later."""
 
-    def _impl():
+    provider = await compute_embedding("__probe__")
+
+    def _impl(embeddings_enabled: bool):
         item_type = type
         if item_type not in set(MemoryItemType.values):
             raise ValidationError(f"Invalid memory item type: {item_type}")
@@ -104,22 +107,27 @@ async def add(
             source_thread=getattr(agent, "thread", None),
         )
 
-        # Create embedding row as pending placeholder (vector can stay NULL).
-        MemoryItemEmbedding.objects.get_or_create(
-            user=agent.user,
-            item=item,
-            defaults={
-                "state": "pending",
-                "dimensions": 1024,
-            },
-        )
+        # Create embedding row only when embeddings are enabled.
+        embedding_state = None
+        if embeddings_enabled:
+            emb, _ = MemoryItemEmbedding.objects.get_or_create(
+                user=agent.user,
+                item=item,
+                defaults={
+                    "state": "pending",
+                    "dimensions": 1024,
+                },
+            )
+            embedding_state = emb.state
 
         return {
             "id": item.id,
-            "embedding_state": getattr(item.embedding, "state", "pending"),
+            "embedding_state": embedding_state,
         }
 
-    return await sync_to_async(_impl, thread_sensitive=True)()
+    # `compute_embedding` returns None when embeddings are disabled; probe is cheap.
+    embeddings_enabled = provider is not None
+    return await sync_to_async(_impl, thread_sensitive=True)(embeddings_enabled)
 
 
 async def get(item_id: int, agent: LLMAgent) -> Dict[str, Any]:
@@ -182,7 +190,9 @@ async def search(
         raise ValidationError("limit must be an integer") from e
     limit = max(1, min(limit, 50))
 
-    def _impl():
+    query_vec = await compute_embedding(query.strip())
+
+    def _impl(vec: Optional[List[float]]):
         qs = MemoryItem.objects.select_related("theme").filter(user=agent.user)
 
         if theme:
@@ -205,16 +215,31 @@ async def search(
 
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+            from pgvector.django import CosineDistance
 
             vector = SearchVector("content", config="english")
             q = SearchQuery(query)
-            qs2 = (
-                qs.annotate(rank=SearchRank(vector, q))
-                .filter(rank__gt=0.0)
-                .order_by(F("rank").desc(), F("created_at").desc())
-            )
 
-            for item in qs2[:limit]:
+            qs_ranked = qs.annotate(rank=SearchRank(vector, q)).filter(rank__gt=0.0)
+
+            if vec is not None:
+                # Hybrid ranking:
+                # - semantic (cosine distance) for items with ready vectors
+                # - still keep FTS rank for exact-token boost
+                qs_ranked = qs_ranked.select_related("embedding").annotate(
+                    distance=CosineDistance("embedding__vector", vec)
+                ).filter(
+                    embedding__vector__isnull=False,
+                    embedding__state="ready",
+                ).order_by(
+                    F("distance").asc(nulls_last=True),
+                    F("rank").desc(),
+                    F("created_at").desc(),
+                )
+            else:
+                qs_ranked = qs_ranked.order_by(F("rank").desc(), F("created_at").desc())
+
+            for item in qs_ranked[:limit]:
                 results.append(
                     {
                         "id": item.id,
@@ -222,8 +247,11 @@ async def search(
                         "type": item.type,
                         "content_snippet": item.content[:240],
                         "created_at": item.created_at.isoformat() if item.created_at else None,
-                        "score": float(getattr(item, "rank", 0.0) or 0.0),
-                        "signals": {"fts": True, "semantic": False},
+                        "score": {
+                            "fts_rank": float(getattr(item, "rank", 0.0) or 0.0),
+                            "cosine_distance": float(getattr(item, "distance", 0.0)) if vec is not None else None,
+                        },
+                        "signals": {"fts": True, "semantic": vec is not None},
                     }
                 )
         else:
@@ -245,11 +273,11 @@ async def search(
         return {
             "results": results,
             "notes": [
-                "semantic ranking is not enabled yet (requires query embeddings + Celery task)",
+                "semantic ranking is enabled only when embeddings provider is configured and vectors are ready",
             ],
         }
 
-    return await sync_to_async(_impl, thread_sensitive=True)()
+    return await sync_to_async(_impl, thread_sensitive=True)(query_vec)
 
 
 async def get_functions(tool, agent: LLMAgent):
