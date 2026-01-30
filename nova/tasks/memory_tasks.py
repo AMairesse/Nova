@@ -18,13 +18,19 @@ def compute_memory_item_embedding_task(self, embedding_id: int):
 
     from asgiref.sync import async_to_sync
 
-    provider = get_embeddings_provider()
-    if not provider:
-        logger.info("[compute_memory_item_embedding] embeddings disabled; skipping %s", embedding_id)
+    emb = (
+        MemoryItemEmbedding.objects.select_related("item")
+        .filter(id=embedding_id)
+        .first()
+    )
+    if not emb:
         return
 
-    emb = MemoryItemEmbedding.objects.select_related("item").filter(id=embedding_id).first()
-    if not emb:
+    # Provider is user-scoped (DB-backed) and must be evaluated per-task.
+    # (Changes should apply immediately, even for queued jobs.)
+    provider = get_embeddings_provider(user_id=emb.user_id)
+    if not provider:
+        logger.info("[compute_memory_item_embedding] embeddings disabled; skipping %s", embedding_id)
         return
 
     # idempotence
@@ -32,7 +38,7 @@ def compute_memory_item_embedding_task(self, embedding_id: int):
         return
 
     try:
-        vec = async_to_sync(compute_embedding)(emb.item.content)
+        vec = async_to_sync(compute_embedding)(emb.item.content, user_id=emb.user_id)
         if vec is None:
             return
 

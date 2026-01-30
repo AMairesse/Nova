@@ -28,7 +28,7 @@ from django.utils import timezone
 from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
-from nova.llm.embeddings import compute_embedding, get_embeddings_provider
+from nova.llm.embeddings import compute_embedding, aget_embeddings_provider
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemType, MemoryTheme
 
 METADATA = {
@@ -79,7 +79,7 @@ async def add(
 ) -> Dict[str, Any]:
     """Create a new MemoryItem. Embedding will be computed asynchronously later."""
 
-    provider = get_embeddings_provider()
+    provider = await aget_embeddings_provider(user_id=agent.user.id)
     embeddings_enabled = provider is not None
 
     def _impl():
@@ -198,8 +198,13 @@ async def search(
         raise ValidationError("limit must be an integer") from e
     limit = max(1, min(limit, 50))
 
-    provider = get_embeddings_provider()
-    query_vec = await compute_embedding(query.strip()) if provider else None
+    # Provider is user-scoped (DB-backed) and must be evaluated per-call.
+    provider = await aget_embeddings_provider(user_id=agent.user.id)
+    query_vec = (
+        await compute_embedding(query.strip(), user_id=agent.user.id)
+        if provider
+        else None
+    )
 
     def _impl(vec: Optional[List[float]]):
         qs = MemoryItem.objects.select_related("theme").filter(user=agent.user)
