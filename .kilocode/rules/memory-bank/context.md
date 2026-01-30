@@ -2,12 +2,12 @@
 
 ## Current Work Focus
 
-**Completed: Thread UI refactors (Bootstrap-native + deduplication)**:
+**In progress: redesign long-term memory**
 
-- Centralized initialization in `NovaApp.bootstrapThreadUI()`
-- Removed `DOMContentLoaded` auto-init from modules (notably `responsive.js`)
-- Added explicit `bind()` / idempotence guards to avoid duplicate listeners
-- Refactored mobile Files/Webapps tabs to Bootstrap 5 native tabs (`data-bs-toggle="tab"`) and replaced manual switching with a `shown.bs.tab` handler
-- Extracted duplicated user dropdown menu items into reusable template partial `includes/user_menu_items.html`
+- Goal: replace current Markdown/theme-based memory with structured memory items.
+- Retrieval: hybrid search (PostgreSQL FTS + pgvector embeddings).
+- Embeddings: computed asynchronously via Celery with FTS fallback.
+- Provider: configurable HTTP endpoint; auto-prefer `llama.cpp` as a system provider when available.
+- Prompt: avoid injecting memory content; rely on tool calls (`memory.search`).
 
-**Next**: Validate mobile offcanvas behavior (tabs switching, files toolbar visibility, webapps lazy-load), plus thread switching/files sidebar/websocket regressions.
+Design spec draft: [`plans/memory.md`](plans/memory.md)
