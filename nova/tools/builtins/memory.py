@@ -1,13 +1,38 @@
-import re
-from django.core.exceptions import ValidationError
-from langchain_core.tools import StructuredTool
-from nova.llm.llm_agent import LLMAgent
-from nova.utils import get_theme_content
+"""Nova builtin tool: Memory (v2)
+
+This replaces the original theme/markdown-based memory with a structured store.
+
+Agent-facing functions exposed:
+- `search(query, limit=10, theme=None, types=None, recency_days=None)`
+- `add(type, content, theme=None, tags=None)`
+- `get(item_id)`
+- `list_themes()`
+
+Notes:
+- Hybrid search (FTS + pgvector) is implemented as FTS-first for now.
+- Semantic scoring will be enabled once query-embedding computation is wired
+  (Celery task + provider selection). Until then, stored item embeddings are
+  kept but not used for ranking.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from typing import Any, Dict, List, Optional
+
 from asgiref.sync import sync_to_async
+from django.core.exceptions import ValidationError
+from django.db import connection
+from django.db.models import F, Q
+from django.utils import timezone
+from langchain_core.tools import StructuredTool
+
+from nova.llm.llm_agent import LLMAgent
+from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemType, MemoryTheme
 
 METADATA = {
     'name': 'Memory',
-    'description': 'Access and manage user information stored in Markdown format',
+    'description': 'Access and manage structured long-term memory (search + add + get).',
     'requires_config': False,
     'config_fields': [],
     'test_function': None,
@@ -15,165 +40,216 @@ METADATA = {
 }
 
 
-def _get_user_info(user):
-    """Sync function to get or create UserInfo."""
-    from nova.models.UserObjects import UserInfo
-    user_info, _ = UserInfo.objects.get_or_create(user=user)
-    return user_info
+def _normalize_theme_slug(theme: str) -> str:
+    theme = (theme or "").strip().lower()
+    if not theme:
+        raise ValidationError("theme must be a non-empty string")
+    return theme.replace(" ", "-")
 
 
-def _update_user_info(user, content):
-    """Sync function to update UserInfo."""
-    from nova.models.UserObjects import UserInfo
-    user_info, _ = UserInfo.objects.get_or_create(user=user)
-    user_info.markdown_content = content
-    user_info.full_clean()  # Validate before saving
-    user_info.save()
-    return user_info
+async def list_themes(agent: LLMAgent) -> Dict[str, Any]:
+    """List themes available in the structured memory store."""
+
+    def _impl():
+        themes = MemoryTheme.objects.filter(user=agent.user).order_by("slug")
+        return {
+            "themes": [
+                {
+                    "slug": t.slug,
+                    "display_name": t.display_name,
+                    "description": t.description,
+                    "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+                }
+                for t in themes
+            ]
+        }
+
+    # NOTE: SQLite (tests) is prone to "database table is locked" errors when ORM
+    # runs in a separate worker thread. Keep DB access thread-sensitive.
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
-def _get_theme_content(content: str, theme: str) -> str:
-    """Get content for a specific theme."""
-    return get_theme_content(content, theme)
+async def add(
+    type: str,
+    content: str,
+    agent: LLMAgent,
+    theme: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Create a new MemoryItem. Embedding will be computed asynchronously later."""
+
+    def _impl():
+        item_type = type
+        if item_type not in set(MemoryItemType.values):
+            raise ValidationError(f"Invalid memory item type: {item_type}")
+
+        if not content or not content.strip():
+            raise ValidationError("content must be a non-empty string")
+
+        theme_obj = None
+        if theme:
+            slug = _normalize_theme_slug(theme)
+            theme_obj, _ = MemoryTheme.objects.get_or_create(
+                user=agent.user,
+                slug=slug,
+                defaults={"display_name": theme.strip()},
+            )
+
+        item = MemoryItem.objects.create(
+            user=agent.user,
+            theme=theme_obj,
+            type=item_type,
+            content=content.strip(),
+            tags=[t for t in (tags or []) if isinstance(t, str) and t.strip()],
+            source_thread=getattr(agent, "thread", None),
+        )
+
+        # Create embedding row as pending placeholder (vector can stay NULL).
+        MemoryItemEmbedding.objects.get_or_create(
+            user=agent.user,
+            item=item,
+            defaults={
+                "state": "pending",
+                "dimensions": 1024,
+            },
+        )
+
+        return {
+            "id": item.id,
+            "embedding_state": getattr(item.embedding, "state", "pending"),
+        }
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
-def _set_theme_content(content: str, theme: str, new_content: str) -> str:
-    """Update or add content for a specific theme."""
-    lines = content.split('\n')
-    new_lines = []
-    in_theme = False
-    theme_replaced = False
+async def get(item_id: int, agent: LLMAgent) -> Dict[str, Any]:
+    """Fetch a memory item by id."""
 
-    for line in lines:
-        if line.strip().startswith('# ') and line.strip()[2:].strip() == theme:
-            in_theme = True
-            theme_replaced = True
-            new_lines.append(line)
-            # Add the new content
-            if new_content.strip():
-                new_lines.extend(new_content.strip().split('\n'))
-        elif line.strip().startswith('# ') and in_theme:
-            in_theme = False
-            new_lines.append(line)
-        elif not in_theme:
-            new_lines.append(line)
+    def _impl():
+        item = (
+            MemoryItem.objects.select_related("theme")
+            .filter(user=agent.user, id=item_id)
+            .first()
+        )
+        if not item:
+            return {"error": "not_found"}
 
-    # If theme not found, add it at the end
-    if not theme_replaced:
-        if content.strip():
-            new_lines.append('')
-        new_lines.append(f'# {theme}')
-        if new_content.strip():
-            new_lines.extend(new_content.strip().split('\n'))
+        embedding = getattr(item, "embedding", None)
+        return {
+            "id": item.id,
+            "theme": item.theme.slug if item.theme else None,
+            "type": item.type,
+            "content": item.content,
+            "tags": item.tags,
+            "status": item.status,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            "embedding": {
+                "state": getattr(embedding, "state", None),
+                "provider_type": getattr(embedding, "provider_type", ""),
+                "model": getattr(embedding, "model", ""),
+                "dimensions": getattr(embedding, "dimensions", None),
+                "error": getattr(embedding, "error", None),
+                "has_vector": bool(getattr(embedding, "vector", None)),
+            },
+        }
 
-    return '\n'.join(new_lines).strip()
-
-
-def _delete_theme_content(content: str, theme: str) -> str:
-    """Remove a specific theme."""
-    lines = content.split('\n')
-    new_lines = []
-    in_theme = False
-
-    for line in lines:
-        if line.strip().startswith('# ') and line.strip()[2:].strip() == theme:
-            in_theme = True
-        elif line.strip().startswith('# ') and in_theme:
-            in_theme = False
-        elif not in_theme:
-            new_lines.append(line)
-
-    return '\n'.join(new_lines).strip()
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
-async def get_info(theme: str, agent: LLMAgent) -> str:
-    """Get information for a specific theme."""
+async def search(
+    query: str,
+    agent: LLMAgent,
+    limit: int = 10,
+    theme: Optional[str] = None,
+    types: Optional[List[str]] = None,
+    recency_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Search memory items.
+
+    Current implementation:
+    - Uses PostgreSQL FTS when available.
+    - Falls back to icontains for non-Postgres DBs (e.g. SQLite tests).
+    - pgvector semantic ranking will be enabled later once query embeddings exist.
+    """
+
+    if not query or not query.strip():
+        raise ValidationError("query must be a non-empty string")
+
     try:
-        user_info = await sync_to_async(_get_user_info)(agent.user)
-        content = user_info.markdown_content
-
-        if not content:
-            return f"No information stored for theme '{theme}'."
-
-        theme_content = _get_theme_content(content, theme)
-        if not theme_content:
-            return f"No information stored for theme '{theme}'."
-
-        return theme_content
+        limit = int(limit)
     except Exception as e:
-        return f"Error retrieving information for theme '{theme}': {str(e)}"
+        raise ValidationError("limit must be an integer") from e
+    limit = max(1, min(limit, 50))
 
+    def _impl():
+        qs = MemoryItem.objects.select_related("theme").filter(user=agent.user)
 
-async def set_info(theme: str, content: str, agent: LLMAgent) -> str:
-    """Set or update information for a specific theme."""
-    try:
-        # Validate content doesn't contain malicious patterns
-        if re.search(r'<script|<iframe|<object', content, re.IGNORECASE):
-            raise ValidationError("Content contains potentially unsafe HTML tags.")
+        if theme:
+            slug = _normalize_theme_slug(theme)
+            qs = qs.filter(theme__slug=slug)
 
-        user_info = await sync_to_async(_get_user_info)(agent.user)
-        current_content = user_info.markdown_content
+        if types:
+            valid_types = set(MemoryItemType.values)
+            requested = [t for t in types if t in valid_types]
+            if requested:
+                qs = qs.filter(type__in=requested)
 
-        updated_content = _set_theme_content(current_content, theme, content)
-        await sync_to_async(_update_user_info)(agent.user, updated_content)
+        if recency_days is not None:
+            cutoff = timezone.now() - timedelta(days=int(recency_days))
+            qs = qs.filter(created_at__gte=cutoff)
 
-        return f"Information for theme '{theme}' has been updated."
-    except Exception as e:
-        return f"Error updating information for theme '{theme}': {str(e)}"
+        engine = connection.vendor
 
+        results: List[Dict[str, Any]] = []
 
-async def delete_theme(theme: str, agent: LLMAgent) -> str:
-    """Delete a specific theme."""
-    if theme == "global_user_preferences":
-        return "The 'global_user_preferences' theme cannot be deleted as it is required."
+        if engine == "postgresql":
+            from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
 
-    try:
-        user_info = await sync_to_async(_get_user_info)(agent.user)
-        current_content = user_info.markdown_content
+            vector = SearchVector("content", config="english")
+            q = SearchQuery(query)
+            qs2 = (
+                qs.annotate(rank=SearchRank(vector, q))
+                .filter(rank__gt=0.0)
+                .order_by(F("rank").desc(), F("created_at").desc())
+            )
 
-        updated_content = _delete_theme_content(current_content, theme)
-        await sync_to_async(_update_user_info)(agent.user, updated_content)
+            for item in qs2[:limit]:
+                results.append(
+                    {
+                        "id": item.id,
+                        "theme": item.theme.slug if item.theme else None,
+                        "type": item.type,
+                        "content_snippet": item.content[:240],
+                        "created_at": item.created_at.isoformat() if item.created_at else None,
+                        "score": float(getattr(item, "rank", 0.0) or 0.0),
+                        "signals": {"fts": True, "semantic": False},
+                    }
+                )
+        else:
+            # SQLite (tests) or other DBs: degrade gracefully.
+            qs2 = qs.filter(Q(content__icontains=query)).order_by(F("created_at").desc())
+            for item in qs2[:limit]:
+                results.append(
+                    {
+                        "id": item.id,
+                        "theme": item.theme.slug if item.theme else None,
+                        "type": item.type,
+                        "content_snippet": item.content[:240],
+                        "created_at": item.created_at.isoformat() if item.created_at else None,
+                        "score": None,
+                        "signals": {"fts": True, "semantic": False},
+                    }
+                )
 
-        return f"Theme '{theme}' has been deleted."
-    except Exception as e:
-        return f"Error deleting theme '{theme}': {str(e)}"
+        return {
+            "results": results,
+            "notes": [
+                "semantic ranking is not enabled yet (requires query embeddings + Celery task)",
+            ],
+        }
 
-
-async def create_theme(theme: str, agent: LLMAgent) -> str:
-    """Create a new theme with empty content."""
-    try:
-        user_info = await sync_to_async(_get_user_info)(agent.user)
-        current_content = user_info.markdown_content
-
-        # Check if theme already exists
-        themes = await sync_to_async(user_info.get_themes)()
-        if theme in themes:
-            return f"Theme '{theme}' already exists."
-
-        updated_content = _set_theme_content(current_content, theme, "")
-        await sync_to_async(_update_user_info)(agent.user, updated_content)
-
-        return f"Theme '{theme}' has been created."
-    except Exception as e:
-        return f"Error creating theme '{theme}': {str(e)}"
-
-
-async def list_themes(agent: LLMAgent) -> str:
-    """List all available themes."""
-    try:
-        user_info = await sync_to_async(_get_user_info)(agent.user)
-        content = user_info.markdown_content
-
-        if not content:
-            return "No themes available."
-
-        themes = await sync_to_async(user_info.get_themes)()
-        if not themes:
-            return "No themes available."
-
-        return "Available themes:\n" + "\n".join(f"- {theme}" for theme in themes)
-    except Exception as e:
-        return f"Error listing themes: {str(e)}"
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def get_functions(tool, agent: LLMAgent):
@@ -182,73 +258,79 @@ async def get_functions(tool, agent: LLMAgent):
     """
     return [
         StructuredTool.from_function(
-            coroutine=lambda theme: get_info(theme, agent),
-            name="get_info",
-            description="Retrieve stored information for a specific theme",
+            coroutine=lambda query, limit=10, theme=None, types=None, recency_days=None: search(
+                query=query,
+                limit=limit,
+                theme=theme,
+                types=types,
+                recency_days=recency_days,
+                agent=agent,
+            ),
+            name="search",
+            description="Search long-term memory items relevant to a query",
             args_schema={
                 "type": "object",
                 "properties": {
-                    "theme": {
-                        "type": "string",
-                        "description": "The theme name to retrieve information for"
-                    }
-                },
-                "required": ["theme"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=lambda theme, content: set_info(theme, content, agent),
-            name="set_info",
-            description="Store or update information for a specific theme",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "theme": {
-                        "type": "string",
-                        "description": "The theme name to store information under"
+                    "query": {"type": "string", "description": "Search query"},
+                    "limit": {"type": "integer", "description": "Max results (1-50)", "default": 10},
+                    "theme": {"type": "string", "description": "Optional theme slug"},
+                    "types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of memory item types",
                     },
-                    "content": {
-                        "type": "string",
-                        "description": "The Markdown content to store"
-                    }
+                    "recency_days": {
+                        "type": "integer",
+                        "description": "Optional: only items from the last N days",
+                    },
                 },
-                "required": ["theme", "content"]
+                "required": ["query"],
             }
         ),
         StructuredTool.from_function(
-            coroutine=lambda theme: delete_theme(theme, agent),
-            name="delete_theme",
-            description="Delete a specific theme",
+            coroutine=lambda type, content, theme=None, tags=None: add(
+                type=type,
+                content=content,
+                theme=theme,
+                tags=tags,
+                agent=agent,
+            ),
+            name="add",
+            description="Add a long-term memory item",
             args_schema={
                 "type": "object",
                 "properties": {
-                    "theme": {
+                    "type": {
                         "type": "string",
-                        "description": "The theme name to delete"
-                    }
+                        "description": "Memory item type (preference|fact|instruction|summary|other)",
+                    },
+                    "content": {"type": "string", "description": "Memory content"},
+                    "theme": {"type": "string", "description": "Optional theme"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tags",
+                    },
                 },
-                "required": ["theme"]
+                "required": ["type", "content"],
             }
         ),
         StructuredTool.from_function(
-            coroutine=lambda theme: create_theme(theme, agent),
-            name="create_theme",
-            description="Create a new theme for storing information",
+            coroutine=lambda item_id: get(item_id, agent),
+            name="get",
+            description="Get a memory item by id",
             args_schema={
                 "type": "object",
                 "properties": {
-                    "theme": {
-                        "type": "string",
-                        "description": "The name of the new theme to create"
-                    }
+                    "item_id": {"type": "integer", "description": "Memory item id"},
                 },
-                "required": ["theme"]
+                "required": ["item_id"],
             }
         ),
         StructuredTool.from_function(
             coroutine=lambda: list_themes(agent),
             name="list_themes",
-            description="List all available themes",
+            description="List themes in long-term memory",
             args_schema={
                 "type": "object",
                 "properties": {},
