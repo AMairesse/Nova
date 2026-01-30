@@ -526,6 +526,52 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
 
 
 # ────────────────────────────────────────────────────────────────────────────
+#  Memory embeddings settings (user-level)
+# ────────────────────────────────────────────────────────────────────────────
+class UserMemoryEmbeddingsForm(SecretPreserveMixin, forms.ModelForm):
+    """Configure embeddings provider for long-term memory.
+
+    Note: llama.cpp system provider (if present) is enforced at runtime.
+    The UI can still show these fields, but the backend will prefer llama.cpp.
+    """
+
+    secret_fields = ("memory_embeddings_api_key",)
+
+    class Meta:
+        model = UserParameters
+        fields = [
+            "memory_embeddings_enabled",
+            "memory_embeddings_url",
+            "memory_embeddings_model",
+            "memory_embeddings_api_key",
+        ]
+        widgets = {
+            "memory_embeddings_api_key": forms.PasswordInput(render_value=False),
+        }
+
+    def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+            Field("memory_embeddings_enabled"),
+            Field("memory_embeddings_url"),
+            Field("memory_embeddings_model"),
+            Field("memory_embeddings_api_key"),
+        )
+
+    def clean_memory_embeddings_api_key(self) -> str:
+        """Preserve encrypted value when left blank."""
+        data = self.cleaned_data.get("memory_embeddings_api_key", "")
+        if not data and self.instance.pk:
+            return self.instance.memory_embeddings_api_key
+        return data
+
+
+# ────────────────────────────────────────────────────────────────────────────
 #  User Information (Memory)
 # ────────────────────────────────────────────────────────────────────────────
 class UserInfoForm(forms.ModelForm):

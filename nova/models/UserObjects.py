@@ -66,6 +66,33 @@ class UserParameters(models.Model):
                                 on_delete=models.CASCADE)
     allow_langfuse = models.BooleanField(default=False)
 
+    # ------------------------------------------------------------------
+    # Memory embeddings (optional)
+    # ------------------------------------------------------------------
+    # Note: memory is global per-user, so config lives at user level.
+    memory_embeddings_enabled = models.BooleanField(
+        default=False,
+        help_text=_("Enable semantic (embedding) search for long-term memory"),
+    )
+    memory_embeddings_url = models.CharField(
+        max_length=400,
+        blank=True,
+        default="",
+        help_text=_("Embeddings endpoint URL (OpenAI-compatible /v1 recommended)"),
+    )
+    memory_embeddings_model = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text=_("Embeddings model name"),
+    )
+    memory_embeddings_api_key = EncryptedCharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text=_("API key for the embeddings endpoint (optional)"),
+    )
+
     # Langfuse per-user config
     langfuse_public_key = EncryptedCharField(max_length=255, blank=True,
                                              null=True)

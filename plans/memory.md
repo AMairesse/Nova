@@ -24,6 +24,19 @@ This document will specify:
 3. The **prompt injection contract** (what is injected, and why)
 4. Minimal **read-only UI** requirements for inspection
 
+## 0.2 Implementation status (living notes)
+
+Implemented / in-progress:
+
+- Postgres Docker switched to pgvector-enabled PG16 image.
+- New models: `MemoryTheme`, `MemoryItem`, `MemoryItemEmbedding` with `VectorField(dimensions=1024)`.
+- Builtin tool `memory` rewritten (v2): `search/add/get/list_themes`.
+- Prompt injection updated to stop injecting memory content and to point the agent to tool-based retrieval.
+- Embeddings plumbing introduced:
+  - provider selection (`llama.cpp` auto-preferred, else user-configured HTTP endpoint)
+  - Celery task skeleton to compute embeddings
+- User configuration direction chosen: **Option A** (dedicated Memory settings in `user_settings/`, stored in `UserParameters`) + a “Test embeddings endpoint” button.
+
 ## 1. Current state (baseline)
 
 What exists today:

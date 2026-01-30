@@ -28,7 +28,7 @@ from django.utils import timezone
 from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
-from nova.llm.embeddings import compute_embedding
+from nova.llm.embeddings import compute_embedding, get_embeddings_provider
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemType, MemoryTheme
 
 METADATA = {
@@ -79,9 +79,10 @@ async def add(
 ) -> Dict[str, Any]:
     """Create a new MemoryItem. Embedding will be computed asynchronously later."""
 
-    provider = await compute_embedding("__probe__")
+    provider = get_embeddings_provider()
+    embeddings_enabled = provider is not None
 
-    def _impl(embeddings_enabled: bool):
+    def _impl():
         item_type = type
         if item_type not in set(MemoryItemType.values):
             raise ValidationError(f"Invalid memory item type: {item_type}")
@@ -120,14 +121,21 @@ async def add(
             )
             embedding_state = emb.state
 
+            # Enqueue embedding computation (best-effort). We keep tool call fast.
+            try:
+                from nova.tasks.memory_tasks import compute_memory_item_embedding_task
+
+                compute_memory_item_embedding_task.delay(emb.id)
+            except Exception:
+                # If Celery is not running, keep the embedding in pending state.
+                pass
+
         return {
             "id": item.id,
             "embedding_state": embedding_state,
         }
 
-    # `compute_embedding` returns None when embeddings are disabled; probe is cheap.
-    embeddings_enabled = provider is not None
-    return await sync_to_async(_impl, thread_sensitive=True)(embeddings_enabled)
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def get(item_id: int, agent: LLMAgent) -> Dict[str, Any]:
@@ -190,7 +198,8 @@ async def search(
         raise ValidationError("limit must be an integer") from e
     limit = max(1, min(limit, 50))
 
-    query_vec = await compute_embedding(query.strip())
+    provider = get_embeddings_provider()
+    query_vec = await compute_embedding(query.strip()) if provider else None
 
     def _impl(vec: Optional[List[float]]):
         qs = MemoryItem.objects.select_related("theme").filter(user=agent.user)

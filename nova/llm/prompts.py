@@ -10,8 +10,7 @@ from typing import Optional
 from langchain.agents.middleware import dynamic_prompt
 from langchain.agents.middleware.types import ModelRequest
 from nova.models.UserFile import UserFile
-from nova.models.UserObjects import UserInfo
-from nova.utils import get_theme_content
+from nova.models.Memory import MemoryTheme
 from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
@@ -90,29 +89,37 @@ async def _is_memory_tool_enabled(agent_config) -> bool:
 
 
 async def _get_user_memory(user) -> Optional[str]:
-    """Get user memory content for injection into prompt."""
-    try:
-        user_info = await sync_to_async(UserInfo.objects.get)(user=user)
-        themes = await sync_to_async(user_info.get_themes)()
+    """Return a small prompt hint describing how to use long-term memory.
 
-        # Always include global_user_preferences content if it exists
-        global_content = ""
-        if themes and "global_user_preferences" in themes:
-            global_content = get_theme_content(user_info.markdown_content, "global_user_preferences")
-            if global_content.strip():
-                global_content = f"\n\nGlobal user's preferences:\n{global_content}"
+    New memory design is tool-driven: we do NOT inject memory content.
+    """
+    try:
+        themes = await sync_to_async(
+            lambda: list(
+                MemoryTheme.objects.filter(user=user).order_by("slug").values_list("slug", flat=True)
+            ),
+            thread_sensitive=False,
+        )()
+
+        # Keep this block intentionally short to avoid prompt bloat.
+        lines = [
+            "\n\nLong-term memory is available.",
+            "Use the memory tools when you need user-specific facts or preferences:",
+            "- Use `memory.search` to find relevant memories",
+            "- Use `memory.get` to retrieve a specific item",
+            "- Use `memory.add` to store durable information when clearly relevant",
+        ]
 
         if themes:
-            memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
-            return global_content + memory_block
+            # Limit how many themes we list.
+            shown = themes[:10]
+            suffix = "" if len(themes) <= 10 else f" (+{len(themes) - 10} more)"
+            lines.append(f"Known memory themes: {', '.join(shown)}{suffix}")
 
-    except UserInfo.DoesNotExist:
-        # UserInfo should exist due to signal, but handle gracefully
-        pass
+        return "\n".join(lines)
     except Exception as e:
-        logger.warning(f"Failed to load user memory: {e}")
-
-    return None
+        logger.warning(f"Failed to load memory themes: {e}")
+        return "\n\nLong-term memory is available via tools (`memory.search`, `memory.get`, `memory.add`)."
 
 
 async def _get_file_context(thread, user) -> Optional[str]:

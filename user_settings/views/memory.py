@@ -1,12 +1,15 @@
+from asgiref.sync import async_to_sync
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
-from django.views.generic import UpdateView
 from django.http import HttpResponse
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from django.views.generic import UpdateView
 
-from nova.models.UserObjects import UserInfo
-from user_settings.forms import UserInfoForm
+from nova.llm.embeddings import compute_embedding, get_embeddings_provider
+from nova.models.UserObjects import UserParameters
+from user_settings.forms import UserMemoryEmbeddingsForm
 from user_settings.mixins import DashboardRedirectMixin
 
 
@@ -17,18 +20,20 @@ class MemorySettingsView(
     UpdateView
 ):
     """
-    View and edit user memory information stored in Markdown format.
+    Configure long-term memory embeddings.
+
+    Memory content itself is not edited here (tool-driven memory).
     """
-    model = UserInfo
-    form_class = UserInfoForm
+    model = UserParameters
+    form_class = UserMemoryEmbeddingsForm
     template_name = "user_settings/memory_form.html"
-    success_message = _("Memory updated successfully")
+    success_message = _("Memory settings updated successfully")
     dashboard_tab = "memory"
     success_url = reverse_lazy("user_settings:dashboard")
 
-    # Ensure every user has a UserInfo row
+    # Ensure every user has a UserParameters row
     def get_object(self, queryset=None):
-        obj, _ = UserInfo.objects.get_or_create(user=self.request.user)
+        obj, _ = UserParameters.objects.get_or_create(user=self.request.user)
         return obj
 
     # HTMX: if ?partial=1, return only the fragment
@@ -47,13 +52,37 @@ class MemorySettingsView(
 
         return redirect_response
 
+    def post(self, request, *args, **kwargs):
+        # Handle healthcheck button
+        if request.POST.get("action") == "test_embeddings":
+            provider = get_embeddings_provider()
+            if not provider:
+                messages.warning(request, _("Embeddings provider is not configured."))
+                return self.get(request, *args, **kwargs)
+
+            try:
+                vec = async_to_sync(compute_embedding)("healthcheck")
+                if vec is None:
+                    messages.warning(request, _("Embeddings provider returned no vector (disabled)."))
+                else:
+                    messages.success(
+                        request,
+                        _("Embeddings OK: got %(dims)s dimensions from %(provider)s")
+                        % {"dims": len(vec), "provider": provider.provider_type},
+                    )
+            except Exception as e:
+                messages.error(request, _("Embeddings test failed: %(err)s") % {"err": str(e)})
+
+            return self.get(request, *args, **kwargs)
+
+        return super().post(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['help_text'] = _(
-            "Store your personal information in Markdown format. "
-            "Use headings (# Theme Name) to organize different topics. "
-            "Note: '# global_user_preferences' is a special theme that is always available "
-            "and cannot be deleted - it contains your essential preferences that are "
-            "automatically shared with agents when the memory tool is enabled."
+        provider = get_embeddings_provider()
+        context["embeddings_provider"] = provider
+        context["help_text"] = _(
+            "Configure semantic search (embeddings) for long-term memory. "
+            "If no provider is configured, Nova will run in text-search (FTS) mode only."
         )
         return context
