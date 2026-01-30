@@ -1,6 +1,9 @@
 services:
   db: &base-db  # Anchor for reuse if needed
-    image: postgres:16-alpine
+    # pgvector enabled image (required for new memory embeddings search)
+    # Provides PostgreSQL 16 + pgvector extension.
+    # We pin both PG major and Debian base for stability.
+    image: pgvector/pgvector:pg16-bookworm
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data

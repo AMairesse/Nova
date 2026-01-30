@@ -457,6 +457,8 @@ psycopg-pool==3.3.0
     # via
     #   langgraph-checkpoint-postgres
     #   nova (pyproject.toml)
+pgvector==0.3.6
+    # via nova (memory embeddings)
 py-key-value-aio[disk,keyring,memory,redis]==0.3.0
     # via
     #   fastmcp
