@@ -2,6 +2,104 @@
 
 document.addEventListener("DOMContentLoaded", () => {
   //------------------------------------------------------------
+  // 0. Generic conditional visibility for builtin config fields
+  //    Driven by metadata attrs:
+  //    - data-visible-if-field="enable_sending"
+  //    - data-visible-if-equals="true" (JSON encoded)
+  //------------------------------------------------------------
+  const configForm = document.getElementById("configForm");
+  if (configForm) {
+    const wrappers = Array.from(
+      configForm.querySelectorAll("[data-visible-if-field][data-visible-if-equals]")
+    );
+
+    // Map controller field name -> dependent wrappers
+    const depsByController = new Map();
+
+    const findWrapper = (el) =>
+      el.closest(".mb-3") || el.closest(".form-check") || el.parentElement;
+
+    const getFieldValue = (fieldEl) => {
+      if (!fieldEl) return null;
+      if (fieldEl.type === "checkbox") return !!fieldEl.checked;
+      if (fieldEl.type === "number") {
+        if (fieldEl.value === "") return null;
+        const n = Number(fieldEl.value);
+        return Number.isNaN(n) ? fieldEl.value : n;
+      }
+      return fieldEl.value;
+    };
+
+    const setRequired = (container, isVisible) => {
+      if (!container) return;
+      container.querySelectorAll("input, select, textarea").forEach((el) => {
+        // Preserve original required state so we can restore it.
+        if (el.dataset.originalRequired === undefined) {
+          el.dataset.originalRequired = el.required ? "1" : "0";
+        }
+        if (!isVisible) {
+          el.required = false;
+        } else {
+          el.required = el.dataset.originalRequired === "1";
+        }
+      });
+    };
+
+    const applyVisibility = (container, isVisible) => {
+      if (!container) return;
+      container.classList.toggle("d-none", !isVisible);
+      setRequired(container, isVisible);
+    };
+
+    wrappers.forEach((depEl) => {
+      const controllerName = depEl.dataset.visibleIfField;
+      let expected;
+      try {
+        expected = JSON.parse(depEl.dataset.visibleIfEquals);
+      } catch {
+        expected = depEl.dataset.visibleIfEquals;
+      }
+
+      const container = findWrapper(depEl);
+      if (!container || !controllerName) return;
+
+      // Store expected value on the container (more stable than on the input).
+      container.dataset.visibleIfField = controllerName;
+      container.dataset.visibleIfEquals = JSON.stringify(expected);
+
+      const arr = depsByController.get(controllerName) || [];
+      arr.push(container);
+      depsByController.set(controllerName, arr);
+    });
+
+    const evalContainer = (container) => {
+      const controllerName = container.dataset.visibleIfField;
+      if (!controllerName) return;
+
+      const controller = configForm.querySelector(`[name="${CSS.escape(controllerName)}"]`);
+      let expected;
+      try {
+        expected = JSON.parse(container.dataset.visibleIfEquals);
+      } catch {
+        expected = container.dataset.visibleIfEquals;
+      }
+      const actual = getFieldValue(controller);
+      applyVisibility(container, actual === expected);
+    };
+
+    // Initial evaluation
+    depsByController.forEach((containers) => containers.forEach(evalContainer));
+
+    // Attach listeners (one per controller)
+    depsByController.forEach((containers, controllerName) => {
+      const controller = configForm.querySelector(`[name="${CSS.escape(controllerName)}"]`);
+      if (!controller) return;
+      controller.addEventListener("change", () => containers.forEach(evalContainer));
+      controller.addEventListener("input", () => containers.forEach(evalContainer));
+    });
+  }
+
+  //------------------------------------------------------------
   // 1. Auth-type field switch (only for generic credentials)
   //------------------------------------------------------------
   const authSelect = document.querySelector('[name="auth_type"]');
