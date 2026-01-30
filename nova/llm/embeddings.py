@@ -123,7 +123,14 @@ async def compute_embedding(
     if not embedding:
         raise ValueError("Embeddings response missing data[0].embedding")
 
-    if len(embedding) != EMBEDDING_DIMENSIONS:
-        raise ValueError(f"Embedding dimensions mismatch: got {len(embedding)} expected {EMBEDDING_DIMENSIONS}")
+    # We store vectors in a fixed-size pgvector column (1024 dims).
+    # To support providers returning smaller embeddings (e.g. 768), we pad with zeros.
+    # If a provider returns *more* than our column size, we must fail.
+    if len(embedding) > EMBEDDING_DIMENSIONS:
+        raise ValueError(
+            f"Embedding dimensions too large: got {len(embedding)} max {EMBEDDING_DIMENSIONS}"
+        )
+    if len(embedding) < EMBEDDING_DIMENSIONS:
+        embedding = embedding + [0.0] * (EMBEDDING_DIMENSIONS - len(embedding))
 
     return embedding
