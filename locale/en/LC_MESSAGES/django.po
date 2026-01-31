@@ -1,475 +1,603 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-01-31 13:23+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
 #: nova/models/AgentConfig.py:14
 msgid "User agents"
-msgstr "User agents"
+msgstr ""
 
 #: nova/models/AgentConfig.py:19
-#: user_settings/templates/user_settings/fragments/agent_table.html:24
+#: user_settings/templates/user_settings/fragments/agent_table.html:44
 msgid "Provider"
-msgstr "Providers"
+msgstr ""
 
-#: nova/models/AgentConfig.py:20
+#: nova/models/AgentConfig.py:20 nova/models/ScheduledTask.py:25
 msgid "Prompt"
-msgstr "Prompt"
+msgstr ""
 
 #: nova/models/AgentConfig.py:21
 msgid "Recursion limit"
-msgstr "Recursion limit"
+msgstr ""
 
 #: nova/models/AgentConfig.py:25 nova/models/Tool.py:37
 #: user_settings/templates/user_settings/dashboard.html:36
 #: user_settings/templates/user_settings/tool_list.html:8
 msgid "Tools"
-msgstr "Tools"
+msgstr ""
 
 #: nova/models/AgentConfig.py:28
 msgid "Is tool"
-msgstr "Is tool"
+msgstr ""
 
 #: nova/models/AgentConfig.py:29
 msgid "If true, this agent can be used as a tool by other agents."
-msgstr "If true, this agent can be used as a tool by other agents."
+msgstr ""
 
 #: nova/models/AgentConfig.py:38 user_settings/forms.py:117
 msgid "Agents to use as tools"
-msgstr "Agents to use as tools"
+msgstr ""
 
 #: nova/models/AgentConfig.py:46
 msgid "Tool description"
-msgstr "Tool description"
+msgstr ""
 
 #: nova/models/AgentConfig.py:47
 msgid ""
 "Description of this agent when used as a tool (required if is_tool=True)"
 msgstr ""
-"Description of this agent when used as a tool (required if is_tool=True)"
 
-#: nova/models/AgentConfig.py:64
+#: nova/models/AgentConfig.py:93
 msgid "Tool description is required when 'is_tool' is True."
-msgstr "Tool description is required when 'is_tool' is True."
+msgstr ""
 
-#: nova/models/AgentConfig.py:73
+#: nova/models/AgentConfig.py:102
 msgid "Found a cyclic dependency between agents."
-msgstr "Found a cyclic dependency between agents."
+msgstr ""
 
 #: nova/models/Interaction.py:8 nova/models/Task.py:13
 msgid "Pending"
-msgstr "Pending"
+msgstr ""
 
 #: nova/models/Interaction.py:9
 msgid "Answered"
-msgstr "Answered"
+msgstr ""
 
 #: nova/models/Interaction.py:10
 msgid "Canceled"
-msgstr "Canceled"
+msgstr ""
 
 #: nova/models/Interaction.py:22
 msgid "Task"
-msgstr "Task"
+msgstr ""
 
 #: nova/models/Interaction.py:28 nova/models/Task.py:28
 #: nova/models/WebApp.py:29
 msgid "Thread"
-msgstr "Thread"
+msgstr ""
 
 #: nova/models/Interaction.py:34 nova/models/Task.py:34
 msgid "AgentConfig"
-msgstr "AgentConfig"
+msgstr ""
 
 #: nova/models/Interaction.py:41
 msgid "Origin (display name)"
-msgstr "Origin (display name)"
+msgstr ""
 
 #: nova/models/Interaction.py:44
 msgid "Question to user"
-msgstr "Question to user"
+msgstr ""
 
 #: nova/models/Interaction.py:45
 msgid "User answer"
-msgstr "User answer"
+msgstr ""
 
 #: nova/models/Interaction.py:71
 msgid "Interaction"
-msgstr "Interaction"
+msgstr ""
 
 #: nova/models/Interaction.py:72
 msgid "Interactions"
-msgstr "Interactions"
+msgstr ""
 
 #: nova/models/Interaction.py:81
 msgid "Interaction thread must match task thread."
-msgstr "Interaction thread must match task thread."
+msgstr ""
 
 #: nova/models/Interaction.py:89
 msgid "There is already a pending interaction for this task."
-msgstr "There is already a pending interaction for this task."
+msgstr ""
 
-#: nova/models/Message.py:9
+#: nova/models/Memory.py:36
+msgid "preference"
+msgstr ""
+
+#: nova/models/Memory.py:37
+msgid "fact"
+msgstr ""
+
+#: nova/models/Memory.py:38
+msgid "instruction"
+msgstr ""
+
+#: nova/models/Memory.py:39
+msgid "summary"
+msgstr ""
+
+#: nova/models/Memory.py:40
+msgid "other"
+msgstr ""
+
+#: nova/models/Memory.py:44
+msgid "active"
+msgstr ""
+
+#: nova/models/Memory.py:45
+msgid "archived"
+msgstr ""
+
+#: nova/models/Memory.py:107
+msgid "pending"
+msgstr ""
+
+#: nova/models/Memory.py:108
+msgid "ready"
+msgstr ""
+
+#: nova/models/Memory.py:109
+msgid "error"
+msgstr ""
+
+#: nova/models/Message.py:9 nova/models/ScheduledTask.py:16
 msgid "User"
-msgstr "User"
+msgstr ""
 
-#: nova/models/Message.py:10
+#: nova/models/Message.py:10 nova/models/ScheduledTask.py:22
+#: user_settings/templates/user_settings/scheduled_tasks.html:27
+#: user_settings/templates/user_settings/scheduled_tasks.html:63
 msgid "Agent"
-msgstr "Agent"
+msgstr ""
 
 #: nova/models/Message.py:11
 msgid "System"
-msgstr "System"
+msgstr ""
 
 #: nova/models/Message.py:15
 msgid "Standard message"
-msgstr "Standard message"
+msgstr ""
 
 #: nova/models/Message.py:16
 msgid "Agent question to user"
-msgstr "Agent question to user"
+msgstr ""
 
 #: nova/models/Message.py:17
 msgid "User answer to agent question"
-msgstr "User answer to agent question"
+msgstr ""
 
 #: nova/models/Message.py:24
 msgid "User messages"
-msgstr "User messages"
+msgstr ""
 
 #: nova/models/Message.py:37
 msgid "Message type"
-msgstr "Message type"
+msgstr ""
 
 #: nova/models/Message.py:45
 msgid "Related interaction"
-msgstr "Related interaction"
+msgstr ""
 
 #: nova/models/Provider.py:42
-#, fuzzy
-#| msgid ""
-#| "Maximum tokens for this provider's context window (e.g., 4096 for small "
-#| "models, 100000 or more for large)."
 msgid ""
 "Maximum tokens for this provider's context window\n"
 "                       (e.g., 4096 for small models, 100000 or more for "
 "large)."
 msgstr ""
-"Maximum tokens for this provider's context window (e.g., 4096 for small "
-"models, 100000 or more for large)."
 
 #: nova/models/Provider.py:53
 msgid "LLM providers"
-msgstr "LLM providers"
+msgstr ""
 
 #: nova/models/Provider.py:66 user_settings/forms.py:98
 msgid "Max context tokens must be at least 512."
-msgstr "Max context tokens must be at least 512."
+msgstr ""
+
+#: nova/models/ScheduledTask.py:24
+msgid "Task name"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:26
+msgid "Cron expression"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:27
+msgid "Timezone"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:28
+msgid "Keep thread after execution"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:29
+msgid "Is active"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:30
+msgid "Last error"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:31
+msgid "Last run at"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:37
+msgid "Scheduled task"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:38
+msgid "Scheduled tasks"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:48
+msgid "Invalid cron expression"
+msgstr ""
+
+#: nova/models/ScheduledTask.py:56
+#, python-format
+msgid "Invalid cron expression: %(error)s"
+msgstr ""
 
 #: nova/models/Task.py:14
 msgid "Running"
-msgstr "Running"
+msgstr ""
 
 #: nova/models/Task.py:15
 msgid "Awaiting user input"
-msgstr "Awaiting user input"
+msgstr ""
 
 #: nova/models/Task.py:16
 msgid "Completed"
-msgstr "Completed"
+msgstr ""
 
 #: nova/models/Task.py:17
 msgid "Failed"
-msgstr "Failed"
+msgstr ""
 
 #: nova/models/Task.py:24
 msgid "User tasks"
-msgstr "User tasks"
+msgstr ""
 
 #: nova/models/Thread.py:14
 msgid "User threads"
-msgstr "User threads"
+msgstr ""
 
 #: nova/models/Thread.py:25
 msgid "Invalid actor: {}"
-msgstr "Invalid actor: {}"
+msgstr ""
 
 #: nova/models/Tool.py:22
 msgid "Builtin"
-msgstr "Builtin"
+msgstr ""
 
 #: nova/models/Tool.py:23
 msgid "API HTTP/REST"
-msgstr "API HTTP/REST"
+msgstr ""
 
 #: nova/models/Tool.py:24
 msgid "MCP Server"
-msgstr "MCP Server"
+msgstr ""
 
 #: nova/models/Tool.py:27
 msgid "Streamable HTTP (Default)"
-msgstr "Streamable HTTP (Default)"
+msgstr ""
 
 #: nova/models/Tool.py:28
 msgid "SSE (Legacy)"
-msgstr "SSE (Legacy)"
+msgstr ""
 
 #: nova/models/Tool.py:63
 msgid "Transport method for MCP servers"
-msgstr "Transport method for MCP servers"
+msgstr ""
 
 #: nova/models/Tool.py:75
 msgid "Available functions for this tool, if any."
-msgstr "Available functions for this tool, if any."
+msgstr ""
 
 #: nova/models/Tool.py:88
 msgid "A BUILTIN tool must select a subtype."
-msgstr "A BUILTIN tool must select a subtype."
+msgstr ""
 
 #: nova/models/Tool.py:92
 #, python-format
 msgid "Invalid builtin subtype: %s"
-msgstr "Invalid builtin subtype: %s"
+msgstr ""
 
 #: nova/models/Tool.py:99
 msgid "Endpoint is mandatory for API or MCP tools."
-msgstr "Endpoint is mandatory for API or MCP tools."
+msgstr ""
 
 #: nova/models/Tool.py:115
 msgid "Tool credentials"
-msgstr "Tool credentials"
+msgstr ""
 
 #: nova/models/Tool.py:119
 msgid "Credentials"
-msgstr "Credentials"
+msgstr ""
 
 #: nova/models/Tool.py:124
 msgid "No Authentication"
-msgstr "No Authentication"
+msgstr ""
 
 #: nova/models/Tool.py:125
 msgid "Basic Auth"
-msgstr "Basic Auth"
+msgstr ""
 
 #: nova/models/Tool.py:126
 msgid "Token Auth"
-msgstr "Token Auth"
+msgstr ""
 
 #: nova/models/Tool.py:127
 msgid "OAuth"
-msgstr "OAuth"
+msgstr ""
 
 #: nova/models/Tool.py:128
 msgid "API Key"
-msgstr "API Key"
+msgstr ""
 
 #: nova/models/Tool.py:129
 msgid "Custom"
-msgstr "Custom"
+msgstr ""
 
 #: nova/models/Tool.py:160
 msgid "{}'s credentials for {}"
-msgstr "{}'s credentials for {}"
+msgstr ""
 
 #: nova/models/UserObjects.py:21
 msgid "User information stored in Markdown format"
-msgstr "User information stored in Markdown format"
+msgstr ""
 
 #: nova/models/UserObjects.py:27 nova/models/UserObjects.py:28
 msgid "User Information"
-msgstr "User Information"
+msgstr ""
 
 #: nova/models/UserObjects.py:37
 msgid "Markdown content should start with a heading (#)."
-msgstr "Markdown content should start with a heading (#)."
+msgstr ""
 
 #: nova/models/UserObjects.py:41
 msgid ""
 "The 'global_user_preferences' theme cannot be deleted as it is required."
 msgstr ""
-"The 'global_user_preferences' theme cannot be deleted as it is required."
 
 #: nova/models/UserObjects.py:45
 msgid "Content exceeds maximum size of 50,000 characters."
-msgstr "Content exceeds maximum size of 50,000 characters."
+msgstr ""
 
-#: nova/models/UserObjects.py:84
+#: nova/models/UserObjects.py:75
+msgid "Enable semantic (embedding) search for long-term memory"
+msgstr ""
+
+#: nova/models/UserObjects.py:81
+msgid "Embeddings endpoint URL (OpenAI-compatible /v1 recommended)"
+msgstr ""
+
+#: nova/models/UserObjects.py:87
+msgid "Embeddings model name"
+msgstr ""
+
+#: nova/models/UserObjects.py:93
+msgid "API key for the embeddings endpoint (optional)"
+msgstr ""
+
+#: nova/models/UserObjects.py:111
 msgid "Whether user has generated an API token"
-msgstr "Whether user has generated an API token"
+msgstr ""
 
-#: nova/models/UserObjects.py:101
+#: nova/models/UserObjects.py:128
 msgid "Default agent must be a normal agent."
-msgstr "Default agent must be a normal agent."
+msgstr ""
 
-#: nova/models/UserObjects.py:104
+#: nova/models/UserObjects.py:131
 msgid "Default agent must belong to the user."
-msgstr "Default agent must belong to the user."
+msgstr ""
 
 #: nova/models/WebApp.py:23
 msgid "User webapps"
-msgstr "User webapps"
+msgstr ""
 
 #: nova/models/WebApp.py:36 nova/models/WebAppFile.py:44
 msgid "Web application"
-msgstr "Web application"
+msgstr ""
 
 #: nova/models/WebApp.py:37
 msgid "Web applications"
-msgstr "Web applications"
+msgstr ""
 
 #: nova/models/WebApp.py:47
 msgid "WebApp user must match Thread owner."
-msgstr "WebApp user must match Thread owner."
+msgstr ""
 
 #: nova/models/WebAppFile.py:17
 msgid ""
 "Invalid file path. Only letters, digits, dots, underscores and hyphens are "
 "allowed (max 120)."
 msgstr ""
-"Invalid file path. Only letters, digits, dots, underscores and hyphens are "
-"allowed (max 120)."
 
 #: nova/models/WebAppFile.py:21
 msgid "Path must be a single filename without directories."
-msgstr "Path must be a single filename without directories."
+msgstr ""
 
 #: nova/models/WebAppFile.py:24
 msgid "Invalid file extension. Allowed: .html, .css, .js"
-msgstr "Invalid file extension. Allowed: .html, .css, .js"
+msgstr ""
 
 #: nova/models/WebAppFile.py:26
 msgid "Hidden files are not allowed."
-msgstr "Hidden files are not allowed."
+msgstr ""
 
 #: nova/models/WebAppFile.py:32
 #, python-brace-format
 msgid "File is too large: {size} bytes. Max {_MAX_BYTES_PER_FILE} bytes."
-msgstr "File is too large: {size} bytes. Max {_MAX_BYTES_PER_FILE} bytes."
+msgstr ""
 
 #: nova/models/WebAppFile.py:48
 msgid "Path (filename)"
-msgstr "Path (filename)"
+msgstr ""
 
 #: nova/models/WebAppFile.py:49
 msgid "Example: index.html, styles.css, app.js"
-msgstr "Example: index.html, styles.css, app.js"
+msgstr ""
 
 #: nova/models/WebAppFile.py:52
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:35
 msgid "Content"
-msgstr "Content"
+msgstr ""
 
 #: nova/models/WebAppFile.py:53
 msgid "File content (UTF-8). Max 200 KB per file."
-msgstr "File content (UTF-8). Max 200 KB per file."
+msgstr ""
 
 #: nova/models/WebAppFile.py:57
 msgid "Web application file"
-msgstr "Web application file"
+msgstr ""
 
 #: nova/models/WebAppFile.py:58
 msgid "Web application files"
-msgstr "Web application files"
+msgstr ""
 
 #: nova/templates/base.html:8
 msgid "Nova Application"
-msgstr "Nova Application"
+msgstr ""
 
-#: nova/templates/base.html:52
-msgid "Settings"
-msgstr "Settings"
+#: nova/templates/base.html:56 nova/templates/nova/index.html:11
+#: nova/templates/nova/index.html:53
+msgid "Threads"
+msgstr ""
 
-#: nova/templates/base.html:58
-msgid "Admin"
-msgstr "Admin"
+#: nova/templates/base.html:70 nova/templates/nova/files/sidebar_panel.html:8
+#: nova/templates/nova/index.html:99
+msgid "Files"
+msgstr ""
 
-#: nova/templates/base.html:67
-msgid "Logout"
-msgstr "Logout"
-
-#: nova/templates/includes/messages.html:14
+#: nova/templates/includes/messages.html:15 nova/templates/nova/index.html:167
 #: user_settings/templates/user_settings/provider_list.html:17
 #: user_settings/templates/user_settings/tool_configure.html:42
 #: user_settings/templates/user_settings/tool_configure.html:46
 msgid "Close"
-msgstr "Close"
+msgstr ""
 
-#: nova/templates/nova/files/sidebar_panel.html:8
-#: nova/templates/nova/index.html:16 nova/templates/nova/index.html:105
-msgid "Files"
-msgstr "Files"
+#: nova/templates/includes/user_menu_items.html:5
+msgid "Settings"
+msgstr ""
+
+#: nova/templates/includes/user_menu_items.html:10
+#: user_settings/templates/user_settings/scheduled_tasks.html:4
+#: user_settings/templates/user_settings/scheduled_tasks.html:9
+msgid "Scheduled Tasks"
+msgstr ""
+
+#: nova/templates/includes/user_menu_items.html:16
+msgid "Admin"
+msgstr ""
+
+#: nova/templates/includes/user_menu_items.html:25
+msgid "Logout"
+msgstr ""
 
 #: nova/templates/nova/files/sidebar_panel.html:13
-#: nova/templates/nova/index.html:110
+#: nova/templates/nova/index.html:113
 msgid "Webapps"
-msgstr "Webapps"
+msgstr ""
 
-#: nova/templates/nova/files/sidebar_panel.html:20
-#: nova/templates/nova/files/sidebar_panel.html:22
-#: nova/templates/nova/index.html:117 nova/templates/nova/index.html:119
+#: nova/templates/nova/files/sidebar_panel.html:24
+#: nova/templates/nova/files/sidebar_panel.html:26
+#: nova/templates/nova/index.html:120 nova/templates/nova/index.html:122
 msgid "Upload files"
-msgstr "Upload files"
+msgstr ""
 
-#: nova/templates/nova/files/sidebar_panel.html:25
-#: nova/templates/nova/index.html:122
+#: nova/templates/nova/files/sidebar_panel.html:29
+#: nova/templates/nova/index.html:125
 msgid "Upload directory"
-msgstr "Upload directory"
+msgstr ""
 
-#: nova/templates/nova/files/sidebar_panel.html:35
+#: nova/templates/nova/files/sidebar_panel.html:36
 msgid "Loading files..."
-msgstr "Loading files..."
+msgstr ""
 
-#: nova/templates/nova/files/sidebar_panel.html:40
-#: nova/templates/nova/index.html:136
+#: nova/templates/nova/files/sidebar_panel.html:43
+#: nova/templates/nova/index.html:155
 msgid "Loading webapps..."
-msgstr "Loading webapps..."
+msgstr ""
 
 #: nova/templates/nova/files/webapps_list.html:12
 msgid "Updated"
-msgstr "Updated"
+msgstr ""
 
 #: nova/templates/nova/files/webapps_list.html:15
-#: user_settings/templates/user_settings/fragments/agent_table.html:24
+#: user_settings/templates/user_settings/fragments/agent_table.html:44
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Actions"
-msgstr "Actions"
+msgstr ""
 
 #: nova/templates/nova/files/webapps_list.html:21
 #: nova/templates/nova/files/webapps_list.html:22
 msgid "Preview side-by-side"
-msgstr "Preview side-by-side"
+msgstr ""
 
 #: nova/templates/nova/files/webapps_list.html:25
 #: nova/templates/nova/preview.html:44
 msgid "Open in new tab"
-msgstr "Open in new tab"
+msgstr ""
 
 #: nova/templates/nova/files/webapps_list.html:33
 msgid "No webapps yet for this thread."
-msgstr "No webapps yet for this thread."
+msgstr ""
 
-#: nova/templates/nova/index.html:11 nova/templates/nova/index.html:26
-#: nova/templates/nova/index.html:68
-msgid "Threads"
-msgstr "Threads"
-
-#: nova/templates/nova/index.html:13 nova/templates/nova/index.html:50
-msgid "Messages"
-msgstr "Messages"
-
-#: nova/templates/nova/index.html:40 nova/templates/nova/index.html:86
+#: nova/templates/nova/index.html:25 nova/templates/nova/index.html:71
 msgid "Load More"
-msgstr "Load More"
+msgstr ""
 
-#: nova/templates/nova/index.html:97
+#: nova/templates/nova/index.html:35
+msgid "Messages"
+msgstr ""
+
+#: nova/templates/nova/index.html:82
 msgid "Files & Webapps"
-msgstr "Files & Webapps"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:66
-#, fuzzy, python-format
-#| msgid ""
-#| "\n"
-#| "                %(file_count)s file was shared with this message.\n"
-#| "              "
-#| msgid_plural ""
-#| "\n"
-#| "                %(file_count)s files were shared with this message.\n"
-#| "              "
+#: nova/templates/nova/index.html:166
+msgid "Message Options"
+msgstr ""
+
+#: nova/templates/nova/index.html:172
+msgid "Context"
+msgstr ""
+
+#: nova/templates/nova/index.html:180
+msgid "Copy message"
+msgstr ""
+
+#: nova/templates/nova/index.html:184
+msgid "Regenerate response"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:61
+#, python-format
 msgid ""
 "\n"
 "                  %(file_count)s file was shared with this message.\n"
@@ -479,741 +607,1174 @@ msgid_plural ""
 "                  %(file_count)s files were shared with this message.\n"
 "                "
 msgstr[0] ""
-"\n"
-"                %(file_count)s file was shared with this message.\n"
-"              "
 msgstr[1] ""
-"\n"
-"                %(file_count)s files were shared with this message.\n"
-"              "
 
-#: nova/templates/nova/message_container.html:86
-msgid "Show summary details"
-msgstr "Show summary details"
+#: nova/templates/nova/message_container.html:79
+msgid "Summarize conversation to save context space"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:109
-#: nova/templates/nova/message_container.html:111
-#: nova/templates/nova/message_container.html:113
+#: nova/templates/nova/message_container.html:80
+msgid "Compact"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:85
+#: nova/templates/nova/message_container.html:87
+#: nova/templates/nova/message_container.html:89
 msgid "Context consumption"
-msgstr "Context consumption"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:109
+#: nova/templates/nova/message_container.html:85
 msgid "real"
-msgstr "real"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:111
-#: nova/templates/nova/message_container.html:113
+#: nova/templates/nova/message_container.html:87
+#: nova/templates/nova/message_container.html:89
 msgid "approximated"
-msgstr "approximated"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:116
+msgid "Type your answer..."
+msgstr ""
+
+#: nova/templates/nova/message_container.html:118
+msgid "Answer format may be structured; plain text is also accepted."
+msgstr ""
 
 #: nova/templates/nova/message_container.html:122
-msgid "Compact"
-msgstr "Compact"
+msgid "Answer the question"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:149
-msgid "Type your answer..."
-msgstr "Type your answer..."
-
-#: nova/templates/nova/message_container.html:151
-msgid "Answer format may be structured; plain text is also accepted."
-msgstr "Answer format may be structured; plain text is also accepted."
-
-#: nova/templates/nova/message_container.html:156
+#: nova/templates/nova/message_container.html:123
 msgid "Answer"
-msgstr "Answer"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:159
+#: nova/templates/nova/message_container.html:125
+msgid "Cancel the question"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:126
 #: user_settings/templates/user_settings/agent_confirm_delete.html:23
 #: user_settings/templates/user_settings/agent_confirm_delete.html:27
-#: user_settings/templates/user_settings/agent_form.html:28
-#: user_settings/templates/user_settings/agent_form.html:32
+#: user_settings/templates/user_settings/agent_form.html:43
+#: user_settings/templates/user_settings/agent_form.html:47
+#: user_settings/templates/user_settings/fragments/memory_form.html:47
 #: user_settings/templates/user_settings/provider_confirm_delete.html:21
 #: user_settings/templates/user_settings/provider_form.html:32
 #: user_settings/templates/user_settings/provider_form.html:36
+#: user_settings/templates/user_settings/scheduled_task_confirm_delete.html:24
+#: user_settings/templates/user_settings/scheduled_task_form.html:91
 #: user_settings/templates/user_settings/tool_confirm_delete.html:23
 #: user_settings/templates/user_settings/tool_confirm_delete.html:27
 #: user_settings/templates/user_settings/tool_form.html:28
 #: user_settings/templates/user_settings/tool_form.html:32
 msgid "Cancel"
-msgstr "Cancel"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:175
+#: nova/templates/nova/message_container.html:142
 msgid "Working..."
-msgstr "Working..."
+msgstr ""
 
-#: nova/templates/nova/message_container.html:187
+#: nova/templates/nova/message_container.html:154
 msgid "No agents configured yet."
-msgstr "No agents configured yet."
+msgstr ""
 
-#: nova/templates/nova/message_container.html:189
+#: nova/templates/nova/message_container.html:156
 msgid "Create one now"
-msgstr "Create one now"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:213
+#: nova/templates/nova/message_container.html:180
+#: nova/templates/nova/message_container.html:181
 msgid "Select an agent"
-msgstr "Select an agent"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:228
+#: nova/templates/nova/message_container.html:196
 msgid "No agents available"
-msgstr "No agents available"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:214
+msgid "Type your message..."
+msgstr ""
+
+#: nova/templates/nova/message_container.html:222
+#: nova/templates/nova/message_container.html:225
+msgid "Voice input"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:234
+msgid "Send"
+msgstr ""
 
 #: nova/templates/nova/message_container.html:246
-msgid "Type your message..."
-msgstr "Type your message..."
+msgid "Sub-agent summarization"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:254
-#: nova/templates/nova/message_container.html:257
-msgid "Voice input"
-msgstr "Voice input"
+#: nova/templates/nova/message_container.html:250
+msgid "Sub-agents have accumulated context in this conversation:"
+msgstr ""
 
-#: nova/templates/nova/message_container.html:266
-msgid "Send"
-msgstr "Send"
+#: nova/templates/nova/message_container.html:252
+msgid "Do you want to optimize their context as well?"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:256
+msgid "No, only main agent"
+msgstr ""
+
+#: nova/templates/nova/message_container.html:259
+msgid "Yes, optimize all"
+msgstr ""
 
 #: nova/templates/nova/partials/_thread_groups.html:7
 msgid "Today"
-msgstr "Today"
+msgstr ""
 
 #: nova/templates/nova/partials/_thread_groups.html:9
 msgid "Yesterday"
-msgstr "Yesterday"
+msgstr ""
 
 #: nova/templates/nova/partials/_thread_groups.html:11
 msgid "Last Week"
-msgstr "Last Week"
+msgstr ""
 
 #: nova/templates/nova/partials/_thread_groups.html:13
 msgid "Last Month"
-msgstr "Last Month"
+msgstr ""
 
 #: nova/templates/nova/partials/_thread_groups.html:15
 msgid "Older"
-msgstr "Older"
+msgstr ""
 
-#: nova/templates/nova/partials/_thread_item.html:12
+#: nova/templates/nova/partials/_thread_item.html:10
+msgid "Delete thread"
+msgstr ""
+
+#: nova/templates/nova/partials/_thread_item.html:13
 msgid "Delete Thread"
-msgstr "Delete Thread"
+msgstr ""
 
 #: nova/templates/nova/preview.html:15 nova/templates/nova/preview.html:16
 #: nova/templates/nova/preview.html:62
 msgid "Close preview"
-msgstr "Close preview"
+msgstr ""
 
 #: nova/templates/nova/preview.html:20
 msgid "Conversation and Preview Split"
-msgstr "Conversation and Preview Split"
+msgstr ""
 
 #: nova/templates/nova/preview.html:22
 msgid "Chat pane"
-msgstr "Chat pane"
+msgstr ""
 
 #: nova/templates/nova/preview.html:31
 msgid "Resize preview"
-msgstr "Resize preview"
+msgstr ""
 
 #: nova/templates/nova/preview.html:38
 msgid "Webapp preview"
-msgstr "Webapp preview"
+msgstr ""
 
 #: nova/templates/nova/preview.html:41
 msgid "Refresh preview"
-msgstr "Refresh preview"
+msgstr ""
 
 #: nova/templates/nova/preview.html:46
 msgid "Open"
-msgstr "Open"
+msgstr ""
 
 #: nova/templates/nova/preview.html:56
 msgid "Toggle chat"
-msgstr "Toggle chat"
+msgstr ""
 
 #: nova/templates/nova/preview.html:58
 msgid "Chat"
-msgstr "Chat"
+msgstr ""
 
 #: nova/templates/nova/preview.html:69
 msgid "Loading"
-msgstr "Loading"
+msgstr ""
 
 #: nova/templates/registration/login.html:9
 #: nova/templates/registration/login.html:67
 msgid "Login"
-msgstr "Login"
+msgstr ""
 
 #: nova/templates/registration/login.html:13
 msgid "Your username and password didn't match. Please try again."
-msgstr "Your username and password didn't match. Please try again."
+msgstr ""
 
 #: nova/templates/registration/login.html:20
 msgid ""
 "Your account doesn't have access to this page. To proceed, please login with "
 "an account that has access."
 msgstr ""
-"Your account doesn't have access to this page. To proceed, please login with "
-"an account that has access."
 
 #: nova/templates/registration/login.html:24
 msgid "Please login to see this page."
-msgstr "Please login to see this page."
+msgstr ""
 
 #: nova/templates/registration/login.html:76
 msgid "Lost password?"
-msgstr "Lost password?"
+msgstr ""
 
 #: nova/tools/__init__.py:57
 msgid "Invalid python_path: Must be under 'nova.tools.builtins.'."
-msgstr "Invalid python_path: Must be under 'nova.tools.builtins.'."
+msgstr ""
 
 #: nova/tools/__init__.py:63
 #, python-format
 msgid "Could not import module: %s"
-msgstr "Could not import module: %s"
+msgstr ""
 
-#: nova/tools/agent_tool_wrapper.py:71
+#: nova/tools/agent_tool_wrapper.py:62
+#, python-format
+msgid "Error in sub-agent %(name)s: %(error)s"
+msgstr ""
+
+#: nova/tools/agent_tool_wrapper.py:66
+msgid " Check connections or config."
+msgstr ""
+
+#: nova/tools/agent_tool_wrapper.py:76
 #, python-format
 msgid "Question or instruction sent to the agent %(name)s"
-msgstr "Question or instruction sent to the agent %(name)s"
+msgstr ""
 
-#: nova/tools/builtins/ask_user.py:66
+#: nova/tools/builtins/ask_user.py:72
 msgid ""
 "Ask the end-user a clarification question and pause execution. Use when "
 "additional information is required to proceed."
 msgstr ""
-"Ask the end-user a clarification question and pause execution. Use when "
-"additional information is required to proceed."
 
-#: nova/tools/builtins/caldav.py:31
+#: nova/tools/builtins/caldav.py:30
 msgid "Incomplete CalDav configuration: missing URL, username, or password"
-msgstr "Incomplete CalDav configuration: missing URL, username, or password"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:50
+#: nova/tools/builtins/caldav.py:49
 #, python-brace-format
 msgid "No CalDav credential found for tool {tool_id}"
-msgstr "No CalDav credential found for tool {tool_id}"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:71 nova/tools/builtins/caldav.py:162
-#: nova/tools/builtins/caldav.py:212 nova/tools/builtins/caldav.py:242
+#: nova/tools/builtins/caldav.py:69 nova/tools/builtins/caldav.py:149
+#: nova/tools/builtins/caldav.py:194 nova/tools/builtins/caldav.py:219
 msgid "No calendars available."
-msgstr "No calendars available."
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:73
+#: nova/tools/builtins/caldav.py:71
 msgid "Available calendars :\n"
-msgstr "Available calendars :\n"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:80
-#, python-brace-format
-msgid "CalDav error: {error}. Check credentials and server URL."
-msgstr "CalDav error: {error}. Check credentials and server URL."
-
-#: nova/tools/builtins/caldav.py:82
-#, python-brace-format
-msgid "Unexpected error when retrieving calendars: {error}"
-msgstr "Unexpected error when retrieving calendars: {error}"
-
-#: nova/tools/builtins/caldav.py:134 nova/tools/builtins/caldav.py:185
-msgid "Error when retrieving events : {}"
-msgstr "Error when retrieving events : {}"
-
-#: nova/tools/builtins/caldav.py:157 nova/tools/builtins/caldav.py:207
+#: nova/tools/builtins/caldav.py:144 nova/tools/builtins/caldav.py:189
 #, python-brace-format
 msgid "Calendar '{calendar_name}' not found."
-msgstr "Calendar '{calendar_name}' not found."
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:181
+#: nova/tools/builtins/caldav.py:168
 msgid "No events found"
-msgstr "No events found"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:218
+#: nova/tools/builtins/caldav.py:200
 msgid "Event not found."
-msgstr "Event not found."
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:221
-msgid "Error when retrieving event's details : {}"
-msgstr "Error when retrieving event's details : {}"
-
-#: nova/tools/builtins/caldav.py:258 nova/tools/builtins/caldav.py:263
+#: nova/tools/builtins/caldav.py:235
 msgid "Error when searching events : {}"
-msgstr "Error when searching events : {}"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:277
+#: nova/tools/builtins/caldav.py:249
 msgid "No calendars found"
-msgstr "No calendars found"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:282
+#: nova/tools/builtins/caldav.py:254
 #, python-format
 msgid "%(count)d calendar found"
 msgid_plural "%(count)d calendars found"
-msgstr[0] "%(count)d calendar found"
-msgstr[1] "%(count)d calendars found"
+msgstr[0] ""
+msgstr[1] ""
 
-#: nova/tools/builtins/caldav.py:290
-#, python-format
-msgid "Connection error: %(err)s"
-msgstr "Connection error: %(err)s"
-
-#: nova/tools/builtins/caldav.py:299
+#: nova/tools/builtins/caldav.py:266
 msgid "URL CalDav"
-msgstr "URL CalDav"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:300
+#: nova/tools/builtins/caldav.py:267 nova/tools/builtins/email.py:636
 msgid "Username"
-msgstr "Username"
+msgstr ""
 
-#: nova/tools/builtins/caldav.py:301
+#: nova/tools/builtins/caldav.py:268 nova/tools/builtins/email.py:637
 msgid "Password"
-msgstr "Password"
+msgstr ""
 
 #: nova/tools/builtins/code_execution.py:24
 msgid "Judge0 Server URL"
-msgstr "Judge0 Server URL"
+msgstr ""
 
 #: nova/tools/builtins/code_execution.py:25
 msgid "Judge0 API Key (optional)"
-msgstr "Judge0 API Key (optional)"
+msgstr ""
 
 #: nova/tools/builtins/code_execution.py:26
 msgid "Default execution timeout (seconds)"
-msgstr "Default execution timeout (seconds)"
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:43
+#: nova/tools/builtins/code_execution.py:42
 #, python-brace-format
 msgid "{count} supported languages found"
-msgstr "{count} supported languages found"
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:48
+#: nova/tools/builtins/code_execution.py:47
 msgid "No languages found - check server configuration"
-msgstr "No languages found - check server configuration"
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:53
-#, python-brace-format
-msgid "Connection error: {err}"
-msgstr "Connection error: {err}"
-
-#: nova/tools/builtins/code_execution.py:66
-#: nova/tools/builtins/code_execution.py:83
+#: nova/tools/builtins/code_execution.py:60
+#: nova/tools/builtins/code_execution.py:77
 msgid "No credential configured for this Code Execution tool."
-msgstr "No credential configured for this Code Execution tool."
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:70
-msgid "Field judge0_url is missing from the configuration."
-msgstr "Field judge0_url is missing from the configuration."
+#: nova/tools/builtins/code_execution.py:64
+msgid "Field ‘judge0_url’ is missing from the configuration."
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:125
+#: nova/tools/builtins/code_execution.py:118
 msgid "No languages available."
-msgstr "No languages available."
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:130
-#, python-brace-format
-msgid "Error listing languages: {error}"
-msgstr "Error listing languages: {error}"
-
-#: nova/tools/builtins/code_execution.py:143
+#: nova/tools/builtins/code_execution.py:133
 msgid "No languages available. Please check server configuration."
-msgstr "No languages available. Please check server configuration."
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:150
+#: nova/tools/builtins/code_execution.py:140
 #, python-brace-format
 msgid ""
 "Language '{lang}' not found.            Use list_supported_languages to see "
 "available options."
 msgstr ""
-"Language '{lang}' not found.            Use list_supported_languages to see "
-"available options."
 
-#: nova/tools/builtins/code_execution.py:169
-#, python-brace-format
-msgid "Error getting status: {error}"
-msgstr "Error getting status: {error}"
-
-#: nova/tools/builtins/code_execution.py:193
+#: nova/tools/builtins/code_execution.py:178
 msgid "Compilation timeout"
-msgstr "Compilation timeout"
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:198
-#, python-brace-format
-msgid "Error compiling code: {error}"
-msgstr "Error compiling code: {error}"
+#: nova/tools/builtins/email.py:33
+msgid "Incomplete IMAP configuration: missing server, username, or password"
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:226
+#: nova/tools/builtins/email.py:44
 #, python-brace-format
-msgid "Error executing code: {error}"
-msgstr "Error executing code: {error}"
+msgid "No IMAP credential found for tool {tool_id}"
+msgstr ""
 
-#: nova/tools/builtins/code_execution.py:259
+#: nova/tools/builtins/email.py:132
 #, python-brace-format
-msgid "Error running code with inputs: {error}"
-msgstr "Error running code with inputs: {error}"
+msgid "No emails found in {folder}"
+msgstr ""
+
+#: nova/tools/builtins/email.py:141
+#, python-brace-format
+msgid "Recent emails in {folder}:\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:160 nova/tools/builtins/email.py:483
+#: nova/tools/builtins/email.py:501 nova/tools/builtins/email.py:519
+#, python-brace-format
+msgid "Email with ID {id} not found."
+msgstr ""
+
+#: nova/tools/builtins/email.py:168
+msgid "Email body not available."
+msgstr ""
+
+#: nova/tools/builtins/email.py:175
+msgid "Email Details:\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:186
+#, python-brace-format
+msgid "From: {sender}\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:187
+#, python-brace-format
+msgid "To: {to}\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:188
+#, python-brace-format
+msgid "Subject: {subject}\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:189
+#, python-brace-format
+msgid "Date: {date}\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:191
+msgid ""
+"From: [Not available]\n"
+"To: [Not available]\n"
+"Subject: [Not available]\n"
+"Date: [Not available]\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:194
+msgid "Content Preview (first 500 characters):\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:210
+msgid ""
+"\n"
+"\n"
+"[Content truncated. Use preview_only=False to read full email]"
+msgstr ""
+
+#: nova/tools/builtins/email.py:214
+msgid "Full Content:\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:244
+#, python-brace-format
+msgid "No emails found matching '{query}'"
+msgstr ""
+
+#: nova/tools/builtins/email.py:248
+#, python-brace-format
+msgid "Emails matching '{query}':\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:264
+msgid "Available mailboxes:\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:283
+msgid "Server capabilities:\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:288
+msgid ""
+"\n"
+"Derived features:\n"
+msgstr ""
+
+#: nova/tools/builtins/email.py:310
+msgid ""
+"SMTP server not configured. Please add SMTP settings to your email tool "
+"configuration."
+msgstr ""
+
+#: nova/tools/builtins/email.py:375
+#, python-brace-format
+msgid "Email sent successfully to {to}"
+msgstr ""
+
+#: nova/tools/builtins/email.py:378 nova/tools/builtins/email.py:415
+#, python-brace-format
+msgid "No email credential found for tool {tool_id}"
+msgstr ""
+
+#: nova/tools/builtins/email.py:394
+#, python-brace-format
+msgid "Draft folder '{folder}' does not exist."
+msgstr ""
+
+#: nova/tools/builtins/email.py:412
+#, python-brace-format
+msgid "Draft saved successfully in {folder}"
+msgstr ""
+
+#: nova/tools/builtins/email.py:426
+#, python-brace-format
+msgid "Source folder '{folder}' does not exist."
+msgstr ""
+
+#: nova/tools/builtins/email.py:434
+#, python-brace-format
+msgid "Email with ID {id} not found in {folder}."
+msgstr ""
+
+#: nova/tools/builtins/email.py:439
+#, python-brace-format
+msgid "Target folder '{folder}' does not exist."
+msgstr ""
+
+#: nova/tools/builtins/email.py:440
+msgid " Use list_mailboxes() to see available folders."
+msgstr ""
+
+#: nova/tools/builtins/email.py:448 nova/tools/builtins/email.py:464
+#, python-brace-format
+msgid "Email {id} moved from {source} to {target}."
+msgstr ""
+
+#: nova/tools/builtins/email.py:471
+#, python-brace-format
+msgid "Error moving email with fallback method: {error}"
+msgstr ""
+
+#: nova/tools/builtins/email.py:489
+#, python-brace-format
+msgid "Email {id} marked as read."
+msgstr ""
+
+#: nova/tools/builtins/email.py:507
+#, python-brace-format
+msgid "Email {id} marked as unread."
+msgstr ""
+
+#: nova/tools/builtins/email.py:525
+#, python-brace-format
+msgid "Email {id} deleted."
+msgstr ""
+
+#: nova/tools/builtins/email.py:534
+#, python-format
+msgid "IMAP: %(result)s"
+msgstr ""
+
+#: nova/tools/builtins/email.py:574
+msgid "IMAP and SMTP OK, but no sent folder found. Sent emails won't be saved."
+msgstr ""
+
+#: nova/tools/builtins/email.py:580
+msgid "IMAP and SMTP connections successful"
+msgstr ""
+
+#: nova/tools/builtins/email.py:585
+msgid "IMAP: OK, SMTP: Connection failed - check server/port"
+msgstr ""
+
+#: nova/tools/builtins/email.py:590
+msgid "IMAP: OK, SMTP: Authentication failed - check credentials"
+msgstr ""
+
+#: nova/tools/builtins/email.py:595
+#, python-format
+msgid "IMAP: OK, SMTP: %(error)s"
+msgstr ""
+
+#: nova/tools/builtins/email.py:600
+#, python-format
+msgid "IMAP: OK, SMTP: Unexpected error - %(error)s"
+msgstr ""
+
+#: nova/tools/builtins/email.py:605 nova/tools/builtins/email.py:611
+msgid "IMAP connection successful"
+msgstr ""
+
+#: nova/tools/builtins/email.py:621
+msgid "IMAP Server"
+msgstr ""
+
+#: nova/tools/builtins/email.py:622
+msgid "IMAP Port"
+msgstr ""
+
+#: nova/tools/builtins/email.py:624
+msgid "Use SSL for IMAP"
+msgstr ""
+
+#: nova/tools/builtins/email.py:628
+msgid "SMTP Server"
+msgstr ""
+
+#: nova/tools/builtins/email.py:630
+msgid "SMTP Port"
+msgstr ""
+
+#: nova/tools/builtins/email.py:632
+msgid "Use TLS for SMTP"
+msgstr ""
+
+#: nova/tools/builtins/email.py:641
+msgid "Enable email sending (drafts always available)"
+msgstr ""
+
+#: nova/tools/builtins/email.py:643
+msgid "From Address (needed if username is not an email)"
+msgstr ""
+
+#: nova/tools/builtins/email.py:645
+msgid "Sent Folder Name (to move sent emails to)"
+msgstr ""
 
 #: nova/tools/builtins/searxng.py:14
 msgid "URL SearXNG server"
-msgstr "URL SearXNG server"
+msgstr ""
 
 #: nova/tools/builtins/searxng.py:15
 msgid "Max results"
-msgstr "Max results"
+msgstr ""
 
 #: nova/tools/builtins/searxng.py:27
 msgid "This tool is not owned by the current user."
-msgstr "This tool is not owned by the current user."
+msgstr ""
 
 #: nova/tools/builtins/searxng.py:35
 msgid "No credential configured for this SearXNG tool."
-msgstr "No credential configured for this SearXNG tool."
+msgstr ""
 
 #: nova/tools/builtins/searxng.py:39
-msgid "Field searxng_url is missing from the configuration."
-msgstr "Field searxng_url is missing from the configuration."
+msgid "Field ‘searxng_url’ is missing from the configuration."
+msgstr ""
 
 #: nova/utils.py:92
 msgid "Enter a valid URL."
-msgstr "Enter a valid URL."
+msgstr ""
 
-#: user_settings/forms.py:190
+#: user_settings/forms.py:223
 msgid "Required when using an agent as a tool."
-msgstr "Required when using an agent as a tool."
+msgstr ""
 
-#: user_settings/forms.py:209
+#: user_settings/forms.py:242
 msgid "Builtin tool subtype"
-msgstr "Builtin tool subtype"
+msgstr ""
 
-#: user_settings/forms.py:210
+#: user_settings/forms.py:243
 msgid "Select a builtin tool subtype"
-msgstr "Select a builtin tool subtype"
+msgstr ""
 
-#: user_settings/forms.py:217
+#: user_settings/forms.py:250
 msgid "JSON schema describing the tool inputs"
-msgstr "JSON schema describing the tool inputs"
+msgstr ""
 
-#: user_settings/forms.py:224
+#: user_settings/forms.py:257
 msgid "JSON schema describing the tool outputs"
-msgstr "JSON schema describing the tool outputs"
+msgstr ""
 
-#: user_settings/forms.py:311
+#: user_settings/forms.py:344
 msgid "A BUILTIN tool must have a subtype defined."
-msgstr "A BUILTIN tool must have a subtype defined."
-
-#: user_settings/forms.py:330
-msgid "This field is required."
-msgstr "This field is required."
+msgstr ""
 
 #: user_settings/forms.py:363
+msgid "This field is required."
+msgstr ""
+
+#: user_settings/forms.py:396
 msgid "CalDav server URL"
-msgstr "CalDav server URL"
+msgstr ""
 
-#: user_settings/forms.py:465
+#: user_settings/forms.py:478
 msgid "API Token Status"
-msgstr "API Token Status"
+msgstr ""
 
-#: user_settings/forms.py:490
+#: user_settings/forms.py:503
 msgid "Active - Token exists"
-msgstr "Active - Token exists"
+msgstr ""
 
-#: user_settings/forms.py:492 user_settings/forms.py:494
+#: user_settings/forms.py:505 user_settings/forms.py:507
 msgid "No token generated"
-msgstr "No token generated"
+msgstr ""
 
 #: user_settings/mixins.py:44
 msgid "Saved successfully"
-msgstr "Saved successfully"
+msgstr ""
 
 #: user_settings/mixins.py:53
 msgid "Created successfully"
-msgstr "Created successfully"
+msgstr ""
 
 #: user_settings/mixins.py:65
 msgid "Updated successfully"
-msgstr "Updated successfully"
+msgstr ""
 
 #: user_settings/mixins.py:70
 msgid "Deleted successfully"
-msgstr "Deleted successfully"
+msgstr ""
 
-#: user_settings/mixins.py:89 user_settings/views/tool.py:185
+#: user_settings/mixins.py:89 user_settings/views/tool.py:235
 msgid "Secret exists, leave blank to keep"
-msgstr "Secret exists, leave blank to keep"
+msgstr ""
 
 #: user_settings/templates/user_settings/agent_confirm_delete.html:7
 msgid "Delete agent"
-msgstr "Delete agent"
+msgstr ""
 
 #: user_settings/templates/user_settings/agent_confirm_delete.html:10
 #: user_settings/templates/user_settings/provider_confirm_delete.html:10
 #: user_settings/templates/user_settings/tool_confirm_delete.html:10
-#, fuzzy, python-format
-#| msgid ""
-#| "\n"
-#| "      Are you sure you want to delete %(name)s?\n"
-#| "    "
+#, python-format
 msgid ""
 "\n"
-"      Are you sure you want to delete %(name)s?\n"
+"      Are you sure you want to delete “%(name)s”?\n"
 "    "
-msgstr "Are you sure you want to delete %(name)s?"
+msgstr ""
 
 #: user_settings/templates/user_settings/agent_confirm_delete.html:18
 #: user_settings/templates/user_settings/provider_confirm_delete.html:18
 #: user_settings/templates/user_settings/tool_confirm_delete.html:18
 msgid "Yes, delete"
-msgstr "Yes, delete"
+msgstr ""
 
 #: user_settings/templates/user_settings/agent_form.html:13
 msgid "Edit agent"
-msgstr "Edit agent"
+msgstr ""
 
 #: user_settings/templates/user_settings/agent_form.html:13
-#: user_settings/templates/user_settings/fragments/agent_table.html:9
-#: user_settings/templates/user_settings/fragments/agent_table.html:16
+#: user_settings/templates/user_settings/fragments/agent_table.html:21
+#: user_settings/templates/user_settings/fragments/agent_table.html:35
 msgid "Add agent"
-msgstr "Add agent"
+msgstr ""
 
-#: user_settings/templates/user_settings/agent_form.html:23
+#: user_settings/templates/user_settings/agent_form.html:29
+msgid "Summarization Settings"
+msgstr ""
+
+#: user_settings/templates/user_settings/agent_form.html:38
+#: user_settings/templates/user_settings/fragments/memory_form.html:51
 #: user_settings/templates/user_settings/provider_form.html:27
+#: user_settings/templates/user_settings/scheduled_task_form.html:92
 #: user_settings/templates/user_settings/tool_configure.html:36
 #: user_settings/templates/user_settings/tool_form.html:23
 msgid "Save"
-msgstr "Save"
+msgstr ""
 
 #: user_settings/templates/user_settings/agent_list.html:8
 #: user_settings/templates/user_settings/dashboard.html:28
 msgid "Agents"
-msgstr "Agents"
+msgstr ""
+
+#: user_settings/templates/user_settings/agent_list.html:18
+#: user_settings/templates/user_settings/agent_list.html:26
+#: user_settings/templates/user_settings/fragments/agent_table.html:15
+#: user_settings/templates/user_settings/fragments/agent_table.html:28
+msgid "Bootstrap default agents"
+msgstr ""
+
+#: user_settings/templates/user_settings/agent_list.html:25
+#: user_settings/templates/user_settings/fragments/agent_table.html:27
+msgid "Configure at least one LLM provider to enable bootstrap."
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:12
 msgid "User configuration"
-msgstr "User configuration"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:20
 #: user_settings/templates/user_settings/provider_list.html:8
 msgid "LLM Providers"
-msgstr "LLM Providers"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:44
+#: user_settings/views/tool.py:246
 msgid "General"
-msgstr "General"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:53
 msgid "Memory"
-msgstr "Memory"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:67
-msgid "Loading providers"
-msgstr "Loading providers"
+msgid "Loading providers…"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:77
-msgid "Loading agents"
-msgstr "Loading agents"
+msgid "Loading agents…"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:87
-msgid "Loading tools"
-msgstr "Loading tools"
+msgid "Loading tools…"
+msgstr ""
+
+#: user_settings/templates/user_settings/dashboard.html:97
+msgid "Loading…"
+msgstr ""
 
 #: user_settings/templates/user_settings/dashboard.html:108
-msgid "Loading memory"
-msgstr "Loading memory"
+msgid "Loading memory…"
+msgstr ""
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:24
+#: user_settings/templates/user_settings/fragments/agent_table.html:44
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Name"
-msgstr "Name"
-
-#: user_settings/templates/user_settings/fragments/agent_table.html:24
-msgid "Agent as tool"
-msgstr "Agent as a tool"
-
-#: user_settings/templates/user_settings/fragments/agent_table.html:34
-#: user_settings/templates/user_settings/fragments/provider_table.html:25
-#: user_settings/templates/user_settings/fragments/tool_table.html:42
-msgid "Edit"
-msgstr "Edit"
-
-#: user_settings/templates/user_settings/fragments/agent_table.html:40
-msgid "Make default"
-msgstr "Make default"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/agent_table.html:44
+msgid "Agent as tool"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:54
+#: user_settings/templates/user_settings/fragments/provider_table.html:25
+#: user_settings/templates/user_settings/fragments/tool_table.html:42
+#: user_settings/templates/user_settings/scheduled_tasks.html:39
+#: user_settings/templates/user_settings/scheduled_tasks.html:80
+msgid "Edit"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:60
+msgid "Make default"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/agent_table.html:64
 #: user_settings/templates/user_settings/fragments/provider_table.html:29
 #: user_settings/templates/user_settings/fragments/tool_table.html:46
+#: user_settings/templates/user_settings/scheduled_task_confirm_delete.html:25
+#: user_settings/templates/user_settings/scheduled_tasks.html:85
 msgid "Delete"
-msgstr "Delete"
+msgstr ""
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:51
+#: user_settings/templates/user_settings/fragments/agent_table.html:71
 msgid "You need to create an LLM provider first before you can create agents."
-msgstr "You need to create an LLM provider first before you can create agents."
+msgstr ""
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:53
+#: user_settings/templates/user_settings/fragments/agent_table.html:73
 msgid "Go to Providers"
-msgstr "Go to Providers"
+msgstr ""
 
-#: user_settings/templates/user_settings/fragments/agent_table.html:59
+#: user_settings/templates/user_settings/fragments/agent_table.html:79
 msgid "Click on \"Add Agent\" to create your first agent."
-msgstr "Click on \"Add Agent\" to create your first agent."
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:15
 msgid "Langfuse Configuration"
-msgstr "Langfuse configuration"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:28
 msgid "API Token Management"
-msgstr "API Token Management"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:34
 msgid "This will replace any existing token. Continue?"
-msgstr "This will replace any existing token. Continue?"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:35
 msgid "Are you sure you want to delete your API token?"
-msgstr "Are you sure you want to delete your API token?"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:44
 msgid "Generate New Token"
-msgstr "Generate New Token"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:54
 msgid "Delete Token"
-msgstr "Delete Token"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/general_form.html:61
 msgid ""
 "Use your API token to authenticate with the Nova API. The token will only be "
 "displayed once when generated."
 msgstr ""
-"Use your API token to authenticate with the Nova API. The token will only be "
-"displayed once when generated."
 
 #: user_settings/templates/user_settings/fragments/general_form.html:68
 msgid "Save Settings"
-msgstr "Save Settings"
-
-#: user_settings/templates/user_settings/fragments/memory_form.html:12
-msgid "Personal Memory"
-msgstr "Personal Memory"
-
-#: user_settings/templates/user_settings/fragments/memory_form.html:27
-msgid "Info"
-msgstr "Info"
-
-#: user_settings/templates/user_settings/fragments/memory_form.html:27
-msgid "The theme"
-msgstr "The theme"
-
-#: user_settings/templates/user_settings/fragments/memory_form.html:28
-msgid ""
-"is mandatory and cannot be deleted. It contains your essential preferences "
-"that are automatically shared with agents."
 msgstr ""
-"is mandatory and cannot be deleted. It contains your essential preferences "
-"that are automatically shared with agents."
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:11
+msgid "Memory: embeddings settings"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:20
+msgid "Active provider"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/memory_form.html:35
+#, python-format
 msgid ""
-"Maximum 50,000 characters. Use headings (# Theme) to organize your "
-"information."
+"\n"
+"            Changing the embeddings provider/model will trigger a rebuild of "
+"%(count)s embeddings.\n"
+"          "
 msgstr ""
-"Maximum 50,000 characters. Use headings (# Theme) to organize your "
-"information."
 
-#: user_settings/templates/user_settings/fragments/memory_form.html:39
-msgid "Save Memory"
-msgstr "Save Memory"
+#: user_settings/templates/user_settings/fragments/memory_form.html:44
+msgid "Confirm"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:56
+msgid "Test embeddings endpoint"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:64
+msgid "Memory browser"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_form.html:72
+msgid "Loading memory items…"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:5
+msgid "Memory items"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:22
+msgid "Include archived"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:32
+msgid "Created"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:33
+msgid "Theme"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:34
+#: user_settings/templates/user_settings/fragments/provider_table.html:13
+#: user_settings/templates/user_settings/fragments/tool_table.html:14
+msgid "Type"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:36
+msgid "Embedding"
+msgstr ""
+
+#: user_settings/templates/user_settings/fragments/memory_items_table.html:64
+msgid "No memory items."
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/password_change_form.html:6
 #: user_settings/templates/user_settings/fragments/password_change_form.html:27
 msgid "Change Password"
-msgstr "Change Password"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/password_change_form.html:11
 msgid "Password changed successfully!"
-msgstr "Password changed successfully!"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/password_change_form.html:12
 msgid ""
 "Your password has been updated. You are still logged in and can continue "
 "using the application."
 msgstr ""
-"Your password has been updated. You are still logged in and can continue "
-"using the application."
 
 #: user_settings/templates/user_settings/fragments/provider_table.html:7
 #: user_settings/templates/user_settings/provider_form.html:16
 msgid "Add provider"
-msgstr "Add provider"
-
-#: user_settings/templates/user_settings/fragments/provider_table.html:13
-#: user_settings/templates/user_settings/fragments/tool_table.html:14
-msgid "Type"
-msgstr "Type"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/provider_table.html:13
 msgid "Model"
-msgstr "Model"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:7
 #: user_settings/templates/user_settings/tool_form.html:13
 msgid "Add tool"
-msgstr "Add tools"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 #: user_settings/templates/user_settings/fragments/tool_table.html:24
+#: user_settings/templates/user_settings/scheduled_tasks.html:37
 msgid "Active"
-msgstr "Active"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:14
 msgid "Models Using"
-msgstr "Models Using"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:28
+#: user_settings/templates/user_settings/scheduled_tasks.html:78
 msgid "Inactive"
-msgstr "Inactive"
+msgstr ""
 
 #: user_settings/templates/user_settings/fragments/tool_table.html:44
 msgid "Configure"
-msgstr "Configure"
+msgstr ""
 
 #: user_settings/templates/user_settings/general_form.html:7
 msgid "General settings"
-msgstr "General settings"
+msgstr ""
 
 #: user_settings/templates/user_settings/memory_form.html:7
 msgid "Memory Settings"
-msgstr "Memory Settings"
+msgstr ""
 
 #: user_settings/templates/user_settings/provider_confirm_delete.html:7
 msgid "Delete provider"
-msgstr "Delete provider"
+msgstr ""
 
 #: user_settings/templates/user_settings/provider_form.html:14
 msgid "Edit provider"
-msgstr "Edit provider"
+msgstr ""
 
 #: user_settings/templates/user_settings/provider_list.html:25
 msgid "No providers found."
-msgstr "No providers found."
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_confirm_delete.html:4
+#: user_settings/templates/user_settings/scheduled_task_confirm_delete.html:12
+msgid "Delete Scheduled Task"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_confirm_delete.html:16
+msgid "Are you sure you want to delete the scheduled task"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_confirm_delete.html:19
+msgid "This action cannot be undone."
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:31
+msgid "Schedule helper"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:33
+msgid "Custom cron expression"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:34
+msgid "Every N minutes"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:35
+msgid "Hourly"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:36
+msgid "Daily at a specific time"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:37
+msgid "Weekly at a specific time"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:38
+msgid "Monthly at a specific time"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:44
+msgid "Minutes"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:49
+msgid "Time"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:54
+msgid "Weekday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:56
+msgid "Monday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:57
+msgid "Tuesday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:58
+msgid "Wednesday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:59
+msgid "Thursday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:60
+msgid "Friday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:61
+msgid "Saturday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:62
+msgid "Sunday"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:67
+msgid "Day of month"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:74
+msgid "The cron expression is validated on save (server-side)."
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:84
+msgid "Keep thread after execution (for review)"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_task_form.html:87
+msgid "If unchecked, the thread will be deleted after successful execution."
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:11
+msgid "Create New Task"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:18
+msgid "Active Tasks"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:28
+#: user_settings/templates/user_settings/scheduled_tasks.html:64
+#: user_settings/views/scheduled_tasks.py:41
+msgid "Schedule"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:32
+#: user_settings/templates/user_settings/scheduled_tasks.html:68
+msgid "Last run"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:40
+msgid "Run Now"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:41
+msgid "Disable"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:54
+msgid "Inactive Tasks"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:73
+msgid "Error"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:82
+msgid "Clear Error"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:84
+msgid "Enable"
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:97
+msgid "No scheduled tasks yet."
+msgstr ""
+
+#: user_settings/templates/user_settings/scheduled_tasks.html:99
+msgid "Create your first scheduled task"
+msgstr ""
 
 #: user_settings/templates/user_settings/tool_configure.html:13
 #, python-format
 msgid "Configure %(tool.name)s"
-msgstr "Configure %(tool.name)s"
+msgstr ""
 
 #: user_settings/templates/user_settings/tool_configure.html:27
 msgid "Test connection"
-msgstr "Test connection"
+msgstr ""
 
 #: user_settings/templates/user_settings/tool_configure.html:30
 msgid "No configuration required for this tool."
-msgstr "No configuration required for this tool."
+msgstr ""
 
 #: user_settings/templates/user_settings/tool_confirm_delete.html:7
 msgid "Delete tool"
-msgstr "Delete tool"
+msgstr ""
 
 #: user_settings/templates/user_settings/tool_form.html:13
 msgid "Edit tool"
-msgstr "Edit tool"
+msgstr ""
 
 #: user_settings/templates/user_settings/tool_list.html:14
 msgid "No tools found."
-msgstr "No tools found"
+msgstr ""
+
+#: user_settings/views/agent.py:151
+msgid "Created: "
+msgstr ""
+
+#: user_settings/views/agent.py:153
+msgid "Updated: "
+msgstr ""
+
+#: user_settings/views/agent.py:157
+#, python-brace-format
+msgid "Skipped {name}: {reason}"
+msgstr ""
+
+#: user_settings/views/agent.py:170
+msgid "Bootstrap completed with no changes (everything already configured)."
+msgstr ""
 
 #: user_settings/views/api_token.py:32
 msgid ""
@@ -1221,31 +1782,115 @@ msgid ""
 "                   Please copy this token immediately as it will not be "
 "shown again."
 msgstr ""
-"Your new API token: <strong>{}</strong><br>\n"
-"Please copy this token immediately as it will not be shown again."
 
 #: user_settings/views/api_token.py:54
 msgid "API token has been deleted successfully."
-msgstr "API token has been deleted successfully."
+msgstr ""
 
 #: user_settings/views/api_token.py:56
 msgid "No API token was found to delete."
-msgstr "No API token was found to delete."
-
-#: user_settings/views/memory.py:25
-msgid "Memory updated successfully"
-msgstr "Memory updated successfully"
-
-#: user_settings/views/memory.py:53
-msgid ""
-"Store your personal information in Markdown format. Use headings (# Theme "
-"Name) to organize different topics. Note: '# global_user_preferences' is a "
-"special theme that is always available and cannot be deleted - it contains "
-"your essential preferences that are automatically shared with agents when "
-"the memory tool is enabled."
 msgstr ""
-"Store your personal information in Markdown format. Use headings (# Theme "
-"Name) to organize different topics. Note: '# global_user_preferences' is a "
-"special theme that is always available and cannot be deleted - it contains "
-"your essential preferences that are automatically shared with agents when "
-"the memory tool is enabled."
+
+#: user_settings/views/memory.py:37
+msgid "Memory settings updated successfully"
+msgstr ""
+
+#: user_settings/views/memory.py:74
+msgid "Embeddings settings change cancelled."
+msgstr ""
+
+#: user_settings/views/memory.py:87
+msgid "No pending embeddings change to confirm."
+msgstr ""
+
+#: user_settings/views/memory.py:110
+msgid "Embeddings settings updated. Rebuilding embeddings in background."
+msgstr ""
+
+#: user_settings/views/memory.py:135
+msgid "Embeddings provider is not configured."
+msgstr ""
+
+#: user_settings/views/memory.py:144
+msgid "Embeddings provider returned no vector (disabled)."
+msgstr ""
+
+#: user_settings/views/memory.py:148
+#, python-format
+msgid "Embeddings OK: got %(dims)s dimensions from %(provider)s"
+msgstr ""
+
+#: user_settings/views/memory.py:152
+#, python-format
+msgid "Embeddings test failed: %(err)s"
+msgstr ""
+
+#: user_settings/views/memory.py:209
+#, python-format
+msgid ""
+"Changing the embeddings provider/model will trigger a rebuild of %(count)s "
+"embeddings. Click Confirm to proceed or Cancel to abort."
+msgstr ""
+
+#: user_settings/views/memory.py:243
+msgid ""
+"Configure semantic search (embeddings) for long-term memory. If no provider "
+"is configured, Nova will run in text-search (FTS) mode only."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:43
+msgid "Cron format: minute hour day month weekday (e.g. '*/5 * * * *')."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:51
+msgid "Agent must belong to the same user."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:79
+msgid "Scheduled task created successfully."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:86
+msgid "Create Scheduled Task"
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:102
+msgid "Scheduled task updated successfully."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:110
+msgid "Edit Scheduled Task"
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:121
+msgid "Scheduled task deleted successfully."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:136
+msgid "activated"
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:136
+msgid "deactivated"
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:137
+#, python-format
+msgid "Scheduled task %(status)s successfully."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:147
+msgid "Scheduled task execution started."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:157
+msgid "Error cleared successfully."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:167
+msgid "Cron expression is required."
+msgstr ""
+
+#: user_settings/views/scheduled_tasks.py:181
+msgid "Cron expression must have 5 parts: minute hour day month weekday."
+msgstr ""

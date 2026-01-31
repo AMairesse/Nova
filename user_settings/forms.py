@@ -20,7 +20,7 @@ from crispy_forms.layout import Layout, Div, Field
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Tool import Tool, ToolCredential
-from nova.models.UserObjects import UserInfo, UserParameters
+from nova.models.UserObjects import UserParameters
 from user_settings.mixins import SecretPreserveMixin
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -526,32 +526,46 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-#  User Information (Memory)
+#  Memory embeddings settings (user-level)
 # ────────────────────────────────────────────────────────────────────────────
-class UserInfoForm(forms.ModelForm):
-    """Form for editing user memory information in Markdown format."""
+class UserMemoryEmbeddingsForm(SecretPreserveMixin, forms.ModelForm):
+    """Configure embeddings provider for long-term memory.
+
+    Note: llama.cpp system provider (if present) is enforced at runtime.
+    The UI can still show these fields, but the backend will prefer llama.cpp.
+    """
+
+    secret_fields = ("memory_embeddings_api_key",)
 
     class Meta:
-        model = UserInfo
-        fields = ["markdown_content"]
+        model = UserParameters
+        fields = [
+            "memory_embeddings_enabled",
+            "memory_embeddings_url",
+            "memory_embeddings_model",
+            "memory_embeddings_api_key",
+        ]
         widgets = {
-            "markdown_content": forms.Textarea(attrs={
-                "rows": 20,
-                "placeholder": ("# Personal Info\n\n## Preferences\n"
-                                "- Favorite color: Blue\n- Preferred language: English\n\n"
-                                "## Work\n- Current project: Nova\n- Role: Developer\n\n"
-                                "## Other\n- Hobbies: Reading, coding")
-            }),
+            "memory_embeddings_api_key": forms.PasswordInput(render_value=False),
         }
 
-    # ------------------------------------------------------------------ #
-    #  Constructor                                                        #
-    # ------------------------------------------------------------------ #
     def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
         self.user = user
         super().__init__(*args, **kwargs)
 
-        # Crispy forms helper
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+            Field("memory_embeddings_enabled"),
+            Field("memory_embeddings_url"),
+            Field("memory_embeddings_model"),
+            Field("memory_embeddings_api_key"),
+        )
+
+    def clean_memory_embeddings_api_key(self) -> str:
+        """Preserve encrypted value when left blank."""
+        data = self.cleaned_data.get("memory_embeddings_api_key", "")
+        if not data and self.instance.pk:
+            return self.instance.memory_embeddings_api_key
+        return data

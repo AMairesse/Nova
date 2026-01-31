@@ -9,9 +9,10 @@ from typing import Optional
 
 from langchain.agents.middleware import dynamic_prompt
 from langchain.agents.middleware.types import ModelRequest
+from django.db.models import Count, Q
 from nova.models.UserFile import UserFile
-from nova.models.UserObjects import UserInfo
-from nova.utils import get_theme_content
+from nova.models.Memory import MemoryTheme
+from nova.models.Tool import Tool
 from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ async def nova_system_prompt(request: ModelRequest) -> str:
             base_prompt += file_context
     elif not thread:
         # When no thread is associated (e.g. /api/ask/), skip DB access
-        base_prompt += "\nNo attached files available."
+        base_prompt += "\nNo attached files available.\n"
 
     return base_prompt
 
@@ -82,7 +83,7 @@ async def _is_memory_tool_enabled(agent_config) -> bool:
     # Wrap ORM call in sync_to_async to avoid async context error
     tools = await sync_to_async(
         list, thread_sensitive=False
-    )(agent_config.tools.filter(is_active=True, tool_type='BUILTIN'))
+    )(agent_config.tools.filter(is_active=True, tool_type=Tool.ToolType.BUILTIN))
     return any(
         tool.tool_subtype == 'memory' and tool.is_active
         for tool in tools
@@ -90,29 +91,42 @@ async def _is_memory_tool_enabled(agent_config) -> bool:
 
 
 async def _get_user_memory(user) -> Optional[str]:
-    """Get user memory content for injection into prompt."""
+    """Return a small prompt hint describing how to use long-term memory.
+
+    New memory design is tool-driven: we do NOT inject memory content.
+    """
     try:
-        user_info = await sync_to_async(UserInfo.objects.get)(user=user)
-        themes = await sync_to_async(user_info.get_themes)()
+        # Include lightweight discovery hints: top themes + active item counts.
+        # NOTE: keep this intentionally small to avoid prompt bloat.
+        def _load_theme_hints():
+            themes_qs = (
+                MemoryTheme.objects.filter(user=user)
+                .annotate(active_count=Count("items", filter=Q(items__status="active")))
+                .order_by("-active_count", "slug")
+            )
+            return list(themes_qs.values_list("slug", "active_count"))
 
-        # Always include global_user_preferences content if it exists
-        global_content = ""
-        if themes and "global_user_preferences" in themes:
-            global_content = get_theme_content(user_info.markdown_content, "global_user_preferences")
-            if global_content.strip():
-                global_content = f"\n\nGlobal user's preferences:\n{global_content}"
+        # NOTE: SQLite (tests) is prone to table locking when ORM runs in a separate
+        # worker thread. Keep DB access thread-sensitive.
+        theme_hints = await sync_to_async(_load_theme_hints, thread_sensitive=True)()
 
-        if themes:
-            memory_block = f"\n\nAvailable themes in memory, use tools to read them: {', '.join(themes)}"
-            return global_content + memory_block
+        # Keep this block intentionally short to avoid prompt bloat.
+        lines = [
+            "\nLong-term memory is available.",
+            "Use the memory tools when you need user-specific facts or preferences\n",
+        ]
 
-    except UserInfo.DoesNotExist:
-        # UserInfo should exist due to signal, but handle gracefully
-        pass
+        if theme_hints:
+            # Limit how many themes we list.
+            shown = theme_hints[:10]
+            suffix = "" if len(theme_hints) <= 10 else f" (+{len(theme_hints) - 10} more)"
+            formatted = ", ".join([f"{slug} ({count})" for slug, count in shown])
+            lines.append(f"\nKnown memory themes (active items): {formatted}{suffix}\n")
+
+        return "\n".join(lines)
     except Exception as e:
-        logger.warning(f"Failed to load user memory: {e}")
-
-    return None
+        logger.warning(f"Failed to load memory themes: {e}")
+        return "\nLong-term memory is available via tools (`memory.search`, `memory.get`, `memory.add`).\n"
 
 
 async def _get_file_context(thread, user) -> Optional[str]:
@@ -126,7 +140,7 @@ async def _get_file_context(thread, user) -> Optional[str]:
         if file_count:
             return f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
         else:
-            return "\nNo attached files available."
+            return "\nNo attached files available.\n"
     except Exception as e:
         logger.warning(f"Failed to get file context: {e}")
-        return "\nNo attached files available."
+        return "\nNo attached files available.\n"

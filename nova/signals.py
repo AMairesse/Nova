@@ -7,7 +7,7 @@ from django.dispatch import receiver
 from asgiref.sync import async_to_sync
 
 from nova.llm.checkpoints import get_checkpointer
-from nova.models.UserObjects import UserInfo, UserParameters, UserProfile
+from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.Thread import Thread
 
 logger = logging.getLogger(__name__)
@@ -17,13 +17,12 @@ logger = logging.getLogger(__name__)
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile_and_params(sender, instance, created, **kwargs):
     """
-    Automatically create UserProfile, UserParameters, and UserInfo
+    Automatically create UserProfile and UserParameters
     when a new User is created.
     """
     if created:
         UserProfile.objects.create(user=instance)
         UserParameters.objects.create(user=instance)
-        UserInfo.objects.create(user=instance)
 
 
 # --------------------------------------------------------------------------

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-11-11 15:36+0000\n"
+"POT-Creation-Date: 2026-01-31 13:25+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,56 +17,74 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-
 #: nova/static/js/file-operations.js:312
 msgid "No files in this thread."
-msgstr "No files in this thread."
+msgstr ""
 
-#: nova/static/js/message-manager.js:165 nova/static/js/message-manager.js:183
-#: nova/static/js/message-manager.js:206
+#: nova/static/js/message-manager.js:198 nova/static/js/message-manager.js:221
 msgid "Processing…"
-msgstr "Processing…"
+msgstr ""
 
-#: nova/static/js/message-renderer.js:49
+#: nova/static/js/message-manager.js:428 nova/static/js/message-manager.js:522
+msgid "Starting..."
+msgstr ""
+
+#: nova/static/js/message-manager.js:461 nova/static/js/message-manager.js:552
+msgid "Running..."
+msgstr ""
+
+#: nova/static/js/message-manager.js:488
+msgid "tokens"
+msgstr ""
+
+#: nova/static/js/message-manager.js:562 nova/static/js/message-renderer.js:35
 msgid "Compact"
-msgstr "Compact"
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:272
+#: nova/static/js/message-renderer.js:34
+msgid "Summarize conversation to save context space"
+msgstr ""
+
+#: nova/static/js/streaming-manager.js:332
 msgid "Waiting for your answer..."
-msgstr "Waiting for your answer..."
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:272
+#: nova/static/js/streaming-manager.js:332
 msgid "Type your message..."
-msgstr "Type your message..."
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:294
+#: nova/static/js/streaming-manager.js:354
 msgid "asks"
-msgstr "asks"
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:294
+#: nova/static/js/streaming-manager.js:354
 msgid "Question"
-msgstr "Question"
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:296
+#: nova/static/js/streaming-manager.js:356
 msgid "Answer format may be structured; plain text is also accepted."
-msgstr "Answer format may be structured; plain text is also accepted."
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:308
+#: nova/static/js/streaming-manager.js:368
 msgid "Type your answer..."
-msgstr "Type your answer..."
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:313
+#: nova/static/js/streaming-manager.js:373
 msgid "Answer"
-msgstr "Answer"
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:316
+#: nova/static/js/streaming-manager.js:376
 msgid "Cancel"
-msgstr "Cancel"
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:348
+#: nova/static/js/streaming-manager.js:408
 msgid "Answer received. Resuming..."
-msgstr "Answer received. Resuming..."
+msgstr ""
 
-#: nova/static/js/streaming-manager.js:350
+#: nova/static/js/streaming-manager.js:410
 msgid "Canceled."
-msgstr "Canceled"
+msgstr ""
+
+#: nova/static/js/streaming-manager.js:469
+msgid "Compaction done"
+msgstr ""

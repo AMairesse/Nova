@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import json
+from collections import OrderedDict
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -14,6 +16,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView, DeleteView, FormView
 from crispy_forms.helper import FormHelper
+from crispy_forms.layout import Layout, Div, Fieldset, Field
 from asgiref.sync import sync_to_async
 
 from user_settings.mixins import (
@@ -175,12 +178,17 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
         self.helper.form_tag = False
         self.helper.disable_csrf = True
 
+        config_fields = meta.get("config_fields", [])
+
         # Build dynamic fields
-        for cfg in meta.get("config_fields", []):
+        for cfg in config_fields:
             ftype = cfg["type"]
             required = cfg.get("required", False)
             name = cfg["name"]
             label = cfg["label"]
+            default = cfg.get("default")
+            group = cfg.get("group")
+            visible_if = cfg.get("visible_if")
 
             if ftype == "password":
                 widget = forms.PasswordInput(render_value=False)
@@ -189,8 +197,39 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
                 )
             elif ftype == "url":
                 self.fields[name] = forms.URLField(label=label, required=required)
-            else:
-                self.fields[name] = forms.CharField(label=label, required=required)
+            elif ftype == "boolean":
+                self.fields[name] = forms.BooleanField(
+                    label=label, required=required, initial=default
+                )
+            elif ftype == "integer":
+                widget = forms.NumberInput()
+                self.fields[name] = forms.IntegerField(
+                    label=label, required=required, widget=widget, initial=default
+                )
+            else:  # default to text
+                self.fields[name] = forms.CharField(
+                    label=label, required=required, initial=default
+                )
+
+            # Add group information for template rendering
+            if group:
+                self.fields[name].widget.attrs["data-group"] = group
+
+            # Generic conditional visibility support.
+            # We attach the condition to the *input element*; JS will hide the nearest wrapper.
+            # Expected shape: visible_if: {"field": "enable_sending", "equals": true}
+            if (
+                isinstance(visible_if, dict)
+                and visible_if.get("field")
+                and ("equals" in visible_if)
+            ):
+                self.fields[name].widget.attrs["data-visible-if-field"] = str(
+                    visible_if["field"]
+                )
+                # Use JSON to preserve booleans / numbers (JS will parse).
+                self.fields[name].widget.attrs["data-visible-if-equals"] = json.dumps(
+                    visible_if.get("equals")
+                )
 
         # Preserve existing secrets
         keep_msg = _("Secret exists, leave blank to keep")
@@ -199,6 +238,40 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
                 fld = self.fields[f]
                 fld.required = False
                 fld.widget.attrs.setdefault("placeholder", keep_msg)
+
+        # ------------------------------------------------------------------
+        # Crispy layout: group fields server-side to avoid fragile DOM moves.
+        # ------------------------------------------------------------------
+        grouped: "OrderedDict[str, list[str]]" = OrderedDict()
+        ungrouped_key = _("General")
+        for cfg in config_fields:
+            group_name = cfg.get("group") or ungrouped_key
+            grouped.setdefault(group_name, []).append(cfg["name"])
+
+        fieldsets = []
+        for group_name, field_names in grouped.items():
+            # Always render a Fieldset; keeps structure consistent.
+            # Title: use translated "General" for the ungrouped bucket.
+            title = group_name
+            if group_name != ungrouped_key:
+                # Basic prettifying for plain identifiers like "imap" -> "Imap".
+                title = str(group_name).replace("_", " ").strip().title()
+            fieldsets.append(
+                Fieldset(
+                    title,
+                    *[
+                        Div(
+                            Field(fname),
+                            css_class="mb-3",
+                        )
+                        for fname in field_names
+                        if fname in self.fields
+                    ],
+                    css_class="mb-4",
+                )
+            )
+
+        self.helper.layout = Layout(*fieldsets)
 
     def clean(self):
         data = super().clean()

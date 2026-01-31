@@ -29,8 +29,9 @@ Nova
 |  |  ├─ Task.py                        # Task and TaskStatus objects' model
 |  |  ├─ Thread.py                      # Thread object's model
 |  |  ├─ Tool.py                        # Tool and ToolCredential objects' model
+|  |  ├─ Memory.py                      # MemoryTheme, MemoryItem and MemoryItemEmbedding objects' model
 |  |  ├─ UserFile.py                    # UserFile object's model
-|  |  └─ UserObjects.py                 # UserInfo, UserParameters and UserProfile objects' model
+|  |  └─ UserObjects.py                 # UserParameters and UserProfile objects' model
 |  ├─ static/                           # JS helpers (streaming, tool modal manager…)
 |  |  ├─ css/                           # CSS helpers
 |  |  |  └─ main.css                    # CSS helpers
@@ -82,6 +83,14 @@ Nova
 - The conversation between a user and one or multiple agent is a ```Thread``` object.
 - During a conversation the user can choose to switch to another agent for each new message sent.
 - A Thread contains multiple ```Messages```.
+
+
+## Translation
+
+Update the messages :
+```python manage.py makemessages -l en```
+and
+```python manage.py makemessages -l en --domain djangojs```
 
 
 ## Requirements

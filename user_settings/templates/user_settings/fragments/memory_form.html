@@ -6,37 +6,70 @@
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
 
-  <!-- Memory Information Section -->
   <div class="card mb-4">
     <div class="card-header">
-      <h5 class="mb-0">{% trans "Personal Memory" %}</h5>
+      <h5 class="mb-0">{% trans "Memory: embeddings settings" %}</h5>
     </div>
     <div class="card-body">
       <div class="mb-3">
-        {{ form.markdown_content|as_crispy_field }}
-        <div class="form-text">
-          {{ help_text }}
+        <div class="form-text">{{ help_text }}</div>
+      </div>
+
+      {% if embeddings_provider %}
+        <div class="alert alert-info">
+          <strong>{% trans "Active provider" %}:</strong>
+          <code>{{ embeddings_provider.provider_type }}</code>
+          {% if embeddings_provider.model %}
+            — <code>{{ embeddings_provider.model }}</code>
+          {% endif %}
         </div>
+      {% endif %}
+
+      {{ form.memory_embeddings_enabled|as_crispy_field }}
+      {{ form.memory_embeddings_url|as_crispy_field }}
+      {{ form.memory_embeddings_model|as_crispy_field }}
+      {{ form.memory_embeddings_api_key|as_crispy_field }}
+
+      {% if has_pending_reembed %}
+        <div class="alert alert-warning mt-3">
+          {% blocktrans with count=pending_reembed_count %}
+            Changing the embeddings provider/model will trigger a rebuild of {{ count }} embeddings.
+          {% endblocktrans %}
+        </div>
+      {% endif %}
+
+      <div class="d-flex gap-2 mt-3">
+        {% if has_pending_reembed %}
+          <button type="submit" class="btn btn-warning" name="action" value="confirm_reembed">
+            {% trans "Confirm" %}
+          </button>
+          <button type="submit" class="btn btn-outline-secondary" name="action" value="cancel_reembed">
+            {% trans "Cancel" %}
+          </button>
+        {% else %}
+          <button type="submit" class="btn btn-primary">
+            {% trans "Save" %}
+          </button>
+        {% endif %}
+
+        <button type="submit" class="btn btn-outline-secondary" name="action" value="test_embeddings">
+          {% trans "Test embeddings endpoint" %}
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- Information about mandatory theme -->
-  <div class="alert alert-info mt-2">
-    <small>
-      <strong>ℹ️ {% trans "Info" %}:</strong> {% trans "The theme" %} <code># global_user_preferences</code>
-      {% trans "is mandatory and cannot be deleted. It contains your essential preferences that are automatically shared with agents." %}
-    </small>
-  </div>
-
-  <div class="d-flex justify-content-between align-items-center">
-    <div>
-      <small class="text-muted">
-        {% trans "Maximum 50,000 characters. Use headings (# Theme) to organize your information." %}
-      </small>
+  <div class="card">
+    <div class="card-header">
+      <h5 class="mb-0">{% trans "Memory browser" %}</h5>
     </div>
-    <button type="submit" class="btn btn-primary">
-      {% trans "Save Memory" %}
-    </button>
+    <div class="card-body"
+         id="memory-items-container"
+         hx-get="{% url 'user_settings:memory-items' %}"
+         hx-trigger="revealed once"
+         hx-target="this"
+         hx-swap="innerHTML">
+      <div class="text-muted">{% trans "Loading memory items…" %}</div>
+    </div>
   </div>
 </form>

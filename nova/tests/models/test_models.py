@@ -12,61 +12,12 @@ from nova.models.Message import Message, Actor, MessageType
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
-from nova.models.UserObjects import UserInfo, UserParameters, UserProfile
+from nova.models.UserObjects import UserParameters, UserProfile
 from nova.tests.base import BaseTestCase
 from nova.tests.factories import create_agent, create_provider, create_user
 
 
 class UserObjectsModelsTest(BaseTestCase):
-    def test_user_info_creation(self):
-        """
-        Test UserInfo model creation and default values.
-        Ensures that UserInfo objects are properly created with default markdown content.
-        """
-        # UserInfo is created automatically via signal, so we get it for user created in base.py
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertEqual(user_info.user, self.user)
-        self.assertEqual(user_info.markdown_content, "# global_user_preferences\n")
-
-    def test_user_info_clean_valid_markdown(self):
-        """
-        Test UserInfo validation with valid markdown content.
-        Verifies that clean() method accepts properly formatted markdown with themes.
-        """
-        user_info = UserInfo(user=self.user, markdown_content="# global_user_preferences\n# theme1\n")
-        user_info.clean()  # Should not raise
-
-    def test_user_info_clean_missing_global_theme(self):
-        """
-        Test UserInfo validation when global_user_preferences theme is missing.
-        Ensures that the required global theme cannot be deleted.
-        """
-        user_info = UserInfo(user=self.user, markdown_content="# other_theme\n")
-        with self.assertRaises(ValidationError):
-            user_info.full_clean()
-
-    def test_user_info_clean_too_long_content(self):
-        """
-        Test UserInfo validation with content exceeding maximum length.
-        Verifies that content is limited to 50,000 characters.
-        """
-        content = "# global_user_preferences\n" + "x" * 50001
-        user_info = UserInfo(user=self.user, markdown_content=content)
-        with self.assertRaises(ValidationError):
-            user_info.full_clean()
-
-    def test_user_info_get_themes(self):
-        """
-        Test UserInfo.get_themes() method extracts theme names correctly.
-        Verifies that themes are parsed from markdown headings.
-        """
-        user_info = UserInfo(
-            user=self.user,
-            markdown_content="# global_user_preferences\n# theme1\n# theme2\n"
-        )
-        themes = user_info.get_themes()
-        self.assertEqual(themes, ["global_user_preferences", "theme1", "theme2"])
-
     def test_user_parameters_creation(self):
         """
         Test UserParameters model creation and default values.

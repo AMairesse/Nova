@@ -149,10 +149,9 @@ Nova
 ```
 
 ## Roadmap
-1. File management : add a file, receive a file as a result, file support for MCP tools, ...
-2. Add a scratchpad tool (acting like a memory for long task)
-3. Add a canvas tool (acting like a UI component for the agent to interact with the user)
-4. Better display for "thinking models"
+1. Continuous discussion mode (default, day segments + summarization + `conversation.search/get`) – spec in [`plans/continuous_discussion.md`](plans/continuous_discussion.md:1)
+2. Add ability to interact using messages' apps (Signal, Discord, ...)
+3. Add a tool for the agent to set sheduled task itself
 
 ## Contributing
 Pull requests are welcome!

@@ -1,205 +1,69 @@
-"""
-Tests for the memory builtin tool and UserInfo model.
+"""Tests for the memory builtin tool.
+
+NOTE: Memory tool was redesigned (v2) to use structured models + search.
+The old Markdown theme slicing helpers are no longer present.
 """
 from django.test import TestCase
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
 from asgiref.sync import async_to_sync
 from types import SimpleNamespace
 
-from nova.models.UserObjects import UserInfo
-from nova.tools.builtins.memory import (
-    _get_theme_content,
-    _set_theme_content,
-    _delete_theme_content,
-    get_info,
-    set_info,
-    delete_theme,
-    create_theme,
-    list_themes,
-)
+from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryTheme
+from nova.tools.builtins.memory import add, get, list_themes, search
 
 
 User = get_user_model()
 
 
-class UserInfoModelTest(TestCase):
-    """Verify automatic creation and validation rules for the UserInfo model."""
+class MemoryToolV2Tests(TestCase):
+    """Test the v2 memory tool surface (structured store)."""
 
     def setUp(self):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
             password='testpass123'
-        )
-
-    def test_userinfo_creation(self):
-        """
-        Ensure a UserInfo record is automatically created for a new user with
-        the expected default global_user_preferences heading.
-        """
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertEqual(user_info.user, self.user)
-        self.assertEqual(user_info.markdown_content, "# global_user_preferences\n")
-
-    def test_userinfo_validation(self):
-        """
-        Validate that UserInfo enforces:
-        - presence of the required heading
-        - maximum content length
-        - acceptance of valid markdown content.
-        """
-        user_info = UserInfo.objects.get(user=self.user)
-
-        # Valid content
-        user_info.markdown_content = "# global_user_preferences\n- Be concise"
-        user_info.full_clean()  # Should not raise
-
-        # Invalid content (no heading)
-        user_info.markdown_content = "Invalid content without heading"
-        with self.assertRaises(ValidationError):
-            user_info.full_clean()
-
-        # Content too long
-        user_info.markdown_content = "# Test\n" + "x" * 50001
-        with self.assertRaises(ValidationError):
-            user_info.full_clean()
-
-
-class MemoryToolTest(TestCase):
-    """Test low-level helpers that slice and mutate theme sections."""
-
-    def setUp(self):
-        self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='testpass123'
-        )
-        self.user_info = UserInfo.objects.get(user=self.user)
-        self.user_info.markdown_content = """# Personal
-- Name: Test User
-- Age: 30
-
-# Work
-- Company: Test Corp
-- Role: Developer
-
-# Preferences
-- Language: Python
-- IDE: VSCode
-"""
-        self.user_info.save()
-
-    def test_get_theme_content(self):
-        """Ensure _get_theme_content returns only the lines for the given theme."""
-        content = self.user_info.markdown_content
-        theme_content = _get_theme_content(content, "Personal")
-        self.assertIn("Name: Test User", theme_content)
-        self.assertIn("Age: 30", theme_content)
-
-    def test_set_theme_content(self):
-        """Ensure _set_theme_content replaces the targeted theme block correctly."""
-        content = self.user_info.markdown_content
-        new_content = "# Personal\n- Name: Updated User\n- Age: 31"
-        updated = _set_theme_content(content, "Personal", new_content)
-        self.assertIn("Name: Updated User", updated)
-        self.assertIn("Age: 31", updated)
-
-    def test_delete_theme_content(self):
-        """Ensure _delete_theme_content removes the requested theme section."""
-        content = self.user_info.markdown_content
-        updated = _delete_theme_content(content, "Work")
-        self.assertNotIn("# Work", updated)
-        self.assertNotIn("Company: Test Corp", updated)
-
-
-class MemoryToolAsyncTests(TestCase):
-    """
-    Cover the async-facing memory tool helpers (get_info, set_info, delete_theme,
-    create_theme, list_themes) as used by agents.
-    """
-
-    def setUp(self):
-        self.user = User.objects.create_user(
-            username='asyncuser',
-            email='async@example.com',
-            password='asyncpass123'
         )
         self.agent = SimpleNamespace(user=self.user)
-        user_info = UserInfo.objects.get(user=self.user)
-        user_info.markdown_content = "\n".join([
-            "# global_user_preferences",
-            "- Locale: en",
-            "",
-            "# Personal",
-            "- Name: Async User",
-            "- Age: 42",
-            "",
-            "# Work",
-            "- Company: Async Corp",
-            "- Role: Engineer",
-        ])
-        user_info.save()
 
-    def test_get_info_returns_existing_theme(self):
-        """get_info should return content for an existing theme."""
-        result = async_to_sync(get_info)("Personal", self.agent)
-        self.assertIn("Async User", result)
-
-    def test_get_info_handles_missing_theme(self):
-        """get_info should emit a friendly message when theme is missing."""
-        result = async_to_sync(get_info)("UnknownTheme", self.agent)
-        self.assertEqual(result, "No information stored for theme 'UnknownTheme'.")
-
-    def test_set_info_updates_existing_theme(self):
-        """set_info should update an existing theme and persist changes."""
-        response = async_to_sync(set_info)("Personal", "- Name: Updated User\n- Age: 43", self.agent)
-        self.assertEqual(response, "Information for theme 'Personal' has been updated.")
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertIn("Updated User", user_info.markdown_content)
-
-    def test_set_info_rejects_malicious_content(self):
-        """set_info should detect and reject unsafe HTML/script content."""
-        response = async_to_sync(set_info)("Personal", "<script>alert(1)</script>", self.agent)
-        self.assertIn("unsafe HTML tags", response)
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertNotIn("alert(1)", user_info.markdown_content)
-
-    def test_delete_theme_removes_section(self):
-        """delete_theme should remove the target theme from markdown_content."""
-        response = async_to_sync(delete_theme)("Work", self.agent)
-        self.assertEqual(response, "Theme 'Work' has been deleted.")
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertNotIn("# Work", user_info.markdown_content)
-
-    def test_delete_theme_protects_global_preferences(self):
-        """delete_theme must not allow deletion of global_user_preferences."""
-        response = async_to_sync(delete_theme)("global_user_preferences", self.agent)
-        self.assertEqual(
-            response,
-            "The 'global_user_preferences' theme cannot be deleted as it is required."
+    def test_add_creates_item_and_pending_embedding(self):
+        out = async_to_sync(add)(
+            type="fact",
+            content="User's favorite IDE is VSCode",
+            theme="preferences",
+            tags=["dev"],
+            agent=self.agent,
         )
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertIn("# global_user_preferences", user_info.markdown_content)
+        self.assertIn("id", out)
+        item = MemoryItem.objects.get(id=out["id"], user=self.user)
+        self.assertEqual(item.type, "fact")
+        self.assertEqual(item.theme.slug, "preferences")
+        # Embeddings are optional: if no provider configured, tool should still work.
+        emb = MemoryItemEmbedding.objects.filter(item=item, user=self.user).first()
+        if emb:
+            self.assertEqual(emb.state, "pending")
 
-    def test_create_theme_adds_new_section(self):
-        """create_theme should append a new, empty theme section when absent."""
-        response = async_to_sync(create_theme)("Hobbies", self.agent)
-        self.assertEqual(response, "Theme 'Hobbies' has been created.")
-        user_info = UserInfo.objects.get(user=self.user)
-        self.assertIn("# Hobbies", user_info.markdown_content)
+    def test_get_returns_item(self):
+        theme = MemoryTheme.objects.create(user=self.user, slug="work", display_name="Work")
+        item = MemoryItem.objects.create(user=self.user, theme=theme, type="fact", content="Company is X")
+        MemoryItemEmbedding.objects.create(user=self.user, item=item, state="pending", dimensions=1024)
 
-    def test_create_theme_returns_existing_message(self):
-        """create_theme should be idempotent and report when theme already exists."""
-        response = async_to_sync(create_theme)("Personal", self.agent)
-        self.assertEqual(response, "Theme 'Personal' already exists.")
+        out = async_to_sync(get)(item.id, self.agent)
+        self.assertEqual(out["id"], item.id)
+        self.assertEqual(out["theme"], "work")
 
-    def test_list_themes_formats_output(self):
-        """list_themes should return a human-readable list including all themes."""
-        response = async_to_sync(list_themes)(self.agent)
-        self.assertIn("Available themes:", response)
-        self.assertIn("- Personal", response)
-        self.assertIn("- global_user_preferences", response)
+    def test_list_themes_returns_json(self):
+        MemoryTheme.objects.create(user=self.user, slug="personal", display_name="Personal")
+        out = async_to_sync(list_themes)(self.agent)
+        self.assertIn("themes", out)
+        self.assertTrue(any(t["slug"] == "personal" for t in out["themes"]))
+
+    def test_search_finds_item(self):
+        theme = MemoryTheme.objects.create(user=self.user, slug="personal", display_name="Personal")
+        MemoryItem.objects.create(user=self.user, theme=theme, type="fact", content="Name is Alice")
+        out = async_to_sync(search)(query="Alice", agent=self.agent)
+        self.assertIn("results", out)
+        self.assertGreaterEqual(len(out["results"]), 1)
 
 
 class MemoryIntegrationTest(TestCase):
@@ -211,15 +75,6 @@ class MemoryIntegrationTest(TestCase):
             email='test@example.com',
             password='testpass123'
         )
-
-    def test_userinfo_signal_creation(self):
-        """
-        Ensure the post-save signal creates a UserInfo for new users so memory
-        is always available.
-        """
-        # User creation should trigger signal
-        user_info_count = UserInfo.objects.filter(user=self.user).count()
-        self.assertEqual(user_info_count, 1)
 
     def test_memory_tool_registration(self):
         """

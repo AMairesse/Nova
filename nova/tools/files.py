@@ -13,7 +13,6 @@ from django.shortcuts import get_object_or_404
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.llm.llm_agent import LLMAgent
-from nova.utils import estimate_tokens
 from nova.file_utils import batch_upload_files
 
 logger = logging.getLogger(__name__)
@@ -85,48 +84,6 @@ async def list_files(thread_id, user) -> str:
 async def get_file_url(file_id: int) -> str:
     file = await async_get_object_or_404(UserFile, id=file_id)
     return file.get_download_url()
-
-
-async def read_file(agent: LLMAgent, file_id: int) -> str:
-    """Read the content of a file (text only).
-       Reject if exceeds context limit."""
-    file = await async_get_object_or_404(UserFile, id=file_id)
-    thread_id, user = await async_get_threadid_and_user(agent)
-    file_thread_id, file_user = await async_get_threadid_and_user(file)
-    if file_thread_id != thread_id or file_user != user:
-        return "Permission denied: File does not belong to current thread/user."
-
-    if not file.mime_type.startswith('text/'):
-        return "File is not text; use read_file_chunk for binary or large files."
-
-    max_tokens = await sync_to_async(lambda: agent.agent_config.llm_provider.max_context_tokens,
-                                     thread_sensitive=False)()
-
-    session = aioboto3.Session()
-    async with session.client(
-        's3',
-        endpoint_url=settings.MINIO_ENDPOINT_URL,
-        aws_access_key_id=settings.MINIO_ACCESS_KEY,
-        aws_secret_access_key=settings.MINIO_SECRET_KEY
-    ) as s3_client:
-        try:
-            head = await s3_client.head_object(Bucket=settings.MINIO_BUCKET_NAME,
-                                               Key=file.key)
-            file_size = head['ContentLength']
-            estimated_file_tokens = estimate_tokens(input_size=file_size)
-            if estimated_file_tokens > max_tokens:
-                return f"File too large ({estimated_file_tokens} tokens > {max_tokens}). Use read_file_chunk."
-
-            response = await s3_client.get_object(Bucket=settings.MINIO_BUCKET_NAME,
-                                                  Key=file.key)
-            content = await response['Body'].read()
-            try:
-                return content.decode('utf-8')
-            except UnicodeDecodeError:
-                return "File decoding error; possibly binary."
-        except ClientError as e:
-            logger.error(f"Failed to read file {file_id}: {e}")
-            return f"Error reading file: {str(e)}"
 
 
 async def read_file_chunk(agent: LLMAgent, file_id: int, start: int = 0,
@@ -213,7 +170,7 @@ async def read_image(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
         return "Permission denied: File does not belong to current thread/user.", None
 
     if not file.mime_type.startswith('image/'):
-        return "File is not an image. Use read_file or read_file_chunk for other types.", None
+        return "File is not an image. Use read_file_chunk for other types.", None
 
     session = aioboto3.Session()
     async with session.client(
@@ -254,10 +211,7 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     async def list_files_wrapper() -> str:
         return await list_files(thread_id, user)
 
-    async def read_file_wrapper(file_id: int) -> str:
-        return await read_file(agent, file_id)
-
-    async def reaf_file_chunk_wrapper(file_id: int, start: int = 0, chunk_size: int = 4096) -> str:
+    async def read_file_chunk_wrapper(file_id: int, start: int = 0, chunk_size: int = 4096) -> str:
         return await read_file_chunk(agent, file_id, start, chunk_size)
 
     async def create_file_wrapper(content: str, filename: str) -> str:
@@ -269,27 +223,21 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     return [
         StructuredTool.from_function(
             coroutine=list_files_wrapper,
-            name="list_files",
+            name="file_ls",
             description="List all files in the current thread (no parameters needed)",
             args_schema={"type": "object", "properties": {}, "required": []}
         ),
         StructuredTool.from_function(
             coroutine=get_file_url,
-            name="get_file_url",
+            name="file_get_url",
             description="Get a public URL for a file.",
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
         ),
         StructuredTool.from_function(
-            coroutine=read_file_wrapper,
-            name="read_file",
-            description="Read the full content of a text file. Checks context limit first.",
-            args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
-        ),
-        StructuredTool.from_function(
-            coroutine=reaf_file_chunk_wrapper,
-            name="read_file_chunk",
-            description="Read a chunk of a file (for large/binary files). Params: start (byte offset, default 0), \
-                chunk_size (bytes, default 4096).",
+            coroutine=read_file_chunk_wrapper,
+            name="file_read_chunk",
+            description="Read a chunk of a file, use start and chunk_size params to iterate through the full file. \
+                Params: start (byte offset, default 0), chunk_size (bytes, default 4096).",
             args_schema={"type": "object", "properties": {
                 "file_id": {"type": "integer"},
                 "start": {"type": "integer", "default": 0},
@@ -298,7 +246,7 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
         ),
         StructuredTool.from_function(
             coroutine=create_file_wrapper,
-            name="create_file",
+            name="file_create",
             description="Create a new file in the current thread with content",
             args_schema={"type": "object", "properties": {
                 "filename": {"type": "string"},
@@ -307,13 +255,13 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
         ),
         StructuredTool.from_function(
             coroutine=async_delete_file,
-            name="delete_file",
+            name="file_delete",
             description="Delete a file from the current thread",
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]}
         ),
         StructuredTool.from_function(
             coroutine=read_image_wrapper,
-            name="read_image",
+            name="file_read_image",
             description="Read an image file and return base64-encoded content for processing.",
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]},
             return_direct=True,

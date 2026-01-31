@@ -246,6 +246,12 @@ LLAMA_CPP_SERVER_URL = os.getenv('LLAMA_CPP_SERVER_URL', None)
 LLAMA_CPP_MODEL = os.getenv('LLAMA_CPP_MODEL', None)
 LLAMA_CPP_CTX_SIZE = os.getenv('LLAMA_CPP_CTX_SIZE', None)
 
+# Memory embeddings (optional)
+# If llama.cpp is configured, it is auto-preferred (see `nova.llm.embeddings`).
+MEMORY_EMBEDDINGS_URL = os.getenv('MEMORY_EMBEDDINGS_URL', None)
+MEMORY_EMBEDDINGS_MODEL = os.getenv('MEMORY_EMBEDDINGS_MODEL', None)
+MEMORY_EMBEDDINGS_API_KEY = os.getenv('MEMORY_EMBEDDINGS_API_KEY', None)
+
 # Get info about a Searxng server if configured
 SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)
 SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)
