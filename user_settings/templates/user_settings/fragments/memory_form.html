@@ -64,6 +64,7 @@
       <h5 class="mb-0">{% trans "Memory browser" %}</h5>
     </div>
     <div class="card-body"
+         id="memory-items-container"
          hx-get="{% url 'user_settings:memory-items' %}"
          hx-trigger="revealed once"
          hx-target="this"

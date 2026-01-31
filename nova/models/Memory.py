@@ -42,7 +42,6 @@ class MemoryItemType(models.TextChoices):
 
 class MemoryItemStatus(models.TextChoices):
     ACTIVE = "active", _("active")
-    SUPERSEDED = "superseded", _("superseded")
     ARCHIVED = "archived", _("archived")
 
 
@@ -86,13 +85,6 @@ class MemoryItem(models.Model):
         max_length=20,
         choices=MemoryItemStatus.choices,
         default=MemoryItemStatus.ACTIVE,
-    )
-    supersedes = models.ForeignKey(
-        "self",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="superseded_by",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

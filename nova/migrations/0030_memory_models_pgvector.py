@@ -71,19 +71,43 @@ class Migration(migrations.Migration):
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 (
                     "source_message",
-                    models.ForeignKey(blank=True, null=True, on_delete=SET_NULL, related_name="memory_items", to="nova.message"),
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=SET_NULL,
+                        related_name="memory_items",
+                        to="nova.message",
+                    ),
                 ),
                 (
                     "source_thread",
-                    models.ForeignKey(blank=True, null=True, on_delete=SET_NULL, related_name="memory_items", to="nova.thread"),
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=SET_NULL,
+                        related_name="memory_items",
+                        to="nova.thread",
+                    ),
                 ),
                 (
                     "supersedes",
-                    models.ForeignKey(blank=True, null=True, on_delete=SET_NULL, related_name="superseded_by", to="nova.memoryitem"),
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=SET_NULL,
+                        related_name="superseded_by",
+                        to="nova.memoryitem",
+                    ),
                 ),
                 (
                     "theme",
-                    models.ForeignKey(blank=True, null=True, on_delete=SET_NULL, related_name="items", to="nova.memorytheme"),
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=SET_NULL,
+                        related_name="items",
+                        to="nova.memorytheme",
+                    ),
                 ),
                 (
                     "user",
@@ -128,7 +152,11 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "user",
-                    models.ForeignKey(on_delete=CASCADE, related_name="memory_item_embeddings", to=settings.AUTH_USER_MODEL),
+                    models.ForeignKey(
+                        on_delete=CASCADE,
+                        related_name="memory_item_embeddings",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
                 ),
             ],
             options={

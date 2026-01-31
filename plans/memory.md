@@ -139,9 +139,7 @@ Fields:
 - `tags` (JSON list of strings, optional)
 - `status` (enum)
   - `active`
-  - `superseded`
   - `archived`
-- `supersedes` (FK → self, nullable) (optional link to indicate replacement)
 - `created_at`, `updated_at`
 
 Search support:
@@ -234,6 +232,9 @@ Input:
 - `theme` (string slug or null)
 - `types` (list of strings or null)
 - `recency_days` (int or null)
+- `status` (string or null)
+  - default: `active`
+  - allowed: `active|archived|any`
 
 Output (JSON-serializable):
 
@@ -251,6 +252,8 @@ Behavior:
 - Special-case “match all”:
   - if `query` is empty or equals `'*'`, return items ordered by recency (newest first) and apply `limit`, `theme`, `types`, `recency_days` filters.
 - Otherwise: always compute lexical match (FTS).
+- By default, search returns only `status=active` items.
+  - When `status='any'`, it returns all statuses.
 - If embeddings provider configured:
   - compute query embedding (in-process or via cached provider client)
   - compute semantic similarity for items with `state=ready`
@@ -286,9 +289,38 @@ Input: `item_id`
 
 Output: full item fields + embedding state.
 
-#### 3.2.4 `memory.update()` / `memory.delete()`
+#### 3.2.4 `memory.archive()` (agent-facing)
 
-These are optional for v1; they can exist but can also be intentionally omitted to keep the surface small.
+Goal: allow removing bad/outdated items without hard deletion.
+
+Input:
+
+- `item_id` (int)
+
+Output:
+
+- `{ id, status='archived' }`
+
+Behavior:
+
+- set `status=archived`
+- keep row for audit/debugging.
+
+Rationale (why archive-only)
+
+- Simpler tool surface for the agent.
+- Avoids giving the agent the ability to rewrite history; instead it can:
+  1) create a corrected item via `memory.add` (with proper theme)
+  2) archive the old one via `memory.archive`
+
+Implication
+
+- `memory.search` should filter `status=active` by default (unless explicitly overridden).
+
+Non-goal (v1)
+
+- `memory.delete()` hard delete is intentionally not exposed to agents.
+- `memory.update()` is intentionally not exposed to agents (agent should add + archive).
 
 #### 3.2.5 `memory.list_themes()`
 

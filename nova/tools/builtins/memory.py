@@ -29,7 +29,7 @@ from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.embeddings import compute_embedding, aget_embeddings_provider
-from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemType, MemoryTheme
+from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemStatus, MemoryItemType, MemoryTheme
 
 METADATA = {
     'name': 'Memory',
@@ -181,6 +181,29 @@ async def get(item_id: int, agent: LLMAgent) -> Dict[str, Any]:
     return await sync_to_async(_impl, thread_sensitive=True)()
 
 
+async def archive(item_id: int, agent: LLMAgent) -> Dict[str, Any]:
+    """Archive a memory item (soft delete).
+
+    This is intentionally preferred to hard delete to preserve traceability.
+    """
+
+    def _impl():
+        item = MemoryItem.objects.filter(user=agent.user, id=item_id).first()
+        if not item:
+            return {"error": "not_found"}
+
+        # Keep it simple: archive the item. We keep the row for audit/debug.
+        item.status = MemoryItemStatus.ARCHIVED
+        item.save(update_fields=["status", "updated_at"])
+
+        return {
+            "id": item.id,
+            "status": item.status,
+        }
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
+
+
 async def search(
     query: str,
     agent: LLMAgent,
@@ -188,6 +211,7 @@ async def search(
     theme: Optional[str] = None,
     types: Optional[List[str]] = None,
     recency_days: Optional[int] = None,
+    status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search memory items.
 
@@ -217,6 +241,19 @@ async def search(
 
     def _impl(vec: Optional[List[float]]):
         qs = MemoryItem.objects.select_related("theme").filter(user=agent.user)
+
+        # Default to ACTIVE items only unless explicitly overridden.
+        status_value = (status or "").strip().lower()
+        if not status_value:
+            status_value = MemoryItemStatus.ACTIVE
+
+        if status_value != "any":
+            valid_statuses = set(MemoryItemStatus.values)
+            if status_value in valid_statuses:
+                qs = qs.filter(status=status_value)
+            else:
+                # Unknown status: fall back to default ACTIVE.
+                qs = qs.filter(status=MemoryItemStatus.ACTIVE)
 
         if theme:
             slug = _normalize_theme_slug(theme)
@@ -339,12 +376,13 @@ async def get_functions(tool, agent: LLMAgent):
     """
     return [
         StructuredTool.from_function(
-            coroutine=lambda query, limit=10, theme=None, types=None, recency_days=None: search(
+            coroutine=lambda query, limit=10, theme=None, types=None, recency_days=None, status=None: search(
                 query=query,
                 limit=limit,
                 theme=theme,
                 types=types,
                 recency_days=recency_days,
+                status=status,
                 agent=agent,
             ),
             name="search",
@@ -363,6 +401,10 @@ async def get_functions(tool, agent: LLMAgent):
                     "recency_days": {
                         "type": "integer",
                         "description": "Optional: only items from the last N days",
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Optional: filter by status (active|archived|any)",
                     },
                 },
                 "required": ["query"],
@@ -417,5 +459,17 @@ async def get_functions(tool, agent: LLMAgent):
                 "properties": {},
                 "required": []
             }
+        ),
+        StructuredTool.from_function(
+            coroutine=lambda item_id: archive(item_id=item_id, agent=agent),
+            name="archive",
+            description="Archive (soft-delete) a memory item by id",
+            args_schema={
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer", "description": "Memory item id"},
+                },
+                "required": ["item_id"],
+            },
         ),
     ]
