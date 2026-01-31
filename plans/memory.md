@@ -43,6 +43,7 @@ Recent implementation notes:
 - **Embeddings dimension mismatch**: vectors smaller than 1024 are now accepted via **zero-padding**; vectors larger than 1024 error.
 - **Provider/model change flow**: Save triggers an inline confirmation (shows count of embeddings to rebuild), Confirm enqueues a background rebuild.
 - **Read-only Memory browser**: added a simple table view (items + embedding state) rendered under the Memory settings form.
+- **Memory browser archived toggle**: added an “Include archived” switch (default OFF) that refreshes the list via HTMX.
 - **pgvector index**: added PostgreSQL-only HNSW cosine index migration for `MemoryItemEmbedding.vector`.
 
 ## 1. Current state (baseline)
@@ -255,11 +256,41 @@ Behavior:
 - By default, search returns only `status=active` items.
   - When `status='any'`, it returns all statuses.
 - If embeddings provider configured:
-  - compute query embedding (in-process or via cached provider client)
-  - compute semantic similarity for items with `state=ready`
-  - combine rankings (hybrid)
+   - compute query embedding (in-process or via cached provider client)
+   - compute semantic similarity for items with `state=ready`
+   - combine rankings (hybrid)
 - If provider configured but no embeddings ready yet:
-  - return FTS-only results
+   - return FTS-only results
+
+Hybrid ranking (v1)
+
+- Target weighting: **70% semantic** (pgvector) + **30% lexical** (PostgreSQL FTS).
+- Practical approach:
+  1) Retrieve candidates from both signals:
+     - semantic top K (items with embeddings `state=ready`)
+     - FTS top K (ranked by `SearchRank`)
+  2) Union candidates, then compute a **normalized** score per signal on that candidate set.
+  3) Final score = `0.7 * semantic_norm + 0.3 * fts_norm`.
+  4) Tie-breakers:
+     - newer `created_at` first
+     - then stable ordering by `id`.
+
+Normalization guidance
+
+- Semantic signal is distance-based (lower is better). Convert to similarity, then normalize.
+  - Example: `semantic_sim = 1 / (1 + distance)` then min-max normalize within the candidate set.
+- FTS signal is already a score (higher is better). Min-max normalize within the candidate set.
+
+Fallback rules
+
+- If embeddings are disabled or query embedding fails: use FTS-only.
+- If no FTS matches but semantic matches exist: return semantic-only results.
+- If both signals are empty: return empty list.
+
+Parameters (implementation constants)
+
+- `K` (per-signal candidate size): default 50 (bounded).
+- `limit` remains max 50 for tool output.
 
 #### 3.2.2 `memory.add()`
 
@@ -346,23 +377,107 @@ Behavior:
   - else remote API
 - Store vector + set state to `ready` or `error`.
 
-### 3.3 Prompt injection contract
+### 3.2.7 Embeddings lifecycle rules
 
-Goal: **do not inject memory content** by default.
+This feature uses a **rebuild-total** strategy for simplicity.
 
-Proposed injected block when memory tool is enabled:
+#### Provider/model changes
 
-- 1–2 lines instructing the agent to use `memory.search` for user-specific context.
-- Optionally list up to N themes (N small, e.g. 10) so the agent knows what exists.
+When the embeddings provider or model changes (via the user settings flow):
 
-Hard rule:
-
-- never inject the full memory store
+- Set all existing `MemoryItemEmbedding` rows for the user to `state=pending`.
+- Clear `error` fields.
+- Update embedding metadata fields (`provider_type`, `model`, `dimensions`) to the new configuration (so search ignores stale configs).
+- Enqueue a background rebuild job that recomputes vectors for **all items** (active + archived).
 
 Rationale:
 
-- memory is accessed through tools so prompt stays bounded
-- avoids needing opportunistic consolidation in thread mode
+- Avoids keeping multiple embedding versions.
+- Keeps runtime search logic simple (single provider/model per user).
+
+#### Item creation
+
+On [`memory.add()`](nova/tools/builtins/memory.py:1):
+
+- If embeddings enabled: create/update `MemoryItemEmbedding(state=pending)` and enqueue compute.
+- If embeddings disabled: do not create embeddings rows (or keep them but unused).
+
+#### Item archival
+
+On [`memory.archive()`](nova/tools/builtins/memory.py:1):
+
+- Do not delete embeddings.
+- Archived items are excluded from search by default; embeddings can still be rebuilt (rebuild-total includes them).
+
+#### Failure handling
+
+- If compute fails: set `state=error` and store an error string.
+- Search must treat `error` as “no embedding available” and fall back to lexical-only scoring for that item.
+
+### 3.3 Prompt injection contract
+
+Nova must remain **tool-driven**: the agent should **not** receive raw memory item content in the system prompt. Instead, the prompt provides short operational guidance and lightweight discovery hints.
+
+#### 3.3.1 Goals
+
+- Keep prompts small, stable, and low-risk (avoid injecting potentially sensitive memory content).
+- Encourage correct use of the memory tool surface.
+- Improve discoverability of themes without injecting item content.
+
+#### 3.3.2 What gets injected
+
+1) **Minimal instructions** (always injected when memory tool is enabled)
+
+- A short block (5–10 lines) describing when to use:
+  - [`memory.search()`](nova/tools/builtins/memory.py:1)
+  - [`memory.get()`](nova/tools/builtins/memory.py:1)
+  - [`memory.add()`](nova/tools/builtins/memory.py:1)
+  - [`memory.archive()`](nova/tools/builtins/memory.py:1)
+- Mention match-all semantics:
+  - `query='*'` or empty query returns the most recent items (subject to filters/limit).
+- Mention lifecycle defaults:
+  - default searches return `status=active`; `status='any'` includes archived.
+
+2) **Hints block** (enabled by default)
+
+- Inject a compact “themes overview”:
+  - Top N themes (default N=10).
+  - Include counts of **active** items per theme.
+  - No item content, no per-item titles, no excerpts.
+
+Illustrative format (not strict):
+
+- Available memory themes (top 10):
+  - general (42)
+  - work (18)
+  - preferences (9)
+
+Hard rule:
+
+- Never inject the full memory store.
+- Never inject memory item content in the system prompt (only the tool results should carry content).
+
+#### 3.3.3 When it is injected
+
+- Inject into the **system prompt** at agent creation time (agent-level), so it remains stable and avoids prompt bloat.
+- Refresh hints at most once per agent run (or per day) to avoid frequent DB calls.
+
+#### 3.3.4 Size limits
+
+- Target: <= ~1 KB for memory guidance + hints.
+- Hard cap: <= ~2 KB.
+
+If theme enumeration would exceed the cap:
+
+- truncate to top N themes
+- include a note to use [`memory.list_themes()`](nova/tools/builtins/memory.py:1)
+
+#### 3.3.5 Failure / fallback behavior
+
+- If memory is disabled for the user or a DB error occurs:
+  - still inject a minimal block stating “memory tools unavailable” and instruct to proceed without them.
+- If theme hints query fails:
+  - omit hints; keep minimal instructions.
 
 ### 3.4 UI (read-only)
 
@@ -388,3 +503,74 @@ Out of scope:
 - Current storage: [`nova/models/UserObjects.py`](nova/models/UserObjects.py)
 - Prompt injection: [`nova/llm/prompts.py`](nova/llm/prompts.py:56)
 - Bootstrap tool creation: [`nova/bootstrap.py`](nova/bootstrap.py:173)
+
+## 6. Implementation plan (next steps)
+
+This section maps the remaining spec decisions to concrete code changes.
+
+### 6.1 Prompt injection “hints” (theme counts)
+
+Goal: update prompt injection to include **top N themes + active item counts**, without leaking item content.
+
+Files:
+
+- Implement in [`nova/llm/prompts.py:_get_user_memory()`](nova/llm/prompts.py:91)
+  - Replace the current theme list query (`MemoryTheme.objects...`) with an annotated query counting active items.
+  - Suggested query shape:
+    - `MemoryTheme.objects.filter(user=user).annotate(active_count=Count('items', filter=Q(items__status='active')))`
+  - Limit to top N=10, and respect the ~2KB cap (truncate).
+
+Notes:
+
+- Keep DB access in `sync_to_async(..., thread_sensitive=True)` for SQLite test stability.
+
+### 6.2 Hybrid ranking: target 70% semantic / 30% FTS
+
+Goal: make [`memory.search()`](nova/tools/builtins/memory.py:207) follow the spec weighting.
+
+Current state (code):
+
+- Postgres branch orders by distance asc, then FTS rank desc, then created_at desc.
+- This is not an explicit 70/30 weighted rerank.
+
+Implementation plan:
+
+- In [`nova/tools/builtins/memory.py:search()`](nova/tools/builtins/memory.py:207), PostgreSQL path:
+  1) Fetch candidate IDs:
+     - `semantic_top_k`: items with embedding vector ready, ordered by cosine distance
+     - `fts_top_k`: items ordered by SearchRank
+  2) Union candidates and compute per-item signals (distance + rank) on that reduced set.
+  3) Normalize signals across the candidate set and compute `final_score = 0.7*semantic + 0.3*fts`.
+  4) Order by final_score desc, then created_at desc, then id.
+
+Fallbacks:
+
+- If no provider / no query vec: FTS-only.
+- If semantic candidates empty but FTS has results: FTS-only.
+
+### 6.3 Embeddings lifecycle: rebuild-total
+
+Goal: ensure provider/model changes cause a full rebuild of all embeddings.
+
+Files:
+
+- Confirm existing flow in [`user_settings/views/memory.py:MemorySettingsView.post()`](user_settings/views/memory.py:68)
+  - Already triggers [`rebuild_user_memory_embeddings_task()`](nova/tasks/memory_rebuild_tasks.py:1) after confirmation.
+- Ensure [`nova/tasks/memory_rebuild_tasks.py`](nova/tasks/memory_rebuild_tasks.py:1) implements “set all pending + recompute all”.
+
+### 6.4 Tests
+
+Add/extend tests in [`nova/tests/test_memory.py`](nova/tests/test_memory.py:1):
+
+- `search('*')` and empty query returns newest items.
+- Default `status=active` filtering; `status='any'` includes archived.
+- `add()` defaults missing theme to `general`.
+- Ranking invariants (coarse):
+  - when vectors present, semantic matches should outrank pure lexical matches in most cases (do not assert exact float score).
+
+### 6.5 UI polish (optional)
+
+If needed, extend [`user_settings/views/memory_browser.py`](user_settings/views/memory_browser.py:7) and the template to add:
+
+- theme filter dropdown based on existing themes
+- consistent archived badge

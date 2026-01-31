@@ -298,38 +298,132 @@ async def search(
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
             from pgvector.django import CosineDistance
-            from django.db.models.functions import Now
-            from django.db.models import ExpressionWrapper, FloatField
+            # ------------------------------------------------------------
+            # Hybrid retrieval strategy (v1): 70% semantic / 30% FTS
+            #
+            # Implementation approach:
+            # 1) Fetch top-K candidates from semantic and lexical signals.
+            # 2) Union candidate IDs.
+            # 3) Compute per-item signals and do a small in-Python rerank.
+            #
+            # This keeps DB queries simple and avoids having to implement
+            # complex SQL normalization functions.
+            # ------------------------------------------------------------
+            K = 50
 
             vector = SearchVector("content", config="english")
             q = SearchQuery(query)
 
-            qs_ranked = qs.annotate(rank=SearchRank(vector, q)).filter(rank__gt=0.0)
+            # Lexical (FTS) candidates
+            fts_qs = (
+                qs.annotate(fts_rank=SearchRank(vector, q))
+                .filter(fts_rank__gt=0.0)
+                .order_by(F("fts_rank").desc(), F("created_at").desc())
+            )
+            fts_ids = list(fts_qs.values_list("id", flat=True)[:K])
+
+            # Semantic candidates (only if a query vector exists)
+            semantic_ids: List[int] = []
+            if vec is not None:
+                semantic_qs = (
+                    qs.filter(embedding__state="ready")
+                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    .order_by(F("distance").asc(), F("created_at").desc())
+                )
+                semantic_ids = list(semantic_qs.values_list("id", flat=True)[:K])
+
+            candidate_ids = list(dict.fromkeys([*semantic_ids, *fts_ids]))
+            if not candidate_ids:
+                return {
+                    "results": [],
+                    "notes": [
+                        "no matches",
+                    ],
+                }
+
+            # Load candidates with both signals (where possible)
+            candidates_qs = (
+                qs.filter(id__in=candidate_ids)
+                .select_related("theme")
+                .select_related("embedding")
+                .annotate(fts_rank=SearchRank(vector, q))
+            )
 
             if vec is not None:
-                # Hybrid ranking:
-                # - semantic (cosine distance) when a ready vector exists
-                # - fallback to FTS rank when embedding is missing/pending
-                # - add a small recency tie-breaker
-                qs_ranked = qs_ranked.select_related("embedding").annotate(
-                    distance=CosineDistance("embedding__vector", vec),
-                    # age_days is just to make recency ordering explicit/portable
-                    age_days=ExpressionWrapper(
-                        (Now() - F("created_at")) / 86400000000.0,
-                        output_field=FloatField(),
-                    ),
-                ).order_by(
-                    # Put best semantic matches first, but keep items without vectors.
-                    F("distance").asc(nulls_last=True),
-                    # Then fall back to lexical rank.
-                    F("rank").desc(),
-                    # Finally prefer more recent items.
-                    F("created_at").desc(),
+                candidates_qs = candidates_qs.annotate(
+                    distance=CosineDistance("embedding__vector", vec)
                 )
             else:
-                qs_ranked = qs_ranked.order_by(F("rank").desc(), F("created_at").desc())
+                candidates_qs = candidates_qs.annotate(
+                    distance=F("id") * 0.0  # dummy numeric column
+                )
 
-            for item in qs_ranked[:limit]:
+            candidates = list(candidates_qs)
+
+            # Compute normalized scores
+            def _semantic_sim(item) -> Optional[float]:
+                dist = getattr(item, "distance", None)
+                # Distance only meaningful when embedding exists and query vec exists.
+                if vec is None:
+                    return None
+                if dist is None:
+                    return None
+                try:
+                    dist_f = float(dist)
+                except Exception:
+                    return None
+                # Convert distance (lower is better) to similarity (higher is better)
+                return 1.0 / (1.0 + max(0.0, dist_f))
+
+            def _fts_score(item) -> float:
+                try:
+                    return float(getattr(item, "fts_rank", 0.0) or 0.0)
+                except Exception:
+                    return 0.0
+
+            semantic_vals = [v for v in (_semantic_sim(i) for i in candidates) if v is not None]
+            fts_vals = [_fts_score(i) for i in candidates]
+
+            sem_min = min(semantic_vals) if semantic_vals else 0.0
+            sem_max = max(semantic_vals) if semantic_vals else 0.0
+            fts_min = min(fts_vals) if fts_vals else 0.0
+            fts_max = max(fts_vals) if fts_vals else 0.0
+
+            def _minmax(v: float, vmin: float, vmax: float) -> float:
+                if vmax <= vmin:
+                    return 0.0
+                return (v - vmin) / (vmax - vmin)
+
+            scored: List[Dict[str, Any]] = []
+            for item in candidates:
+                sem = _semantic_sim(item)
+                sem_norm = _minmax(sem, sem_min, sem_max) if sem is not None else 0.0
+                fts = _fts_score(item)
+                fts_norm = _minmax(fts, fts_min, fts_max)
+                final_score = 0.7 * sem_norm + 0.3 * fts_norm
+                cosine_distance = None
+                if vec is not None and getattr(item, "distance", None) is not None:
+                    cosine_distance = float(getattr(item, "distance", 0.0))
+
+                scored.append(
+                    {
+                        "item": item,
+                        "final_score": final_score,
+                        "fts_rank": fts,
+                        "cosine_distance": cosine_distance,
+                    }
+                )
+
+            scored.sort(
+                key=lambda r: (
+                    -r["final_score"],
+                    -(r["item"].created_at.timestamp() if getattr(r["item"], "created_at", None) else 0.0),
+                    r["item"].id,
+                )
+            )
+
+            for row in scored[:limit]:
+                item = row["item"]
                 results.append(
                     {
                         "id": item.id,
@@ -338,8 +432,9 @@ async def search(
                         "content_snippet": item.content[:240],
                         "created_at": item.created_at.isoformat() if item.created_at else None,
                         "score": {
-                            "fts_rank": float(getattr(item, "rank", 0.0) or 0.0),
-                            "cosine_distance": float(getattr(item, "distance", 0.0)) if vec is not None else None,
+                            "final": float(row["final_score"]),
+                            "fts_rank": float(row["fts_rank"]),
+                            "cosine_distance": row["cosine_distance"],
                         },
                         "signals": {"fts": True, "semantic": vec is not None},
                     }

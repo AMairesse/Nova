@@ -9,6 +9,7 @@ from typing import Optional
 
 from langchain.agents.middleware import dynamic_prompt
 from langchain.agents.middleware.types import ModelRequest
+from django.db.models import Count, Q
 from nova.models.UserFile import UserFile
 from nova.models.Memory import MemoryTheme
 from asgiref.sync import sync_to_async
@@ -94,12 +95,19 @@ async def _get_user_memory(user) -> Optional[str]:
     New memory design is tool-driven: we do NOT inject memory content.
     """
     try:
-        themes = await sync_to_async(
-            lambda: list(
-                MemoryTheme.objects.filter(user=user).order_by("slug").values_list("slug", flat=True)
-            ),
-            thread_sensitive=False,
-        )()
+        # Include lightweight discovery hints: top themes + active item counts.
+        # NOTE: keep this intentionally small to avoid prompt bloat.
+        def _load_theme_hints():
+            themes_qs = (
+                MemoryTheme.objects.filter(user=user)
+                .annotate(active_count=Count("items", filter=Q(items__status="active")))
+                .order_by("-active_count", "slug")
+            )
+            return list(themes_qs.values_list("slug", "active_count"))
+
+        # NOTE: SQLite (tests) is prone to table locking when ORM runs in a separate
+        # worker thread. Keep DB access thread-sensitive.
+        theme_hints = await sync_to_async(_load_theme_hints, thread_sensitive=True)()
 
         # Keep this block intentionally short to avoid prompt bloat.
         lines = [
@@ -108,13 +116,15 @@ async def _get_user_memory(user) -> Optional[str]:
             "- Use `memory.search` to find relevant memories",
             "- Use `memory.get` to retrieve a specific item",
             "- Use `memory.add` to store durable information when clearly relevant",
+            "- Use `memory.archive` to archive outdated/incorrect items",
         ]
 
-        if themes:
+        if theme_hints:
             # Limit how many themes we list.
-            shown = themes[:10]
-            suffix = "" if len(themes) <= 10 else f" (+{len(themes) - 10} more)"
-            lines.append(f"Known memory themes: {', '.join(shown)}{suffix}")
+            shown = theme_hints[:10]
+            suffix = "" if len(theme_hints) <= 10 else f" (+{len(theme_hints) - 10} more)"
+            formatted = ", ".join([f"{slug} ({count})" for slug, count in shown])
+            lines.append(f"Known memory themes (active items): {formatted}{suffix}")
 
         return "\n".join(lines)
     except Exception as e:
