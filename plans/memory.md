@@ -72,6 +72,15 @@ Issues with current design:
 - UI: read-only
 - Consolidation: later (via existing scheduled tasks UI), not part of this spec iteration
 
+Additional UX/API decisions (based on early tests)
+
+- `memory.search` should support a “match all” mode:
+  - `query='*'` means “return the most recent items” (subject to `limit` and other filters)
+  - empty query is also accepted and treated like `'*'`
+- Themes are not mandatory for agents, but we avoid “theme-less” items in storage:
+  - if `theme` is omitted on `memory.add`, the system assigns it to the `general` theme automatically
+  - consequence: `memory.list_themes()` will always include at least `general` as soon as one item exists
+
 Additional decision:
 
 - Vector search backend: use **pgvector** in PostgreSQL from day 1.
@@ -239,7 +248,9 @@ Output (JSON-serializable):
 
 Behavior:
 
-- Always compute lexical match (FTS).
+- Special-case “match all”:
+  - if `query` is empty or equals `'*'`, return items ordered by recency (newest first) and apply `limit`, `theme`, `types`, `recency_days` filters.
+- Otherwise: always compute lexical match (FTS).
 - If embeddings provider configured:
   - compute query embedding (in-process or via cached provider client)
   - compute semantic similarity for items with `state=ready`
@@ -263,6 +274,8 @@ Output:
 Behavior:
 
 - Create `MemoryItem`.
+- Theme handling:
+  - If `theme` is omitted or blank: use theme `general` (create it if missing).
 - If embeddings are enabled:
   - create/update `MemoryItemEmbedding(state=pending)`
   - enqueue Celery task to compute the embedding.
@@ -280,6 +293,11 @@ These are optional for v1; they can exist but can also be intentionally omitted 
 #### 3.2.5 `memory.list_themes()`
 
 Returns list of `(slug, display_name)` for this user.
+
+Notes:
+
+- Themes are effectively “the set of themes that exist in storage”, not an exhaustive taxonomy.
+- Because `memory.add` defaults to `general`, users should reliably see at least one theme once memory has items.
 
 ### 3.2.6 Embedding compute task (Celery)
 

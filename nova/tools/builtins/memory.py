@@ -48,6 +48,10 @@ def _normalize_theme_slug(theme: str) -> str:
     return theme.replace(" ", "-")
 
 
+def _get_default_theme_slug() -> str:
+    return "general"
+
+
 async def list_themes(agent: LLMAgent) -> Dict[str, Any]:
     """List themes available in the structured memory store."""
 
@@ -90,14 +94,18 @@ async def add(
         if not content or not content.strip():
             raise ValidationError("content must be a non-empty string")
 
-        theme_obj = None
-        if theme:
-            slug = _normalize_theme_slug(theme)
-            theme_obj, _ = MemoryTheme.objects.get_or_create(
-                user=agent.user,
-                slug=slug,
-                defaults={"display_name": theme.strip()},
-            )
+        # Theme is optional from the agent perspective, but we avoid storing
+        # "theme-less" items to keep enumeration/retrieval predictable.
+        theme_value = (theme or "").strip()
+        if not theme_value:
+            theme_value = _get_default_theme_slug()
+
+        slug = _normalize_theme_slug(theme_value)
+        theme_obj, _ = MemoryTheme.objects.get_or_create(
+            user=agent.user,
+            slug=slug,
+            defaults={"display_name": theme_value},
+        )
 
         item = MemoryItem.objects.create(
             user=agent.user,
@@ -189,8 +197,9 @@ async def search(
     - pgvector semantic ranking will be enabled later once query embeddings exist.
     """
 
-    if not query or not query.strip():
-        raise ValidationError("query must be a non-empty string")
+    # Match-all support: empty query or '*' returns most recent items.
+    query = (query or "").strip()
+    match_all = (query == "" or query == "*")
 
     try:
         limit = int(limit)
@@ -201,7 +210,7 @@ async def search(
     # Provider is user-scoped (DB-backed) and must be evaluated per-call.
     provider = await aget_embeddings_provider(user_id=agent.user.id)
     query_vec = (
-        await compute_embedding(query.strip(), user_id=agent.user.id)
+        await compute_embedding(query, user_id=agent.user.id)
         if provider
         else None
     )
@@ -226,6 +235,28 @@ async def search(
         engine = connection.vendor
 
         results: List[Dict[str, Any]] = []
+
+        if match_all:
+            # No lexical filter: just return the newest items.
+            qs_recent = qs.order_by(F("created_at").desc())
+            for item in qs_recent[:limit]:
+                results.append(
+                    {
+                        "id": item.id,
+                        "theme": item.theme.slug if item.theme else None,
+                        "type": item.type,
+                        "content_snippet": item.content[:240],
+                        "created_at": item.created_at.isoformat() if item.created_at else None,
+                        "score": None,
+                        "signals": {"fts": False, "semantic": False},
+                    }
+                )
+            return {
+                "results": results,
+                "notes": [
+                    "match-all mode: empty query or '*' returns most recent items",
+                ],
+            }
 
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
