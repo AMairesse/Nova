@@ -2,7 +2,23 @@
 
 ## Current Work Focus
 
-**In progress: redesign long-term memory (structured + hybrid retrieval)**
+**In progress: continuous discussion mode (spec + macro-design in progress)**
+
+- Goal: add a default “continuous discussion” mode that coexists with thread-based mode.
+- Artifact: [`plans/continuous_discussion.md`](plans/continuous_discussion.md:1) (spec cleaned + enriched with ASCII mockups + Mermaid flows).
+- V1 decisions captured in the spec:
+  - exactly one continuous thread per user
+  - visible day segments (boundary = first message of the day, user timezone)
+  - bounded context: today raw window (4k token budget with aggressive tool-output trimming) + today summary + yesterday summary
+  - new tools: `conversation.search` + `conversation.get`
+  - `conversation.search` scope: summaries + transcript FTS + embeddings (when enabled), summaries-first, slight penalty for transcript hits covered by summary
+  - daily summaries stored as Markdown and also emitted as system messages for web UI clarity
+  - sub-agents stateless; `conversation.*` reserved to main agent
+  - explicit policy to avoid cannibalization between global Memory v2 (`memory.*`) and conversation recall (`conversation.*`)
+
+Status note:
+
+- Long-term memory redesign (Memory v2) is considered **done**; current focus is **100%** on continuous discussion mode.
 
 - Goal: replace current Markdown/theme-based memory (`UserInfo.markdown_content`) with structured memory items + themes.
 - Models: `MemoryTheme`, `MemoryItem`, `MemoryItemEmbedding` (pgvector, 1024 dims).

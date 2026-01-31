@@ -371,7 +371,9 @@ mypy-extensions==1.1.0
 niquests==3.17.0
     # via caldav
 numpy==2.4.1
-    # via langchain-community
+    # via
+    #   langchain-community
+    #   pgvector
 ollama==0.6.1
     # via langchain-ollama
 openai==2.15.0
@@ -431,6 +433,8 @@ pathable==0.4.4
     # via jsonschema-path
 pathvalidate==3.3.1
     # via py-key-value-aio
+pgvector==0.4.2
+    # via nova (pyproject.toml)
 platformdirs==4.5.1
     # via fastmcp
 playwright==1.57.0
@@ -457,8 +461,6 @@ psycopg-pool==3.3.0
     # via
     #   langgraph-checkpoint-postgres
     #   nova (pyproject.toml)
-pgvector==0.3.6
-    # via nova (memory embeddings)
 py-key-value-aio[disk,keyring,memory,redis]==0.3.0
     # via
     #   fastmcp

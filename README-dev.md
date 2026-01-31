@@ -84,6 +84,14 @@ Nova
 - A Thread contains multiple ```Messages```.
 
 
+## Translation
+
+Update the messages :
+```python manage.py makemessages -l en```
+and
+```python manage.py makemessages -l en --domain djangojs```
+
+
 ## Requirements
 
 Requirements are defined in the requirements.in file. It can be checked with :
