@@ -18,7 +18,7 @@
       {% if embeddings_provider %}
         <div class="alert alert-info">
           <strong>{% trans "Active provider" %}:</strong>
-          <code>{{ embeddings_provider.provider_type }}</code>
+          <code>{{ embeddings_provider.base_url }}</code>
           {% if embeddings_provider.model %}
             — <code>{{ embeddings_provider.model }}</code>
           {% endif %}

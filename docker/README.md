@@ -6,35 +6,36 @@ Using docker compose is the recommended way to run Nova, even for development.
 
 ```
 Nova
-├─ docker/                                # Docker compose configuration for the project
+├─ docker/                                         # Docker compose configuration for the project
 |  ├─ judge0/
-|  |  └─  judge0.conf                     # Default configuration file for the judge0 container
+|  |  └─  judge0.conf                              # Default configuration file for the judge0 container
 |  ├─ nginx/
 |  |  ├─ templates
-|  |  |  └─  default.conf.template        # Template for nginx's config (needed because MINIO_BUCKET_NAME can be set in config)
-|  |  └─ nginx.conf                       # Nginx's config
+|  |  |  └─  default.conf.template                 # Template for nginx's config (needed because MINIO_BUCKET_NAME can be set in config)
+|  |  └─ nginx.conf                                # Nginx's config
 |  ├─ ollama/
 |  |  ├─ templates
-|  |  |  └─  Modelfile.template           # Template file for Ollama (needed to configure default model to load and context size)
-|  |  └─ ollama_entrypoint.sh             # Ollama's container's entrypoint which will serve the configured model
+|  |  |  └─  Modelfile.template                    # Template file for Ollama (needed to configure default model to load and context size)
+|  |  └─ ollama_entrypoint.sh                      # Ollama's container's entrypoint which will serve the configured model
 |  ├─ searxng/
-|  |  ├─  limiter.toml                    # Required config file for searxng
-|  |  └─  settings.yml                    # Settings' file for SearXNG (warning: running the container will change owner's file)
-|  ├─ .env                                # This file should be created from .env.example
-|  ├─ .env.example                        # Example file with environment's variable for the project
-|  ├─ docker-compose.add-judge0.yml       # Add judge0 to your default setup
-|  ├─ docker-compose.add-langfuse.yml     # Add Langfuse to your default setup
-|  ├─ docker-compose.add-llamacpp.yml     # Add llama.cpp to your default setup
-|  ├─ docker-compose.add-ollama.yml       # Add Ollama to your default setup
-|  ├─ docker-compose.add-pgadmin.yml      # Add pgAdmin to your default setup
-|  ├─ docker-compose.add-searxng.yml      # Add SearXNG to your default setup
-|  ├─ docker-compose.base.yml             # Base configuration for the project
-|  ├─ docker-compose.dev.yml              # Dev configuration for the project
-|  ├─ docker-compose.from-source.yml      # Base configuration for the project but using the source code
-|  ├─ docker-compose.yml                  # Default configuration for the project
-|  ├─ Dockerfile                          # Nova's container's Dockerfile
-|  ├─ entrypoint.sh                       # Nova's container's entrypoint
-|  └─ README.md                           # This file
+|  |  ├─  limiter.toml                             # Required config file for searxng
+|  |  └─  settings.yml                             # Settings' file for SearXNG (warning: running the container will change owner's file)
+|  ├─ .env                                         # This file should be created from .env.example
+|  ├─ .env.example                                 # Example file with environment's variable for the project
+|  ├─ docker-compose.add-judge0.yml                # Add judge0 to your default setup
+|  ├─ docker-compose.add-langfuse.yml              # Add llama.cpp for embeddings to your default setup
+|  ├─ docker-compose.add-llamacpp-embeddings.yml   # Add llama.cpp to your default setup
+|  ├─ docker-compose.add-llamacpp.yml              # Add llama.cpp to your default setup
+|  ├─ docker-compose.add-ollama.yml                # Add Ollama to your default setup
+|  ├─ docker-compose.add-pgadmin.yml               # Add pgAdmin to your default setup
+|  ├─ docker-compose.add-searxng.yml               # Add SearXNG to your default setup
+|  ├─ docker-compose.base.yml                      # Base configuration for the project
+|  ├─ docker-compose.dev.yml                       # Dev configuration for the project
+|  ├─ docker-compose.from-source.yml               # Base configuration for the project but using the source code
+|  ├─ docker-compose.yml                           # Default configuration for the project
+|  ├─ Dockerfile                                   # Nova's container's Dockerfile
+|  ├─ entrypoint.sh                                # Nova's container's entrypoint
+|  └─ README.md                                    # This file
 ├─ locale/
 ├─ ...
 └─ requirements.txt
@@ -121,6 +122,25 @@ This setup include :
    ```
 
 5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
+
+
+## Add llama.cpp for embeddings to your default setup
+
+1. Download the `docker-compose.add-llamacpp-embeddings.yml` file:
+
+   ```bash
+   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-llamacpp-embeddings.yml
+   ```
+
+2. Edit the `.env` file if you want to change the model
+
+4. Start containers:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.add-llamacpp-embeddings.yml up -d
+   ```
+
+5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider for embeddings will be available for all users on the memory config panel.
 
 
 ## Add Ollama to your default setup

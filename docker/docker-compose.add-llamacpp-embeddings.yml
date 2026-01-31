@@ -1,0 +1,25 @@
+services:
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    environment:
+      - MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1
+      - MEMORY_EMBEDDINGS_MODEL=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
+      - MEMORY_EMBEDDINGS_API_KEY=${MEMORY_EMBEDDINGS_MODEL:-None}
+
+  llamacpp-embeddings:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    volumes:
+      - hfcache:/root/.cache
+    environment:
+      - LLAMA_ARG_HF_REPO=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
+      - LLAMA_ARG_EMBEDDINGS=1
+      - LLAMA_ARG_NO_WEBUI=1
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/v1/health"]
+      interval: 5s
+
+volumes:
+  hfcache:
