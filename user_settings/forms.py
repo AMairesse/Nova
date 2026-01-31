@@ -20,7 +20,7 @@ from crispy_forms.layout import Layout, Div, Field
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Tool import Tool, ToolCredential
-from nova.models.UserObjects import UserInfo, UserParameters
+from nova.models.UserObjects import UserParameters
 from user_settings.mixins import SecretPreserveMixin
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -569,35 +569,3 @@ class UserMemoryEmbeddingsForm(SecretPreserveMixin, forms.ModelForm):
         if not data and self.instance.pk:
             return self.instance.memory_embeddings_api_key
         return data
-
-
-# ────────────────────────────────────────────────────────────────────────────
-#  User Information (Memory)
-# ────────────────────────────────────────────────────────────────────────────
-class UserInfoForm(forms.ModelForm):
-    """Form for editing user memory information in Markdown format."""
-
-    class Meta:
-        model = UserInfo
-        fields = ["markdown_content"]
-        widgets = {
-            "markdown_content": forms.Textarea(attrs={
-                "rows": 20,
-                "placeholder": ("# Personal Info\n\n## Preferences\n"
-                                "- Favorite color: Blue\n- Preferred language: English\n\n"
-                                "## Work\n- Current project: Nova\n- Role: Developer\n\n"
-                                "## Other\n- Hobbies: Reading, coding")
-            }),
-        }
-
-    # ------------------------------------------------------------------ #
-    #  Constructor                                                        #
-    # ------------------------------------------------------------------ #
-    def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
-        self.user = user
-        super().__init__(*args, **kwargs)
-
-        # Crispy forms helper
-        self.helper = FormHelper()
-        self.helper.form_tag = False
-        self.helper.disable_csrf = True

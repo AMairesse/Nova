@@ -480,7 +480,7 @@ async def get_functions(tool, agent: LLMAgent):
                 status=status,
                 agent=agent,
             ),
-            name="search",
+            name="memory_search",
             description="Search long-term memory items relevant to a query",
             args_schema={
                 "type": "object",
@@ -513,7 +513,7 @@ async def get_functions(tool, agent: LLMAgent):
                 tags=tags,
                 agent=agent,
             ),
-            name="add",
+            name="memory_add",
             description="Add a long-term memory item",
             args_schema={
                 "type": "object",
@@ -535,7 +535,7 @@ async def get_functions(tool, agent: LLMAgent):
         ),
         StructuredTool.from_function(
             coroutine=lambda item_id: get(item_id, agent),
-            name="get",
+            name="memory_get",
             description="Get a memory item by id",
             args_schema={
                 "type": "object",
@@ -547,7 +547,7 @@ async def get_functions(tool, agent: LLMAgent):
         ),
         StructuredTool.from_function(
             coroutine=lambda: list_themes(agent),
-            name="list_themes",
+            name="memory_list_themes",
             description="List themes in long-term memory",
             args_schema={
                 "type": "object",
@@ -557,7 +557,7 @@ async def get_functions(tool, agent: LLMAgent):
         ),
         StructuredTool.from_function(
             coroutine=lambda item_id: archive(item_id=item_id, agent=agent),
-            name="archive",
+            name="memory_archive",
             description="Archive (soft-delete) a memory item by id",
             args_schema={
                 "type": "object",

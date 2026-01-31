@@ -12,6 +12,7 @@ from langchain.agents.middleware.types import ModelRequest
 from django.db.models import Count, Q
 from nova.models.UserFile import UserFile
 from nova.models.Memory import MemoryTheme
+from nova.models.Tool import Tool
 from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ async def nova_system_prompt(request: ModelRequest) -> str:
             base_prompt += file_context
     elif not thread:
         # When no thread is associated (e.g. /api/ask/), skip DB access
-        base_prompt += "\nNo attached files available."
+        base_prompt += "\nNo attached files available.\n"
 
     return base_prompt
 
@@ -82,7 +83,7 @@ async def _is_memory_tool_enabled(agent_config) -> bool:
     # Wrap ORM call in sync_to_async to avoid async context error
     tools = await sync_to_async(
         list, thread_sensitive=False
-    )(agent_config.tools.filter(is_active=True, tool_type='BUILTIN'))
+    )(agent_config.tools.filter(is_active=True, tool_type=Tool.ToolType.BUILTIN))
     return any(
         tool.tool_subtype == 'memory' and tool.is_active
         for tool in tools
@@ -111,12 +112,8 @@ async def _get_user_memory(user) -> Optional[str]:
 
         # Keep this block intentionally short to avoid prompt bloat.
         lines = [
-            "\n\nLong-term memory is available.",
-            "Use the memory tools when you need user-specific facts or preferences:",
-            "- Use `memory.search` to find relevant memories",
-            "- Use `memory.get` to retrieve a specific item",
-            "- Use `memory.add` to store durable information when clearly relevant",
-            "- Use `memory.archive` to archive outdated/incorrect items",
+            "\nLong-term memory is available.",
+            "Use the memory tools when you need user-specific facts or preferences\n",
         ]
 
         if theme_hints:
@@ -124,12 +121,12 @@ async def _get_user_memory(user) -> Optional[str]:
             shown = theme_hints[:10]
             suffix = "" if len(theme_hints) <= 10 else f" (+{len(theme_hints) - 10} more)"
             formatted = ", ".join([f"{slug} ({count})" for slug, count in shown])
-            lines.append(f"Known memory themes (active items): {formatted}{suffix}")
+            lines.append(f"\nKnown memory themes (active items): {formatted}{suffix}\n")
 
         return "\n".join(lines)
     except Exception as e:
         logger.warning(f"Failed to load memory themes: {e}")
-        return "\n\nLong-term memory is available via tools (`memory.search`, `memory.get`, `memory.add`)."
+        return "\nLong-term memory is available via tools (`memory.search`, `memory.get`, `memory.add`).\n"
 
 
 async def _get_file_context(thread, user) -> Optional[str]:
@@ -143,7 +140,7 @@ async def _get_file_context(thread, user) -> Optional[str]:
         if file_count:
             return f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
         else:
-            return "\nNo attached files available."
+            return "\nNo attached files available.\n"
     except Exception as e:
         logger.warning(f"Failed to get file context: {e}")
-        return "\nNo attached files available."
+        return "\nNo attached files available.\n"

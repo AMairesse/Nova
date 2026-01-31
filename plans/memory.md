@@ -492,9 +492,47 @@ Out of scope:
 - editing memory content
 - managing scheduled consolidation from this feature (already exists elsewhere)
 
-## 4. Future work (explicitly not in this iteration)
+## 4. Legacy System Decommissioning (UserInfo removal)
 
-- Memory consolidation via scheduled tasks (nightly/weekly) using Nova’s existing UI-based scheduler.
+The old memory system based on [`UserInfo.markdown_content`](nova/models/UserObjects.py:13) is now obsolete and scheduled for removal. The new structured memory system (MemoryTheme + MemoryItem + MemoryItemEmbedding) completely replaces it.
+
+### 4.1 Rationale for removal
+
+- **No functional usage**: No active code reads `UserInfo.markdown_content` anymore
+- **No migration needed**: Per spec section 0.1, no backward compatibility required
+- **Data loss acceptable**: Old Markdown blob was unstructured; valuable data should have been migrated manually or is reproducible via agent interactions
+- **Simplification**: Removing dead code reduces maintenance surface
+
+### 4.2 Files to modify for complete removal
+
+| File | Change |
+|------|--------|
+| [`nova/models/UserObjects.py`](nova/models/UserObjects.py:13) | Delete `UserInfo` class |
+| [`nova/signals.py`](nova/signals.py:26) | Remove `UserInfo.objects.create(user=instance)` line |
+| [`nova/admin.py`](nova/admin.py:23) | Remove `admin.site.register(UserInfo)` |
+| [`user_settings/forms.py`](user_settings/forms.py:577) | Delete `UserInfoForm` class (unused but exists) |
+| [`nova/tests/models/test_models.py`](nova/tests/models/test_models.py:21) | Delete `UserObjectsModelsTest` class or remove UserInfo tests |
+| `nova/migrations/` | Create migration to delete `UserInfo` table |
+| [`README-dev.md`](README-dev.md:33) | Update model description (remove UserInfo mention) |
+| [`plans/memory.md`](plans/memory.md:54) | Update section 1 (current state) to reflect removal |
+
+### 4.3 Pre-removal verification checklist
+
+- [ ] Confirm no views reference `UserInfo`
+- [ ] Confirm no templates reference `user_info`
+- [ ] Confirm no API endpoints expose `UserInfo`
+- [ ] Confirm no management commands use `UserInfo`
+- [ ] Backup production data (if applicable) before migration
+
+### 4.4 Post-removal cleanup
+
+- [ ] Verify tests pass
+- [ ] Verify new user creation still works (UserProfile, UserParameters created)
+- [ ] Update any documentation referencing the old memory system
+
+## 5. Future work (explicitly not in this iteration)
+
+- Memory consolidation via scheduled tasks (nightly/weekly) using Nova's existing UI-based scheduler.
 - Continuous discussion mode (single ongoing session across days) built on top of the same memory store.
 
 ## 5. Relevant code touchpoints

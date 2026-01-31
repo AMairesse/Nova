@@ -213,7 +213,7 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
     return [
         StructuredTool.from_function(
             coroutine=lambda files: upsert_webapp(None, files, agent),
-            name="create_webapp",
+            name="webapp_create",
             description=(
                 "Create a static web-app for the current conversation. "
                 "Always include at least 'index.html'. "
@@ -240,7 +240,7 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         ),
         StructuredTool.from_function(
             coroutine=lambda slug, files: upsert_webapp(slug, files, agent),
-            name="update_webapp",
+            name="webapp_update",
             description=(
                 "Update an existing static web-app for the current conversation (partial upsert). "
                 "Use this when you already know the webapp slug for this conversation. "
@@ -270,7 +270,7 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
         ),
         StructuredTool.from_function(
             coroutine=lambda slug: read_webapp(slug, agent),
-            name="read_webapp",
+            name="webapp_read",
             description=(
                 "Return all files of a webapp (path -> content) for this conversation. "
             ),
