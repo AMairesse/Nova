@@ -6,7 +6,6 @@ services:
     environment:
       - MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1
       - MEMORY_EMBEDDINGS_MODEL=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
-      - MEMORY_EMBEDDINGS_API_KEY=${MEMORY_EMBEDDINGS_MODEL:-None}
 
   llamacpp-embeddings:
     image: ghcr.io/ggml-org/llama.cpp:server

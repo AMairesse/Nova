@@ -70,12 +70,16 @@ def get_embeddings_provider(*, user_id: int | None = None) -> Optional[Embedding
     (as requested) so changes take effect immediately.
     """
 
-    # 1) llama.cpp (system provider-like)
-    llama_url = getattr(settings, "LLAMA_CPP_SERVER_URL", None)
-    llama_model = getattr(settings, "LLAMA_CPP_MODEL", None)
-    if llama_url and llama_model:
-        # llama.cpp compose sets /v1 already; keep behavior consistent.
-        return EmbeddingsProvider(provider_type="llama.cpp", base_url=llama_url, model=llama_model)
+    # 1) llama.cpp embeddings model (system provider-like)
+    llama_url = getattr(settings, "MEMORY_EMBEDDINGS_URL", None)
+    llama_model = getattr(settings, "MEMORY_EMBEDDINGS_MODEL", None) or ""
+    if llama_url:
+        return EmbeddingsProvider(
+            provider_type="custom_http",
+            base_url=llama_url,
+            model=llama_model,
+            api_key=None,
+        )
 
     # 2) Per-user custom endpoint (DB)
     if user_id is not None:
@@ -88,18 +92,6 @@ def get_embeddings_provider(*, user_id: int | None = None) -> Optional[Embedding
                 model=(params.memory_embeddings_model or "").strip(),
                 api_key=(params.memory_embeddings_api_key or None),
             )
-
-    # 3) Legacy env-based custom endpoint
-    custom_url = getattr(settings, "MEMORY_EMBEDDINGS_URL", None)
-    custom_model = getattr(settings, "MEMORY_EMBEDDINGS_MODEL", None) or ""
-    custom_key = getattr(settings, "MEMORY_EMBEDDINGS_API_KEY", None)
-    if custom_url:
-        return EmbeddingsProvider(
-            provider_type="custom_http",
-            base_url=custom_url,
-            model=custom_model,
-            api_key=custom_key,
-        )
 
     return None
 
