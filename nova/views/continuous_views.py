@@ -138,6 +138,11 @@ def continuous_messages(request):
         except Exception:
             return JsonResponse({"error": "invalid_day"}, status=400)
 
+    # Posting is only allowed for today's day label.
+    # If the user is browsing a past day, the UI should be read-only.
+    today_label = get_day_label_for_user(request.user)
+    allow_posting = (day_label is None) or (day_label == today_label)
+
     user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
     agent_id = request.GET.get("agent_id")
     default_agent = None
@@ -178,6 +183,7 @@ def continuous_messages(request):
             "default_agent": default_agent,
             "pending_interactions": [],
             "Actor": Actor,
+            "allow_posting": allow_posting,
         },
     )
 

@@ -57,3 +57,20 @@ Recent updates (since last compact)
   - config change confirmation: changing provider/model prompts confirmation and shows how many embeddings will be rebuilt
 
 Design spec: [`plans/memory.md`](plans/memory.md)
+
+## Continuous discussion mode – implementation status (recent)
+
+Work completed/changed recently (post-spec cleanup):
+
+- Continuous mode now has day-scoped message loading (`/continuous/messages/?day=YYYY-MM-DD`).
+- Continuous UI day selector supports deep-linking via `?day=` and shows **“Today”** label for the current day.
+- Day summary UI is rendered from `DaySegment.summary_markdown` and shows a “Day summary updated” event derived from `DaySegment.updated_at` (no persisted `system` Message for summary updates).
+- Summary panel is injected into the same scroll container as the timeline, so it scrolls with the conversation.
+- Removed browser persistence of selected thread (`lastThreadId` / `lastContinuousThreadId`) and related JS code paths.
+- Threads UI now filters out the continuous thread (shows only `Thread.mode=thread`).
+- Threads delete endpoint returns JSON (`{"status":"OK"}`) so deletion persists server-side when called via `fetch`.
+- Fixed stuck “Running AI agent” UI after reload by explicitly re-enabling input and hiding the progress bar when `/running-tasks/<thread_id>/` returns no running tasks.
+
+Notes / remaining:
+
+- UX/UI verification ongoing; migrations + full test suite intentionally deferred until the UI stabilizes.

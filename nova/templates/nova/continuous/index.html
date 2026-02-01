@@ -140,9 +140,33 @@
   };
 </script>
 
-<script>
-  (function () {
+  <script>
+  (async function () {
     let selectedDay = null;
+    let isDayPinnedInUrl = false;
+
+    function getLocalISODate() {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    function isTodayDayLabel(day) {
+      return !!day && day === getLocalISODate();
+    }
+
+    function applyPostingVisibility(day) {
+      // When browsing a day different from today, posting must be disabled.
+      // We enforce it client-side as well, because the message input lives in the
+      // server-rendered message container and we want this to be bulletproof
+      // across navigation + refresh.
+      const allowPosting = !day || isTodayDayLabel(day);
+      document.querySelectorAll('#message-container .message-input-area').forEach((el) => {
+        el.style.display = allowPosting ? '' : 'none';
+      });
+    }
 
     function getSelectedDayFromUrl() {
       const qs = new URLSearchParams(window.location.search);
@@ -151,6 +175,7 @@
 
     function setSelectedDay(day) {
       selectedDay = day || null;
+      isDayPinnedInUrl = !!selectedDay;
       const qs = new URLSearchParams(window.location.search);
       if (selectedDay) qs.set('day', selectedDay); else qs.delete('day');
       const nextUrl = `${window.location.pathname}${qs.toString() ? '?' + qs.toString() : ''}`;
@@ -190,6 +215,8 @@
       const mc = document.getElementById('message-container');
       if (mc) mc.innerHTML = html;
 
+      applyPostingVisibility(day);
+
       // Re-attach summary panel and ensure it scrolls with the conversation.
       if (summaryPanel) {
         const scroll = document.querySelector('#message-container #conversation-container');
@@ -214,7 +241,10 @@
       const eventEl = document.getElementById('continuous-summary-updated-event');
       if (!panel || !htmlEl || !titleEl || !eventEl) return;
 
-      if (!day) {
+      // Summary is only visible when the day is explicitly present in the URL.
+      // This keeps `/continuous/` focused on "today" without showing an (often empty)
+      // summary panel for the current day.
+      if (!day || !isDayPinnedInUrl) {
         panel.style.display = 'none';
         return;
       }
@@ -242,6 +272,12 @@
 
     async function selectDay(day) {
       setSelectedDay(day);
+      // The panel is shown only when `day` is explicitly present in the URL.
+      // (handled by loadSummary)
+
+      // Load messages first (this re-renders the scroll container), then load the summary.
+      // This ordering avoids edge cases where the summary is rendered but the panel
+      // gets moved/removed during message refresh.
       await loadMessages(day);
       await loadSummary(day);
     }
@@ -293,16 +329,23 @@
 
     bindDayClicks();
 
-    // Initial selection: URL ?day=YYYY-MM-DD (if present), otherwise today.
+    // Initial selection:
+    // - If the URL has `?day=...`, we are in "pinned day" mode (summary visible).
+    // - If the URL is `/continuous/` (no param), we render today's messages but keep the URL
+    //   unchanged and keep the summary panel hidden.
     const initialDay = getSelectedDayFromUrl();
     if (initialDay) {
-      selectDay(initialDay);
+      isDayPinnedInUrl = true;
+      await selectDay(initialDay);
     } else {
-      // When no day is selected we still load messages (server defaults).
-      loadMessages(null);
+      isDayPinnedInUrl = false;
+      selectedDay = null;
+      // Keep URL as `/continuous/` (no `?day=`) for the default “today” view.
+      await loadMessages(getLocalISODate());
+      await loadSummary(null);
     }
   })();
-</script>
+  </script>
 
 <script src="{% static 'js/responsive.js' %}" defer></script>
 <script src="{% static 'js/voice_recognition.js' %}" defer></script>
