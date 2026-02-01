@@ -184,6 +184,13 @@
 
                 // Check for running tasks and reconnect to streaming if needed
                 this.checkAndReconnectRunningTasks();
+
+                // If nothing is running and there are no pending interactions,
+                // ensure the input is enabled (important after a page reload).
+                const pendingCards = document.querySelectorAll('[data-interaction-id]');
+                if (!pendingCards || pendingCards.length === 0) {
+                    this.streamingManager.setInputAreaDisabled(false);
+                }
             } catch (error) {
                 console.error('Error loading messages:', error);
             }
@@ -615,6 +622,14 @@
                             task.current_response,
                             task.last_progress
                         );
+                    }
+                } else {
+                    // No running tasks: hide progress UI and re-enable input.
+                    const progressDiv = document.getElementById('task-progress');
+                    if (progressDiv) progressDiv.classList.add('d-none');
+                    const pendingCards = document.querySelectorAll('[data-interaction-id]');
+                    if (!pendingCards || pendingCards.length === 0) {
+                        this.streamingManager.setInputAreaDisabled(false);
                     }
                 }
             } catch (error) {

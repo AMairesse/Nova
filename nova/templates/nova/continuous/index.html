@@ -28,7 +28,9 @@
         </button>
       </div>
 
-      <!-- Day summary (client-rendered from /continuous/day/<day>/, no SYSTEM message injection) -->
+      <!-- Day summary (client-rendered from /continuous/day/<day>/, no SYSTEM message injection).
+           The JS moves this node inside the message scroll container (#conversation-container)
+           after messages are loaded, so it scrolls with the timeline. -->
       <div class="border-bottom bg-white" id="continuous-day-summary" style="display:none;">
         <div class="d-flex align-items-center justify-content-between px-3 py-2">
           <div class="fw-semibold" id="continuous-day-summary-title">{% trans "Day Summary" %}</div>
@@ -163,12 +165,28 @@
       el.innerHTML = data.html || '<div class="text-muted p-3">No days yet.</div>';
     }
 
+    function ensureSummaryInsideScroll() {
+      const panel = document.getElementById('continuous-day-summary');
+      const scroll = document.querySelector('#message-container #conversation-container');
+      if (!panel || !scroll) return;
+
+      // Only move when the container has been rendered.
+      // Prepend so the summary is above the timeline inside the same scroll area.
+      if (panel.parentElement !== scroll) {
+        scroll.prepend(panel);
+      }
+    }
+
     async function loadMessages(day) {
       const params = day ? `?day=${encodeURIComponent(day)}` : '';
       const resp = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
       const html = await resp.text();
       const mc = document.getElementById('message-container');
       if (mc) mc.innerHTML = html;
+
+      // Make sure the day summary panel scrolls with the conversation.
+      ensureSummaryInsideScroll();
+
       // Announce thread id for other modules (files/webapps)
       // Thread id is embedded in the message container hidden field.
       const tid = document.querySelector('#message-container input[name="thread_id"]')?.value;
@@ -203,6 +221,9 @@
       }
 
       panel.style.display = '';
+
+      // If messages were already loaded, ensure summary is inside the scroll container.
+      ensureSummaryInsideScroll();
     }
 
     async function selectDay(day) {
