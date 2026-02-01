@@ -328,6 +328,14 @@ def run_scheduled_agent_task(self, scheduled_task_id):
         # Get the scheduled task
         scheduled_task = ScheduledTask.objects.get(id=scheduled_task_id)
 
+        # Maintenance tasks should never be executed through this legacy entrypoint.
+        if scheduled_task.task_kind == ScheduledTask.TaskKind.MAINTENANCE:
+            logger.warning(
+                "Scheduled task %s is maintenance; skipping legacy run_scheduled_agent_task.",
+                scheduled_task.name,
+            )
+            return
+
         if not scheduled_task.is_active:
             logger.info(f"Scheduled task {scheduled_task.name} is not active, skipping.")
             return
@@ -353,6 +361,12 @@ def run_scheduled_agent_task(self, scheduled_task_id):
         # Use AgentTaskExecutor for consistent execution
         executor = AgentTaskExecutor(task, scheduled_task.user, thread, scheduled_task.agent, scheduled_task.prompt)
         asyncio.run(executor.execute_or_resume())
+
+        # IMPORTANT: TaskExecutor swallows exceptions and marks the Task as FAILED.
+        # Refresh and surface failure as a scheduled_task error.
+        task.refresh_from_db()
+        if task.status == TaskStatus.FAILED:
+            raise RuntimeError(task.result or "scheduled agent task failed")
 
         # Mark task as completed
         task.status = TaskStatus.COMPLETED

@@ -24,9 +24,18 @@
                     <div>
                         <h6 class="mb-1">{{ task.name }}</h6>
                         <small class="text-muted">
-                            {% trans "Agent" %}: {{ task.agent.name }} |
+                            {% if task.task_kind == "maintenance" %}
+                                {% trans "Maintenance" %}
+                            {% else %}
+                                {% trans "Agent" %}: {{ task.agent.name }} |
+                            {% endif %}
                             {% trans "Schedule" %}: {{ task.get_schedule_description }} ({{ task.timezone }})
                         </small>
+                        {% if task.task_kind == "maintenance" %}
+                        <br><small class="text-muted">
+                            {% trans "Purpose" %}: {% trans "Nightly summaries for continuous discussion" %}
+                        </small>
+                        {% endif %}
                         {% if task.last_run_at %}
                         <br><small class="text-muted">
                             {% trans "Last run" %}: {{ task.last_run_at|date:"Y-m-d H:i" }}
@@ -38,7 +47,9 @@
                         <div class="mt-2">
                             <a href="{% url 'user_settings:scheduled_task_edit' task.pk %}" class="btn btn-sm btn-outline-primary">{% trans "Edit" %}</a>
                             <a href="{% url 'user_settings:scheduled_task_run_now' task.pk %}" class="btn btn-sm btn-outline-secondary">{% trans "Run Now" %}</a>
+                            {% if task.task_kind != "maintenance" %}
                             <a href="{% url 'user_settings:scheduled_task_toggle_active' task.pk %}" class="btn btn-sm btn-outline-warning">{% trans "Disable" %}</a>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
@@ -60,7 +71,11 @@
                     <div>
                         <h6 class="mb-1">{{ task.name }}</h6>
                         <small class="text-muted">
-                            {% trans "Agent" %}: {{ task.agent.name }} |
+                            {% if task.task_kind == "maintenance" %}
+                                {% trans "Maintenance" %}
+                            {% else %}
+                                {% trans "Agent" %}: {{ task.agent.name }} |
+                            {% endif %}
                             {% trans "Schedule" %}: {{ task.get_schedule_description }} ({{ task.timezone }})
                         </small>
                         {% if task.last_run_at %}
@@ -81,8 +96,10 @@
                             {% if task.last_error %}
                             <a href="{% url 'user_settings:scheduled_task_clear_error' task.pk %}" class="btn btn-sm btn-outline-info">{% trans "Clear Error" %}</a>
                             {% endif %}
+                            {% if task.task_kind != "maintenance" %}
                             <a href="{% url 'user_settings:scheduled_task_toggle_active' task.pk %}" class="btn btn-sm btn-outline-success">{% trans "Enable" %}</a>
                             <a href="{% url 'user_settings:scheduled_task_delete' task.pk %}" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
+                            {% endif %}
                         </div>
                     </div>
                 </div>

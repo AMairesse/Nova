@@ -71,23 +71,44 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
     # Django ORM is synchronous and must not run in an async context.
     # Use sync_to_async for all DB access.
 
-    async def _fetch_segment_and_messages() -> Tuple[Optional[DaySegment], List[Message]]:
-        def _impl() -> Tuple[Optional[DaySegment], List[Message]]:
+    async def _fetch_segment_and_messages() -> Tuple[Optional[DaySegment], List[Message], str]:
+        def _impl() -> Tuple[Optional[DaySegment], List[Message], str]:
             segment = (
                 DaySegment.objects.select_related("thread", "user", "starts_at_message")
                 .filter(id=day_segment_id)
                 .first()
             )
             if not segment:
-                return None, []
-            msgs = list(
-                Message.objects.filter(
-                    user=segment.user,
-                    thread=segment.thread,
-                    created_at__gte=segment.starts_at_message.created_at,
-                ).order_by("created_at")
+                return None, [], ""
+
+            # Bound the day segment using the next segment start.
+            next_seg = (
+                DaySegment.objects.filter(user=segment.user, thread=segment.thread, day_label__gt=segment.day_label)
+                .order_by("day_label")
+                .select_related("starts_at_message")
+                .first()
             )
-            return segment, msgs
+            start_dt = segment.starts_at_message.created_at
+            end_dt = next_seg.starts_at_message.created_at if (next_seg and next_seg.starts_at_message_id) else None
+
+            qs = Message.objects.filter(
+                user=segment.user,
+                thread=segment.thread,
+                created_at__gte=start_dt,
+            )
+            if end_dt:
+                qs = qs.filter(created_at__lt=end_dt)
+
+            msgs = list(qs.order_by("created_at", "id"))
+
+            # Carry-over from previous day summary (optional).
+            prev_seg = (
+                DaySegment.objects.filter(user=segment.user, thread=segment.thread, day_label__lt=segment.day_label)
+                .order_by("-day_label")
+                .first()
+            )
+            carry_over = (prev_seg.summary_markdown or "").strip() if prev_seg else ""
+            return segment, msgs, carry_over
 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
@@ -100,7 +121,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
-    segment, messages = await _fetch_segment_and_messages()
+    segment, messages, carry_over = await _fetch_segment_and_messages()
     if not segment:
         return {"status": "not_found", "day_segment_id": day_segment_id}
 
@@ -113,6 +134,15 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
     if not transcript.strip():
         return {"status": "ok", "day_segment_id": day_segment_id, "summary": ""}
 
+    # Option A: include carry-over explicitly so "open loops" stay visible across days,
+    # but keep the transcript source-of-truth for the day.
+    if carry_over:
+        transcript = (
+            "Carry-over (yesterday summary):\n"
+            f"{carry_over}\n\n"
+            "Today transcript:\n"
+            f"{transcript}"
+        )
     prompt = _build_day_summary_prompt(str(segment.day_label), transcript)
 
     agent = await LLMAgent.create(user=user, thread=segment.thread, agent_config=agent_config)
@@ -159,3 +189,117 @@ def summarize_day_segment_task(self, day_segment_id: int, mode: str = "heuristic
     except Exception as e:
         logger.exception("[summarize_day_segment] failed day_segment_id=%s", day_segment_id)
         raise self.retry(countdown=60, exc=e)
+
+
+def _daysegment_needs_nightly_refresh(seg: DaySegment) -> bool:
+    """Return True if the segment should be summarized (or re-summarized).
+
+    Policy:
+    - only for day segments strictly older than today (handled by caller)
+    - summarize if no summary exists
+    - or if new messages were appended after the last summarized message
+    """
+
+    if not (seg.summary_markdown or "").strip():
+        return True
+
+    # If we have a summary but no boundary pointer, be conservative and refresh.
+    if not seg.summary_until_message_id:
+        return True
+
+    # Check for messages after the boundary within this day segment.
+    # NOTE: Day segments are defined by their starts_at_message and the next segment's start.
+    next_seg = (
+        DaySegment.objects.filter(user=seg.user, thread=seg.thread, day_label__gt=seg.day_label)
+        .order_by("day_label")
+        .only("id", "starts_at_message_id")
+        .first()
+    )
+    end_dt = None
+    if next_seg and next_seg.starts_at_message_id:
+        end_dt = next_seg.starts_at_message.created_at
+
+    qs = Message.objects.filter(
+        user=seg.user,
+        thread=seg.thread,
+        created_at__gte=seg.starts_at_message.created_at,
+        id__gt=seg.summary_until_message_id,
+    )
+    if end_dt:
+        qs = qs.filter(created_at__lt=end_dt)
+
+    return qs.exists()
+
+
+@shared_task(bind=True, name="continuous_nightly_daysegment_summaries")
+def nightly_summarize_continuous_daysegments_task(self):
+    """Nightly maintenance task (celery-beat).
+
+    Runs at 02:00 UTC daily.
+
+    For all DaySegments with day_label < today (UTC):
+    - generate a summary if missing
+    - or regenerate if new messages exist after `summary_until_message`
+    """
+
+    from django.utils import timezone
+
+    today = timezone.now().date()
+
+    # Prefetch starts_at_message to avoid N+1 on created_at.
+    segs = (
+        DaySegment.objects.select_related("starts_at_message", "thread", "user")
+        .filter(day_label__lt=today)
+        .order_by("day_label", "id")
+    )
+
+    queued = 0
+    for seg in segs:
+        try:
+            if _daysegment_needs_nightly_refresh(seg):
+                summarize_day_segment_task.delay(seg.id, mode="nightly")
+                queued += 1
+        except Exception:
+            logger.exception("[nightly_summarize] failed scheduling day_segment_id=%s", seg.id)
+
+    logger.info("[nightly_summarize] queued=%s", queued)
+    return {"status": "ok", "queued": queued}
+
+
+@shared_task(bind=True, name="continuous_nightly_daysegment_summaries_for_user")
+def nightly_summarize_continuous_daysegments_for_user_task(self, user_id: int):
+    """Nightly maintenance task, scoped to a single user.
+
+    This is the task scheduled via user-owned ScheduledTask so users can edit the time.
+    """
+
+    from django.utils import timezone
+
+    today = timezone.now().date()
+    segs = (
+        DaySegment.objects.select_related("starts_at_message", "thread", "user")
+        .filter(user_id=user_id, day_label__lt=today)
+        .order_by("day_label", "id")
+    )
+
+    # IMPORTANT:
+    # We must process in chronological order and *execute* each summarization before the next,
+    # so that carry-over (yesterday summary) is up-to-date.
+    processed = 0
+    updated = 0
+    for seg in segs:
+        processed += 1
+        try:
+            if _daysegment_needs_nightly_refresh(seg):
+                asyncio.run(_summarize_day_segment_async(day_segment_id=seg.id, mode="nightly"))
+                updated += 1
+        except Exception:
+            logger.exception("[nightly_summarize_for_user] failed day_segment_id=%s", seg.id)
+
+    logger.info(
+        "[nightly_summarize_for_user] user_id=%s processed=%s updated=%s",
+        user_id,
+        processed,
+        updated,
+    )
+    return {"status": "ok", "user_id": user_id, "processed": processed, "updated": updated}

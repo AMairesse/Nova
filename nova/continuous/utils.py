@@ -46,18 +46,63 @@ def ensure_continuous_thread(user) -> Thread:
     with transaction.atomic():
         thread = Thread.objects.filter(user=user, mode=Thread.Mode.CONTINUOUS).first()
         if thread:
+            # Best-effort: ensure the per-user nightly maintenance scheduled task exists.
+            # This keeps the behavior user-visible/editable via Scheduled Tasks.
+            try:
+                ensure_continuous_nightly_summary_scheduled_task(user)
+            except Exception:
+                pass
             return thread
 
         # Create with a stable subject; we'll keep it simple for V1.
         try:
-            return Thread.objects.create(
+            thread = Thread.objects.create(
                 user=user,
                 subject="Continuous",
                 mode=Thread.Mode.CONTINUOUS,
             )
+            # Best-effort: schedule nightly summaries for this user.
+            try:
+                ensure_continuous_nightly_summary_scheduled_task(user)
+            except Exception:
+                pass
+            return thread
         except IntegrityError:
             # Another request created it.
-            return Thread.objects.get(user=user, mode=Thread.Mode.CONTINUOUS)
+            thread = Thread.objects.get(user=user, mode=Thread.Mode.CONTINUOUS)
+            try:
+                ensure_continuous_nightly_summary_scheduled_task(user)
+            except Exception:
+                pass
+            return thread
+
+
+def ensure_continuous_nightly_summary_scheduled_task(user) -> None:
+    """Ensure the per-user nightly summary maintenance task exists.
+
+    This is implemented as a user-owned ScheduledTask so it appears in the UI
+    (Scheduled Tasks) and the user can modify the schedule.
+    """
+
+    from nova.models.ScheduledTask import ScheduledTask
+
+    # Default: 02:00 UTC daily.
+    name = "Continuous: nightly day summaries"
+    ScheduledTask.objects.get_or_create(
+        user=user,
+        name=name,
+        defaults={
+            "task_kind": ScheduledTask.TaskKind.MAINTENANCE,
+            "maintenance_task": "continuous_nightly_daysegment_summaries_for_user",
+            "cron_expression": "0 2 * * *",
+            "timezone": "UTC",
+            "keep_thread": False,
+            "is_active": True,
+            # Kept for backward compatibility with the existing form/UI.
+            "prompt": "",
+            "agent": None,
+        },
+    )
 
 
 def ensure_day_segment(user, thread: Thread, day_label: dt.date):
