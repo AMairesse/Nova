@@ -1,4 +1,4 @@
-# Continuous Discussion Mode (Spec Draft)
+# Continuous Discussion Mode (Spec)
 
 ## 0. Goal
 
@@ -6,9 +6,9 @@ Add a **continuous discussion mode** to Nova that:
 
 - lets a user continue the same discussion across days without creating new threads
 - keeps context **bounded** (no runaway prompts)
-- remains compatible with the existing **thread-based** mode
+- lives along the existing **thread-based** mode
 
-This mode builds on the existing structured global memory (Memory v2) and adds **conversation-level recall** for the ongoing continuous thread.
+This mode builds on the existing structured global memory (memory tool) and adds **conversation-level recall** for the ongoing continuous thread.
 
 ## 1. Key concepts
 
@@ -16,19 +16,17 @@ We separate 3 layers:
 
 1) **Transcript**: raw [`Message`](nova/models/Message.py:1) rows in the continuous [`Thread`](nova/models/Thread.py:1)
 2) **Day segments**: visible daily grouping + summaries (new `DaySegment`)
-3) **Global Memory v2**: durable user memory via [`memory.search()`](nova/tools/builtins/memory.py:207)
+3) **Memory Tool**: durable user memory via `memory.search()`
 
 Principle:
 
 - **Messages remain source of truth** (not deleted). Summaries are derived artifacts.
 
-## 2. Decisions (V1 frozen)
+## 2. Decisions
 
 ### 2.1 One continuous thread per user
 
-- V1: exactly **one** continuous thread per user (default entry point)
-
-Implementation note (V1): this is enforced via a dedicated mapping table [`ContinuousThread`](plans/continuous_discussion.md:609) (not via `Thread.mode`).
+- Exactly **one** continuous thread per user (default entry point)
 
 ### 2.2 Visible day segments with boundary = first message of the day
 
@@ -52,14 +50,14 @@ Everything older is retrieved via `conversation.search` / `conversation.get`.
 
 ### 2.4 Conversation tools: search + get
 
-V1 exposes two tools:
+We exposes two tools allowing the agent to read previous messages or summaries:
 
 - `conversation.search` (global merge across summary + transcript candidates)
 - `conversation.get` (fetch exact content by message id or by range)
 
-### 2.5 conversation.search scope (V1)
+### 2.5 conversation.search scope
 
-V1 search scope:
+Search scope:
 
 - **summaries + transcript FTS + embeddings** (when embeddings enabled)
 - single merged ranking; summaries and transcript are both searchable
@@ -90,21 +88,16 @@ Suggested Markdown template:
 - ...
 ```
 
-### 2.7 Summaries also visible as system messages
+### 2.7 Summary persistence and UI visibility
 
-We want the web UI to show compaction results clearly.
-
-- `DaySegment.summary_markdown` is persisted for retrieval
-- a corresponding **system message** is appended in the thread so the user can see when compaction happened
-
-Messaging apps note:
-
-- external apps cannot insert historical system messages; the web UI can.
+- The summary is stored only in `DaySegment.summary_markdown`.
+- No `system` [`Message`](nova/models/Message.py:1) is persisted for summary updates.
+- The web UI can display a lightweight “Day summary updated” UI event derived from `DaySegment.updated_at`.
 
 ### 2.8 Sub-agents are stateless and cannot call conversation tools
 
 - Sub-agents do not keep persistent continuous context
-- `conversation.search/get` are reserved to the main agent (V1)
+- `conversation.search/get` are reserved to the main agent
 
 ## 3. UX text mockups (web)
 
@@ -148,11 +141,11 @@ Timeline (Today)
 09:05  User:   On avance sur les segments journaliers.
 09:06  Agent:  Ok, voici les options...
 
-10:12  System: Day summary updated
-       [content folded by default ▸ expand]
+  10:12  UI: Day summary updated
+        (summary panel refreshed)
 
 10:13  User:   Et pour conversation.search ?
-10:14  Agent:  V1: summaries + transcript FTS + embeddings...
+  10:14  Agent:  summaries + transcript FTS + embeddings...
 
 [Type message…____________________________________] [Send]
 ```
@@ -166,8 +159,8 @@ Timeline (2026-01-29)
 
   [Older messages folded ▸]
 
-  18:10 System: Day summary finalized
-        (shows the daily summary block)
+  18:10 UI: Day summary updated
+        (summary panel refreshed)
 
   18:11 User/Agent messages...
 ```
@@ -201,8 +194,8 @@ Timeline (Today)
 
   [Older messages folded ▸]    (these are now represented by the summary)
 
-  14:32 System: Day summary updated
-        [expand to read the summary]
+  14:32 UI: Day summary updated
+        [expand summary panel]
 
   14:33 User:  Ok, continue.
   14:34 Agent: ...
@@ -239,18 +232,7 @@ Two mechanisms:
 - Summaries are derived artifacts.
 - Transcript remains searchable even if content is covered by a summary.
 
-### 4.4 Messaging app integration note (WhatsApp, Signal, ...)
-
-In a messaging app, we cannot insert a “system summary message” back in time.
-
-Guideline:
-
-- The web UI remains the source of truth for summary visibility.
-- The messaging adapter can:
-  - ignore system summary messages entirely, or
-  - post a summary forward as a new assistant message (if we explicitly want users to see it in the external app).
-
-## 5. Tool spec (draft V1)
+## 5. Tool spec
 
 ### 5.1 `conversation.search`
 
@@ -258,7 +240,7 @@ Input:
 
 - `query` string
 - `day` optional `YYYY-MM-DD`
-- `recency_days` optional (V1 default: 14)
+- `recency_days` optional (default: 14)
 - `limit` int default 6 max 20
 - `cursor` optional opaque string (cursor-based pagination)
 - `min_score` optional float
@@ -278,10 +260,10 @@ Output:
     - `summary_snippet`
     - `score`
 
-API abstraction note (V1):
+API abstraction note:
 
 - Transcript search may be implemented internally on `TranscriptChunk`, but the tool output intentionally exposes a stable `message_id` only.
-- To inspect details and quote accurately, the agent should follow up with [`conversation.get`](plans/continuous_discussion.md:290) using that `message_id` (or a day/range).
+- To inspect details and quote accurately, the agent should follow up with [`conversation.get`](plans/continuous_discussion.md:333) using that `message_id` (or a day/range).
 
 Ranking:
 
@@ -294,14 +276,14 @@ Ranking:
 - apply penalty when `covered_by_summary=true` (multiplier 0.85)
 - tie-breakers: newer day, then newer message
 
-Merge strategy (V1 decision):
+Merge strategy:
 
 - single global list
 - combine `kind=summary` and `kind=message` candidates into one pool
 - sort by `final_score` descending
 - no fixed bonus for summaries (summaries tend to win naturally via higher-signal embeddings)
 
-Default scope and pagination (V1 decisions):
+Default scope and pagination:
 
 - Default scope is `recency_days=14`.
 - If `day` is provided, it overrides recency scope (search only within that day segment).
@@ -312,14 +294,14 @@ Default scope and pagination (V1 decisions):
 
 Notes:
 
-- This mirrors the “hybrid 70/30” idea used in Clawdbot, but V1 should keep the exact coefficients configurable.
+- This mirrors the “hybrid 70/30” idea used in Clawdbot, but should keep the exact coefficients configurable.
 - If embeddings are disabled, transcript search falls back to FTS-only.
 
-#### 5.1.1 `covered_by_summary` (V1 definition)
+#### 5.1.1 `covered_by_summary`
 
 Goal: mark transcript hits that are likely redundant because the **day summary already contains the same information**.
 
-V1 approach (pragmatic + cheap): treat `covered_by_summary` as a **range-based coverage flag**.
+Approach (pragmatic + cheap): treat `covered_by_summary` as a **range-based coverage flag**.
 
 Definition:
 
@@ -350,7 +332,7 @@ Input (one-of):
 - `day_segment_id`
 - `day_segment_id` + `from_message_id` + `to_message_id`
 
-V1 additions (pagination + limits):
+Pagination + limits:
 
 - `limit` optional (default 30, max 30)
 - `before_message_id` optional (for pagination)
@@ -369,142 +351,46 @@ Output:
 - if messages: ordered list of `{message_id, role, content, created_at}`
 - if summary: `{day_segment_id, day_label, summary_markdown, updated_at}`
 
-Output additions (V1):
+Output additions:
 
 - `truncated` bool
 - `next_before_message_id` / `next_after_message_id` optional, to support cursor-less paging on message ids
 
-Multi-tenant and permissions (V1):
+Multi-tenant and permissions:
 
 - `conversation.get` only returns content belonging to the current authenticated user
 - any `message_id` / `day_segment_id` outside the user scope must return a not-found style error
 
 ## 6. Prompt policy (avoid cannibalization)
 
-Rule set (V1):
+Rule set:
 
 - Durable fact / preference / long-term instruction → use [`memory.search()`](nova/tools/builtins/memory.py:207)
 - Ongoing-thread detail across days → use `conversation.search/get`
 - Never copy raw transcript into long-term memory automatically; use [`memory.add()`](nova/tools/builtins/memory.py:77) only when explicitly asked or clearly durable and non-sensitive
 
-## 7. Data model (V1 draft)
+## 7. Data model
 
 ### 7.1 Thread mode
 
-V1 decision: we **do not** model “continuous-ness” as a `Thread` type (`Thread.mode` is not used).
+Decision: model continuous discussion as a **Thread mode**.
 
-Instead we introduce a mapping table `ContinuousThread` (see below).
+- Add `Thread.mode` with at least: `thread|continuous`.
+- Continuous home resolves the user’s continuous thread via:
+  - `Thread.objects.get(user=user, mode='continuous')`
+  - if missing: create it.
 
-#### 7.1.1 Design choice: `Thread.mode` vs `ContinuousThread` mapping table
+Correctness note:
 
-We have 3 viable approaches to enforce “exactly one continuous thread per user”.
-
-##### Option A: `Thread.mode = continuous` (service-layer enforcement)
-
-Mechanics:
-
-- Add `Thread.mode` field and query `Thread.objects.get(user=user, mode='continuous')`.
-
-Pros:
-
-- simplest mental model
-- minimal schema surface
-- day segments and transcript indexing naturally FK to `thread`
-
-Cons:
-
-- without a DB constraint, two concurrent requests could create two continuous threads
-- adding a DB partial unique constraint can be migration/DB-specific (Postgres supports it well)
-
-Best when:
-
-- you accept service-layer idempotence + retry, and/or you add a DB partial unique.
-
-##### Option B: `Thread.mode = continuous` + DB partial unique
-
-Mechanics:
-
-- keep `Thread.mode`
-- add unique `(user_id)` WHERE `mode='continuous'` (Postgres partial unique index)
-
-Pros:
-
-- strong correctness at DB level
-- still minimal schema
-
-Cons:
-
-- migration complexity (partial unique index) and it is DB-specific
-
-Best when:
-
-- you are comfortable with Postgres-specific migrations (Nova already assumes Postgres).
-
-##### Option C: separate `ContinuousThread` table (mapping)
-
-Mechanics:
-
-- keep existing `Thread` table unchanged (or no `mode` field)
-- add a new table: `ContinuousThread(user -> thread)` (OneToOne on user)
-
-Pros:
-
-- **hard guarantee**: OneToOne ensures exactly one mapping row per user
-- avoids partial unique index migrations
-- future flexibility: can evolve to `ContinuousThread(user, key, thread)` if later you want multiple “continuous spaces” (per agent, per workspace, per label)
-- keeps `Thread` semantics stable (threads remain generic containers)
-
-Cons:
-
-- adds an indirection hop everywhere you need the continuous thread
-- needs careful deletion behavior (if thread deleted, mapping must be recreated)
-
-Best when:
-
-- you want correctness guarantees without relying on partial uniques
-- you anticipate future variants of “continuous threads”
-
-##### Recommendation
-
-Given Nova is Postgres-based, **Option B** is the most direct if you are fine with Postgres partial unique indexes.
-
-If you prefer avoiding partial-unique migration complexity and you like the idea that “continuous-ness” is a *relationship* rather than a *thread type*, then **Option C (`ContinuousThread`) is a good idea** and is very maintainable.
-
-If we pick Option C, we should update this spec section to:
-
-- remove `Thread.mode` and instead define `ContinuousThread`
-- define how the system resolves the continuous thread (get-or-create mapping row under lock)
-
-V1 choice: **Option C (`ContinuousThread`)**.
-
-### 7.1.2 `ContinuousThread` (V1)
-
-New model suggestion: [`nova/models/ContinuousThread.py`](nova/models/ContinuousThread.py:1)
-
-- `user` OneToOne
-- `thread` OneToOne → [`Thread`](nova/models/Thread.py:1)
-- `created_at`
-
-Constraint:
-
-- OneToOne(`user`) enforces exactly one continuous thread per user at DB level.
-
-Resolution algorithm (high-level):
-
-- `get_or_create` the `ContinuousThread` row under a transaction
-- if created, also create the backing `Thread` row and bind it
-
-Deletion behavior:
-
-- If the backing thread is deleted, delete the mapping row too.
-- If the mapping row is missing, it is recreated lazily on next access.
+- The request path must be idempotent (handle concurrent create attempts safely).
+- We can later add a PostgreSQL partial unique index to enforce **at most one** `mode='continuous'` thread per user, without changing API semantics.
 
 ### 7.2 `DaySegment`
 
 New model (location suggestion: [`nova/models/DaySegment.py`](nova/models/DaySegment.py:1)):
 
 - `user` FK
-- `thread` FK
+- `thread` FK (the continuous thread)
 - `day_label` date
 - `starts_at_message` FK → `Message`
 - `ends_at_message` FK → `Message` nullable
@@ -512,7 +398,7 @@ New model (location suggestion: [`nova/models/DaySegment.py`](nova/models/DaySeg
 - `summary_covers_until_message` FK → `Message` nullable
 - `updated_at`
 
-Clarifications (V1):
+Clarifications:
 
 - `day_label` is computed using **user timezone**.
 - `starts_at_message` is the **first message** that opened the day segment.
@@ -534,13 +420,13 @@ Invariants:
 - if set, `ends_at_message.thread_id == DaySegment.thread_id`
 - if set, `summary_covers_until_message.thread_id == DaySegment.thread_id`
 
-Additional invariants (V1):
+Additional invariants:
 
 - if set, `ends_at_message_id >= starts_at_message_id`
 - if set, `summary_covers_until_message_id >= starts_at_message_id`
 - if both set, `summary_covers_until_message_id <= ends_at_message_id`
 
-Update rules (V1):
+Update rules:
 
 - On day creation, set `starts_at_message` to the triggering message; leave `ends_at_message` null.
 - On nightly finalization:
@@ -553,7 +439,7 @@ Update rules (V1):
 
 Important: `summary_covers_until_message` must be monotonic within a day segment (never move backwards).
 
-### 7.3 Derived indexes for transcript search (to specify)
+### 7.3 Derived indexes for transcript search
 
 We will need derived structures for:
 
@@ -562,7 +448,7 @@ We will need derived structures for:
 
 This will likely mirror Memory v2 patterns but scoped to the continuous thread/day segments.
 
-#### 7.3.1 Proposed V1: `TranscriptChunk` (+ optional embeddings)
+#### 7.3.1 `TranscriptChunk` (+ optional embeddings)
 
 Plain-language definition:
 
@@ -591,7 +477,7 @@ New model suggestion: [`nova/models/TranscriptChunk.py`](nova/models/TranscriptC
 - `created_at`
 - `updated_at`
 
-Clarifications (V1):
+Clarifications:
 
 - A chunk represents an **ordered contiguous window** of messages within a single day segment.
 - A chunk is the unit for transcript search (FTS + embeddings) and returns provenance via `start_message_id/end_message_id`.
@@ -599,7 +485,7 @@ Clarifications (V1):
 Chunk construction inputs:
 
 - include `user` + `assistant` messages by default
-- V1 decision: exclude `system` messages from transcript chunks (summaries have their own storage + embeddings; keep transcript chunks focused on raw dialogue)
+- Decision: exclude `system` messages from transcript chunks (including day summary system messages).
 - exclude or heavily trim tool call payloads/results
 
 Indexes/constraints:
@@ -618,7 +504,7 @@ Invariants:
 - `end_message.thread_id == TranscriptChunk.thread_id`
 - `start_message_id <= end_message_id`
 
-Additional invariants (V1):
+Additional invariants:
 
 - `day_segment.thread_id == TranscriptChunk.thread_id`
 - `start_message.created_at` and `end_message.created_at` fall within the day segment’s effective window
@@ -633,7 +519,7 @@ Update model:
 - append-only during the day: new chunks cover new messages after the last indexed `end_message_id`
 - nightly recompute: can rewrite chunk boundaries for a day; use `content_hash` + upsert to keep idempotence
 
-##### Strategy: append-only (daytime) vs nightly recompute (V1)
+##### Strategy: append-only (daytime) vs nightly recompute
 
 We combine two behaviors:
 
@@ -683,7 +569,7 @@ Notes:
 - We keep transcript search artifacts **scoped to the continuous thread** (not global).
 - Retention: V1 keeps all chunks (messages are source-of-truth anyway); later we can add pruning if needed.
 
-#### 7.3.2 Optional V1: summary indexing
+#### 7.3.2 Summary indexing
 
 To make `conversation.search` summaries-first fast, we can add:
 
@@ -692,7 +578,7 @@ To make `conversation.search` summaries-first fast, we can add:
 
 If we do summary embeddings, we can reuse the Memory v2 embedding pipeline pattern.
 
-##### `DaySegmentEmbedding` (V1)
+##### `DaySegmentEmbedding`
 
 New model suggestion: [`nova/models/DaySegmentEmbedding.py`](nova/models/DaySegmentEmbedding.py:1)
 
@@ -706,9 +592,9 @@ Indexes:
 - OneToOne enforces unique on `day_segment_id`
 - vector index (pgvector) aligned with the project’s chosen index type
 
-### 7.4 Embeddings strategy for continuous mode (V1)
+### 7.4 Embeddings strategy for continuous mode
 
-V1 decision:
+Decision:
 
 - Embeddings are computed for:
   - `DaySegment.summary_markdown` (high signal, low volume)
@@ -719,7 +605,7 @@ Provider selection and vector rules:
 - reuse the existing Memory v2 embedding provider selection precedence and vector padding rules (1024 dims, zero-pad, reject larger)
 - embeddings are computed asynchronously via Celery
 
-Throttling (V1):
+Throttling:
 
 - no numeric quota in V1
 - use a **dedicated Celery queue** for conversation embeddings, ex: `conversation_embeddings`
@@ -730,7 +616,7 @@ Rebuild policy:
 - if the user changes embedding provider/model, mark conversation embeddings stale and enqueue rebuild gradually
 - rebuild can be prioritized: summaries first, then chunks
 
-### 7.5 Lexical search (FTS) strategy (V1)
+### 7.5 Lexical search (FTS) strategy
 
 We use PostgreSQL full-text search (FTS) as the lexical signal for [`conversation.search`](plans/continuous_discussion.md:253).
 
@@ -753,17 +639,9 @@ Rationale:
 
 #### 7.5.2 Language configuration
 
-V1 decision:
+Decision:
 
 - use the same `to_tsvector` config as Memory v2 / current implementation: `english`.
-
-If Nova’s UI and users are mostly French:
-
-- prefer `french` config for stemming.
-
-If multi-language per user is expected:
-
-- V2 can introduce a per-user config and/or store per-row language.
 
 #### 7.5.3 Ranking signal and normalization
 
@@ -782,13 +660,9 @@ Notes:
 
 #### 7.5.4 Query parsing
 
-V1 recommendation:
+Decision:
 
 - `plainto_tsquery` for safety and predictable behavior.
-
-V2 follow-up:
-
-- support `websearch_to_tsquery` to better match user expectations (quotes, minus terms).
 
 #### 7.5.5 Indexing and updates
 
@@ -799,7 +673,7 @@ V2 follow-up:
   - update the `content_tsv` field (if materialized)
   - optionally enqueue embeddings job for `TranscriptChunkEmbedding`
 
-## 8. Celery workflows (V1 draft)
+## 8. Celery workflows
 
 This section specifies the async jobs required for continuous discussion mode.
 
@@ -808,14 +682,14 @@ This section specifies the async jobs required for continuous discussion mode.
 - produce and refresh day summaries (nightly + in-day)
 - keep transcript indexing up-to-date (chunks + FTS + embeddings when enabled)
 - ensure idempotence and safe concurrency
-- provide observability: user-visible system messages + task logs
+ - provide observability: user-visible UI events + task logs
 
 ### 8.2 Task inventory (proposed)
 
 Suggested task module: [`nova/tasks/conversation_tasks.py`](nova/tasks/conversation_tasks.py:1)
 
 1) `ensure_continuous_thread(user_id)`
-   - resolves/creates [`ContinuousThread`](nova/models/ContinuousThread.py:1) + backing [`Thread`](nova/models/Thread.py:1)
+   - resolves/creates the user’s continuous [`Thread`](nova/models/Thread.py:1) (`Thread.mode='continuous'`)
    - should be callable from request path but implemented as an idempotent helper
 
 2) `ensure_day_segment(user_id, thread_id, day_label)`
@@ -828,10 +702,10 @@ Suggested task module: [`nova/tasks/conversation_tasks.py`](nova/tasks/conversat
      - messages from `starts_at_message` to current end (or latest message if open)
      - trims tool outputs aggressively
      - may include previous summary as context to make summarization incremental
-   - writes:
-     - `DaySegment.summary_markdown`
-     - advances `DaySegment.summary_covers_until_message`
-   - appends a system message to the thread (web UI clarity)
+    - writes:
+      - `DaySegment.summary_markdown`
+      - advances `DaySegment.summary_covers_until_message`
+    - no transcript message is created; the UI shows the updated summary panel
 
 4) `index_transcript_append(day_segment_id, from_message_id)`
    - creates new [`TranscriptChunk`](nova/models/TranscriptChunk.py:1) rows for messages after `from_message_id`
@@ -879,12 +753,12 @@ Heuristic triggers (V1):
 
 ### 8.4 Idempotence + concurrency control
 
-Principles (V1):
+Principles:
 
 - tasks are safe to retry
 - only one summarization or recompute runs at a time per `(user_id, day_segment_id)`
 
-Locking strategy (V1 decision):
+Locking strategy (decision):
 
 - **DB lock only**
   - use DB row-level lock on [`DaySegment`](nova/models/DaySegment.py:1) (`SELECT ... FOR UPDATE`) inside the task
@@ -919,14 +793,14 @@ Idempotence rules:
 
 User-visible:
 
-- system message “Day summary updated” with folded summary block (web UI)
+- UI event “Day summary updated” rendered using `DaySegment.updated_at` (no persisted transcript message)
 
 Internal:
 
 - Celery task status stored in existing task tracking (if present) and logged
 - include `day_segment_id`, `thread_id`, `start/end message ids`, and token estimates in logs
 
-## 9. Open design point: transcript chunking for embeddings (V1)
+## 9. Transcript chunking for embeddings
 
 We must avoid indexing per-token/per-message with excessive volume.
 
@@ -936,11 +810,11 @@ Candidates:
 - Chunk by window of messages (e.g. group contiguous messages into ~400–800 token blocks with overlap)
 - Chunk by turn-pairs (user+assistant)
 
-Recommendation for V1: group by contiguous windows to reduce index cardinality, with provenance back to message ids.
+Recommendation: group by contiguous windows to reduce index cardinality, with provenance back to message ids.
 
-### 9.1 Chunking strategy (V1 decision)
+### 9.1 Chunking strategy (decision)
 
-V1 decision: **chunks by windows of messages** with:
+Decision: **chunks by windows of messages** with:
 
 - target size: ~600 tokens per chunk
 - overlap: small overlap (ex: ~100 tokens or N last messages) to reduce boundary misses
@@ -952,7 +826,7 @@ V1 decision: **chunks by windows of messages** with:
 Chunk composition rules:
 
 - include only user/assistant natural language by default
-- include system messages that carry meaning (ex: day summary messages)
+- exclude system messages (summaries are indexed separately; keep transcript chunks focused on raw dialogue)
 - aggressively trim tool outputs (head/tail + placeholders), consistent with [`4.1 Raw window budget (today)`](plans/continuous_discussion.md:213)
 
 Rationale:
@@ -1020,15 +894,14 @@ flowchart TD
   F[Nightly scheduler] --> G[Finalize open DaySegments]
   G --> D
   D --> H[Store summary_markdown on DaySegment]
-  H --> I[Append system summary message to thread]
+  H --> I[UI shows summary updated event]
 ```
 
-### 10.5 Data model ERD (V1)
+### 10.5 Data model ERD
 
 ```mermaid
 erDiagram
-  USER ||--|| CONTINUOUSTHREAD : owns
-  CONTINUOUSTHREAD ||--|| THREAD : points_to
+  USER ||--o{ THREAD : owns
   THREAD ||--o{ MESSAGE : contains
   THREAD ||--o{ DAYSEGMENT : groups
   DAYSEGMENT ||--o{ TRANSCRIPTCHUNK : indexes
@@ -1048,41 +921,31 @@ Notes:
 - Cardinalities are conceptual; actual DB constraints are via FK/OneToOne + unique indexes.
 - All entities are user-scoped (multi-tenant). The `user` FK is included even when `thread` exists to make filtering and indexes explicit.
 
-## 11. V2 follow-ups (explicit)
+## 11. UI + endpoints mapping
 
-Not in V1, but intentionally kept as follow-ups:
+Decision: add a dedicated continuous page at route `continuous/`, and keep the existing thread-based home page unchanged.
 
-- **Numeric throttling/quotas** for conversation embeddings (budget per day/user, queue backpressure)
-- **Redis distributed locks** if DB locks show contention or long-running tasks require stronger coordination
-- **Multiple continuous discussions per user** (ex: by agent, by workspace, or by label) by extending [`ContinuousThread`](plans/continuous_discussion.md:324)
-- Smarter semantic `covered_by_summary` detection (if range-based coverage proves too coarse)
-- Transcript pruning strategies (if chunk volume becomes an operational issue)
-
-## 12. UI + endpoints mapping (V1)
-
-V1 decision: add a dedicated continuous page at route `continuous/`, and keep the existing thread-based home page unchanged.
-
-### 12.1 Routes
+### 11.1 Routes
 
 Add new server-rendered views:
 
 - `GET continuous/` → render continuous home (day selector + day summary + timeline)
 - `GET continuous/day/<YYYY-MM-DD>/` (optional) → open a specific day
-- `POST continuous/search/` (HTMX) → run [`conversation.search`](plans/continuous_discussion.md:376) and render results fragment
-- `GET continuous/messages/` (HTMX) → fetch message window around `message_id` (wraps [`conversation.get`](plans/continuous_discussion.md:466))
-- `POST continuous/add-message/` (HTMX) → append a user message into the `ContinuousThread` and start agent execution (Celery task), returning the appended message fragment
+- `POST continuous/search/` (HTMX) → run [`conversation.search`](plans/continuous_discussion.md:243) and render results fragment
+- `GET continuous/messages/` (HTMX) → fetch message window around `message_id` (wraps [`conversation.get`](plans/continuous_discussion.md:333))
+- `POST continuous/add-message/` (HTMX) → append a user message into the continuous thread and start agent execution (Celery task), returning the appended message fragment
 - `POST continuous/regenerate-summary/` (HTMX) → manual trigger: enqueue `summarize_day_segment(mode=manual)`
 
-### 12.7 Real-time streaming (V1)
+### 11.7 Real-time streaming
 
-V1 decision:
+Decision:
 
 - Reuse the existing WebSocket + Celery task progress pipeline (same consumer pattern as thread mode).
 
 Expected flow (continuous):
 
 1) User submits `POST continuous/add-message/`
-2) View appends the user message in the backing `Thread` from [`ContinuousThread`](plans/continuous_discussion.md:609)
+2) View appends the user message in the backing continuous `Thread` (`Thread.mode='continuous'`).
 3) View enqueues the existing agent execution task (same as thread mode), passing:
    - `thread_id` = continuous thread id
    - `agent_config` = default agent
@@ -1091,17 +954,17 @@ Expected flow (continuous):
 
 Notes:
 
-- Continuous mode should not introduce a new streaming mechanism (no SSE in V1).
+- Continuous mode should not introduce a new streaming mechanism (no SSE).
 - Only routing and thread resolution differ; task tracking and WebSocket infra stay the same.
 
-### 12.8 Day selector (V1)
+### 11.8 Day selector
 
 Goal:
 
 - allow the user to navigate day segments in the continuous thread quickly
 - default to Today
 
-UI controls (V1):
+UI controls:
 
 - Quick picks:
   - `Today`
@@ -1138,18 +1001,18 @@ Loading a selected day:
   - timeline block
   - search scope default (Day)
 
-## 13. Implementation checklist (V1)
+## 12. Implementation checklist
 
 This is an execution-oriented checklist to implement the spec.
 
-### 13.1 Data model + migrations
+### 12.1 Data model + migrations
 
-- Add model [`ContinuousThread`](nova/models/ContinuousThread.py:1) (OneToOne user → OneToOne thread)
+- Add/extend [`Thread`](nova/models/Thread.py:1) with `mode` field.
 - Add model [`DaySegment`](nova/models/DaySegment.py:1)
-  - include `summary_covers_until_message` (FK to [`Message`](nova/models/Message.py:1))
+   - include `summary_covers_until_message` (FK to [`Message`](nova/models/Message.py:1))
 - Add model [`TranscriptChunk`](nova/models/TranscriptChunk.py:1)
-  - include `content_text`, `content_hash`, `token_estimate`
-  - exclude `system` messages from chunk content (V1 decision)
+   - include `content_text`, `content_hash`, `token_estimate`
+   - exclude `system` messages from chunk content
 - Add model [`TranscriptChunkEmbedding`](nova/models/TranscriptChunkEmbedding.py:1) (pgvector(1024))
 - Add model [`DaySegmentEmbedding`](nova/models/DaySegmentEmbedding.py:1) (pgvector(1024))
 - Add indexes:
@@ -1160,9 +1023,9 @@ This is an execution-oriented checklist to implement the spec.
 
 Notes:
 
-- The spec still mentions `Thread.mode` in historical sections; for V1 implementation we should prefer the `ContinuousThread` mapping and keep `Thread` generic.
+- `Thread.mode` must be added and migration must ensure default mode for existing rows.
 
-### 13.2 Tools: `conversation.search` + `conversation.get`
+### 12.2 Tools: `conversation.search` + `conversation.get`
 
 - Implement tool handler(s) following the schemas in:
   - [`conversation.search`](plans/continuous_discussion.md:376)
@@ -1174,7 +1037,7 @@ Notes:
   - merge: single global sorted list
 - Implement cursor pagination for `conversation.search` (`cursor` + `next_cursor`)
 
-### 13.3 Indexing pipelines
+### 12.3 Indexing pipelines
 
 - Implement chunking:
   - append-only in-day chunk creation
@@ -1185,7 +1048,7 @@ Notes:
   - use queue `conversation_embeddings`
   - reuse Memory v2 embedding provider selection + padding rules
 
-### 13.4 Celery workflows
+### 12.4 Celery workflows
 
 - Create task module [`nova/tasks/conversation_tasks.py`](nova/tasks/conversation_tasks.py:1)
 - Implement tasks listed in [`Celery workflows`](plans/continuous_discussion.md:234)
@@ -1195,7 +1058,7 @@ Notes:
   - DB row lock on DaySegment (`SELECT ... FOR UPDATE`)
   - avoid holding locks during LLM calls (two-phase pattern)
 
-### 13.5 Views + templates (web UI)
+### 12.5 Views + templates (web UI)
 
 - Add routes described in [`UI + endpoints mapping`](plans/continuous_discussion.md:1063)
   - `GET continuous/`
@@ -1214,12 +1077,12 @@ Notes:
 - Streaming:
   - reuse existing WebSocket task progress pipeline (see [`nova/routing.py`](nova/routing.py:1))
 
-### 13.6 Tests
+### 12.6 Tests
 
 - Model tests:
-  - ContinuousThread uniqueness and get-or-create logic
-  - DaySegment invariants and monotonic `summary_covers_until_message`
-  - TranscriptChunk chunk boundary and idempotence (`content_hash`)
+   - Thread.mode continuous get-or-create logic
+   - DaySegment invariants and monotonic `summary_covers_until_message`
+   - TranscriptChunk chunk boundary and idempotence (`content_hash`)
 - Tool tests:
   - `conversation.search` scoring + pagination + user scoping
   - `conversation.get` windowing (`limit`, `before_message_id`, `after_message_id`, truncation)
@@ -1227,18 +1090,18 @@ Notes:
   - nightly finalize closes segments and triggers summary + reindex
   - heuristic triggers do not regress summary boundary
 
-### 13.7 Rollout notes
+### 12.7 Rollout notes
 
 - Initial backfill:
-  - on first visit to `continuous/`, lazily create ContinuousThread and DaySegment on first message
+  - on first visit to `continuous/`, lazily create the continuous Thread and DaySegment on first message
 - Observability:
-  - ensure system summary messages are visible and folded in UI
+  - ensure the summary panel and the “Day summary updated” UI event are visible
 
 Notes:
 
 - We should keep existing endpoints like [`add_message`](nova/views/thread_views.py:221) for thread mode, but introduce a continuous-specific message posting endpoint to avoid mixing semantics.
 
-### 12.2 Templates
+### 11.2 Templates
 
 Suggested new templates (names indicative):
 
@@ -1249,14 +1112,14 @@ Suggested new templates (names indicative):
 - `nova/templates/nova/continuous/partials/search_results.html`
 - `nova/templates/nova/continuous/partials/message_window.html`
 
-### 12.3 Navigation
+### 11.3 Navigation
 
 - Top nav adds: `Continuous` linking to `continuous/`.
 - Threads mode remains accessible via existing navigation.
 
-### 12.3.1 Agent selection (V1)
+### 11.3.1 Agent selection
 
-V1 decision:
+Decision:
 
 - No agent selection UI in continuous mode.
 - Continuous mode always uses the user’s **default agent**.
@@ -1265,34 +1128,46 @@ Implications:
 
 - the `continuous/` page should not expose an agent dropdown
 - the backend must resolve “default agent” deterministically (existing user settings / default AgentConfig)
-- multi-agent continuous discussions are a V2 topic (see [`V2 follow-ups`](plans/continuous_discussion.md:1053))
+- multi-agent continuous discussions are intentionally out of scope for now
 
-### 12.4 Folding behavior (UI)
+### 11.4 Folding behavior (UI)
 
 Rule:
 
 - In the timeline for a day, messages with `message_id <= DaySegment.summary_covers_until_message_id` are folded under an “Older messages” expander.
 
-### 12.5 Search UX
+### 11.5 Search UX
 
 - Search form submits to `continuous/search/`.
 - Scope selector:
   - `Day` → passes `day=<selected day>` to [`conversation.search`](plans/continuous_discussion.md:376)
   - `Recent` → uses default `recency_days=14`
 
-### 12.6 Permissions and multi-tenancy
+### 11.6 Permissions and multi-tenancy
 
 - All continuous endpoints are `login_required`.
 - All queries must be filtered by `request.user`.
 
-## 9. Next steps
-
-Remaining spec work:
-
-- finalize transcript indexing tables and chunking strategy
-- specify Celery tasks precisely (nightly summary + heuristic update) and failure handling
-- map UI changes into Django views/templates and endpoints
-
-Suggested next question to settle before implementation:
+## 13. Open questions (intentionally unresolved)
 
 - Do we want a dedicated UI affordance to “promote” a conversation excerpt into Memory v2 (user-confirmed), or keep it manual via chat instruction only?
+
+## 14. Risks and clarifications
+
+This section captures non-obvious implementation risks and places where extra care is needed.
+
+### 14.1 Continuous thread uniqueness
+
+- Without a DB constraint, concurrent requests can attempt to create multiple continuous threads.
+- Recommended: implement idempotent creation (transaction + retry on integrity error).
+- Optional hardening: add a PostgreSQL partial unique index later (at most one `Thread` with `mode='continuous'` per user).
+
+### 14.2 Transcript indexing complexity
+
+- Maintaining two indexing behaviors (append-only during the day + nightly recompute) adds operational complexity.
+- If you want a simpler first implementation, pick one strategy (append-only only, or recompute-only).
+
+### 14.3 `conversation.search` complexity
+
+- Hybrid scoring (FTS + embeddings) + cursor pagination is substantial.
+- A simplification path is to start with lexical-only (FTS) and add embeddings later.
