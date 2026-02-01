@@ -55,13 +55,13 @@ We exposes two tools allowing the agent to read previous messages or summaries:
 - `conversation.search` (global merge across summary + transcript candidates)
 - `conversation.get` (fetch exact content by message id or by range)
 
-### 2.5 conversation.search scope
+### 2.5 conversation.search scope (V1)
 
-Search scope:
+Search scope (V1):
 
-- **summaries + transcript FTS + embeddings** (when embeddings enabled)
-- single merged ranking; summaries and transcript are both searchable
-- slight penalty for transcript hits that are already covered by a summary
+- **day summaries + transcript chunks**
+- lexical search only (PostgreSQL FTS)
+- recency bias is applied as a simple tie-breaker / light multiplier
 
 ### 2.6 Summary format and storage
 
@@ -129,8 +129,8 @@ Goals
 Decisions
 - Day boundary is first message of the day
 
-Open loops
-- Define transcript chunking for embeddings
+ Open loops
+ - Define transcript chunking parameters (token target + overlap)
 
 Next steps
 - Spec conversation.search/get schemas
@@ -145,7 +145,7 @@ Timeline (Today)
         (summary panel refreshed)
 
 10:13  User:   Et pour conversation.search ?
-  10:14  Agent:  summaries + transcript FTS + embeddings...
+  10:14  Agent:  day summaries + transcript chunks (FTS)...
 
 [Type message…____________________________________] [Send]
 ```
@@ -177,13 +177,22 @@ Results
    action: [Open]
 
 2) kind: message   day: 2026-01-31   score: 0.62   covered_by_summary: yes
-   snippet: "...on mettra une pénalité légère..."
-   action: [Open]
+    snippet: "...on mettra une pénalité légère..."
+    action: [Open]
 ```
 
 Where:
 
 - “Open” calls `conversation.get` to fetch exact text for grounding.
+
+Notes (V1 simplification):
+
+- Search results do **not** include `covered_by_summary`. The UI remains the same; we keep the results list minimal.
+- “Open” still calls `conversation.get` to fetch exact text for grounding.
+
+UI note:
+
+- The mockup line `covered_by_summary: yes` is illustrative only; it is not part of the V1 tool output.
 
 ### 3.4 Collapsing behavior after compaction (what the user sees)
 
@@ -202,6 +211,12 @@ Timeline (Today)
 ```
 
 In other words: we do not delete old messages, but we fold them in the UI once a summary has covered them.
+
+V1 folding rule (simplified):
+
+- Folding is **purely UI-based** and uses timestamps.
+- When `DaySegment.updated_at` changes (summary regenerated), the UI may fold messages with `created_at <= DaySegment.updated_at` under “Older messages folded”.
+- This is a visual aid only; it does not need a stored message-id boundary.
 
 ## 4. Context and compaction behavior
 
@@ -222,9 +237,9 @@ Two mechanisms:
 1) **Daily automatic summary**
    - when first message creates a new day segment, schedule a daily job to produce/update today summary
 2) **Heuristic in-day summary**
-  - async trigger when:
-     - 10 new messages since last summary, OR
-      - token pressure detected (near limit)
+   - async trigger when:
+      - 10 new messages since last summary, OR
+       - token pressure detected (near limit)
 
 ### 4.3 Transcript lifecycle vs summary
 
@@ -241,9 +256,8 @@ Input:
 - `query` string
 - `day` optional `YYYY-MM-DD`
 - `recency_days` optional (default: 14)
-- `limit` int default 6 max 20
-- `cursor` optional opaque string (cursor-based pagination)
-- `min_score` optional float
+- `limit` int default 6 max 50
+- `offset` int default 0 max 500
 
 Output:
 
@@ -254,75 +268,34 @@ Output:
   - if `kind=message`:
     - `message_id` (representative id, typically the first message in the matched chunk window)
     - `snippet`
-    - `covered_by_summary` bool
     - `score`
   - if `kind=summary`:
     - `summary_snippet`
     - `score`
 
+- `total_estimate` optional int (best-effort; can be omitted)
+
 API abstraction note:
 
-- Transcript search may be implemented internally on `TranscriptChunk`, but the tool output intentionally exposes a stable `message_id` only.
-- To inspect details and quote accurately, the agent should follow up with [`conversation.get`](plans/continuous_discussion.md:333) using that `message_id` (or a day/range).
+- Transcript search is implemented on `TranscriptChunk` (not raw [`Message`](nova/models/Message.py:1) rows), but the tool output intentionally exposes a stable `message_id` only.
+- To inspect details and quote accurately, the agent should follow up with [`conversation.get`](plans/continuous_discussion.md:296) using that `message_id` (or a day/range).
 
-Ranking:
+Ranking (V1):
 
 - global merge (single sorted list)
-- base score is hybrid:
-  - normalize vector score to 0..1
-  - normalize lexical (FTS) score to 0..1
-  - `base_score = 0.7 * vector + 0.3 * fts`
-  - if embeddings are disabled or missing for an item: treat `vector=0` and rely on FTS
-- apply penalty when `covered_by_summary=true` (multiplier 0.85)
-- tie-breakers: newer day, then newer message
+- lexical-only base score:
+  - compute `fts_raw` via Postgres ranking (ex: `ts_rank_cd`)
+  - normalize: `fts = fts_raw / (fts_raw + 1)` so `fts` is in 0..1
+- apply a light recency multiplier (simple + deterministic):
+  - items newer than 24h: multiplier 1.0
+  - items older than 24h: multiplier 0.9
+  - items older than 7 days: multiplier 0.8
+- final ordering: `final_score = fts * recency_multiplier`, then tie-break on newer day/message
 
-Merge strategy:
+Pagination (V1):
 
-- single global list
-- combine `kind=summary` and `kind=message` candidates into one pool
-- sort by `final_score` descending
-- no fixed bonus for summaries (summaries tend to win naturally via higher-signal embeddings)
-
-Default scope and pagination:
-
-- Default scope is `recency_days=14`.
-- If `day` is provided, it overrides recency scope (search only within that day segment).
-- Pagination is **cursor-based**:
-  - request passes `cursor`
-  - response returns `next_cursor` when more results exist
-  - cursor encodes the last `(score, kind, stable_id)` boundary (implementation detail)
-
-Notes:
-
-- This mirrors the “hybrid 70/30” idea used in Clawdbot, but should keep the exact coefficients configurable.
-- If embeddings are disabled, transcript search falls back to FTS-only.
-
-#### 5.1.1 `covered_by_summary`
-
-Goal: mark transcript hits that are likely redundant because the **day summary already contains the same information**.
-
-Approach (pragmatic + cheap): treat `covered_by_summary` as a **range-based coverage flag**.
-
-Definition:
-
-- A transcript item (message or chunk) is `covered_by_summary=true` when it is **older than the latest summary boundary for that day**.
-
-Implementation details:
-
-- We define a `DaySegment.summary_covers_until_message_id` (FK to [`Message`](nova/models/Message.py:1), nullable).
-  - when a day summary job completes, it sets this field to the latest message id included in the summarization input
-  - all messages/chunks with `message_id <= summary_covers_until_message_id` are considered covered
-
-Why range-based vs semantic overlap:
-
-- semantic coverage detection is expensive and error-prone
-- range-based coverage is deterministic, fast, and aligns with the UI folding rule
-
-Effect on ranking:
-
-- still return covered transcript results (grounding + verifiability)
-- apply a **light penalty** multiplier (default 0.85) so summaries win when both match
-- if the user explicitly requests exact quotes or raw details, the agent should prefer `conversation.get` even if covered
+- offset-based: `offset` + `limit`.
+- `day` overrides `recency_days`.
 
 ### 5.2 `conversation.get`
 
@@ -393,17 +366,18 @@ New model (location suggestion: [`nova/models/DaySegment.py`](nova/models/DaySeg
 - `thread` FK (the continuous thread)
 - `day_label` date
 - `starts_at_message` FK → `Message`
-- `ends_at_message` FK → `Message` nullable
 - `summary_markdown` text
-- `summary_covers_until_message` FK → `Message` nullable
 - `updated_at`
 
 Clarifications:
 
 - `day_label` is computed using **user timezone**.
 - `starts_at_message` is the **first message** that opened the day segment.
-- `ends_at_message` is optional and can be used to mark the segment “closed” (nightly finalization), otherwise the segment is considered open.
-- `summary_covers_until_message` defines the deterministic range boundary for [`covered_by_summary`](plans/continuous_discussion.md:290).
+
+V1 simplification:
+
+- We do not persist a “closed” marker (`ends_at_message`) in V1.
+- We do not persist a “summary covers until message” boundary in V1 (folding is UI-based via `updated_at`).
 
 Indexes:
 
@@ -417,49 +391,36 @@ Recommended additional indexes:
 Invariants:
 
 - `starts_at_message.thread_id == DaySegment.thread_id`
-- if set, `ends_at_message.thread_id == DaySegment.thread_id`
-- if set, `summary_covers_until_message.thread_id == DaySegment.thread_id`
 
-Additional invariants:
+V1 note:
 
-- if set, `ends_at_message_id >= starts_at_message_id`
-- if set, `summary_covers_until_message_id >= starts_at_message_id`
-- if both set, `summary_covers_until_message_id <= ends_at_message_id`
+- Fields like `ends_at_message` and `summary_covers_until_message` do not exist in V1, so no invariants are defined for them.
 
-Update rules:
+Update rules (V1):
 
-- On day creation, set `starts_at_message` to the triggering message; leave `ends_at_message` null.
-- On nightly finalization:
-  - set `ends_at_message` to the latest message of the day
-  - generate final summary and set `summary_covers_until_message` to the latest summarized message
-- On heuristic in-day summary update:
-  - keep `ends_at_message` null
-  - update `summary_markdown`
-  - advance `summary_covers_until_message` forward (monotonic) to the latest summarized message
-
-Important: `summary_covers_until_message` must be monotonic within a day segment (never move backwards).
+- On day creation, set `starts_at_message` to the triggering message.
+- On any summary update (heuristic / daily / manual): update `summary_markdown` and `updated_at`.
 
 ### 7.3 Derived indexes for transcript search
 
 We will need derived structures for:
 
-- FTS over transcript
-- embeddings over transcript chunks
+- FTS over transcript chunks
 
-This will likely mirror Memory v2 patterns but scoped to the continuous thread/day segments.
+V1 intentionally excludes embeddings for conversation search.
 
-#### 7.3.1 `TranscriptChunk` (+ optional embeddings)
+#### 7.3.1 `TranscriptChunk`
 
 Plain-language definition:
 
 - A `TranscriptChunk` is a **small slice of the continuous conversation transcript**, built by concatenating several consecutive messages into one searchable document.
-- It exists because searching the raw [`Message`](nova/models/Message.py:1) table directly is often too granular (too many rows) and not ideal for embeddings.
+- It exists because searching the raw [`Message`](nova/models/Message.py:1) table directly is often too granular (too many rows).
 - It is the **unit of retrieval** for `conversation.search` on the transcript side.
 
 Key properties:
 
-- Bounded size: targets ~600 tokens per chunk (with small overlap) so embeddings are meaningful and comparable.
-- Provenance: stores `start_message_id` and `end_message_id`, so once we find a relevant chunk we can fetch the exact raw turns with [`conversation.get`](plans/continuous_discussion.md:290).
+- Bounded size: targets ~600 tokens per chunk (with small overlap) so results are not too granular.
+- Provenance: stores `start_message_id` and `end_message_id`, so once we find a relevant chunk we can fetch the exact raw turns with [`conversation.get`](plans/continuous_discussion.md:296).
 - Normalization: tool outputs and noisy payloads are trimmed so the chunk represents the “human conversation” more than logs.
 
 We index the transcript via **chunk windows** (not per message) to control volume.
@@ -512,113 +473,38 @@ Additional invariants:
 `content_hash`:
 
 - deterministic hash of the normalized `content_text` + boundary ids
-- used to make chunk recomputation idempotent (nightly job can upsert)
+- used to make chunk computation idempotent for retries
 
-Update model:
+Update model (V1):
 
-- append-only during the day: new chunks cover new messages after the last indexed `end_message_id`
-- nightly recompute: can rewrite chunk boundaries for a day; use `content_hash` + upsert to keep idempotence
+- append-only only
+  - when new messages arrive, we index them by creating new chunks that start after the last indexed `end_message_id`
+  - we do not rewrite older chunks
 
-##### Strategy: append-only (daytime) vs nightly recompute
+Idempotence:
 
-We combine two behaviors:
-
-1) **Append-only in-day**
-   - When new messages arrive, we index them by creating new chunks that start after the last `end_message_id`.
-   - This avoids rewriting many rows during interactive usage.
-
-2) **Nightly recompute (per day segment)**
-   - At day finalization, rebuild chunks for the whole day using the target window size (~600 tokens + overlap).
-   - Upsert chunks by `(user_id, thread_id, start_message_id, end_message_id)` and `content_hash`.
-   - Delete obsolete chunks for that day segment (those not present in the recompute result).
-
-Why we need recompute:
-
-- append-only chunking can drift (suboptimal boundaries) when message sizes vary
-- nightly recompute yields stable, evenly-sized windows that improve recall and ranking
-
-Concurrency notes:
-
-- nightly recompute should lock per `(user_id, day_segment_id)` to avoid racing with in-day append indexing
-- in-day chunk append should be resilient to duplicate creation by using unique constraints + retry
+- enforce uniqueness via `(user_id, thread_id, start_message_id, end_message_id)`
+- `content_hash` is used to detect “no-op” updates when retrying
 
 FTS:
 
 - store a materialized `tsvector` column (or compute via functional index)
 - language config should follow current project defaults (to confirm)
 
-Embeddings (optional, when enabled):
-
-- store in a separate table mirroring Memory v2 embedding patterns
-- dimensions and padding rules should reuse Memory v2 rules
-
-New model suggestion: [`nova/models/TranscriptChunkEmbedding.py`](nova/models/TranscriptChunkEmbedding.py:1)
-
-- `chunk` OneToOne → `TranscriptChunk`
-- `embedding` pgvector(1024)
-- `provider_label` / `model_label` (for rebuilds and debugging)
-- `created_at`
-
-Indexes:
-
-- OneToOne enforces unique on `chunk_id`
-- vector index (pgvector) aligned with Memory v2 approach (to confirm chosen index type)
-
 Notes:
 
 - We keep transcript search artifacts **scoped to the continuous thread** (not global).
-- Retention: V1 keeps all chunks (messages are source-of-truth anyway); later we can add pruning if needed.
+- Retention: V1 keeps all chunks (messages are source-of-truth anyway).
 
-#### 7.3.2 Summary indexing
+#### 7.3.2 Summary indexing (V1)
 
-To make `conversation.search` summaries-first fast, we can add:
+- add an FTS index on `DaySegment.summary_markdown`
 
-- FTS index on `DaySegment.summary_markdown`
-- embeddings for `DaySegment.summary_markdown` (lowest volume, highest value)
-
-If we do summary embeddings, we can reuse the Memory v2 embedding pipeline pattern.
-
-##### `DaySegmentEmbedding`
-
-New model suggestion: [`nova/models/DaySegmentEmbedding.py`](nova/models/DaySegmentEmbedding.py:1)
-
-- `day_segment` OneToOne → [`DaySegment`](nova/models/DaySegment.py:1)
-- `embedding` pgvector(1024)
-- `provider_label` / `model_label`
-- `created_at`
-
-Indexes:
-
-- OneToOne enforces unique on `day_segment_id`
-- vector index (pgvector) aligned with the project’s chosen index type
-
-### 7.4 Embeddings strategy for continuous mode
-
-Decision:
-
-- Embeddings are computed for:
-  - `DaySegment.summary_markdown` (high signal, low volume)
-  - `TranscriptChunk.content_text` (better recall on raw details)
-
-Provider selection and vector rules:
-
-- reuse the existing Memory v2 embedding provider selection precedence and vector padding rules (1024 dims, zero-pad, reject larger)
-- embeddings are computed asynchronously via Celery
-
-Throttling:
-
-- no numeric quota in V1
-- use a **dedicated Celery queue** for conversation embeddings, ex: `conversation_embeddings`
-  - allows separate worker sizing and prevents starving agent execution
-
-Rebuild policy:
-
-- if the user changes embedding provider/model, mark conversation embeddings stale and enqueue rebuild gradually
-- rebuild can be prioritized: summaries first, then chunks
+V1 intentionally excludes embeddings for summaries and transcript.
 
 ### 7.5 Lexical search (FTS) strategy
 
-We use PostgreSQL full-text search (FTS) as the lexical signal for [`conversation.search`](plans/continuous_discussion.md:253).
+We use PostgreSQL full-text search (FTS) as the lexical signal for `conversation.search`.
 
 #### 7.5.1 What is indexed
 
@@ -645,7 +531,7 @@ Decision:
 
 #### 7.5.3 Ranking signal and normalization
 
-We need the lexical score normalized to 0..1 to combine with vector score in [`conversation.search`](plans/continuous_discussion.md:253).
+We need the lexical score normalized to 0..1 to keep scoring stable.
 
 V1 approach (simple + stable):
 
@@ -668,10 +554,8 @@ Decision:
 
 - On `DaySegment.summary_markdown` update:
   - update the `summary_tsv` field (if materialized)
-  - optionally enqueue embeddings job for `DaySegmentEmbedding`
 - On `TranscriptChunk` creation/update:
   - update the `content_tsv` field (if materialized)
-  - optionally enqueue embeddings job for `TranscriptChunkEmbedding`
 
 ## 8. Celery workflows
 
@@ -680,9 +564,9 @@ This section specifies the async jobs required for continuous discussion mode.
 ### 8.1 Goals
 
 - produce and refresh day summaries (nightly + in-day)
-- keep transcript indexing up-to-date (chunks + FTS + embeddings when enabled)
+- keep transcript indexing up-to-date (chunks + FTS)
 - ensure idempotence and safe concurrency
- - provide observability: user-visible UI events + task logs
+  - provide observability: user-visible UI events + task logs
 
 ### 8.2 Task inventory (proposed)
 
@@ -704,30 +588,16 @@ Suggested task module: [`nova/tasks/conversation_tasks.py`](nova/tasks/conversat
      - may include previous summary as context to make summarization incremental
     - writes:
       - `DaySegment.summary_markdown`
-      - advances `DaySegment.summary_covers_until_message`
     - no transcript message is created; the UI shows the updated summary panel
 
 4) `index_transcript_append(day_segment_id, from_message_id)`
-   - creates new [`TranscriptChunk`](nova/models/TranscriptChunk.py:1) rows for messages after `from_message_id`
-   - should be lightweight and safe to run frequently
+    - creates new [`TranscriptChunk`](nova/models/TranscriptChunk.py:1) rows for messages after `from_message_id`
+    - should be lightweight and safe to run frequently
 
-5) `recompute_day_transcript_index(day_segment_id)`
-   - rebuilds chunks for a day segment (nightly)
-   - deletes obsolete chunks and upserts new ones deterministically
-   - optionally triggers embeddings rebuild for affected chunks
-
-6) `compute_transcript_chunk_embedding(chunk_id)`
-   - mirrors Memory v2 embedding pipeline (provider selection, padding)
-   - stores into [`TranscriptChunkEmbedding`](nova/models/TranscriptChunkEmbedding.py:1)
-
-7) `compute_day_segment_embedding(day_segment_id)`
-   - computes embedding for `DaySegment.summary_markdown`
-   - stores into [`DaySegmentEmbedding`](nova/models/DaySegmentEmbedding.py:1)
-
-8) `finalize_previous_day_segments(user_id, day_label_cutoff)`
-   - Celery Beat scheduler entry point
-   - closes any open day segments older than “today” in user timezone
-   - runs: `summarize_day_segment(mode=nightly)` + `recompute_day_transcript_index`
+5) `finalize_previous_day_segments(user_id, day_label_cutoff)`
+    - Celery Beat scheduler entry point
+    - closes any open day segments older than “today” in user timezone
+    - runs: `summarize_day_segment(mode=nightly)`
 
 ### 8.3 Trigger points
 
@@ -741,7 +611,7 @@ Suggested task module: [`nova/tasks/conversation_tasks.py`](nova/tasks/conversat
 
 Heuristic triggers (V1):
 
-- >= 10 new messages since `summary_covers_until_message`
+- >= 10 new messages since last summary update
 - OR token pressure detected during context build
 
 #### 8.3.2 Nightly scheduler (Celery Beat)
@@ -749,7 +619,7 @@ Heuristic triggers (V1):
 - for each user:
   - compute “today” in user timezone
   - finalize all open segments with `day_label < today`
-  - run nightly summarize + recompute index
+  - run nightly summarize
 
 ### 8.4 Idempotence + concurrency control
 
@@ -758,28 +628,10 @@ Principles:
 - tasks are safe to retry
 - only one summarization or recompute runs at a time per `(user_id, day_segment_id)`
 
-Locking strategy (decision):
+Locking strategy (V1):
 
-- **DB lock only**
-  - use DB row-level lock on [`DaySegment`](nova/models/DaySegment.py:1) (`SELECT ... FOR UPDATE`) inside the task
-  - keep transactions short and avoid holding locks during LLM calls when possible (see note below)
-  - Redis locks are a V2 option if we observe contention
-
-Note on long LLM calls:
-
-- Holding a DB lock while waiting on an LLM is undesirable.
-- Recommended pattern:
-  1) lock `DaySegment` and compute the exact summarization boundaries (`from_message_id` → `to_message_id`)
-  2) persist a lightweight “job intent” marker (ex: `summarization_in_progress_until_message_id` or a Task row)
-  3) release lock
-  4) run LLM summarization
-  5) re-lock and apply updates if boundaries still match expectations
-
-Idempotence rules:
-
-- `summary_covers_until_message` is monotonic; if task runs twice it should not regress
-- `TranscriptChunk` creation uses a unique constraint to avoid duplicates
-- nightly recompute deletes chunks not in the recompute set (safe if lock is held)
+- keep it simple: rely on task retries + uniqueness constraints for `TranscriptChunk`
+- for summaries, last-write-wins on `DaySegment.summary_markdown` is acceptable for V1
 
 ### 8.5 Failure handling + retries
 
@@ -802,37 +654,22 @@ Internal:
 
 ## 9. Transcript chunking for embeddings
 
-We must avoid indexing per-token/per-message with excessive volume.
+## 9. Transcript chunking (V1)
 
-Candidates:
+We avoid indexing per-message to keep search volume reasonable.
 
-- Chunk per message (simplest, can be noisy/short)
-- Chunk by window of messages (e.g. group contiguous messages into ~400–800 token blocks with overlap)
-- Chunk by turn-pairs (user+assistant)
-
-Recommendation: group by contiguous windows to reduce index cardinality, with provenance back to message ids.
-
-### 9.1 Chunking strategy (decision)
-
-Decision: **chunks by windows of messages** with:
+Decision (V1): **chunks by windows of messages** with:
 
 - target size: ~600 tokens per chunk
-- overlap: small overlap (ex: ~100 tokens or N last messages) to reduce boundary misses
+- small overlap (ex: ~100 tokens) to reduce boundary misses
 - provenance: chunk stores `start_message_id` + `end_message_id`
-- updates:
-  - **append-only during the day** (create new chunks only for new messages)
-  - **recompute at end of day** (nightly) to consolidate and improve chunk boundaries
+- updates: **append-only** (no nightly recompute)
 
 Chunk composition rules:
 
 - include only user/assistant natural language by default
-- exclude system messages (summaries are indexed separately; keep transcript chunks focused on raw dialogue)
-- aggressively trim tool outputs (head/tail + placeholders), consistent with [`4.1 Raw window budget (today)`](plans/continuous_discussion.md:213)
-
-Rationale:
-
-- avoids per-message index explosion
-- keeps enough granularity for retrieval grounding via [`conversation.get`](plans/continuous_discussion.md:290)
+- exclude system messages (summaries are indexed separately)
+- aggressively trim tool outputs (head/tail + placeholders), consistent with [`4.1 Raw window budget (today)`](plans/continuous_discussion.md:208)
 
 ## 10. Mermaid diagrams
 
@@ -860,13 +697,9 @@ flowchart TD
   A[conversation.search query] --> B[Search day summaries]
   A --> C[Search transcript]
   C --> D[FTS signal]
-  C --> E[Embedding signal]
-  D --> F[Hybrid base score]
-  E --> F
-  B --> G[Merge results summaries first]
-  F --> G
-  G --> H[Penalty if covered_by_summary]
-  H --> I[Return top N]
+  B --> F[Merge results]
+  D --> F
+  F --> I[Return top N]
 ```
 
 ### 10.3 Day segment creation flow
@@ -906,12 +739,7 @@ erDiagram
   THREAD ||--o{ DAYSEGMENT : groups
   DAYSEGMENT ||--o{ TRANSCRIPTCHUNK : indexes
 
-  DAYSEGMENT ||--|| DAYSEGMENTEMBEDDING : has
-  TRANSCRIPTCHUNK ||--|| TRANSCRIPTCHUNKEMBEDDING : has
-
   DAYSEGMENT }o--|| MESSAGE : starts_at
-  DAYSEGMENT }o--o| MESSAGE : ends_at
-  DAYSEGMENT }o--o| MESSAGE : summary_covers_until
   TRANSCRIPTCHUNK }o--|| MESSAGE : start_message
   TRANSCRIPTCHUNK }o--|| MESSAGE : end_message
 ```
@@ -982,7 +810,7 @@ Recommended endpoint:
 
 - `GET continuous/days/` (HTMX fragment)
   - returns a list of available day segments, ordered by `day_label DESC`
-  - supports cursor pagination by `day_label` or by `(day_label, id)`
+  - supports offset pagination (or “load more” based on last day)
 
 How to compute Today/Yesterday:
 
@@ -1009,16 +837,12 @@ This is an execution-oriented checklist to implement the spec.
 
 - Add/extend [`Thread`](nova/models/Thread.py:1) with `mode` field.
 - Add model [`DaySegment`](nova/models/DaySegment.py:1)
-   - include `summary_covers_until_message` (FK to [`Message`](nova/models/Message.py:1))
 - Add model [`TranscriptChunk`](nova/models/TranscriptChunk.py:1)
-   - include `content_text`, `content_hash`, `token_estimate`
-   - exclude `system` messages from chunk content
-- Add model [`TranscriptChunkEmbedding`](nova/models/TranscriptChunkEmbedding.py:1) (pgvector(1024))
-- Add model [`DaySegmentEmbedding`](nova/models/DaySegmentEmbedding.py:1) (pgvector(1024))
+    - include `content_text`, `content_hash`, `token_estimate`
+    - exclude `system` messages from chunk content
 - Add indexes:
   - unique `(user_id, thread_id, day_label)` on DaySegment
   - unique `(user_id, thread_id, start_message_id, end_message_id)` on TranscriptChunk
-  - vector indexes for embedding tables (pgvector)
   - FTS indexes/columns for `DaySegment.summary_markdown` and `TranscriptChunk.content_text`
 
 Notes:
@@ -1031,22 +855,14 @@ Notes:
   - [`conversation.search`](plans/continuous_discussion.md:376)
   - [`conversation.get`](plans/continuous_discussion.md:466)
 - Enforce user-scoping (multi-tenant) and not-found semantics
-- Implement scoring:
-  - `base_score = 0.7*vector + 0.3*fts` with normalization
-  - apply `covered_by_summary` penalty multiplier 0.85
-  - merge: single global sorted list
-- Implement cursor pagination for `conversation.search` (`cursor` + `next_cursor`)
+- Implement scoring: FTS-only + simple recency multiplier
+- Implement pagination for `conversation.search`: `offset` + `limit`
 
 ### 12.3 Indexing pipelines
 
 - Implement chunking:
   - append-only in-day chunk creation
-  - nightly recompute per day segment (delete obsolete, upsert deterministic)
 - Implement FTS updates for summary + chunks (config `english` to match current Memory v2)
-- Implement embeddings jobs:
-  - compute embeddings for DaySegment summaries and TranscriptChunks
-  - use queue `conversation_embeddings`
-  - reuse Memory v2 embedding provider selection + padding rules
 
 ### 12.4 Celery workflows
 
@@ -1054,9 +870,6 @@ Notes:
 - Implement tasks listed in [`Celery workflows`](plans/continuous_discussion.md:234)
 - Add Celery Beat schedule:
   - nightly `finalize_previous_day_segments` per user
-- Concurrency:
-  - DB row lock on DaySegment (`SELECT ... FOR UPDATE`)
-  - avoid holding locks during LLM calls (two-phase pattern)
 
 ### 12.5 Views + templates (web UI)
 
@@ -1071,7 +884,7 @@ Notes:
   - `nova/templates/nova/continuous/index.html`
   - partials for day selector, day summary, timeline, search results, message window
 - Folding:
-  - fold messages older than `summary_covers_until_message_id`
+  - fold messages using timestamps (UI-based) as described in [`3.4 Collapsing behavior after compaction`](plans/continuous_discussion.md:188)
 - Agent selection:
   - no selection in V1; always resolve user default agent
 - Streaming:
@@ -1081,14 +894,14 @@ Notes:
 
 - Model tests:
    - Thread.mode continuous get-or-create logic
-   - DaySegment invariants and monotonic `summary_covers_until_message`
+   - DaySegment invariants
    - TranscriptChunk chunk boundary and idempotence (`content_hash`)
 - Tool tests:
   - `conversation.search` scoring + pagination + user scoping
   - `conversation.get` windowing (`limit`, `before_message_id`, `after_message_id`, truncation)
 - Task tests:
-  - nightly finalize closes segments and triggers summary + reindex
-  - heuristic triggers do not regress summary boundary
+   - nightly finalize triggers summary
+   - heuristic triggers schedule summary updates
 
 ### 12.7 Rollout notes
 
@@ -1134,7 +947,7 @@ Implications:
 
 Rule:
 
-- In the timeline for a day, messages with `message_id <= DaySegment.summary_covers_until_message_id` are folded under an “Older messages” expander.
+- In the timeline for a day, messages with `created_at <= DaySegment.updated_at` may be folded under an “Older messages” expander.
 
 ### 11.5 Search UX
 
@@ -1147,27 +960,3 @@ Rule:
 
 - All continuous endpoints are `login_required`.
 - All queries must be filtered by `request.user`.
-
-## 13. Open questions (intentionally unresolved)
-
-- Do we want a dedicated UI affordance to “promote” a conversation excerpt into Memory v2 (user-confirmed), or keep it manual via chat instruction only?
-
-## 14. Risks and clarifications
-
-This section captures non-obvious implementation risks and places where extra care is needed.
-
-### 14.1 Continuous thread uniqueness
-
-- Without a DB constraint, concurrent requests can attempt to create multiple continuous threads.
-- Recommended: implement idempotent creation (transaction + retry on integrity error).
-- Optional hardening: add a PostgreSQL partial unique index later (at most one `Thread` with `mode='continuous'` per user).
-
-### 14.2 Transcript indexing complexity
-
-- Maintaining two indexing behaviors (append-only during the day + nightly recompute) adds operational complexity.
-- If you want a simpler first implementation, pick one strategy (append-only only, or recompute-only).
-
-### 14.3 `conversation.search` complexity
-
-- Hybrid scoring (FTS + embeddings) + cursor pagination is substantial.
-- A simplification path is to start with lexical-only (FTS) and add embeddings later.
