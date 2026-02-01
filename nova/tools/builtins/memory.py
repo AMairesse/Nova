@@ -174,7 +174,7 @@ async def get(item_id: int, agent: LLMAgent) -> Dict[str, Any]:
                 "model": getattr(embedding, "model", ""),
                 "dimensions": getattr(embedding, "dimensions", None),
                 "error": getattr(embedding, "error", None),
-                "has_vector": bool(getattr(embedding, "vector", None)),
+                "has_vector": getattr(embedding, "vector", None) is not None,
             },
         }
 
