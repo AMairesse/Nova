@@ -127,7 +127,10 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
             with transaction.atomic():
                 seg = DaySegment.objects.select_for_update().get(id=segment.id)
                 seg.summary_markdown = summary_md
-                seg.save(update_fields=["summary_markdown", "updated_at"])
+                # Summary boundary: last message included in the transcript.
+                # V1: we summarize from `starts_at_message` up to the last message we read.
+                seg.summary_until_message_id = messages[-1].id if messages else None
+                seg.save(update_fields=["summary_markdown", "summary_until_message", "updated_at"])
 
         await sync_to_async(_persist, thread_sensitive=True)()
 

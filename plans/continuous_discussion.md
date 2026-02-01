@@ -35,12 +35,15 @@ Principle:
 
 ### 2.3 Default agent context in continuous mode (bounded)
 
-Default context payload:
+Default context payload (implemented):
 
-- **Today raw window**: target budget **4k tokens**, with aggressive trimming of tool outputs
-- **Today summary**: Markdown
-- **Yesterday summary**: Markdown
-- Tool hints/policy (how to use `memory.*` vs `conversation.*`)
+- **Yesterday summary** (if present)
+- **Today summary** (optional; exists only if manually generated)
+- **Today raw messages window**
+  - if `Today summary` exists, only include messages **after** the summary boundary
+  - otherwise include all messages of today
+
+This context is implemented by **rebuilding the LangGraph checkpoint state** (delete + inject) lazily when needed.
 
 Anything older is retrieved on-demand via `conversation.search` / `conversation.get`.
 
@@ -90,6 +93,11 @@ We keep summary updates intentionally simple:
 
 No additional “in‑day heuristics” in V1.
 
+Summary boundary:
+
+- When a day summary is (re)generated, the system stores a pointer to the **last message included** in the summarized transcript.
+- On next agent call, the checkpoint rebuild includes only messages **after** that pointer.
+
 ### 2.7 UI visibility of summary updates
 
 - No `system` [`Message`](nova/models/Message.py:1) is persisted for summary updates.
@@ -97,7 +105,8 @@ No additional “in‑day heuristics” in V1.
 
 ### 2.8 Sub-agents policy
 
-- Sub-agents are stateless and **cannot** call `conversation.search/get`.
+- Sub-agents are stateless **when invoked from the continuous thread**.
+  - Their checkpoints are purged at the end of each successful main-agent run.
 - `conversation.search/get` are reserved to the main agent.
 
 ## 3. UX text mockups (web)
@@ -221,15 +230,12 @@ V1 folding rule (simplified):
 
 ## 4. Context and trimming (V1)
 
-### 4.1 Raw window budget (today)
+### 4.1 Raw window budgeting (today)
 
-- Budget: **4k tokens** for the “today raw” window.
+V1 simplification (implemented):
 
-Trimming priorities:
-
-1) keep user+assistant natural language messages
-2) trim tool outputs first (head/tail + placeholder)
-3) drop oldest raw turns from today if still too large
+- We do **not** implement additional tool-output trimming here.
+- The today raw window is bounded structurally by day segments + (optional) `summary_until_message`.
 
 ### 4.2 Summary update triggers
 
@@ -345,6 +351,7 @@ New model (location suggestion: [`nova/models/DaySegment.py`](nova/models/DaySeg
 - `day_label` date
 - `starts_at_message` FK → `Message`
 - `summary_markdown` text
+- `summary_until_message` FK → `Message` (optional; present when a summary exists)
 - `updated_at`
 
 Clarifications:
@@ -355,7 +362,7 @@ Clarifications:
 V1 simplification:
 
 - We do not persist a “closed” marker (`ends_at_message`) in V1.
-- We do not persist a “summary covers until message” boundary in V1 (folding is UI-based via `updated_at`).
+- We persist `summary_until_message` only to avoid re-sending messages already covered by the day summary.
 
 Indexes:
 

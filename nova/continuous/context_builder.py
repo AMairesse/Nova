@@ -24,6 +24,7 @@ class ContinuousContextSnapshot:
     today_updated_at: Optional[dt.datetime]
     today_start_dt: Optional[dt.datetime]
     today_end_dt: Optional[dt.datetime]
+    today_summary_until_message_id: Optional[int]
     today_last_message_id: Optional[int]
 
 
@@ -49,6 +50,7 @@ def compute_continuous_context_fingerprint(snapshot: ContinuousContextSnapshot) 
             f"today_updated_at={_fmt_dt(snapshot.today_updated_at)}",
             f"today_start_dt={_fmt_dt(snapshot.today_start_dt)}",
             f"today_end_dt={_fmt_dt(snapshot.today_end_dt)}",
+            f"today_summary_until_message_id={snapshot.today_summary_until_message_id or ''}",
             f"today_last_message_id={snapshot.today_last_message_id or ''}",
         ]
     )
@@ -124,8 +126,16 @@ def load_continuous_context(
     today = get_day_label_for_user(user)
     yesterday = today - dt.timedelta(days=1)
 
-    y_seg = DaySegment.objects.filter(user=user, thread=thread, day_label=yesterday).first()
-    t_seg = DaySegment.objects.filter(user=user, thread=thread, day_label=today).first()
+    y_seg = (
+        DaySegment.objects.filter(user=user, thread=thread, day_label=yesterday)
+        .select_related("starts_at_message", "summary_until_message")
+        .first()
+    )
+    t_seg = (
+        DaySegment.objects.filter(user=user, thread=thread, day_label=today)
+        .select_related("starts_at_message", "summary_until_message")
+        .first()
+    )
 
     # Determine today window bounds from day segments.
     today_start_dt = None
@@ -148,10 +158,19 @@ def load_continuous_context(
         out.extend(_make_summary_pair("Today summary", t_seg.summary_markdown))
 
     today_last_message_id: Optional[int] = None
+
+    # If we have a summary for today, and it defines a boundary, we only include
+    # messages AFTER the summary boundary.
+    today_summary_until_message_id: Optional[int] = None
+    if t_seg and t_seg.summary_until_message_id:
+        today_summary_until_message_id = t_seg.summary_until_message_id
+
     if today_start_dt:
         qs = Message.objects.filter(user=user, thread=thread, created_at__gte=today_start_dt)
         if today_end_dt:
             qs = qs.filter(created_at__lt=today_end_dt)
+        if today_summary_until_message_id:
+            qs = qs.filter(id__gt=today_summary_until_message_id)
         if exclude_message_id:
             qs = qs.exclude(id=exclude_message_id)
         for m in qs.order_by("created_at", "id"):
@@ -167,6 +186,7 @@ def load_continuous_context(
         today_updated_at=t_seg.updated_at if t_seg else None,
         today_start_dt=today_start_dt,
         today_end_dt=today_end_dt,
+        today_summary_until_message_id=today_summary_until_message_id,
         today_last_message_id=today_last_message_id,
     )
     return snapshot, out

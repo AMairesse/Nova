@@ -69,10 +69,63 @@ class TaskExecutor:
             else:
                 await self._process_result(result)
                 await self._finalize_task()
+
+                # Continuous mode: sub-agents must be stateless.
+                # After a successful run, purge all sub-agent checkpoints for this thread,
+                # keeping only the main agent checkpoint.
+                try:
+                    from nova.models.Thread import Thread as ThreadModel
+                    if self.thread and self.thread.mode == ThreadModel.Mode.CONTINUOUS:
+                        await self._purge_continuous_subagent_checkpoints()
+                except Exception:
+                    # Best-effort cleanup; never fail the task because of this.
+                    pass
         except Exception as e:
             await self._handle_execution_error(e)
         finally:
             await self._cleanup()
+
+    async def _purge_continuous_subagent_checkpoints(self) -> None:
+        """Delete LangGraph checkpoint state for all sub-agents in a continuous thread.
+
+        Policy: delete all checkpoints for this thread except the main agent's checkpoint.
+        We keep CheckpointLink rows; only LangGraph state is deleted.
+        """
+
+        if not self.thread or not self.agent_config:
+            return
+
+        from nova.models.CheckpointLink import CheckpointLink
+        from nova.llm.checkpoints import get_checkpointer
+
+        # Compute which checkpoint_id to keep (main agent)
+        def _load_checkpoint_ids():
+            keep = (
+                CheckpointLink.objects.filter(thread=self.thread, agent=self.agent_config)
+                .values_list("checkpoint_id", flat=True)
+                .first()
+            )
+            all_ids = list(
+                CheckpointLink.objects.filter(thread=self.thread)
+                .exclude(checkpoint_id=keep)
+                .values_list("checkpoint_id", flat=True)
+            )
+            return keep, all_ids
+
+        keep_id, purge_ids = await sync_to_async(_load_checkpoint_ids, thread_sensitive=True)()
+        if not purge_ids:
+            return
+
+        saver = await get_checkpointer()
+        try:
+            for ckp_id in purge_ids:
+                try:
+                    await saver.adelete_thread(ckp_id)
+                except Exception:
+                    # Best-effort; ignore per-checkpoint failure
+                    continue
+        finally:
+            await saver.conn.close()
 
     async def _initialize_task(self, interruption_response=None):
         """Initialize task state and logging."""

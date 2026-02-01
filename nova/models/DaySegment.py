@@ -35,6 +35,18 @@ class DaySegment(models.Model):
 
     summary_markdown = models.TextField(blank=True, default="")
 
+    # If a summary is generated, it should conceptually summarize messages from
+    # `starts_at_message` up to this message (inclusive). When rebuilding the
+    # checkpoint in continuous mode, we include only messages AFTER this pointer.
+    summary_until_message = models.ForeignKey(
+        "Message",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="day_segment_summary_until",
+        verbose_name=_("Summary until message"),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

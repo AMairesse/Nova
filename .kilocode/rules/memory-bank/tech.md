@@ -325,6 +325,19 @@ python manage.py test --settings nova.settings_test     # Run tests
 python manage.py shell                                  # Django shell
 ```
 
+### Local dev note: prefer test settings for CLI commands when Docker DB is unavailable
+
+The default settings are often configured for Docker (e.g. Postgres host `db`).
+When running management commands locally without Docker, use the test settings:
+
+```bash
+python manage.py migrate --settings nova.settings_test
+python manage.py test --settings nova.settings_test
+```
+
+This uses SQLite in-memory (or a lightweight local DB), avoiding failures like
+"failed to resolve host 'db'".
+
 ### Celery Commands
 ```bash
 celery -A nova.celery worker -l info  # Start worker

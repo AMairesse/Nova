@@ -2,7 +2,7 @@
 
 ## Current Work Focus
 
-**In progress: continuous discussion mode (spec + macro-design in progress)**
+**In progress: continuous discussion mode (implementation + context/checkpoint semantics)**
 
 - Goal: add a default “continuous discussion” mode that coexists with thread-based mode.
 - Artifact: [`plans/continuous_discussion.md`](plans/continuous_discussion.md:1) (spec cleaned + enriched with ASCII mockups + Mermaid flows).
@@ -71,6 +71,18 @@ Work completed/changed recently (post-spec cleanup):
 - Threads delete endpoint returns JSON (`{"status":"OK"}`) so deletion persists server-side when called via `fetch`.
 - Fixed stuck “Running AI agent” UI after reload by explicitly re-enabling input and hiding the progress bar when `/running-tasks/<thread_id>/` returns no running tasks.
 
+### Continuous context / checkpoints (implemented)
+
+- Thread-mode auto-compaction (`SummarizationMiddleware` / `auto_summarize`) is disabled for `Thread.mode=continuous`.
+- Continuous main-agent context is built by lazily rebuilding the LangGraph checkpoint from:
+  - yesterday summary (if any)
+  - today summary (if any)
+  - today raw messages window
+- Fingerprint-driven rebuild state is stored on `CheckpointLink` (`continuous_context_fingerprint`, `continuous_context_built_at`).
+- Day summaries store a boundary pointer `DaySegment.summary_until_message` so when a day summary exists, only messages **after** the boundary remain in the raw window.
+- Sub-agents are stateless in continuous: after each successful run, all sub-agent checkpoints for the thread are purged (all `CheckpointLink` except the main agent).
+
 Notes / remaining:
 
-- UX/UI verification ongoing; migrations + full test suite intentionally deferred until the UI stabilizes.
+- UX/UI verified by user.
+- Migrations and full test suite validated using `--settings nova.settings_test` (SQLite).
