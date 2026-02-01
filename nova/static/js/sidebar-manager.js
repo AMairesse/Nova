@@ -45,11 +45,7 @@
                 const target = e.target.getAttribute('data-bs-target');
                 const tabName = target === '#pane-webapps' ? 'webapps' : 'files';
 
-                // Persist selection per thread
-                const threadId = window.FileManager.currentThreadId || window.StorageUtils.getThreadId();
-                if (threadId) {
-                    window.StorageUtils.setItem(window.StorageUtils.getSidebarTabKey(threadId), tabName);
-                }
+                // No persistence of the selected tab.
 
                 // Lazy load webapps on first show
                 if (tabName === 'webapps' && typeof window.WebappIntegration?.loadWebappsList === 'function') {
@@ -60,17 +56,7 @@
 
         // Restore the saved tab using Bootstrap Tab API
         restoreSavedTab() {
-            const threadId = window.FileManager.currentThreadId || window.StorageUtils.getThreadId();
-            if (!threadId) return;
-
-            const savedTab = window.StorageUtils.getItem(window.StorageUtils.getSidebarTabKey(threadId), 'files');
-            if (savedTab === 'webapps') {
-                const webappsTabEl = document.getElementById('tab-webapps');
-                if (webappsTabEl) {
-                    const tab = new bootstrap.Tab(webappsTabEl);
-                    tab.show();
-                }
-            }
+            // No persistence of the selected tab.
         },
 
         // Load file tree

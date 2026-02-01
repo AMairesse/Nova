@@ -11,7 +11,7 @@
    * Initialization is invoked once from NovaApp.bootstrapThreadUI().
    */
   window.FileManager = {
-    currentThreadId: window.StorageUtils.getThreadId(),
+    currentThreadId: null,
     isUploading: false,
     sidebarContentLoaded: false,
     _delegatesBound: false,
@@ -25,7 +25,6 @@
       if (this._initialized) return;
       this._initialized = true;
 
-      this.currentThreadId = window.StorageUtils.getThreadId();
       this.attachSidebarEventHandlers();
       this.initDelegatedHandlers();
 
@@ -35,10 +34,7 @@
         this.updateForThread(tid);
       });
 
-      // Initial sync for last thread (if any).
-      if (this.currentThreadId) {
-        this.updateForThread(this.currentThreadId);
-      }
+      // Initial sync happens when MessageManager dispatches `threadChanged`.
     },
 
     attachSidebarEventHandlers() {
@@ -166,7 +162,7 @@
 
       e.preventDefault();
       const slug = previewEl.dataset.slug || '';
-      const threadId = this.currentThreadId || window.StorageUtils.getThreadId();
+      const threadId = this.currentThreadId;
       if (!slug || !threadId) return true;
 
       // Mobile: open dedicated full-page preview

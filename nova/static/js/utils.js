@@ -64,11 +64,6 @@
 
   // LocalStorage Utilities
   window.StorageUtils = {
-    // Thread-related storage keys
-    getThreadId: function () {
-      return localStorage.getItem('lastThreadId') || null;
-    },
-
     getWidthKey: function (threadId) {
       return `splitWidth:${threadId}`;
     },

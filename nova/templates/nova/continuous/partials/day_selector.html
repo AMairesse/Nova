@@ -4,7 +4,11 @@
   <ul class="list-group list-group-flush">
     {% for seg in day_segments %}
       <li class="list-group-item d-flex justify-content-between align-items-center">
-        <a href="{% url 'continuous_day' seg.day_label|date:'Y-m-d' %}" class="text-decoration-none">
+        <a
+          href="?day={{ seg.day_label|date:'Y-m-d' }}"
+          class="text-decoration-none"
+          data-day-label="{{ seg.day_label|date:'Y-m-d' }}"
+        >
           {{ seg.day_label|date:'Y-m-d' }}
         </a>
         {% if seg.summary_markdown %}
@@ -18,4 +22,3 @@
 {% else %}
   <div class="text-muted">{% trans "No days yet." %}</div>
 {% endif %}
-

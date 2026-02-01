@@ -33,7 +33,17 @@ def continuous_home(request):
     """
 
     thread = ensure_continuous_thread(request.user)
-    day_label = get_day_label_for_user(request.user)
+
+    # Allow selecting a day via query param for initial render.
+    # If invalid/missing: default to today.
+    day_qs = request.GET.get("day")
+    if day_qs:
+        try:
+            day_label = dt.date.fromisoformat(day_qs)
+        except Exception:
+            day_label = get_day_label_for_user(request.user)
+    else:
+        day_label = get_day_label_for_user(request.user)
     day_segment = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
 
     # IMPORTANT:
@@ -100,6 +110,7 @@ def continuous_day(request, day):
             "day_segment_id": seg.id if seg else None,
             "summary_markdown": seg.summary_markdown if seg else "",
             "summary_html": markdown_to_html(seg.summary_markdown) if seg and seg.summary_markdown else "",
+            "updated_at": seg.updated_at.isoformat() if (seg and seg.updated_at) else None,
         }
     )
 
@@ -112,11 +123,18 @@ def continuous_messages(request):
     This is a lightweight compatibility layer so we can reuse the same
     message rendering mechanics as Threads mode.
 
-    V1: always loads the user's continuous thread.
-    Later: add day scoping/pagination.
+    V1: supports day scoping.
     """
 
     thread = ensure_continuous_thread(request.user)
+
+    day_qs = request.GET.get("day")
+    day_label = None
+    if day_qs:
+        try:
+            day_label = dt.date.fromisoformat(day_qs)
+        except Exception:
+            return JsonResponse({"error": "invalid_day"}, status=400)
 
     user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
     agent_id = request.GET.get("agent_id")
@@ -126,7 +144,24 @@ def continuous_messages(request):
     if not default_agent:
         default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
 
-    messages = list(thread.get_messages())
+    if day_label:
+        seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
+        if not seg or not seg.starts_at_message_id:
+            messages = []
+        else:
+            next_seg = (
+                DaySegment.objects.filter(user=request.user, thread=thread, day_label__gt=day_label)
+                .order_by("day_label")
+                .first()
+            )
+            start_dt = seg.starts_at_message.created_at
+            end_dt = next_seg.starts_at_message.created_at if (next_seg and next_seg.starts_at_message_id) else None
+            qs = Message.objects.filter(user=request.user, thread=thread, created_at__gte=start_dt)
+            if end_dt:
+                qs = qs.filter(created_at__lt=end_dt)
+            messages = list(qs.order_by("created_at", "id"))
+    else:
+        messages = list(thread.get_messages())
     for m in messages:
         m.rendered_html = markdown_to_html(m.text)
 

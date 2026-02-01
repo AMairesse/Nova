@@ -27,6 +27,22 @@
           <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
         </button>
       </div>
+
+      <!-- Day summary (client-rendered from /continuous/day/<day>/, no SYSTEM message injection) -->
+      <div class="border-bottom bg-white" id="continuous-day-summary" style="display:none;">
+        <div class="d-flex align-items-center justify-content-between px-3 py-2">
+          <div class="fw-semibold" id="continuous-day-summary-title">{% trans "Day Summary" %}</div>
+          <button class="btn btn-sm btn-outline-secondary" type="button" id="continuous-regenerate-summary">
+            <i class="bi bi-arrow-clockwise"></i>
+            <span class="d-none d-sm-inline">{% trans "Regenerate summary" %}</span>
+          </button>
+        </div>
+        <div class="px-3 pb-3">
+          <div id="continuous-summary-updated-event" class="text-muted small mb-2" style="display:none;"></div>
+          <div id="continuous-summary-html" class="prose"></div>
+        </div>
+      </div>
+
       <div id="message-container" class="d-flex flex-column flex-grow-1" style="min-height: 0;">
         <div class="p-3 text-muted">{% trans "Loading messages…" %}</div>
       </div>
@@ -120,11 +136,25 @@
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",
   };
-  window.NovaApp.storageKeys = { threadId: 'lastContinuousThreadId' };
 </script>
 
 <script>
   (function () {
+    let selectedDay = null;
+
+    function getSelectedDayFromUrl() {
+      const qs = new URLSearchParams(window.location.search);
+      return qs.get('day');
+    }
+
+    function setSelectedDay(day) {
+      selectedDay = day || null;
+      const qs = new URLSearchParams(window.location.search);
+      if (selectedDay) qs.set('day', selectedDay); else qs.delete('day');
+      const nextUrl = `${window.location.pathname}${qs.toString() ? '?' + qs.toString() : ''}`;
+      window.history.replaceState({}, '', nextUrl);
+    }
+
     async function loadDaysInto(containerId) {
       const el = document.getElementById(containerId);
       if (!el) return;
@@ -133,8 +163,9 @@
       el.innerHTML = data.html || '<div class="text-muted p-3">No days yet.</div>';
     }
 
-    async function loadMessages() {
-      const resp = await fetch(window.NovaApp.urls.messageList, { headers: { 'X-AJAX': 'true' } });
+    async function loadMessages(day) {
+      const params = day ? `?day=${encodeURIComponent(day)}` : '';
+      const resp = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
       const html = await resp.text();
       const mc = document.getElementById('message-container');
       if (mc) mc.innerHTML = html;
@@ -142,6 +173,60 @@
       // Thread id is embedded in the message container hidden field.
       const tid = document.querySelector('#message-container input[name="thread_id"]')?.value;
       document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: tid || null } }));
+    }
+
+    async function loadSummary(day) {
+      const panel = document.getElementById('continuous-day-summary');
+      const htmlEl = document.getElementById('continuous-summary-html');
+      const titleEl = document.getElementById('continuous-day-summary-title');
+      const eventEl = document.getElementById('continuous-summary-updated-event');
+      if (!panel || !htmlEl || !titleEl || !eventEl) return;
+
+      if (!day) {
+        panel.style.display = 'none';
+        return;
+      }
+
+      const resp = await fetch(`/continuous/day/${encodeURIComponent(day)}/`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const data = await resp.json();
+
+      titleEl.textContent = `${gettext('Day Summary')} (${day})`;
+      htmlEl.innerHTML = data.summary_html || '<div class="text-muted">No summary yet.</div>';
+
+      // UI event derived from DaySegment.updated_at (no SYSTEM message persisted).
+      if (data.updated_at) {
+        eventEl.style.display = '';
+        eventEl.textContent = `${gettext('Day summary updated')}: ${data.updated_at}`;
+      } else {
+        eventEl.style.display = 'none';
+        eventEl.textContent = '';
+      }
+
+      panel.style.display = '';
+    }
+
+    async function selectDay(day) {
+      setSelectedDay(day);
+      await loadMessages(day);
+      await loadSummary(day);
+    }
+
+    function bindDayClicks(containerId) {
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      el.addEventListener('click', (e) => {
+        const a = e.target.closest('a[data-day-label]');
+        if (!a) return;
+        e.preventDefault();
+        selectDay(a.dataset.dayLabel);
+        // Mobile: close days offcanvas after selection
+        if (window.innerWidth < 992) {
+          const ocEl = document.getElementById('threadsOffcanvas');
+          if (ocEl && window.bootstrap && bootstrap.Offcanvas) {
+            bootstrap.Offcanvas.getOrCreateInstance(ocEl).hide();
+          }
+        }
+      });
     }
 
     document.getElementById('continuous-load-days')?.addEventListener('click', (e) => {
@@ -153,9 +238,35 @@
       loadDaysInto('mobile-threads-list');
     });
 
+    document.getElementById('continuous-regenerate-summary')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!selectedDay) return;
+      const body = new URLSearchParams({ day: selectedDay });
+      const resp = await window.DOMUtils.csrfFetch(window.NovaApp.urls.regenerateSummary, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body
+      });
+      if (resp.ok) {
+        // Reload summary (messages are unchanged)
+        await loadSummary(selectedDay);
+      }
+    });
+
     loadDaysInto('threads-list');
     loadDaysInto('mobile-threads-list');
-    loadMessages();
+
+    bindDayClicks('threads-list');
+    bindDayClicks('mobile-threads-list');
+
+    // Initial selection: URL ?day=YYYY-MM-DD (if present), otherwise today.
+    const initialDay = getSelectedDayFromUrl();
+    if (initialDay) {
+      selectDay(initialDay);
+    } else {
+      // When no day is selected we still load messages (server defaults).
+      loadMessages(null);
+    }
   })();
 </script>
 

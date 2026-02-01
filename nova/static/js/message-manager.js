@@ -13,11 +13,6 @@
             this.voiceRecognition = null;
             this.initVoiceRecognition();
 
-            // Storage keys (allow different pages to avoid clobbering each other).
-            // Threads mode uses `lastThreadId`. Continuous mode should override to
-            // something like `lastContinuousThreadId`.
-            this.threadIdStorageKey = (window.NovaApp?.storageKeys?.threadId || 'lastThreadId');
-
             // Long press context menu state
             this.longPressTimer = null;
             this.longPressDuration = 500; // ms
@@ -156,24 +151,24 @@
                 const response = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
 
                 if (response.status === 404 && threadId) {
-                    window.StorageUtils.setItem('lastThreadId', null);
                     return this.loadMessages(null);
                 }
 
                 const html = await response.text();
                 document.getElementById('message-container').innerHTML = html;
-                this.currentThreadId = threadId;
+                // Thread id can be implicit (when threadId param omitted).
+                // Always re-sync from the hidden input rendered by the server.
+                const renderedThreadId = document.querySelector('#message-container input[name="thread_id"]')?.value;
+                this.currentThreadId = renderedThreadId || threadId;
 
                 document.querySelectorAll('.thread-link').forEach(a => a.classList.remove('active'));
                 const active = document.querySelector(`.thread-link[data-thread-id="${this.currentThreadId}"]`);
                 if (active) active.classList.add('active');
 
-                if (threadId) {
-                    window.StorageUtils.setItem(this.threadIdStorageKey, threadId);
-                }
+                // No browser persistence of selected thread.
 
                 // Announce thread change so other modules (Files panel, Preview split) can react
-                document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: threadId || null } }));
+                document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: this.currentThreadId || null } }));
 
                 this.initTextareaFocus();
                 // Update voice button visibility based on browser support
@@ -406,9 +401,6 @@
                 const firstThread = document.querySelector('.thread-link');
                 const firstThreadId = firstThread?.dataset.threadId;
                 this.loadMessages(firstThreadId);
-                if (window.StorageUtils.getItem(this.threadIdStorageKey) === threadId.toString()) {
-                    window.StorageUtils.setItem(this.threadIdStorageKey, null);
-                }
                 // Dispatch custom event for thread change (null if no threads left)
                 document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: firstThreadId || null } }));
             } catch (error) {
@@ -593,8 +585,8 @@
         }
 
         loadInitialThread() {
-            const lastThreadId = window.StorageUtils.getItem(this.threadIdStorageKey);
-            this.loadMessages(lastThreadId);
+            // Default behavior: server decides which thread to show when none is selected.
+            this.loadMessages(null);
         }
 
         // Disable main input if there are pending interactions

@@ -11,15 +11,11 @@
         let initialized = false;
 
         function el(id) { return document.getElementById(id); }
-        function getThreadId() { return window.StorageUtils.getThreadId(); }
-        function getWidthKey(threadId) { return window.StorageUtils.getWidthKey(threadId); }
-        function getSlugKey(threadId) { return window.StorageUtils.getSlugKey(threadId); }
+        function getThreadId() { return window.FileManager?.currentThreadId || null; }
         function isMobile() { return window.UIUtils.isMobile(); }
 
-        function applyPersistedWidth() {
-            const threadId = getThreadId();
-            const pct = threadId ? parseInt(window.StorageUtils.getItem(getWidthKey(threadId), '30'), 10) : 30;
-            document.documentElement.style.setProperty('--chat-pane-width', `${Math.min(80, Math.max(20, pct))}%`);
+        function applyDefaultWidth() {
+            document.documentElement.style.setProperty('--chat-pane-width', `30%`);
         }
 
         function attachIframeLoadHandler() {
@@ -78,11 +74,10 @@
 
             if (!previewPane || !iframe) return;
 
-            // Persist slug
-            if (threadId) window.StorageUtils.setItem(getSlugKey(threadId), slug);
+            // No persistence of last preview per thread.
 
             // Apply width and show panels
-            applyPersistedWidth();
+            applyDefaultWidth();
             document.body.classList.add('preview-active');
             previewPane.classList.remove('d-none');
             setDesktopLayoutActive(!isMobile());
@@ -128,12 +123,7 @@
                 const onUp = () => {
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
-                    const threadId = getThreadId();
-                    if (threadId) {
-                        const style = getComputedStyle(document.documentElement).getPropertyValue('--chat-pane-width').trim();
-                        const pct = parseInt(style.replace('%', '')) || 30;
-                        window.StorageUtils.setItem(getWidthKey(threadId), String(pct));
-                    }
+                    // No persistence.
                 };
                 document.addEventListener('mousemove', onMove);
                 document.addEventListener('mouseup', onUp);
@@ -148,8 +138,7 @@
                 pct += (e.key === 'ArrowRight' ? 2 : -2);
                 pct = Math.min(80, Math.max(20, pct));
                 document.documentElement.style.setProperty('--chat-pane-width', `${pct}%`);
-                const threadId = getThreadId();
-                if (threadId) window.StorageUtils.setItem(getWidthKey(threadId), String(pct));
+                // No persistence.
             });
         }
 
@@ -190,19 +179,12 @@
         }
 
         function handleThreadChanged(threadId) {
-            // Restore split width for new thread
-            applyPersistedWidth();
-            // Restore last preview for this thread if any
+            // No persistence; just close the preview when switching threads.
             if (!threadId) {
                 closePreview();
                 return;
             }
-            const slug = window.StorageUtils.getItem(getSlugKey(threadId));
-            if (slug) {
-                openPreview(slug, `/apps/${slug}/`);
-            } else {
-                closePreview();
-            }
+            closePreview();
         }
 
         function init() {
@@ -212,7 +194,7 @@
             attachIframeLoadHandler();
             handleResizeDrag();
             bindControls();
-            applyPersistedWidth();
+            applyDefaultWidth();
 
             // Event: open split preview
             document.addEventListener('webapp_preview_activate', (e) => {
@@ -232,17 +214,10 @@
             });
 
             // Restore on initial load
-            const threadId = getThreadId();
+            // Initial open is handled by explicit `previewConfig` only.
             const cfg = window.NovaApp && window.NovaApp.previewConfig;
-
-            // Preview page can provide a public URL; prefer it over default /apps/{slug}/
-            if (cfg && cfg.threadId && String(cfg.threadId) === String(threadId) && cfg.slug) {
+            if (cfg && cfg.threadId && cfg.slug) {
                 openPreview(cfg.slug, cfg.url || `/apps/${cfg.slug}/`);
-            } else if (threadId) {
-                const slug = window.StorageUtils.getItem(getSlugKey(threadId));
-                if (slug) {
-                    openPreview(slug, `/apps/${slug}/`);
-                }
             }
 
             // Listen to thread changes
@@ -251,7 +226,7 @@
             });
         }
 
-        return { init, openPreview, closePreview, applyPersistedWidth };
+        return { init, openPreview, closePreview };
     })();
 
 })();
