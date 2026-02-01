@@ -177,7 +177,7 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
         prompt_text = message.text or ""
 
         # Use the AgentTaskExecutor for cleaner execution
-        executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text)
+        executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text, source_message_id=message.id)
         asyncio.run(executor.execute_or_resume())
 
     except Exception as e:
@@ -248,7 +248,7 @@ class SummarizationTaskExecutor(TaskExecutor):
 
     def __init__(self, task, user, thread, agent_config, include_sub_agents=False, sub_agent_ids=None):
         # Initialize with empty prompt - summarization doesn't need user input
-        super().__init__(task, user, thread, agent_config, "")
+        super().__init__(task, user, thread, agent_config, "", source_message_id=None)
         self.include_sub_agents = include_sub_agents
         self.sub_agent_ids = sub_agent_ids or []
 

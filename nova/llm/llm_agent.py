@@ -24,6 +24,7 @@ from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
+from nova.models.Thread import Thread as ThreadModel
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,9 @@ class LLMAgent:
             llm_provider=llm_provider
         )
 
+        # Keep reference for continuous checkpoint context rebuild.
+        agent.checkpoint_link = checkpointLink
+
         # Store checkpointer for cleanup
         agent.checkpointer = checkpointer
 
@@ -325,7 +329,12 @@ class LLMAgent:
         self.middleware = []  # Agent middleware list
 
         # Add summarization middleware if configured
-        if hasattr(self.agent_config, 'auto_summarize'):
+        # NOTE: In continuous mode we use day summaries + explicit checkpoint rebuild,
+        # so thread-level summarization/compaction middleware must be disabled.
+        if (
+            hasattr(self.agent_config, 'auto_summarize')
+            and (not self.thread or self.thread.mode != ThreadModel.Mode.CONTINUOUS)
+        ):
             self.middleware.append(SummarizationMiddleware(self.agent_config, self))
 
     async def cleanup(self):

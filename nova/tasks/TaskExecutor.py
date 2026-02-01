@@ -39,12 +39,13 @@ class TaskExecutor:
         _process_result(result) : to process the result of the agent and do any necessary updates
 
     """
-    def __init__(self, task, user, thread, agent_config, prompt):
+    def __init__(self, task, user, thread, agent_config, prompt, *, source_message_id: int | None = None):
         self.task = task
         self.user = user
         self.thread = thread
         self.agent_config = agent_config
         self.prompt = prompt
+        self.source_message_id = source_message_id
         self.llm = None
         self.channel_layer = get_channel_layer()
         self.handler = TaskProgressHandler(self.task.id, self.channel_layer)
@@ -160,6 +161,28 @@ class TaskExecutor:
         self.task.progress_logs.append({"step": "Running AI agent",
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
+
+        # Continuous mode: ensure checkpoint state is rebuilt (yesterday/today summaries + today window)
+        # before invoking the agent.
+        try:
+            from nova.models.Thread import Thread as ThreadModel
+            if self.thread and self.thread.mode == ThreadModel.Mode.CONTINUOUS:
+                from nova.continuous.checkpoint_state import ensure_continuous_checkpoint_state
+
+                rebuilt = await ensure_continuous_checkpoint_state(
+                    self.llm,
+                    exclude_message_id=self.source_message_id,
+                )
+                if rebuilt:
+                    self.task.progress_logs.append({
+                        "step": "Continuous context: checkpoint rebuilt",
+                        "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+                        "severity": "info",
+                    })
+                    await sync_to_async(self.task.save, thread_sensitive=False)()
+        except Exception:
+            # Best-effort: never block agent execution if rebuild fails.
+            pass
 
         return await self.llm.ainvoke(self.prompt)
 
