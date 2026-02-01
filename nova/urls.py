@@ -10,6 +10,7 @@ from nova.views.continuous_views import (
     continuous_home,
     continuous_days,
     continuous_day,
+    continuous_messages,
     continuous_add_message,
     continuous_regenerate_summary,
 )
@@ -43,6 +44,7 @@ urlpatterns = [
     path("continuous/", continuous_home, name="continuous_home"),
     path("continuous/days/", continuous_days, name="continuous_days"),
     path("continuous/day/<str:day>/", continuous_day, name="continuous_day"),
+    path("continuous/messages/", continuous_messages, name="continuous_messages"),
     path("continuous/add-message/", continuous_add_message, name="continuous_add_message"),
     path("continuous/regenerate-summary/", continuous_regenerate_summary, name="continuous_regenerate_summary"),
 

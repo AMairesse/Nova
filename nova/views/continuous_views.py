@@ -104,6 +104,47 @@ def continuous_day(request, day):
     )
 
 
+@require_GET
+@login_required(login_url="login")
+def continuous_messages(request):
+    """Return the message container HTML for the continuous thread.
+
+    This is a lightweight compatibility layer so we can reuse the same
+    message rendering mechanics as Threads mode.
+
+    V1: always loads the user's continuous thread.
+    Later: add day scoping/pagination.
+    """
+
+    thread = ensure_continuous_thread(request.user)
+
+    user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
+    agent_id = request.GET.get("agent_id")
+    default_agent = None
+    if agent_id:
+        default_agent = AgentConfig.objects.filter(id=agent_id, user=request.user).first()
+    if not default_agent:
+        default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
+
+    messages = list(thread.get_messages())
+    for m in messages:
+        m.rendered_html = markdown_to_html(m.text)
+
+    # Keep template contract consistent with thread mode.
+    return render(
+        request,
+        "nova/message_container.html",
+        {
+            "messages": messages,
+            "thread_id": thread.id,
+            "user_agents": user_agents,
+            "default_agent": default_agent,
+            "pending_interactions": [],
+            "Actor": Actor,
+        },
+    )
+
+
 @csrf_protect
 @require_POST
 @login_required(login_url="login")
@@ -159,7 +200,28 @@ def continuous_add_message(request):
         except Exception:
             pass
 
-    return JsonResponse({"status": "OK", "thread_id": thread.id, "task_id": task.id, "day_segment_id": seg.id})
+    # Match the JSON contract expected by [`MessageManager.handleFormSubmit()`](nova/static/js/message-manager.js:235)
+    # so Continuous can reuse the same client logic as Threads.
+    message_data = {
+        "id": msg.id,
+        "text": new_message,
+        "actor": msg.actor,
+        "file_count": 0,
+        "internal_data": msg.internal_data or {},
+    }
+
+    return JsonResponse(
+        {
+            "status": "OK",
+            "message": message_data,
+            "thread_id": thread.id,
+            "task_id": task.id,
+            "day_segment_id": seg.id,
+            # Keep response shape compatible with thread mode callers.
+            "threadHtml": None,
+            "uploaded_file_ids": [],
+        }
+    )
 
 
 @csrf_protect

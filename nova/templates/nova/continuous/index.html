@@ -1,90 +1,103 @@
 {% extends 'base.html' %}
-{% load i18n %}
+{% load i18n %} {% load static %}
 
 {% block content %}
-{#
-  NOTE: base layout sets `.main-container > .container-fluid { overflow: hidden; }`
-  to support the chat page internal scrolling.
-  Continuous mode is a settings-like page: allow vertical scrolling.
-#}
-<div class="container-fluid py-3 continuous-page">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h4 class="mb-0">{% trans "Continuous" %}</h4>
-    <a class="btn btn-sm btn-outline-secondary" href="{% url 'index' %}">{% trans "Threads" %}</a>
-  </div>
-
-  <div class="row g-3">
-    <div class="col-12 col-lg-3">
-      <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-          <span>{% trans "Days" %}</span>
-          <button class="btn btn-sm btn-outline-primary" id="continuous-load-days" data-offset="0">{% trans "Load" %}</button>
-        </div>
-        <div class="card-body" id="continuous-day-selector">
-          <div class="text-muted small">{% trans "Loading days…" %}</div>
+<div class="container-fluid h-100 p-0" style="overflow: hidden;">
+  <div class="row g-0 main-content-row">
+    <!-- Days Sidebar (Desktop) -->
+    <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100" id="threads-sidebar">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light">
+        <h5 class="mb-0">{% trans "Days" %}</h5>
+        <button class="btn btn-sm btn-outline-primary" id="continuous-load-days" data-offset="0">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+      </div>
+      <div id="threads-container">
+        <div id="threads-list">
+          <div class="text-muted small p-3">{% trans "Loading days…" %}</div>
         </div>
       </div>
     </div>
 
-    <div class="col-12 col-lg-9">
-      <div class="card mb-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
-          <span>{% trans "Day Summary" %} ({{ day_label }})</span>
-          {#
-            IMPORTANT: the backend expects YYYY-MM-DD.
-            Avoid locale-formatted dates like "Feb. 1, 2026" which cause 400 invalid_day.
-          #}
-          <button class="btn btn-sm btn-outline-secondary" id="continuous-regenerate-summary" data-day="{{ day_label|date:'Y-m-d' }}">
-            {% trans "Regenerate" %}
+    <!-- Message Area (Center) -->
+    <div class="col-12 d-flex flex-column h-100" id="message-area" data-files-visible="true">
+      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light d-none d-lg-flex">
+        <h5 class="mb-0">{% trans "Continuous" %}</h5>
+        <button class="btn btn-sm btn-outline-secondary" type="button" id="files-toggle-btn" aria-expanded="true" aria-controls="files-sidebar">
+          <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
+        </button>
+      </div>
+      <div id="message-container" class="d-flex flex-column flex-grow-1" style="min-height: 0;">
+        <div class="p-3 text-muted">{% trans "Loading messages…" %}</div>
+      </div>
+    </div>
+
+    <!-- Files Sidebar (Desktop) -->
+    <div class="col-lg-2 d-none d-lg-block border-start d-flex flex-column h-100" id="files-sidebar">
+      <div id="file-sidebar-content" class="flex-grow-1 overflow-auto" style="min-height: 0;"></div>
+    </div>
+  </div>
+
+  <!-- Mobile Days Offcanvas (reuses threads offcanvas slot) -->
+  <div class="offcanvas offcanvas-start" tabindex="-1" id="threadsOffcanvas" aria-labelledby="threadsOffcanvasLabel">
+    <div class="offcanvas-header border-bottom d-flex justify-content-between align-items-center">
+      <h5 class="offcanvas-title" id="threadsOffcanvasLabel">{% trans "Days" %}</h5>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-primary" id="continuous-load-days-mobile" data-offset="0">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+    </div>
+    <div class="offcanvas-body p-0 d-flex flex-column" style="min-height: 0;">
+      <div id="mobile-threads-container">
+        <div id="mobile-threads-list">
+          <div class="text-muted small p-3">{% trans "Loading days…" %}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Files/Webapps Offcanvas: unchanged from Threads -->
+  <div class="offcanvas offcanvas-end" tabindex="-1" id="filesOffcanvas" aria-labelledby="filesOffcanvasLabel">
+    <div class="offcanvas-header border-bottom d-flex justify-content-between align-items-center">
+      <h5 class="offcanvas-title" id="filesOffcanvasLabel">{% trans "Files & Webapps" %}</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body p-0 d-flex flex-column">
+      <ul class="nav nav-tabs px-2 pt-2" id="mobile-files-webapps-tabs" role="tablist">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="mobile-tab-files" data-bs-toggle="tab" data-bs-target="#mobile-files-pane" type="button" role="tab" aria-controls="mobile-files-pane" aria-selected="true">
+            <i class="bi bi-files me-1"></i>{% trans "Files" %}
+          </button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="mobile-tab-webapps" data-bs-toggle="tab" data-bs-target="#mobile-webapps-pane" type="button" role="tab" aria-controls="mobile-webapps-pane" aria-selected="false">
+            <i class="bi bi-window me-1"></i>{% trans "Webapps" %}
+          </button>
+        </li>
+      </ul>
+
+      <div class="d-flex justify-content-between align-items-center px-2 py-2 border-bottom bg-light" id="mobile-files-toolbar">
+        <div class="small text-muted">{% trans "Upload files" %}</div>
+        <div>
+          <button id="upload-files-btn-mobile" class="btn btn-sm btn-primary me-1" title="{% trans 'Upload files' %}">
+            <i class="bi bi-upload"></i>
+          </button>
+          <button id="upload-directory-btn-mobile" class="btn btn-sm btn-primary" title="{% trans 'Upload directory' %}">
+            <i class="bi bi-folder-plus"></i>
           </button>
         </div>
-        <div class="card-body" id="continuous-summary">
-          {% if day_segment and day_segment.summary_markdown %}
-            <pre class="mb-0" style="white-space: pre-wrap;">{{ day_segment.summary_markdown }}</pre>
-          {% else %}
-            <div class="text-muted">{% trans "No summary yet." %}</div>
-          {% endif %}
-        </div>
       </div>
 
-      <div class="card">
-        <div class="card-header">{% trans "Send a message" %}</div>
-        <div class="card-body">
-          <form id="continuous-message-form" method="post" action="{% url 'continuous_add_message' %}">
-            {% csrf_token %}
-            <div class="input-group">
-              <textarea class="form-control" name="new_message" rows="2" placeholder="{% trans 'Type your message…' %}"></textarea>
-              <button class="btn btn-primary" type="submit">{% trans "Send" %}</button>
-            </div>
-          </form>
-          <div class="small text-muted mt-2">
-            {% trans "This page is a minimal V1 scaffold; the full UX will be wired next." %}
+      <div class="tab-content flex-grow-1 overflow-auto" id="mobile-files-webapps-tabcontent">
+        <div class="tab-pane fade show active" id="mobile-files-pane" role="tabpanel" aria-labelledby="mobile-tab-files" tabindex="0">
+          <div id="file-sidebar-content-mobile"></div>
+        </div>
+        <div class="tab-pane fade" id="mobile-webapps-pane" role="tabpanel" aria-labelledby="mobile-tab-webapps" tabindex="0">
+          <div id="webapps-list-container-mobile" class="p-2">
+            <p class="text-muted mb-0">{% trans "Loading webapps..." %}</p>
           </div>
-        </div>
-      </div>
-
-      <div class="card mt-3">
-        <div class="card-header">{% trans "Timeline" %}</div>
-        <div class="card-body continuous-timeline" id="continuous-timeline">
-          {% if timeline_messages %}
-            {% for message in timeline_messages %}
-              <div class="mb-2">
-                {% if message.actor == Actor.USER %}
-                  <div class="card border-primary">
-                    <div class="card-body py-2"><strong class="text-primary">{{ message.rendered_html }}</strong></div>
-                  </div>
-                {% elif message.actor == Actor.AGENT %}
-                  <div class="card border-secondary">
-                    <div class="card-body py-2">{{ message.rendered_html }}</div>
-                  </div>
-                {% else %}
-                  <div class="text-muted small">{{ message.rendered_html }}</div>
-                {% endif %}
-              </div>
-            {% endfor %}
-          {% else %}
-            <div class="text-muted">{% trans "No messages yet for this day." %}</div>
-          {% endif %}
         </div>
       </div>
     </div>
@@ -92,65 +105,72 @@
 </div>
 
 <script>
+  window.NovaApp = window.NovaApp || {};
+  window.NovaApp.urls = {
+    index: "{% url 'index' %}",
+    // Continuous-specific endpoints
+    addMessage: "{% url 'continuous_add_message' %}",
+    messageList: "{% url 'continuous_messages' %}",
+    runningTasksBase: "/running-tasks/",
+    // Threads endpoints are not used from this page; keep minimal set.
+    loadDays: "{% url 'continuous_days' %}",
+    regenerateSummary: "{% url 'continuous_regenerate_summary' %}",
+    // Files endpoints (same as thread mode; URLs require thread_id substitution handled by FileManager)
+    fileList: "{% url 'file_list' 0 %}",
+    fileUpload: "{% url 'file_upload' 0 %}",
+    fileDelete: "{% url 'file_delete' 0 %}",
+  };
+  window.NovaApp.storageKeys = { threadId: 'lastContinuousThreadId' };
+</script>
+
+<script>
   (function () {
-    const daysBtn = document.getElementById('continuous-load-days');
-    const daysContainer = document.getElementById('continuous-day-selector');
-    const form = document.getElementById('continuous-message-form');
-    const regenBtn = document.getElementById('continuous-regenerate-summary');
-
-    async function postForm(url, formEl) {
-      const resp = await fetch(url, {
-        method: 'POST',
-        body: new FormData(formEl),
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-      });
-      return await resp.json();
-    }
-
-    async function loadDays() {
-      const resp = await fetch('{% url "continuous_days" %}?offset=0&limit=30', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    async function loadDaysInto(containerId) {
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      const resp = await fetch(`${window.NovaApp.urls.loadDays}?offset=0&limit=30`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
       const data = await resp.json();
-      daysContainer.innerHTML = data.html || '<div class="text-muted">No days yet.</div>';
+      el.innerHTML = data.html || '<div class="text-muted p-3">No days yet.</div>';
     }
 
-    daysBtn?.addEventListener('click', (e) => {
+    async function loadMessages() {
+      const resp = await fetch(window.NovaApp.urls.messageList, { headers: { 'X-AJAX': 'true' } });
+      const html = await resp.text();
+      const mc = document.getElementById('message-container');
+      if (mc) mc.innerHTML = html;
+      // Announce thread id for other modules (files/webapps)
+      // Thread id is embedded in the message container hidden field.
+      const tid = document.querySelector('#message-container input[name="thread_id"]')?.value;
+      document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: tid || null } }));
+    }
+
+    document.getElementById('continuous-load-days')?.addEventListener('click', (e) => {
       e.preventDefault();
-      loadDays();
+      loadDaysInto('threads-list');
+    });
+    document.getElementById('continuous-load-days-mobile')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      loadDaysInto('mobile-threads-list');
     });
 
-    form?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const data = await postForm(form.action, form);
-      if (data.status === 'OK') {
-        form.reset();
-      }
-    });
-
-    regenBtn?.addEventListener('click', async (e) => {
-      e.preventDefault();
-      const f = document.createElement('form');
-      f.method = 'POST';
-      const csrf = document.querySelector('input[name=csrfmiddlewaretoken]');
-      if (csrf) {
-        const csrf2 = document.createElement('input');
-        csrf2.type = 'hidden';
-        csrf2.name = 'csrfmiddlewaretoken';
-        csrf2.value = csrf.value;
-        f.appendChild(csrf2);
-      }
-      const day = document.createElement('input');
-      day.type = 'hidden';
-      day.name = 'day';
-      day.value = regenBtn.dataset.day;
-      f.appendChild(day);
-
-      const data = await postForm('{% url "continuous_regenerate_summary" %}', f);
-      if (data.status === 'OK') {
-        // no-op for now
-      }
-    });
-
-    loadDays();
+    loadDaysInto('threads-list');
+    loadDaysInto('mobile-threads-list');
+    loadMessages();
   })();
 </script>
+
+<script src="{% static 'js/responsive.js' %}" defer></script>
+<script src="{% static 'js/voice_recognition.js' %}" defer></script>
+<script src="{% static 'js/message-renderer.js' %}" defer></script>
+<script src="{% static 'js/streaming-manager.js' %}" defer></script>
+<script src="{% static 'js/message-manager.js' %}" defer></script>
+<script src="{% static 'js/preview-manager.js' %}" defer></script>
+<script src="{% static 'js/thread-manager.js' %}" defer></script>
+<script src="{% static 'js/file-operations.js' %}" defer></script>
+<script src="{% static 'js/sidebar-manager.js' %}" defer></script>
+<script src="{% static 'js/websocket-manager.js' %}" defer></script>
+<script src="{% static 'js/webapp-integration.js' %}" defer></script>
+<script src="{% static 'js/files.js' %}" defer></script>
+<script src="{% static 'js/nova-thread-bootstrap.js' %}" defer></script>
+
 {% endblock %}
