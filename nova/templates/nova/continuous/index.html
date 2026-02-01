@@ -1,0 +1,156 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block content %}
+{#
+  NOTE: base layout sets `.main-container > .container-fluid { overflow: hidden; }`
+  to support the chat page internal scrolling.
+  Continuous mode is a settings-like page: allow vertical scrolling.
+#}
+<div class="container-fluid py-3 continuous-page">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">{% trans "Continuous" %}</h4>
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'index' %}">{% trans "Threads" %}</a>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-3">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>{% trans "Days" %}</span>
+          <button class="btn btn-sm btn-outline-primary" id="continuous-load-days" data-offset="0">{% trans "Load" %}</button>
+        </div>
+        <div class="card-body" id="continuous-day-selector">
+          <div class="text-muted small">{% trans "Loading days…" %}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-9">
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>{% trans "Day Summary" %} ({{ day_label }})</span>
+          {#
+            IMPORTANT: the backend expects YYYY-MM-DD.
+            Avoid locale-formatted dates like "Feb. 1, 2026" which cause 400 invalid_day.
+          #}
+          <button class="btn btn-sm btn-outline-secondary" id="continuous-regenerate-summary" data-day="{{ day_label|date:'Y-m-d' }}">
+            {% trans "Regenerate" %}
+          </button>
+        </div>
+        <div class="card-body" id="continuous-summary">
+          {% if day_segment and day_segment.summary_markdown %}
+            <pre class="mb-0" style="white-space: pre-wrap;">{{ day_segment.summary_markdown }}</pre>
+          {% else %}
+            <div class="text-muted">{% trans "No summary yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">{% trans "Send a message" %}</div>
+        <div class="card-body">
+          <form id="continuous-message-form" method="post" action="{% url 'continuous_add_message' %}">
+            {% csrf_token %}
+            <div class="input-group">
+              <textarea class="form-control" name="new_message" rows="2" placeholder="{% trans 'Type your message…' %}"></textarea>
+              <button class="btn btn-primary" type="submit">{% trans "Send" %}</button>
+            </div>
+          </form>
+          <div class="small text-muted mt-2">
+            {% trans "This page is a minimal V1 scaffold; the full UX will be wired next." %}
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-3">
+        <div class="card-header">{% trans "Timeline" %}</div>
+        <div class="card-body continuous-timeline" id="continuous-timeline">
+          {% if timeline_messages %}
+            {% for message in timeline_messages %}
+              <div class="mb-2">
+                {% if message.actor == Actor.USER %}
+                  <div class="card border-primary">
+                    <div class="card-body py-2"><strong class="text-primary">{{ message.rendered_html }}</strong></div>
+                  </div>
+                {% elif message.actor == Actor.AGENT %}
+                  <div class="card border-secondary">
+                    <div class="card-body py-2">{{ message.rendered_html }}</div>
+                  </div>
+                {% else %}
+                  <div class="text-muted small">{{ message.rendered_html }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="text-muted">{% trans "No messages yet for this day." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const daysBtn = document.getElementById('continuous-load-days');
+    const daysContainer = document.getElementById('continuous-day-selector');
+    const form = document.getElementById('continuous-message-form');
+    const regenBtn = document.getElementById('continuous-regenerate-summary');
+
+    async function postForm(url, formEl) {
+      const resp = await fetch(url, {
+        method: 'POST',
+        body: new FormData(formEl),
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      });
+      return await resp.json();
+    }
+
+    async function loadDays() {
+      const resp = await fetch('{% url "continuous_days" %}?offset=0&limit=30', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      const data = await resp.json();
+      daysContainer.innerHTML = data.html || '<div class="text-muted">No days yet.</div>';
+    }
+
+    daysBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      loadDays();
+    });
+
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = await postForm(form.action, form);
+      if (data.status === 'OK') {
+        form.reset();
+      }
+    });
+
+    regenBtn?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const f = document.createElement('form');
+      f.method = 'POST';
+      const csrf = document.querySelector('input[name=csrfmiddlewaretoken]');
+      if (csrf) {
+        const csrf2 = document.createElement('input');
+        csrf2.type = 'hidden';
+        csrf2.name = 'csrfmiddlewaretoken';
+        csrf2.value = csrf.value;
+        f.appendChild(csrf2);
+      }
+      const day = document.createElement('input');
+      day.type = 'hidden';
+      day.name = 'day';
+      day.value = regenBtn.dataset.day;
+      f.appendChild(day);
+
+      const data = await postForm('{% url "continuous_regenerate_summary" %}', f);
+      if (data.status === 'OK') {
+        // no-op for now
+      }
+    });
+
+    loadDays();
+  })();
+</script>
+{% endblock %}

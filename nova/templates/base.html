@@ -24,7 +24,7 @@
     <link rel="apple-touch-icon" href="{% static 'images/icon-192x192.png' %}">
     {% block extra_head %}{% endblock %}
   </head>
-  <body class="d-flex flex-column">
+  <body class="d-flex flex-column" data-debug="{{ debug|yesno:'true,false' }}">
     <!-- Desktop Navigation (hidden on mobile) -->
     <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom d-none d-lg-flex">
       <div class="container-fluid">
@@ -32,6 +32,17 @@
           <img src="{% static 'images/nova_logo.png' %}" alt="Nova Logo" height="24" class="d-inline-block align-text-top">
           <i class="me-2"></i>Nova
         </a>
+
+        {% if user.is_authenticated %}
+        <div class="navbar-nav me-auto">
+          <a class="nav-link" href="{% url 'continuous_home' %}">
+            <i class="bi bi-infinity me-1"></i>{% trans "Continuous" %}
+          </a>
+          <a class="nav-link" href="{% url 'index' %}">
+            <i class="bi bi-chat-left-text me-1"></i>{% trans "Threads" %}
+          </a>
+        </div>
+        {% endif %}
         
         {% if user.is_authenticated %}
         <div class="navbar-nav ms-auto">
@@ -56,6 +67,9 @@
         <button class="btn btn-sm btn-outline-secondary mobile-nav-btn" type="button" data-bs-toggle="offcanvas" data-bs-target="#threadsOffcanvas" aria-controls="threadsOffcanvas" title="{% trans 'Threads' %}">
           <i class="bi bi-chat-dots"></i>
         </button>
+        <a class="btn btn-sm btn-outline-secondary mobile-nav-btn ms-1" href="{% url 'continuous_home' %}" title="{% trans 'Continuous' %}">
+          <i class="bi bi-infinity"></i>
+        </a>
         {% endif %}
         
         <!-- Center: Brand -->
@@ -98,7 +112,7 @@
               // Send debug status to service worker
               reg.active?.postMessage({
                 type: 'SET_CONFIG',
-                debug: {{ debug|lower }},
+                debug: document.body?.dataset?.debug === 'true',
                 cacheMaxAge: 3 * 24 * 60 * 60 * 1000  // 3 days in ms
               });
             })

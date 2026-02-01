@@ -6,6 +6,13 @@ from nova.views.thread_views import (
     index, message_list, create_thread, delete_thread,
     add_message, load_more_threads, summarize_thread, confirm_summarize_thread
 )
+from nova.views.continuous_views import (
+    continuous_home,
+    continuous_days,
+    continuous_day,
+    continuous_add_message,
+    continuous_regenerate_summary,
+)
 from nova.views.task_views import running_tasks
 from nova.views.files_views import (
     sidebar_panel_view, file_list,
@@ -31,6 +38,14 @@ urlpatterns = [
     path("add-message/", add_message, name="add_message"),
     path("load-more-threads/", load_more_threads, name="load_more_threads"),
     path("running-tasks/<int:thread_id>/", running_tasks, name="running_tasks"),
+
+    # Continuous discussion mode
+    path("continuous/", continuous_home, name="continuous_home"),
+    path("continuous/days/", continuous_days, name="continuous_days"),
+    path("continuous/day/<str:day>/", continuous_day, name="continuous_day"),
+    path("continuous/add-message/", continuous_add_message, name="continuous_add_message"),
+    path("continuous/regenerate-summary/", continuous_regenerate_summary, name="continuous_regenerate_summary"),
+
     # API
     path('api/', include('nova.api.urls')),
     # Authentication views
