@@ -17,6 +17,8 @@
         </a>
         {% if seg.summary_markdown %}
           <span class="badge text-bg-success">{% trans "Summary" %}</span>
+        {% elif today and seg.day_label == today %}
+          {# Today is expected to have no summary by default; show no badge. #}
         {% else %}
           <span class="badge text-bg-secondary">{% trans "Empty" %}</span>
         {% endif %}

@@ -138,10 +138,14 @@ def continuous_messages(request):
         except Exception:
             return JsonResponse({"error": "invalid_day"}, status=400)
 
+    # Default behavior for continuous: if no explicit `?day=...` is provided,
+    # show *today's* slice (not the whole continuous thread).
+    today_label = get_day_label_for_user(request.user)
+    effective_day_label = day_label or today_label
+
     # Posting is only allowed for today's day label.
     # If the user is browsing a past day, the UI should be read-only.
-    today_label = get_day_label_for_user(request.user)
-    allow_posting = (day_label is None) or (day_label == today_label)
+    allow_posting = effective_day_label == today_label
 
     user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
     agent_id = request.GET.get("agent_id")
@@ -151,13 +155,13 @@ def continuous_messages(request):
     if not default_agent:
         default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
 
-    if day_label:
-        seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
+    if effective_day_label:
+        seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=effective_day_label).first()
         if not seg or not seg.starts_at_message_id:
             messages = []
         else:
             next_seg = (
-                DaySegment.objects.filter(user=request.user, thread=thread, day_label__gt=day_label)
+                DaySegment.objects.filter(user=request.user, thread=thread, day_label__gt=effective_day_label)
                 .order_by("day_label")
                 .first()
             )
@@ -168,7 +172,7 @@ def continuous_messages(request):
                 qs = qs.filter(created_at__lt=end_dt)
             messages = list(qs.order_by("created_at", "id"))
     else:
-        messages = list(thread.get_messages())
+        messages = []
     for m in messages:
         m.rendered_html = markdown_to_html(m.text)
 
