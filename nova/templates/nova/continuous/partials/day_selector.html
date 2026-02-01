@@ -9,7 +9,11 @@
           class="text-decoration-none"
           data-day-label="{{ seg.day_label|date:'Y-m-d' }}"
         >
-          {{ seg.day_label|date:'Y-m-d' }}
+          {% if today and seg.day_label == today %}
+            {% trans "Today" %}
+          {% else %}
+            {{ seg.day_label|date:'Y-m-d' }}
+          {% endif %}
         </a>
         {% if seg.summary_markdown %}
           <span class="badge text-bg-success">{% trans "Summary" %}</span>

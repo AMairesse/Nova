@@ -170,7 +170,6 @@
       const scroll = document.querySelector('#message-container #conversation-container');
       if (!panel || !scroll) return;
 
-      // Only move when the container has been rendered.
       // Prepend so the summary is above the timeline inside the same scroll area.
       if (panel.parentElement !== scroll) {
         scroll.prepend(panel);
@@ -178,11 +177,26 @@
     }
 
     async function loadMessages(day) {
+      // If the summary panel was previously moved into #message-container, detach it
+      // before replacing innerHTML so it doesn't get destroyed.
+      const summaryPanel = document.getElementById('continuous-day-summary');
+      if (summaryPanel && summaryPanel.parentElement) {
+        summaryPanel.remove();
+      }
+
       const params = day ? `?day=${encodeURIComponent(day)}` : '';
       const resp = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
       const html = await resp.text();
       const mc = document.getElementById('message-container');
       if (mc) mc.innerHTML = html;
+
+      // Re-attach summary panel and ensure it scrolls with the conversation.
+      if (summaryPanel) {
+        const scroll = document.querySelector('#message-container #conversation-container');
+        if (scroll) {
+          scroll.prepend(summaryPanel);
+        }
+      }
 
       // Make sure the day summary panel scrolls with the conversation.
       ensureSummaryInsideScroll();
@@ -232,14 +246,14 @@
       await loadSummary(day);
     }
 
-    function bindDayClicks(containerId) {
-      const el = document.getElementById(containerId);
-      if (!el) return;
-      el.addEventListener('click', (e) => {
+    function bindDayClicks() {
+      // Global delegation so it keeps working even after partial HTML updates.
+      document.addEventListener('click', (e) => {
         const a = e.target.closest('a[data-day-label]');
         if (!a) return;
         e.preventDefault();
         selectDay(a.dataset.dayLabel);
+
         // Mobile: close days offcanvas after selection
         if (window.innerWidth < 992) {
           const ocEl = document.getElementById('threadsOffcanvas');
@@ -247,7 +261,7 @@
             bootstrap.Offcanvas.getOrCreateInstance(ocEl).hide();
           }
         }
-      });
+      }, { capture: true });
     }
 
     document.getElementById('continuous-load-days')?.addEventListener('click', (e) => {
@@ -277,8 +291,7 @@
     loadDaysInto('threads-list');
     loadDaysInto('mobile-threads-list');
 
-    bindDayClicks('threads-list');
-    bindDayClicks('mobile-threads-list');
+    bindDayClicks();
 
     // Initial selection: URL ?day=YYYY-MM-DD (if present), otherwise today.
     const initialDay = getSelectedDayFromUrl();

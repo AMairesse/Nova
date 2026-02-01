@@ -83,12 +83,14 @@ def continuous_days(request):
     limit = int(request.GET.get("limit", 30))
     limit = max(1, min(limit, 100))
 
+    today = get_day_label_for_user(request.user)
+
     qs = DaySegment.objects.filter(user=request.user, thread=thread).order_by("-day_label")
     segments = list(qs[offset: offset + limit])
 
     html = render_to_string(
         "nova/continuous/partials/day_selector.html",
-        {"day_segments": segments, "offset": offset, "limit": limit},
+        {"day_segments": segments, "offset": offset, "limit": limit, "today": today},
         request=request,
     )
     return JsonResponse({"html": html, "count": len(segments)})

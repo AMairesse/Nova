@@ -154,6 +154,9 @@ def message_list(request):
                             last_agent_message_id = m.id
                             break
 
+            # Hide "Compact" link for continuous mode.
+            show_compact = (getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD)
+
             for m in messages:
                 m.rendered_html = markdown_to_html(m.text)
                 # Add info about files used
@@ -163,7 +166,7 @@ def message_list(request):
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
                 # Mark if this is the last agent message (for compact link)
-                m.is_last_agent_message = (m.id == last_agent_message_id)
+                m.is_last_agent_message = bool(show_compact and (m.id == last_agent_message_id))
 
             # Fetch pending interactions for server-side rendering
             pending_interactions = Interaction.objects.filter(
