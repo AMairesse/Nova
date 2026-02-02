@@ -18,6 +18,24 @@ async def load_tools(agent) -> List[StructuredTool]:
     # Load builtin tools (pre-fetched)
     for tool_obj in agent.builtin_tools:
         try:
+            # ------------------------------------------------------------------
+            # Continuous discussion policy:
+            # - `conversation.*` tools are reserved to the *main* agent.
+            # - Sub-agents are agents used as tools (AgentConfig.is_tool=True).
+            # - Only expose conversation tools when the backing thread is in
+            #   continuous mode.
+            # ------------------------------------------------------------------
+            try:
+                if getattr(tool_obj, "tool_subtype", None) == "conversation":
+                    thread_mode = getattr(getattr(agent, "thread", None), "mode", None)
+                    is_sub_agent = bool(getattr(getattr(agent, "agent_config", None), "is_tool", False))
+                    if thread_mode != "continuous" or is_sub_agent:
+                        continue
+            except Exception:
+                # Be conservative: if we cannot assert policy, don't expose.
+                if getattr(tool_obj, "tool_subtype", None) == "conversation":
+                    continue
+
             from nova.tools import import_module
             module = import_module(tool_obj.python_path)
             if not module:

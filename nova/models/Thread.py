@@ -8,11 +8,22 @@ from nova.models.Message import Actor
 
 
 class Thread(models.Model):
+    class Mode(models.TextChoices):
+        THREAD = "thread", _("Thread")
+        CONTINUOUS = "continuous", _("Continuous")
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='user_threads',
                              verbose_name=_("User threads"))
     subject = models.CharField(max_length=255)
+    mode = models.CharField(
+        max_length=16,
+        choices=Mode.choices,
+        default=Mode.THREAD,
+        db_index=True,
+        help_text=_("Conversation mode: standard thread or continuous discussion")
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

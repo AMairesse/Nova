@@ -148,7 +148,8 @@
     </div>
   </div>
 
-  <!-- Message input area - always visible at bottom -->
+  <!-- Message input area - only for today (or when day filter is not active) -->
+  {% if allow_posting|default:True %}
   {% with nb_agents=user_agents|length %} {% if nb_agents == 0 %}
   <div class="alert alert-info text-center message-input-area m-0 rounded-0">
     {% trans "No agents configured yet." %}<br />
@@ -237,6 +238,7 @@
     </form>
   </div>
   {% endif %} {% endwith %}
+  {% endif %}
 
   <!-- Sub-agent Summarization Confirmation Modal -->
   <div class="modal fade" id="subAgentConfirmationModal" tabindex="-1" aria-labelledby="subAgentConfirmationModalLabel" aria-hidden="true">

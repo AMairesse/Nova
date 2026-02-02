@@ -13,12 +13,13 @@ from cron_descriptor import get_description
 from nova.models.ScheduledTask import ScheduledTask
 from nova.models.AgentConfig import AgentConfig
 from nova.tasks.tasks import run_scheduled_agent_task
+from nova.tasks.conversation_tasks import nightly_summarize_continuous_daysegments_for_user_task
 
 
 class ScheduledTaskForm(ModelForm):
     class Meta:
         model = ScheduledTask
-        fields = ['name', 'agent', 'prompt', 'cron_expression', 'timezone']
+        fields = ['name', 'task_kind', 'maintenance_task', 'agent', 'prompt', 'cron_expression', 'timezone']
         widgets = {
             'cron_expression': forms.TextInput(
                 attrs={
@@ -36,6 +37,32 @@ class ScheduledTaskForm(ModelForm):
 
         if self.user:
             self.fields['agent'].queryset = AgentConfig.objects.filter(user=self.user)
+
+        # If we're editing an existing maintenance task, only allow changing schedule fields.
+        instance_kind = getattr(getattr(self, "instance", None), "task_kind", None)
+        if instance_kind == ScheduledTask.TaskKind.MAINTENANCE:
+            for k in ("name", "task_kind", "maintenance_task", "agent", "prompt"):
+                if k in self.fields:
+                    self.fields[k].disabled = True
+            # keep UI small
+            if "agent" in self.fields:
+                self.fields["agent"].required = False
+            if "prompt" in self.fields:
+                self.fields["prompt"].required = False
+
+            # Clarify that only hour/minute are editable.
+            self.fields["cron_expression"].help_text = _(
+                "Daily schedule only. Edit minute/hour (cron: 'm H * * *')."
+            )
+
+        # Keep maintenance tasks simple in UI:
+        # - show kind + schedule + timezone
+        # - allow agent/prompt for agent kind
+        self.fields['task_kind'].label = _("Kind")
+        self.fields['maintenance_task'].label = _("Maintenance task")
+        self.fields['maintenance_task'].help_text = _(
+            "For maintenance tasks, this is the Celery task name (advanced)."
+        )
 
         # Make this field user-facing (was hidden and driven by legacy jQuery plugins)
         self.fields['cron_expression'].label = _("Schedule")
@@ -97,7 +124,12 @@ def scheduled_task_edit(request, pk):
         form = ScheduledTaskForm(request.POST, instance=task, user=request.user)
         if form.is_valid():
             task = form.save(commit=False)
-            task.keep_thread = request.POST.get('keep_thread') == 'on'
+
+            # Maintenance tasks are system-owned behavior; only schedule is editable.
+            if task.task_kind == ScheduledTask.TaskKind.MAINTENANCE:
+                task.keep_thread = False
+            else:
+                task.keep_thread = request.POST.get('keep_thread') == 'on'
             task.save()
             messages.success(request, _("Scheduled task updated successfully."))
             return redirect('user_settings:scheduled_tasks')
@@ -116,6 +148,10 @@ def scheduled_task_edit(request, pk):
 def scheduled_task_delete(request, pk):
     """Delete a scheduled task."""
     task = get_object_or_404(ScheduledTask, pk=pk, user=request.user)
+
+    if task.task_kind == ScheduledTask.TaskKind.MAINTENANCE:
+        messages.error(request, _("This maintenance task cannot be deleted."))
+        return redirect('user_settings:scheduled_tasks')
     if request.method == 'POST':
         task.delete()
         messages.success(request, _("Scheduled task deleted successfully."))
@@ -131,6 +167,11 @@ def scheduled_task_delete(request, pk):
 def scheduled_task_toggle_active(request, pk):
     """Toggle active status of a scheduled task."""
     task = get_object_or_404(ScheduledTask, pk=pk, user=request.user)
+
+    if task.task_kind == ScheduledTask.TaskKind.MAINTENANCE:
+        messages.error(request, _("This maintenance task cannot be disabled."))
+        return redirect('user_settings:scheduled_tasks')
+
     task.is_active = not task.is_active
     task.save()
     status = _("activated") if task.is_active else _("deactivated")
@@ -142,8 +183,13 @@ def scheduled_task_toggle_active(request, pk):
 def scheduled_task_run_now(request, pk):
     """Manually run a scheduled task."""
     task = get_object_or_404(ScheduledTask, pk=pk, user=request.user)
-    # Trigger the Celery task
-    run_scheduled_agent_task.delay(task.id)
+
+    # Trigger the Celery task depending on kind.
+    if task.task_kind == ScheduledTask.TaskKind.MAINTENANCE:
+        # User-scoped nightly summaries.
+        nightly_summarize_continuous_daysegments_for_user_task.delay(user_id=request.user.id)
+    else:
+        run_scheduled_agent_task.delay(task.id)
     messages.success(request, _("Scheduled task execution started."))
     return redirect('user_settings:scheduled_tasks')
 

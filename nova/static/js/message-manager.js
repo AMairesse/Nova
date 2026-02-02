@@ -151,24 +151,24 @@
                 const response = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
 
                 if (response.status === 404 && threadId) {
-                    window.StorageUtils.setItem('lastThreadId', null);
                     return this.loadMessages(null);
                 }
 
                 const html = await response.text();
                 document.getElementById('message-container').innerHTML = html;
-                this.currentThreadId = threadId;
+                // Thread id can be implicit (when threadId param omitted).
+                // Always re-sync from the hidden input rendered by the server.
+                const renderedThreadId = document.querySelector('#message-container input[name="thread_id"]')?.value;
+                this.currentThreadId = renderedThreadId || threadId;
 
                 document.querySelectorAll('.thread-link').forEach(a => a.classList.remove('active'));
                 const active = document.querySelector(`.thread-link[data-thread-id="${this.currentThreadId}"]`);
                 if (active) active.classList.add('active');
 
-                if (threadId) {
-                    window.StorageUtils.setItem('lastThreadId', threadId);
-                }
+                // No browser persistence of selected thread.
 
                 // Announce thread change so other modules (Files panel, Preview split) can react
-                document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: threadId || null } }));
+                document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: this.currentThreadId || null } }));
 
                 this.initTextareaFocus();
                 // Update voice button visibility based on browser support
@@ -184,6 +184,13 @@
 
                 // Check for running tasks and reconnect to streaming if needed
                 this.checkAndReconnectRunningTasks();
+
+                // If nothing is running and there are no pending interactions,
+                // ensure the input is enabled (important after a page reload).
+                const pendingCards = document.querySelectorAll('[data-interaction-id]');
+                if (!pendingCards || pendingCards.length === 0) {
+                    this.streamingManager.setInputAreaDisabled(false);
+                }
             } catch (error) {
                 console.error('Error loading messages:', error);
             }
@@ -401,9 +408,6 @@
                 const firstThread = document.querySelector('.thread-link');
                 const firstThreadId = firstThread?.dataset.threadId;
                 this.loadMessages(firstThreadId);
-                if (window.StorageUtils.getItem('lastThreadId') === threadId.toString()) {
-                    window.StorageUtils.setItem('lastThreadId', null);
-                }
                 // Dispatch custom event for thread change (null if no threads left)
                 document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: firstThreadId || null } }));
             } catch (error) {
@@ -588,8 +592,8 @@
         }
 
         loadInitialThread() {
-            const lastThreadId = window.StorageUtils.getItem('lastThreadId');
-            this.loadMessages(lastThreadId);
+            // Default behavior: server decides which thread to show when none is selected.
+            this.loadMessages(null);
         }
 
         // Disable main input if there are pending interactions
@@ -618,6 +622,14 @@
                             task.current_response,
                             task.last_progress
                         );
+                    }
+                } else {
+                    // No running tasks: hide progress UI and re-enable input.
+                    const progressDiv = document.getElementById('task-progress');
+                    if (progressDiv) progressDiv.classList.add('d-none');
+                    const pendingCards = document.querySelectorAll('[data-interaction-id]');
+                    if (!pendingCards || pendingCards.length === 0) {
+                        this.streamingManager.setInputAreaDisabled(false);
                     }
                 }
             } catch (error) {

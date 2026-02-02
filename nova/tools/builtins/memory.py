@@ -485,7 +485,7 @@ async def get_functions(tool, agent: LLMAgent):
             args_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"},
+                    "query": {"type": "string", "description": "Search query (empty or * will select all)"},
                     "limit": {"type": "integer", "description": "Max results (1-50)", "default": 10},
                     "theme": {"type": "string", "description": "Optional theme slug"},
                     "types": {

@@ -1,0 +1,30 @@
+{% load i18n %}
+
+{% if day_segments %}
+  <ul class="list-group list-group-flush">
+    {% for seg in day_segments %}
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        <a
+          href="?day={{ seg.day_label|date:'Y-m-d' }}"
+          class="text-decoration-none"
+          data-day-label="{{ seg.day_label|date:'Y-m-d' }}"
+        >
+          {% if today and seg.day_label == today %}
+            {% trans "Today" %}
+          {% else %}
+            {{ seg.day_label|date:'Y-m-d' }}
+          {% endif %}
+        </a>
+        {% if seg.summary_markdown %}
+          <span class="badge text-bg-success">{% trans "Summary" %}</span>
+        {% elif today and seg.day_label == today %}
+          {# Today is expected to have no summary by default; show no badge. #}
+        {% else %}
+          <span class="badge text-bg-secondary">{% trans "Empty" %}</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <div class="text-muted">{% trans "No days yet." %}</div>
+{% endif %}

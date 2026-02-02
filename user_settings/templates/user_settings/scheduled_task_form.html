@@ -20,11 +20,22 @@
                         {% csrf_token %}
 
                         {{ form.name|as_crispy_field }}
-                        {{ form.agent|as_crispy_field }}
-                        {{ form.prompt|as_crispy_field }}
+
+                        {% if form.instance.task_kind != "maintenance" %}
+                            {{ form.agent|as_crispy_field }}
+                            {{ form.prompt|as_crispy_field }}
+                        {% else %}
+                            <div class="alert alert-info">
+                                <strong>{% trans "Maintenance task" %}</strong><br>
+                                {% trans "This task generates/refreshes daily summaries for your continuous discussion days (past days only)." %}
+                                <br>
+                                {% trans "You can only edit the schedule." %}
+                            </div>
+                        {% endif %}
 
                         {{ form.cron_expression|as_crispy_field }}
 
+                        {% if form.instance.task_kind != "maintenance" %}
                         <div class="card mb-3" id="cron_helper">
                             <div class="card-body">
                                 <div class="mb-2">
@@ -75,9 +86,11 @@
                                 </div>
                             </div>
                         </div>
+                        {% endif %}
 
                         {{ form.timezone|as_crispy_field }}
 
+                        {% if form.instance.task_kind != "maintenance" %}
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="keep_thread" name="keep_thread" {% if form.instance.keep_thread %}checked{% endif %}>
                             <label class="form-check-label" for="keep_thread">
@@ -87,6 +100,7 @@
                                 {% trans "If unchecked, the thread will be deleted after successful execution." %}
                             </small>
                         </div>
+                        {% endif %}
                         <div class="d-flex justify-content-between">
                             <a href="{% url 'user_settings:scheduled_tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
                             <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>

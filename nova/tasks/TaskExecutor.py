@@ -39,12 +39,13 @@ class TaskExecutor:
         _process_result(result) : to process the result of the agent and do any necessary updates
 
     """
-    def __init__(self, task, user, thread, agent_config, prompt):
+    def __init__(self, task, user, thread, agent_config, prompt, *, source_message_id: int | None = None):
         self.task = task
         self.user = user
         self.thread = thread
         self.agent_config = agent_config
         self.prompt = prompt
+        self.source_message_id = source_message_id
         self.llm = None
         self.channel_layer = get_channel_layer()
         self.handler = TaskProgressHandler(self.task.id, self.channel_layer)
@@ -68,10 +69,63 @@ class TaskExecutor:
             else:
                 await self._process_result(result)
                 await self._finalize_task()
+
+                # Continuous mode: sub-agents must be stateless.
+                # After a successful run, purge all sub-agent checkpoints for this thread,
+                # keeping only the main agent checkpoint.
+                try:
+                    from nova.models.Thread import Thread as ThreadModel
+                    if self.thread and self.thread.mode == ThreadModel.Mode.CONTINUOUS:
+                        await self._purge_continuous_subagent_checkpoints()
+                except Exception:
+                    # Best-effort cleanup; never fail the task because of this.
+                    pass
         except Exception as e:
             await self._handle_execution_error(e)
         finally:
             await self._cleanup()
+
+    async def _purge_continuous_subagent_checkpoints(self) -> None:
+        """Delete LangGraph checkpoint state for all sub-agents in a continuous thread.
+
+        Policy: delete all checkpoints for this thread except the main agent's checkpoint.
+        We keep CheckpointLink rows; only LangGraph state is deleted.
+        """
+
+        if not self.thread or not self.agent_config:
+            return
+
+        from nova.models.CheckpointLink import CheckpointLink
+        from nova.llm.checkpoints import get_checkpointer
+
+        # Compute which checkpoint_id to keep (main agent)
+        def _load_checkpoint_ids():
+            keep = (
+                CheckpointLink.objects.filter(thread=self.thread, agent=self.agent_config)
+                .values_list("checkpoint_id", flat=True)
+                .first()
+            )
+            all_ids = list(
+                CheckpointLink.objects.filter(thread=self.thread)
+                .exclude(checkpoint_id=keep)
+                .values_list("checkpoint_id", flat=True)
+            )
+            return keep, all_ids
+
+        keep_id, purge_ids = await sync_to_async(_load_checkpoint_ids, thread_sensitive=True)()
+        if not purge_ids:
+            return
+
+        saver = await get_checkpointer()
+        try:
+            for ckp_id in purge_ids:
+                try:
+                    await saver.adelete_thread(ckp_id)
+                except Exception:
+                    # Best-effort; ignore per-checkpoint failure
+                    continue
+        finally:
+            await saver.conn.close()
 
     async def _initialize_task(self, interruption_response=None):
         """Initialize task state and logging."""
@@ -160,6 +214,28 @@ class TaskExecutor:
         self.task.progress_logs.append({"step": "Running AI agent",
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
+
+        # Continuous mode: ensure checkpoint state is rebuilt (yesterday/today summaries + today window)
+        # before invoking the agent.
+        try:
+            from nova.models.Thread import Thread as ThreadModel
+            if self.thread and self.thread.mode == ThreadModel.Mode.CONTINUOUS:
+                from nova.continuous.checkpoint_state import ensure_continuous_checkpoint_state
+
+                rebuilt = await ensure_continuous_checkpoint_state(
+                    self.llm,
+                    exclude_message_id=self.source_message_id,
+                )
+                if rebuilt:
+                    self.task.progress_logs.append({
+                        "step": "Continuous context: checkpoint rebuilt",
+                        "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+                        "severity": "info",
+                    })
+                    await sync_to_async(self.task.save, thread_sensitive=False)()
+        except Exception:
+            # Best-effort: never block agent execution if rebuild fails.
+            pass
 
         return await self.llm.ainvoke(self.prompt)
 

@@ -139,8 +139,9 @@ class MainViewsTests(TestCase):
         # Owner
         self.client.login(username="alice", password="pass")
         resp = self.client.post(reverse("delete_thread", args=[thread.id]))
-        self.assertEqual(resp.status_code, 302)
-        self.assertIn(reverse("index"), resp["Location"])
+        # Endpoint returns JSON so deletion persists when called via fetch.
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json().get("status"), "OK")
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
     @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)

@@ -29,6 +29,27 @@ body {
     overflow: hidden;
 }
 
+/* ============================================
+   Continuous page
+   ============================================ */
+
+/*
+   The base layout uses an internal-scroll pattern and sets
+   `.main-container > .container-fluid { overflow: hidden; }`.
+   The continuous page is currently a settings-like page (cards, day list, summary,
+   timeline). We allow the page to scroll vertically.
+*/
+.continuous-page {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.continuous-page .continuous-timeline {
+    max-height: 60vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 /* Configuration/settings pages - allow full page scrolling */
 .main-container>.container {
     flex: 1;

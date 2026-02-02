@@ -99,13 +99,6 @@
     interactionCancel: "{% url 'interaction_cancel' 0 %}",
   };
 
-  // Force current thread for this preview page so the chat loads immediately
-  // Do this before JS modules init to ensure initial load targets this thread
-  try {
-    localStorage.setItem('lastThreadId', "{{ thread.id }}");
-    localStorage.setItem('lastPreviewSlug:{{ thread.id }}', "{{ webapp.slug }}");
-  } catch (e) {}
-
   // Provide explicit initial preview config (used by PreviewManager + bootstrap)
   window.NovaApp.previewConfig = {
     threadId: "{{ thread.id }}",

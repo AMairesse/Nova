@@ -9,6 +9,10 @@ from django_celery_beat.models import PeriodicTask, CrontabSchedule
 
 
 class ScheduledTask(models.Model):
+    class TaskKind(models.TextChoices):
+        AGENT = "agent", _("Agent")
+        MAINTENANCE = "maintenance", _("Maintenance")
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -19,14 +23,30 @@ class ScheduledTask(models.Model):
         'AgentConfig',
         on_delete=models.CASCADE,
         related_name='scheduled_tasks',
-        verbose_name=_("Agent")
+        verbose_name=_("Agent"),
+        null=True,
+        blank=True,
     )
     name = models.CharField(max_length=120, verbose_name=_("Task name"))
-    prompt = models.TextField(verbose_name=_("Prompt"))
+    prompt = models.TextField(verbose_name=_("Prompt"), blank=True, default="")
     cron_expression = models.CharField(max_length=100, verbose_name=_("Cron expression"))
     timezone = models.CharField(max_length=50, default='UTC', verbose_name=_("Timezone"))
     keep_thread = models.BooleanField(default=True, verbose_name=_("Keep thread after execution"))
     is_active = models.BooleanField(default=True, verbose_name=_("Is active"))
+    task_kind = models.CharField(
+        max_length=32,
+        choices=TaskKind.choices,
+        default=TaskKind.AGENT,
+        verbose_name=_("Task kind"),
+    )
+    # Used when task_kind == MAINTENANCE
+    maintenance_task = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name=_("Maintenance task"),
+        help_text=_("Celery task name, e.g. 'continuous_nightly_daysegment_summaries_for_user'."),
+    )
     last_error = models.TextField(blank=True, null=True, verbose_name=_("Last error"))
     last_run_at = models.DateTimeField(blank=True, null=True, verbose_name=_("Last run at"))
     created_at = models.DateTimeField(auto_now_add=True)
@@ -54,6 +74,30 @@ class ScheduledTask(models.Model):
             croniter.croniter(self.cron_expression)
         except Exception as e:
             raise ValidationError(_("Invalid cron expression: %(error)s") % {'error': str(e)})
+
+        # Kind-specific validation
+        if self.task_kind == self.TaskKind.AGENT:
+            if not self.agent_id:
+                raise ValidationError(_("Agent is required for an agent scheduled task."))
+            if not (self.prompt or "").strip():
+                raise ValidationError(_("Prompt is required for an agent scheduled task."))
+        elif self.task_kind == self.TaskKind.MAINTENANCE:
+            if not (self.maintenance_task or "").strip():
+                raise ValidationError(_("Maintenance task is required for a maintenance scheduled task."))
+
+            # Maintenance tasks must remain daily. Users may change only time (minute/hour)
+            # and timezone.
+            cron_parts = (self.cron_expression or "").split()
+            if len(cron_parts) != 5:
+                raise ValidationError(_("Cron expression must have 5 parts: minute hour day month weekday."))
+            _minute, _hour, day_of_month, month_of_year, day_of_week = cron_parts
+            if not (day_of_month == month_of_year == day_of_week == "*"):
+                raise ValidationError(
+                    _(
+                        "Maintenance tasks must run daily. Only minute/hour and timezone can be changed "
+                        "(expected cron like 'm H * * *')."
+                    )
+                )
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -83,9 +127,18 @@ class ScheduledTask(models.Model):
             periodic_task, created = PeriodicTask.objects.get_or_create(
                 name=task_name,
                 defaults={
-                    'task': 'run_scheduled_agent_task',
+                    'task': 'run_scheduled_agent_task'
+                    if self.task_kind == self.TaskKind.AGENT
+                    else self.maintenance_task,
                     'crontab': crontab,
-                    'args': f'[{self.id}]',
+                    # Agent tasks keep legacy args=[scheduled_task_id].
+                    # Maintenance tasks use kwargs={'user_id': ...}.
+                    'args': f'[{self.id}]' if self.task_kind == self.TaskKind.AGENT else '[]',
+                    'kwargs': (
+                        '{}'
+                        if self.task_kind == self.TaskKind.AGENT
+                        else f'{{"user_id": {self.user_id}}}'
+                    ),
                     'enabled': True,
                 }
             )
@@ -93,7 +146,16 @@ class ScheduledTask(models.Model):
             if not created:
                 # Update existing task
                 periodic_task.crontab = crontab
-                periodic_task.args = f'[{self.id}]'
+                periodic_task.task = (
+                    'run_scheduled_agent_task'
+                    if self.task_kind == self.TaskKind.AGENT
+                    else self.maintenance_task
+                )
+                periodic_task.args = f'[{self.id}]' if self.task_kind == self.TaskKind.AGENT else '[]'
+                if self.task_kind == self.TaskKind.AGENT:
+                    periodic_task.kwargs = '{}'
+                else:
+                    periodic_task.kwargs = f'{{"user_id": {self.user_id}}}'
                 periodic_task.enabled = True
                 periodic_task.save()
         else:

@@ -2,7 +2,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
-from django.shortcuts import render, redirect, get_object_or_404
+from django.shortcuts import render, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -64,9 +64,13 @@ def group_threads_by_date(threads):
 @login_required(login_url='login')
 def index(request):
     # Get initial MAX_THREADS_DISPLAYED threads
-    threads = Thread.objects.filter(user=request.user).order_by('-created_at')[:MAX_THREADS_DISPLAYED]
+    # Hide the continuous thread from the classic Threads UI.
+    threads = (
+        Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD)
+        .order_by('-created_at')[:MAX_THREADS_DISPLAYED]
+    )
     grouped_threads = group_threads_by_date(threads)
-    total_count = Thread.objects.filter(user=request.user).count()
+    total_count = Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD).count()
 
     return render(request, 'nova/index.html', {
         'grouped_threads': grouped_threads,
@@ -82,9 +86,12 @@ def load_more_threads(request):
     offset = int(request.GET.get('offset', 0))
     limit = int(request.GET.get('limit', MAX_THREADS_DISPLAYED))
 
-    threads = Thread.objects.filter(user=request.user).order_by('-created_at')[offset:offset + limit]
+    threads = (
+        Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD)
+        .order_by('-created_at')[offset:offset + limit]
+    )
     grouped_threads = group_threads_by_date(threads)
-    total_count = Thread.objects.filter(user=request.user).count()
+    total_count = Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD).count()
 
     # Render the grouped threads HTML
     html = render_to_string('nova/partials/_thread_groups.html', {
@@ -111,6 +118,15 @@ def message_list(request):
         default_agent = getattr(request.user.userprofile,
                                 "default_agent", None)
     selected_thread_id = request.GET.get('thread_id')
+    # With browser persistence removed, default to the most recent classic thread.
+    if not selected_thread_id:
+        latest = (
+            Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD)
+            .order_by('-created_at')
+            .first()
+        )
+        if latest:
+            selected_thread_id = str(latest.id)
     messages = None
     if selected_thread_id:
         try:
@@ -138,6 +154,9 @@ def message_list(request):
                             last_agent_message_id = m.id
                             break
 
+            # Hide "Compact" link for continuous mode.
+            show_compact = (getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD)
+
             for m in messages:
                 m.rendered_html = markdown_to_html(m.text)
                 # Add info about files used
@@ -147,7 +166,7 @@ def message_list(request):
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
                 # Mark if this is the last agent message (for compact link)
-                m.is_last_agent_message = (m.id == last_agent_message_id)
+                m.is_last_agent_message = bool(show_compact and (m.id == last_agent_message_id))
 
             # Fetch pending interactions for server-side rendering
             pending_interactions = Interaction.objects.filter(
@@ -212,7 +231,8 @@ def delete_thread(request, thread_id):
         }, status=400)
 
     thread.delete()
-    return redirect('index')
+    # JSON response (frontend uses fetch, and handles DOM removal).
+    return JsonResponse({"status": "OK"})
 
 
 @csrf_protect

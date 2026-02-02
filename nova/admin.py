@@ -4,13 +4,16 @@ from django.contrib.auth.models import User
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
+from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction
-from nova.models.Task import Task
 from nova.models.Memory import MemoryTheme, MemoryItem, MemoryItemEmbedding
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
+from nova.models.ScheduledTask import ScheduledTask
+from nova.models.Task import Task
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
+from nova.models.TranscriptChunk import TranscriptChunk
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.WebApp import WebApp
@@ -19,11 +22,14 @@ from nova.models.WebAppFile import WebAppFile
 
 admin.site.site_header = "Nova Admin"
 admin.site.register(AgentConfig)
-admin.site.register(Tool)
-admin.site.register(ToolCredential)
+admin.site.register(DaySegment)
 admin.site.register(MemoryTheme)
 admin.site.register(MemoryItem)
 admin.site.register(MemoryItemEmbedding)
+admin.site.register(ScheduledTask)
+admin.site.register(Tool)
+admin.site.register(TranscriptChunk)
+admin.site.register(ToolCredential)
 
 
 class FilesInline(admin.TabularInline):
