@@ -27,8 +27,15 @@ from django.db.models import F, Q
 from django.utils import timezone
 from langchain_core.tools import StructuredTool
 
+from nova.llm.hybrid_search import (
+    blend_semantic_fts,
+    minmax_bounds,
+    minmax_normalize,
+    resolve_query_vector,
+    semantic_similarity_from_distance,
+)
 from nova.llm.llm_agent import LLMAgent
-from nova.llm.embeddings import compute_embedding, aget_embeddings_provider
+from nova.llm.embeddings import aget_embeddings_provider
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemStatus, MemoryItemType, MemoryTheme
 
 METADATA = {
@@ -231,13 +238,7 @@ async def search(
         raise ValidationError("limit must be an integer") from e
     limit = max(1, min(limit, 50))
 
-    # Provider is user-scoped (DB-backed) and must be evaluated per-call.
-    provider = await aget_embeddings_provider(user_id=agent.user.id)
-    query_vec = (
-        await compute_embedding(query, user_id=agent.user.id)
-        if provider
-        else None
-    )
+    query_vec = await resolve_query_vector(user_id=agent.user.id, query=query)
 
     def _impl(vec: Optional[List[float]]):
         qs = MemoryItem.objects.select_related("theme").filter(user=agent.user)
@@ -368,39 +369,24 @@ async def search(
                     return None
                 if dist is None:
                     return None
-                try:
-                    dist_f = float(dist)
-                except Exception:
-                    return None
-                # Convert distance (lower is better) to similarity (higher is better)
-                return 1.0 / (1.0 + max(0.0, dist_f))
+                return semantic_similarity_from_distance(dist, enabled=True)
 
             def _fts_score(item) -> float:
-                try:
-                    return float(getattr(item, "fts_rank", 0.0) or 0.0)
-                except Exception:
-                    return 0.0
+                return float(getattr(item, "fts_rank", 0.0) or 0.0)
 
             semantic_vals = [v for v in (_semantic_sim(i) for i in candidates) if v is not None]
             fts_vals = [_fts_score(i) for i in candidates]
 
-            sem_min = min(semantic_vals) if semantic_vals else 0.0
-            sem_max = max(semantic_vals) if semantic_vals else 0.0
-            fts_min = min(fts_vals) if fts_vals else 0.0
-            fts_max = max(fts_vals) if fts_vals else 0.0
-
-            def _minmax(v: float, vmin: float, vmax: float) -> float:
-                if vmax <= vmin:
-                    return 0.0
-                return (v - vmin) / (vmax - vmin)
+            sem_min, sem_max = minmax_bounds(semantic_vals)
+            fts_min, fts_max = minmax_bounds(fts_vals)
 
             scored: List[Dict[str, Any]] = []
             for item in candidates:
                 sem = _semantic_sim(item)
-                sem_norm = _minmax(sem, sem_min, sem_max) if sem is not None else 0.0
+                sem_norm = minmax_normalize(sem, vmin=sem_min, vmax=sem_max) if sem is not None else 0.0
                 fts = _fts_score(item)
-                fts_norm = _minmax(fts, fts_min, fts_max)
-                final_score = 0.7 * sem_norm + 0.3 * fts_norm
+                fts_norm = minmax_normalize(fts, vmin=fts_min, vmax=fts_max)
+                final_score = blend_semantic_fts(semantic=sem_norm, fts=fts_norm)
                 cosine_distance = None
                 if vec is not None and getattr(item, "distance", None) is not None:
                     cosine_distance = float(getattr(item, "distance", 0.0))

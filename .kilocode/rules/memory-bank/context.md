@@ -82,6 +82,40 @@ Work completed/changed recently (post-spec cleanup):
 - Day summaries store a boundary pointer `DaySegment.summary_until_message` so when a day summary exists, only messages **after** the boundary remain in the raw window.
 - Sub-agents are stateless in continuous: after each successful run, all sub-agent checkpoints for the thread are purged (all `CheckpointLink` except the main agent).
 
+### Continuous conversation search (agent tools) – implemented
+
+- `conversation.search` now supports hybrid retrieval (FTS + semantic vectors when available), with fallback to FTS-only when embeddings are disabled/unavailable.
+- Added conversation-specific embedding models:
+  - `DaySegmentEmbedding` (1:1 with `DaySegment`)
+  - `TranscriptChunkEmbedding` (1:1 with `TranscriptChunk`)
+- Added Celery tasks for conversation embeddings lifecycle:
+  - `compute_day_segment_embedding`
+  - `compute_transcript_chunk_embedding`
+  - `rebuild_user_conversation_embeddings`
+- Transcript indexing now enqueues/refreshes chunk embeddings when chunks are created or updated.
+- Day summary generation now enqueues/refreshes day-segment summary embeddings after summary persistence.
+- Added migration `0043_conversation_embeddings` to create embedding tables and PostgreSQL HNSW vector indexes.
+- Added tests (`nova/tests/test_conversation_embeddings.py`) covering:
+  - embedding compute tasks success path
+  - `conversation.search` fallback behavior when embeddings are disabled
+
+### Continuous conversation tools policy (runtime + code organization)
+
+- Conversation recall tools are now treated as **implicit system capabilities** of continuous mode, not user-addable builtins.
+- Implementation moved from `nova/tools/builtins/conversation.py` to `nova/continuous/tools/conversation_tools.py` so builtin discovery no longer proposes it in tool catalogs.
+- `LLM` tool loading now imports conversation tools directly from the continuous module when `thread.mode=continuous` and `agent_config.is_tool=False`.
+
+### Search mutualization (Memory + Continuous)
+
+- Introduced shared hybrid-search utilities in `nova/llm/hybrid_search.py` for:
+  - query-vector resolution (`resolve_query_vector`)
+  - FTS saturation scoring
+  - cosine-distance → semantic similarity
+  - min/max bounds + normalization
+  - semantic/FTS score blending
+- Refactored `memory.search` to use the shared utilities while keeping Memory-specific filters and output unchanged.
+- Refactored `conversation.search` to use the shared utilities while keeping conversation-specific ranking policy (summary/message source weighting) and output unchanged.
+
 Notes / remaining:
 
 - UX/UI verified by user.

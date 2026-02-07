@@ -57,6 +57,29 @@ async def load_tools(agent) -> List[StructuredTool]:
         except Exception as e:
             logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
 
+    # ------------------------------------------------------------------
+    # Continuous discussion policy (auto-attach conversation tools):
+    # If the current run is the main agent on a continuous thread, ensure
+    # `conversation_*` tools are available even when the conversation builtin
+    # is not explicitly assigned in agent_config.tools.
+    # ------------------------------------------------------------------
+    try:
+        thread_mode = getattr(getattr(agent, "thread", None), "mode", None)
+        is_sub_agent = bool(getattr(getattr(agent, "agent_config", None), "is_tool", False))
+        has_conversation_tools = any(
+            getattr(t, "name", "") in {"conversation_search", "conversation_get"}
+            for t in tools
+        )
+
+        if thread_mode == "continuous" and not is_sub_agent and not has_conversation_tools:
+            from nova.continuous.tools import conversation_tools
+
+            loaded_tools = await conversation_tools.get_functions(tool=None, agent=agent)
+            tools.extend(loaded_tools)
+            loaded_builtin_modules.append(conversation_tools)
+    except Exception as e:
+        logger.warning(f"Failed to auto-load conversation builtin tools: {e}")
+
     agent._loaded_builtin_modules = loaded_builtin_modules
 
     # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))

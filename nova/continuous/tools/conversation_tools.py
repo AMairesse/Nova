@@ -23,6 +23,14 @@ from django.db.models import F
 from django.utils import timezone
 from langchain_core.tools import StructuredTool
 
+from nova.llm.hybrid_search import (
+    blend_semantic_fts,
+    minmax_bounds,
+    minmax_normalize,
+    resolve_query_vector,
+    score_fts_saturated,
+    semantic_similarity_from_distance,
+)
 from nova.llm.llm_agent import LLMAgent
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Message
@@ -178,7 +186,7 @@ async def conversation_search(
     limit: int = 6,
     offset: int = 0,
 ) -> Dict[str, Any]:
-    """Search summaries + transcript chunks (FTS-only)."""
+    """Search summaries + transcript chunks (hybrid FTS + semantic when enabled)."""
 
     query = (query or "").strip()
     if not query:
@@ -186,7 +194,9 @@ async def conversation_search(
 
     limit, offset = _validate_limit_offset(limit, offset)
 
-    def _impl():
+    query_vec = await resolve_query_vector(user_id=agent.user.id, query=query)
+
+    def _impl(vec: Optional[List[float]]):
         # Resolve scope: either within a day, or last N days.
         seg_qs = DaySegment.objects.filter(user=agent.user)
         chunk_qs = TranscriptChunk.objects.filter(user=agent.user)
@@ -216,33 +226,95 @@ async def conversation_search(
 
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+            from pgvector.django import CosineDistance
 
             q = SearchQuery(query)
+            vector_summary = SearchVector("summary_markdown", config="english")
+            vector_chunk = SearchVector("content_text", config="english")
 
-            # Summaries
-            seg_hits = (
-                seg_qs.annotate(
-                    rank=SearchRank(SearchVector("summary_markdown", config="english"), q)
-                )
+            # 1) candidate retrieval
+            K = 200
+
+            seg_fts_ids = list(
+                seg_qs.annotate(rank=SearchRank(vector_summary, q))
                 .filter(rank__gt=0.0)
                 .order_by(F("rank").desc(), F("day_label").desc())
+                .values_list("id", flat=True)[:K]
+            )
+            chunk_fts_ids = list(
+                chunk_qs.annotate(rank=SearchRank(vector_chunk, q))
+                .filter(rank__gt=0.0)
+                .order_by(F("rank").desc(), F("start_message_id").desc())
+                .values_list("id", flat=True)[:K]
             )
 
-            # Transcript chunks
-            chunk_hits = (
-                chunk_qs.annotate(
-                    rank=SearchRank(SearchVector("content_text", config="english"), q)
+            seg_sem_ids: List[int] = []
+            chunk_sem_ids: List[int] = []
+            if vec is not None:
+                seg_sem_ids = list(
+                    seg_qs.filter(embedding__state="ready")
+                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    .order_by(F("distance").asc(), F("updated_at").desc())
+                    .values_list("id", flat=True)[:K]
                 )
-                .filter(rank__gt=0.0)
-                .select_related("day_segment", "start_message")
-                .order_by(F("rank").desc(), F("start_message_id").desc())
+                chunk_sem_ids = list(
+                    chunk_qs.filter(embedding__state="ready")
+                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    .order_by(F("distance").asc(), F("created_at").desc())
+                    .values_list("id", flat=True)[:K]
+                )
+
+            seg_ids = list(dict.fromkeys([*seg_sem_ids, *seg_fts_ids]))
+            chunk_ids = list(dict.fromkeys([*chunk_sem_ids, *chunk_fts_ids]))
+
+            if not seg_ids and not chunk_ids:
+                return {
+                    "results": [],
+                    "notes": ["no matches"],
+                }
+
+            # 2) candidate loading with both signals
+            seg_candidates = seg_qs.filter(id__in=seg_ids).annotate(
+                fts_rank=SearchRank(vector_summary, q)
             )
+            chunk_candidates = (
+                chunk_qs.filter(id__in=chunk_ids)
+                .select_related("day_segment", "start_message")
+                .annotate(fts_rank=SearchRank(vector_chunk, q))
+            )
+
+            if vec is not None:
+                seg_candidates = seg_candidates.annotate(distance=CosineDistance("embedding__vector", vec))
+                chunk_candidates = chunk_candidates.annotate(distance=CosineDistance("embedding__vector", vec))
+            else:
+                seg_candidates = seg_candidates.annotate(distance=F("id") * 0.0)
+                chunk_candidates = chunk_candidates.annotate(distance=F("id") * 0.0)
+
+            seg_hits = list(seg_candidates)
+            chunk_hits = list(chunk_candidates)
 
             scored: List[Dict[str, Any]] = []
-            for seg in seg_hits[:200]:
-                fts_raw = float(seg.rank or 0.0)
-                fts = fts_raw / (fts_raw + 1.0)
-                score = fts * _recency_multiplier(seg.updated_at)
+
+            def _semantic_sim(distance: Optional[float]) -> float:
+                return semantic_similarity_from_distance(distance, enabled=(vec is not None))
+
+            semantic_vals = [
+                _semantic_sim(getattr(seg, "distance", None)) for seg in seg_hits
+            ] + [
+                _semantic_sim(getattr(ch, "distance", None)) for ch in chunk_hits
+            ]
+            sem_min, sem_max = minmax_bounds(semantic_vals)
+
+            for seg in seg_hits:
+                fts_raw = float(getattr(seg, "fts_rank", 0.0) or 0.0)
+                fts_sat = score_fts_saturated(fts_raw)
+                sem_norm = minmax_normalize(
+                    _semantic_sim(getattr(seg, "distance", None)),
+                    vmin=sem_min,
+                    vmax=sem_max,
+                )
+                blended = blend_semantic_fts(semantic=sem_norm, fts=fts_sat) if vec is not None else fts_sat
+                score = 1.0 * _recency_multiplier(seg.updated_at) * blended
                 scored.append(
                     {
                         "kind": "summary",
@@ -253,10 +325,16 @@ async def conversation_search(
                     }
                 )
 
-            for ch in chunk_hits[:400]:
-                fts_raw = float(ch.rank or 0.0)
-                fts = fts_raw / (fts_raw + 1.0)
-                score = fts * _recency_multiplier(ch.created_at)
+            for ch in chunk_hits:
+                fts_raw = float(getattr(ch, "fts_rank", 0.0) or 0.0)
+                fts_sat = score_fts_saturated(fts_raw)
+                sem_norm = minmax_normalize(
+                    _semantic_sim(getattr(ch, "distance", None)),
+                    vmin=sem_min,
+                    vmax=sem_max,
+                )
+                blended = blend_semantic_fts(semantic=sem_norm, fts=fts_sat) if vec is not None else fts_sat
+                score = 0.92 * _recency_multiplier(ch.created_at) * blended
                 day_label = None
                 if ch.day_segment and ch.day_segment.day_label:
                     day_label = ch.day_segment.day_label.isoformat()
@@ -279,7 +357,12 @@ async def conversation_search(
                 )
             )
             page = scored[offset: offset + limit]
-            return {"results": page}
+            return {
+                "results": page,
+                "notes": [
+                    "semantic ranking enabled only when embeddings provider is configured and vectors are ready",
+                ],
+            }
 
         # SQLite/tests fallback: icontains.
         seg_hits = seg_qs.filter(summary_markdown__icontains=query).order_by(F("day_label").desc())
@@ -315,7 +398,7 @@ async def conversation_search(
         page = results[offset: offset + limit]
         return {"results": page}
 
-    return await sync_to_async(_impl, thread_sensitive=True)()
+    return await sync_to_async(_impl, thread_sensitive=True)(query_vec)
 
 
 async def get_functions(tool, agent: LLMAgent):
@@ -334,7 +417,7 @@ async def get_functions(tool, agent: LLMAgent):
             args_schema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string"},
+                    "query": {"type": "string", "description": "Search query (empty or * will select all)"},
                     "day": {"type": "string", "description": "Optional YYYY-MM-DD"},
                     "recency_days": {"type": "integer", "default": 14},
                     "limit": {"type": "integer", "default": 6},
