@@ -13,6 +13,7 @@ Important:
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
@@ -73,6 +74,122 @@ def _recency_multiplier(created_at) -> float:
     return 0.8
 
 
+_BASIC_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "de",
+    "des",
+    "du",
+    "en",
+    "et",
+    "for",
+    "from",
+    "il",
+    "in",
+    "is",
+    "la",
+    "le",
+    "les",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "un",
+    "une",
+    "with",
+}
+
+
+def _tokenize_for_local_match(text: str) -> List[str]:
+    return [t for t in re.findall(r"\w+", (text or "").lower(), flags=re.UNICODE) if t and t not in _BASIC_STOPWORDS]
+
+
+def _trim_with_ellipses(text: str, start_cut: bool, end_cut: bool) -> str:
+    s = (text or "").strip()
+    if start_cut and s:
+        s = f"… {s}"
+    if end_cut and s:
+        s = f"{s} …"
+    return s
+
+
+def _sentence_spans(text: str) -> List[tuple[int, int, str]]:
+    src = text or ""
+    spans: List[tuple[int, int, str]] = []
+    for m in re.finditer(r"[^\n.!?]+(?:[.!?]+|$)", src, flags=re.UNICODE):
+        start, end = m.span()
+        sentence = src[start:end].strip()
+        if sentence:
+            spans.append((start, end, sentence))
+    if not spans and src.strip():
+        spans = [(0, len(src), src.strip())]
+    return spans
+
+
+def _local_lexical_anchor_window(text: str, query: str, max_len: int = 240) -> str:
+    src = (text or "").strip()
+    if not src:
+        return ""
+    if len(src) <= max_len:
+        return src
+
+    query_tokens = list(dict.fromkeys(_tokenize_for_local_match(query)))
+    if not query_tokens:
+        return _trim_with_ellipses(src[:max_len], start_cut=False, end_cut=True)
+
+    best: Optional[tuple[float, int, int]] = None
+    for start, end, sentence in _sentence_spans(src):
+        sent_tokens = _tokenize_for_local_match(sentence)
+        if not sent_tokens:
+            continue
+        token_set = set(sent_tokens)
+        overlap = sum(1 for t in query_tokens if t in token_set)
+        recall = overlap / max(1, len(query_tokens))
+
+        sent_l = sentence.lower()
+        phrase_bonus = 1.0 if (query or "").lower() in sent_l else 0.0
+
+        first_hit_idx = next((i for i, tok in enumerate(sent_tokens) if tok in query_tokens), None)
+        early_bonus = 0.0 if first_hit_idx is None else max(0.0, 1.0 - (first_hit_idx / max(1, len(sent_tokens))))
+
+        length_penalty = max(0.0, (len(sentence) - 240) / 240)
+        score = 0.6 * recall + 0.25 * phrase_bonus + 0.1 * early_bonus - 0.05 * length_penalty
+
+        if best is None or score > best[0]:
+            best = (score, start, end)
+
+    if best is None:
+        return _trim_with_ellipses(src[:max_len], start_cut=False, end_cut=True)
+
+    _, start, end = best
+    center = (start + end) // 2
+    half = max_len // 2
+    win_start = max(0, center - half)
+    win_end = min(len(src), win_start + max_len)
+    if win_end - win_start < max_len:
+        win_start = max(0, win_end - max_len)
+    snippet = src[win_start:win_end].strip()
+    return _trim_with_ellipses(snippet, start_cut=(win_start > 0), end_cut=(win_end < len(src)))
+
+
+def _focused_snippet(text: str, query: str, headline: Optional[str] = None, max_len: int = 240) -> str:
+    hl = (headline or "").strip()
+    if hl and "<mark>" in hl.lower():
+        if len(hl) <= max_len:
+            return hl
+        return _trim_with_ellipses(hl[:max_len], start_cut=False, end_cut=True)
+    return _local_lexical_anchor_window(text=text, query=query, max_len=max_len)
+
+
 async def conversation_get(
     agent: LLMAgent,
     message_id: Optional[int] = None,
@@ -106,7 +223,8 @@ async def conversation_get(
             }
 
         # Messages fetch
-        if message_id is None and day_segment_id is None:
+        has_range = from_message_id is not None and to_message_id is not None
+        if message_id is None and day_segment_id is None and not has_range:
             return {"error": "invalid_request"}
 
         try:
@@ -186,7 +304,12 @@ async def conversation_search(
     limit: int = 6,
     offset: int = 0,
 ) -> Dict[str, Any]:
-    """Search summaries + transcript chunks (hybrid FTS + semantic when enabled)."""
+    """Search summaries + transcript chunks (hybrid FTS + semantic when enabled).
+
+    Snippets are query-focused:
+    - PostgreSQL FTS hits use ts_headline-style excerpts around matched terms
+    - semantic-only hits use a local lexical anchor fallback
+    """
 
     query = (query or "").strip()
     if not query:
@@ -225,7 +348,7 @@ async def conversation_search(
         results: List[Dict[str, Any]] = []
 
         if engine == "postgresql":
-            from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+            from django.contrib.postgres.search import SearchHeadline, SearchQuery, SearchRank, SearchVector
             from pgvector.django import CosineDistance
 
             q = SearchQuery(query)
@@ -275,12 +398,36 @@ async def conversation_search(
 
             # 2) candidate loading with both signals
             seg_candidates = seg_qs.filter(id__in=seg_ids).annotate(
-                fts_rank=SearchRank(vector_summary, q)
+                fts_rank=SearchRank(vector_summary, q),
+                headline=SearchHeadline(
+                    "summary_markdown",
+                    q,
+                    start_sel="<mark>",
+                    stop_sel="</mark>",
+                    max_words=35,
+                    min_words=12,
+                    short_word=2,
+                    max_fragments=2,
+                    fragment_delimiter=" … ",
+                ),
             )
             chunk_candidates = (
                 chunk_qs.filter(id__in=chunk_ids)
                 .select_related("day_segment", "start_message")
-                .annotate(fts_rank=SearchRank(vector_chunk, q))
+                .annotate(
+                    fts_rank=SearchRank(vector_chunk, q),
+                    headline=SearchHeadline(
+                        "content_text",
+                        q,
+                        start_sel="<mark>",
+                        stop_sel="</mark>",
+                        max_words=35,
+                        min_words=12,
+                        short_word=2,
+                        max_fragments=2,
+                        fragment_delimiter=" … ",
+                    ),
+                )
             )
 
             if vec is not None:
@@ -321,7 +468,12 @@ async def conversation_search(
                         "score": score,
                         "day_label": seg.day_label.isoformat() if seg.day_label else None,
                         "day_segment_id": seg.id,
-                        "summary_snippet": (seg.summary_markdown or "")[:240],
+                        "summary_snippet": _focused_snippet(
+                            text=seg.summary_markdown or "",
+                            query=query,
+                            headline=getattr(seg, "headline", None) if fts_raw > 0 else None,
+                            max_len=240,
+                        ),
                     }
                 )
 
@@ -345,7 +497,12 @@ async def conversation_search(
                         "day_label": day_label,
                         "day_segment_id": ch.day_segment_id,
                         "message_id": ch.start_message_id,
-                        "snippet": (ch.content_text or "")[:240],
+                        "snippet": _focused_snippet(
+                            text=ch.content_text or "",
+                            query=query,
+                            headline=getattr(ch, "headline", None) if fts_raw > 0 else None,
+                            max_len=240,
+                        ),
                     }
                 )
 
@@ -373,7 +530,12 @@ async def conversation_search(
                     "score": None,
                     "day_label": seg.day_label.isoformat() if seg.day_label else None,
                     "day_segment_id": seg.id,
-                    "summary_snippet": (seg.summary_markdown or "")[:240],
+                    "summary_snippet": _focused_snippet(
+                        text=seg.summary_markdown or "",
+                        query=query,
+                        headline=None,
+                        max_len=240,
+                    ),
                 }
             )
 
@@ -391,7 +553,12 @@ async def conversation_search(
                     "day_label": day_label,
                     "day_segment_id": ch.day_segment_id,
                     "message_id": ch.start_message_id,
-                    "snippet": (ch.content_text or "")[:240],
+                    "snippet": _focused_snippet(
+                        text=ch.content_text or "",
+                        query=query,
+                        headline=None,
+                        max_len=240,
+                    ),
                 }
             )
 

@@ -18,7 +18,7 @@ from nova.tasks.conversation_embedding_tasks import (
     compute_day_segment_embedding_task,
     compute_transcript_chunk_embedding_task,
 )
-from nova.continuous.tools.conversation_tools import conversation_search
+from nova.continuous.tools.conversation_tools import _focused_snippet, conversation_get, conversation_search
 
 
 User = get_user_model()
@@ -116,3 +116,38 @@ class ConversationSearchFallbackTests(TestCase):
 
         self.assertIn("results", out)
         self.assertGreaterEqual(len(out["results"]), 1)
+
+    def test_conversation_get_accepts_range_without_message_or_day_segment(self):
+        out = async_to_sync(conversation_get)(
+            agent=self.agent,
+            from_message_id=1,
+            to_message_id=999999,
+            limit=3,
+        )
+
+        self.assertIn("messages", out)
+        self.assertLessEqual(len(out["messages"]), 3)
+        self.assertNotIn("error", out)
+
+
+class ConversationSnippetFocusTests(TestCase):
+    def test_focused_snippet_uses_headline_when_present(self):
+        text = "Long introduction that is not relevant."
+        headline = "... section with <mark>deploy</mark> strategy ..."
+
+        snippet = _focused_snippet(text=text, query="deploy", headline=headline, max_len=240)
+
+        self.assertIn("<mark>deploy</mark>", snippet)
+        self.assertEqual(snippet, headline)
+
+    def test_focused_snippet_fallback_centers_near_query_match(self):
+        text = (
+            "Prefix not relevant. " * 30
+            + "This sentence explains blue green deploy strategy with rollback. "
+            + "Suffix not relevant. " * 30
+        )
+
+        snippet = _focused_snippet(text=text, query="blue green deploy", headline=None, max_len=180)
+
+        self.assertIn("deploy", snippet.lower())
+        self.assertTrue(snippet.startswith("…") or snippet.endswith("…"))
