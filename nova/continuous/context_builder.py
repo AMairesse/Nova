@@ -207,7 +207,7 @@ def load_continuous_context(
             today_end_dt = next_seg.starts_at_message.created_at
 
     # Build summary messages for previous days with strict budget.
-    PREVIOUS_SUMMARIES_TOKEN_BUDGET = 900
+    PREVIOUS_SUMMARIES_TOKEN_BUDGET = 4000
 
     p1_summary_raw = (p1_seg.summary_markdown if p1_seg else "") or ""
     p2_summary_raw = (p2_seg.summary_markdown if p2_seg else "") or ""
