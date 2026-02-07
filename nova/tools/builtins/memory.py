@@ -48,6 +48,16 @@ METADATA = {
 }
 
 
+def get_prompt_instructions() -> List[str]:
+    """Tool-owned prompt guidance for long-term memory usage."""
+    return [
+        "Use memory_search when you need user-specific facts/preferences not guaranteed in current context.",
+        "Use memory_get to read a specific memory item in full before relying on it.",
+        "Use memory_add for durable user preferences/facts that should persist across conversations.",
+        "For recent dialogue-local information, prefer conversation_search/conversation_get instead of memory tools.",
+    ]
+
+
 def _normalize_theme_slug(theme: str) -> str:
     theme = (theme or "").strip().lower()
     if not theme:

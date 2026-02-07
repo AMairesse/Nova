@@ -48,6 +48,22 @@ METADATA = {
 }
 
 
+def get_prompt_instructions() -> List[str]:
+    """Tool-owned prompt guidance for continuous conversation recall."""
+    return [
+        "In continuous mode, use conversation_search first when you need to locate prior discussion evidence.",
+        (
+            "Then use conversation_get to ground exact passages, day summaries, "
+            "or precise message ranges before answering."
+        ),
+        (
+            "If recent-day summaries are truncated by context budget, immediately "
+            "use conversation_search then conversation_get to recover missing details."
+        ),
+        "Do not use conversation tools for facts already present in the current turn context.",
+    ]
+
+
 def _validate_limit_offset(limit: int, offset: int) -> tuple[int, int]:
     try:
         limit = int(limit)

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from django.utils import timezone
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from nova.continuous.utils import get_day_label_for_user
 from nova.models.DaySegment import DaySegment
@@ -19,8 +20,14 @@ from nova.models.Message import Actor, Message
 @dataclass(frozen=True)
 class ContinuousContextSnapshot:
     today: dt.date
-    yesterday: dt.date
-    yesterday_updated_at: Optional[dt.datetime]
+    previous_summary_1_day: Optional[dt.date]
+    previous_summary_2_day: Optional[dt.date]
+    previous_summary_1_updated_at: Optional[dt.datetime]
+    previous_summary_2_updated_at: Optional[dt.datetime]
+    previous_summary_1_hash: str
+    previous_summary_2_hash: str
+    previous_summaries_token_budget: int
+    previous_summaries_truncated: bool
     today_updated_at: Optional[dt.datetime]
     today_start_dt: Optional[dt.datetime]
     today_end_dt: Optional[dt.datetime]
@@ -45,8 +52,20 @@ def compute_continuous_context_fingerprint(snapshot: ContinuousContextSnapshot) 
     raw = "|".join(
         [
             f"today={snapshot.today.isoformat()}",
-            f"yesterday={snapshot.yesterday.isoformat()}",
-            f"yesterday_updated_at={_fmt_dt(snapshot.yesterday_updated_at)}",
+            (
+                "previous_summary_1_day="
+                f"{snapshot.previous_summary_1_day.isoformat() if snapshot.previous_summary_1_day else ''}"
+            ),
+            (
+                "previous_summary_2_day="
+                f"{snapshot.previous_summary_2_day.isoformat() if snapshot.previous_summary_2_day else ''}"
+            ),
+            f"previous_summary_1_updated_at={_fmt_dt(snapshot.previous_summary_1_updated_at)}",
+            f"previous_summary_2_updated_at={_fmt_dt(snapshot.previous_summary_2_updated_at)}",
+            f"previous_summary_1_hash={snapshot.previous_summary_1_hash}",
+            f"previous_summary_2_hash={snapshot.previous_summary_2_hash}",
+            f"previous_summaries_token_budget={snapshot.previous_summaries_token_budget}",
+            f"previous_summaries_truncated={int(snapshot.previous_summaries_truncated)}",
             f"today_updated_at={_fmt_dt(snapshot.today_updated_at)}",
             f"today_start_dt={_fmt_dt(snapshot.today_start_dt)}",
             f"today_end_dt={_fmt_dt(snapshot.today_end_dt)}",
@@ -66,22 +85,51 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + "\n…(truncated)…"
 
 
-def _make_summary_pair(label: str, summary_md: str) -> List[BaseMessage]:
-    """Strict alternation hack: Human(summary) + AI(ack)."""
+def _approx_tokens(text: str) -> int:
+    s = (text or "").strip()
+    if not s:
+        return 0
+    # Conservative/cheap estimate.
+    return max(1, len(s) // 4)
+
+
+def _trim_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool]:
+    s = (text or "").strip()
+    if not s:
+        return "", False
+    if budget_tokens <= 0:
+        return "", bool(s)
+
+    # Word-level trim for deterministic output.
+    words = re.findall(r"\S+", s, flags=re.UNICODE)
+    out_words: list[str] = []
+    used = 0
+    for w in words:
+        wt = _approx_tokens(w)
+        if used + wt > budget_tokens:
+            break
+        out_words.append(w)
+        used += wt
+
+    trimmed = " ".join(out_words).strip()
+    truncated = len(trimmed) < len(s)
+    if truncated and trimmed:
+        trimmed += "\n\n…(summary truncated due to strict context budget)…"
+    return trimmed, truncated
+
+
+def _make_summary_system_message(label: str, summary_md: str) -> List[BaseMessage]:
+    """Inject summary as a SystemMessage (continuous policy)."""
 
     summary_md = (summary_md or "").strip()
     if not summary_md:
         return []
 
-    human = HumanMessage(
+    msg = SystemMessage(
         content=f"[{label}]\n{summary_md}",
-        additional_kwargs={"summary": True, "label": label},
+        additional_kwargs={"summary": True, "label": label, "source": "day_segment"},
     )
-    ack = AIMessage(
-        content="Understood.",
-        additional_kwargs={"summary_ack": True, "label": label},
-    )
-    return [human, ack]
+    return [msg]
 
 
 def _message_to_langchain(m: Message) -> Optional[BaseMessage]:
@@ -116,21 +164,29 @@ def load_continuous_context(
     """Build the messages to inject for the continuous checkpoint.
 
     Policy:
-    - Yesterday summary (if present)
-    - Today summary (if present)
-    - Today raw window: messages between today's DaySegment start and next DaySegment start
+    - Previous two *available* summarized days (before today) as System messages.
+    - Strict combined token budget for these summaries.
+    - If truncated by budget, include explicit fallback guidance toward
+      conversation_search / conversation_get.
+    - Today raw window: messages between today's DaySegment start and next DaySegment start.
 
     Returns (snapshot, messages)
     """
 
     today = get_day_label_for_user(user)
-    yesterday = today - dt.timedelta(days=1)
-
-    y_seg = (
-        DaySegment.objects.filter(user=user, thread=thread, day_label=yesterday)
+    previous_summary_segments = list(
+        DaySegment.objects.filter(
+            user=user,
+            thread=thread,
+            day_label__lt=today,
+            summary_markdown__isnull=False,
+        )
+        .exclude(summary_markdown="")
         .select_related("starts_at_message", "summary_until_message")
-        .first()
+        .order_by("-day_label")[:2]
     )
+    p1_seg = previous_summary_segments[0] if len(previous_summary_segments) >= 1 else None
+    p2_seg = previous_summary_segments[1] if len(previous_summary_segments) >= 2 else None
     t_seg = (
         DaySegment.objects.filter(user=user, thread=thread, day_label=today)
         .select_related("starts_at_message", "summary_until_message")
@@ -150,12 +206,42 @@ def load_continuous_context(
         if next_seg and next_seg.starts_at_message_id:
             today_end_dt = next_seg.starts_at_message.created_at
 
-    # Build messages
+    # Build summary messages for previous days with strict budget.
+    PREVIOUS_SUMMARIES_TOKEN_BUDGET = 900
+
+    p1_summary_raw = (p1_seg.summary_markdown if p1_seg else "") or ""
+    p2_summary_raw = (p2_seg.summary_markdown if p2_seg else "") or ""
+    p1_label = f"Summary of {p1_seg.day_label.isoformat()}" if p1_seg else ""
+    p2_label = f"Summary of {p2_seg.day_label.isoformat()}" if p2_seg else ""
+
+    # Prioritize J-1 then J-2 under one strict budget.
+    budget_left = PREVIOUS_SUMMARIES_TOKEN_BUDGET
+    p1_budget = min(budget_left, _approx_tokens(p1_summary_raw))
+    p1_summary, p1_truncated = _trim_to_token_budget(p1_summary_raw, p1_budget)
+    budget_left = max(0, budget_left - _approx_tokens(p1_summary))
+
+    p2_budget = min(budget_left, _approx_tokens(p2_summary_raw))
+    p2_summary, p2_truncated = _trim_to_token_budget(p2_summary_raw, p2_budget)
+
+    previous_summaries_truncated = p1_truncated or p2_truncated
+
     out: List[BaseMessage] = []
-    if y_seg and y_seg.summary_markdown:
-        out.extend(_make_summary_pair("Yesterday summary", y_seg.summary_markdown))
-    if t_seg and t_seg.summary_markdown:
-        out.extend(_make_summary_pair("Today summary", t_seg.summary_markdown))
+    if p1_summary:
+        out.extend(_make_summary_system_message(p1_label, p1_summary))
+    if p2_summary:
+        out.extend(_make_summary_system_message(p2_label, p2_summary))
+    if previous_summaries_truncated:
+        out.append(
+            SystemMessage(
+                content=(
+                    "[Continuous context notice]\n"
+                    "Some previous-day summaries were truncated due to strict token budget. "
+                    "If more historical detail is needed, use conversation_search first, "
+                    "then conversation_get to ground exact passages."
+                ),
+                additional_kwargs={"summary_notice": True, "truncated": True},
+            )
+        )
 
     today_last_message_id: Optional[int] = None
 
@@ -181,8 +267,14 @@ def load_continuous_context(
 
     snapshot = ContinuousContextSnapshot(
         today=today,
-        yesterday=yesterday,
-        yesterday_updated_at=y_seg.updated_at if y_seg else None,
+        previous_summary_1_day=p1_seg.day_label if p1_seg else None,
+        previous_summary_2_day=p2_seg.day_label if p2_seg else None,
+        previous_summary_1_updated_at=p1_seg.updated_at if p1_seg else None,
+        previous_summary_2_updated_at=p2_seg.updated_at if p2_seg else None,
+        previous_summary_1_hash=hashlib.sha256(p1_summary.encode("utf-8")).hexdigest() if p1_summary else "",
+        previous_summary_2_hash=hashlib.sha256(p2_summary.encode("utf-8")).hexdigest() if p2_summary else "",
+        previous_summaries_token_budget=PREVIOUS_SUMMARIES_TOKEN_BUDGET,
+        previous_summaries_truncated=previous_summaries_truncated,
         today_updated_at=t_seg.updated_at if t_seg else None,
         today_start_dt=today_start_dt,
         today_end_dt=today_end_dt,

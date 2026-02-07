@@ -44,14 +44,16 @@ class LLMToolsContinuousPolicyTests(IsolatedAsyncioTestCase):
             ]
 
         conv_module = SimpleNamespace(get_functions=_conversation_get_functions)
+        conv_module.get_prompt_instructions = lambda: ["use conversation_search first"]
 
-        with patch("nova.continuous.tools.conversation_tools", conv_module):
+        with patch("nova.continuous.tools.conversation_tools", conv_module, create=True):
             with patch("nova.tools.files.get_functions", return_value=[]):
                 tools = await load_tools(agent)
 
         names = {t.name for t in tools}
         self.assertIn("conversation_search", names)
         self.assertIn("conversation_get", names)
+        self.assertIn("use conversation_search first", getattr(agent, "tool_prompt_hints", []))
 
     async def test_does_not_auto_load_conversation_tools_for_subagent(self):
         agent = SimpleNamespace(
@@ -70,3 +72,4 @@ class LLMToolsContinuousPolicyTests(IsolatedAsyncioTestCase):
         names = {t.name for t in tools}
         self.assertNotIn("conversation_search", names)
         self.assertNotIn("conversation_get", names)
+        self.assertEqual(getattr(agent, "tool_prompt_hints", []), [])

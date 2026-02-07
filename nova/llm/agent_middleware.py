@@ -7,7 +7,7 @@ context management, and other cross-cutting concerns.
 """
 from abc import ABC, abstractmethod
 from typing import Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -17,6 +17,7 @@ class AgentContext:
     user: Any  # User model
     thread: Any  # Thread model
     progress_handler: Any = None  # TaskProgressHandler for real-time updates
+    tool_prompt_hints: list[str] = field(default_factory=list)
 
 
 class AgentMiddleware(ABC):

@@ -14,6 +14,24 @@ async def load_tools(agent) -> List[StructuredTool]:
     """
     tools = []
     loaded_builtin_modules = []
+    collected_prompt_hints: list[str] = []
+
+    def _collect_prompt_hints_from_module(module):
+        try:
+            provider = getattr(module, "get_prompt_instructions", None)
+            if not callable(provider):
+                return
+            hints = provider()
+            if not hints:
+                return
+            if isinstance(hints, str):
+                hints = [hints]
+            for hint in hints:
+                text = str(hint or "").strip()
+                if text and text not in collected_prompt_hints:
+                    collected_prompt_hints.append(text)
+        except Exception as e:
+            logger.debug(f"Skipping prompt instructions for module {getattr(module, '__name__', module)}: {e}")
 
     # Load builtin tools (pre-fetched)
     for tool_obj in agent.builtin_tools:
@@ -51,6 +69,7 @@ async def load_tools(agent) -> List[StructuredTool]:
 
             # Add to list
             tools.extend(loaded_tools)
+            _collect_prompt_hints_from_module(module)
 
             # Track module for cleanup
             loaded_builtin_modules.append(module)
@@ -77,10 +96,12 @@ async def load_tools(agent) -> List[StructuredTool]:
             loaded_tools = await conversation_tools.get_functions(tool=None, agent=agent)
             tools.extend(loaded_tools)
             loaded_builtin_modules.append(conversation_tools)
+            _collect_prompt_hints_from_module(conversation_tools)
     except Exception as e:
         logger.warning(f"Failed to auto-load conversation builtin tools: {e}")
 
     agent._loaded_builtin_modules = loaded_builtin_modules
+    agent.tool_prompt_hints = collected_prompt_hints
 
     # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
     for tool_obj, cred, cached_func_metas, cred_user_id in agent.mcp_tools_data:
