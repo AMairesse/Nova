@@ -45,7 +45,11 @@ async def nova_system_prompt(request: ModelRequest) -> str:
         # Handle {today} template
         today = date.today().strftime("%A %d of %B, %Y")
         if "{today}" in base_prompt:
-            base_prompt = base_prompt.format(today=today)
+            class _SafeDict(dict):
+                def __missing__(self, key: str) -> str:
+                    return f"{{{key}}}"
+
+            base_prompt = base_prompt.format_map(_SafeDict(today=today))
     else:
         # Default prompt
         today = date.today().strftime("%A %d of %B, %Y")
