@@ -27,8 +27,10 @@ def categorize_error(error: Exception) -> str:
     error_str = str(error).lower()
     error_type = type(error).__name__.lower()
 
+    if 'timeout' in error_str or 'timeout' in error_type:
+        return ToolErrorCategory.TIMEOUT_ERROR
     if any(keyword in error_str or keyword in error_type for keyword in
-           ['connection', 'network', 'timeout', 'ssl', 'dns']):
+           ['connection', 'network', 'ssl', 'dns']):
         return ToolErrorCategory.NETWORK_ERROR
     elif any(keyword in error_str for keyword in
              ['validation', 'invalid', 'schema', 'required']):
@@ -42,8 +44,6 @@ def categorize_error(error: Exception) -> str:
     elif any(keyword in error_str for keyword in
              ['api', 'http', 'status']):
         return ToolErrorCategory.API_ERROR
-    elif 'timeout' in error_str:
-        return ToolErrorCategory.TIMEOUT_ERROR
     else:
         return ToolErrorCategory.UNKNOWN_ERROR
 
