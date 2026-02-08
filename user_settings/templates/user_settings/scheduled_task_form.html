@@ -20,19 +20,7 @@
                         {% csrf_token %}
 
                         {{ form.name|as_crispy_field }}
-                        {{ form.task_kind|as_crispy_field }}
                         {{ form.trigger_type|as_crispy_field }}
-
-                        {% if form.instance.task_kind == "maintenance" %}
-                            <div class="alert alert-info">
-                                <strong>{% trans "Maintenance task" %}</strong><br>
-                                {% trans "This task generates/refreshes daily summaries for your continuous discussion days (past days only)." %}
-                                <br>
-                                {% trans "You can only edit the schedule." %}
-                            </div>
-                        {% endif %}
-
-                        {{ form.maintenance_task|as_crispy_field }}
                         {{ form.agent|as_crispy_field }}
                         {{ form.prompt|as_crispy_field }}
                         {{ form.run_mode|as_crispy_field }}

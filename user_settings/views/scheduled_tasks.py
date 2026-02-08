@@ -14,6 +14,7 @@ from cron_descriptor import get_description
 from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
+from nova.continuous.utils import ensure_continuous_nightly_summary_scheduled_task
 from nova.tasks.tasks import (
     poll_task_definition_email,
     run_task_definition_cron,
@@ -26,9 +27,7 @@ class TaskDefinitionForm(ModelForm):
         model = TaskDefinition
         fields = [
             "name",
-            "task_kind",
             "trigger_type",
-            "maintenance_task",
             "agent",
             "prompt",
             "run_mode",
@@ -59,12 +58,6 @@ class TaskDefinitionForm(ModelForm):
                 Q(user=self.user) | Q(user__isnull=True),
             )
 
-        self.fields["task_kind"].label = _("Kind")
-        self.fields["maintenance_task"].label = _("Maintenance task")
-        self.fields["maintenance_task"].help_text = _(
-            "For maintenance tasks, this is the Celery task name (advanced)."
-        )
-
         self.fields["trigger_type"].label = _("Trigger")
         self.fields["run_mode"].help_text = _(
             "How Nova should execute this task: new thread, continuous message, or ephemeral run."
@@ -76,25 +69,6 @@ class TaskDefinitionForm(ModelForm):
         self.fields["poll_interval_minutes"].help_text = _(
             "Email polling interval in minutes (1 to 15)."
         )
-
-        # If we're editing an existing maintenance task, keep it schedule-only in UI.
-        instance_kind = getattr(getattr(self, "instance", None), "task_kind", None)
-        if instance_kind == TaskDefinition.TaskKind.MAINTENANCE:
-            for k in ("name", "task_kind", "trigger_type", "maintenance_task", "agent", "prompt", "run_mode"):
-                if k in self.fields:
-                    self.fields[k].disabled = True
-            if "agent" in self.fields:
-                self.fields["agent"].required = False
-            if "prompt" in self.fields:
-                self.fields["prompt"].required = False
-            if "email_tool" in self.fields:
-                self.fields["email_tool"].required = False
-            if "poll_interval_minutes" in self.fields:
-                self.fields["poll_interval_minutes"].required = False
-
-            self.fields["cron_expression"].help_text = _(
-                "Daily schedule only. Edit minute/hour (cron: 'm H * * *')."
-            )
 
     def clean(self):
         cleaned_data = super().clean()
@@ -114,6 +88,12 @@ class TaskDefinitionForm(ModelForm):
 @login_required
 def scheduled_tasks_list(request):
     """List all user task definitions."""
+    # Ensure the system maintenance task exists and remains visible in the Tasks UI.
+    try:
+        ensure_continuous_nightly_summary_scheduled_task(request.user)
+    except Exception:
+        pass
+
     tasks = TaskDefinition.objects.filter(user=request.user).order_by("-created_at")
 
     active_tasks = tasks.filter(task_kind=TaskDefinition.TaskKind.AGENT, is_active=True)
@@ -136,9 +116,8 @@ def scheduled_task_create(request):
         if form.is_valid():
             task = form.save(commit=False)
             task.user = request.user
-            if task.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
-                task.run_mode = TaskDefinition.RunMode.EPHEMERAL
-                task.trigger_type = TaskDefinition.TriggerType.CRON
+            # User-created tasks are always agent tasks.
+            task.task_kind = TaskDefinition.TaskKind.AGENT
             task.save()
             messages.success(request, _("Task created successfully."))
             return redirect("user_settings:scheduled_tasks")
@@ -156,14 +135,15 @@ def scheduled_task_create(request):
 def scheduled_task_edit(request, pk):
     """Edit an existing task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
+    if task.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
+        messages.error(request, _("This system maintenance task cannot be edited."))
+        return redirect("user_settings:scheduled_tasks")
 
     if request.method == "POST":
         form = TaskDefinitionForm(request.POST, instance=task, user=request.user)
         if form.is_valid():
             task = form.save(commit=False)
-            if task.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
-                task.run_mode = TaskDefinition.RunMode.EPHEMERAL
-                task.trigger_type = TaskDefinition.TriggerType.CRON
+            task.task_kind = TaskDefinition.TaskKind.AGENT
             task.save()
             messages.success(request, _("Task updated successfully."))
             return redirect("user_settings:scheduled_tasks")
