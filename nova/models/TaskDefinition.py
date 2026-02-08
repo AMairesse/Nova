@@ -193,20 +193,7 @@ class TaskDefinition(models.Model):
             return
 
         if self.is_active:
-            periodic_task, _created = PeriodicTask.objects.get_or_create(
-                name=self._periodic_task_name(),
-                defaults={
-                    "task": self._celery_task_name(),
-                    "args": f"[{self.id}]",
-                    "kwargs": "{}",
-                    "enabled": True,
-                },
-            )
-
-            periodic_task.task = self._celery_task_name()
-            periodic_task.args = f"[{self.id}]"
-            periodic_task.kwargs = "{}"
-            periodic_task.enabled = True
+            schedule_defaults = {}
 
             if self.trigger_type == self.TriggerType.CRON:
                 cron_parts = self.cron_expression.split()
@@ -222,19 +209,44 @@ class TaskDefinition(models.Model):
                     day_of_week=day_of_week,
                     timezone=self.timezone,
                 )
-                periodic_task.crontab = crontab
-                periodic_task.interval = None
-                periodic_task.solar = None
-                periodic_task.clocked = None
+                schedule_defaults = {
+                    "crontab": crontab,
+                    "interval": None,
+                    "solar": None,
+                    "clocked": None,
+                }
             else:
                 interval, _ = IntervalSchedule.objects.get_or_create(
                     every=self.poll_interval_minutes,
                     period=IntervalSchedule.MINUTES,
                 )
-                periodic_task.interval = interval
-                periodic_task.crontab = None
-                periodic_task.solar = None
-                periodic_task.clocked = None
+                schedule_defaults = {
+                    "interval": interval,
+                    "crontab": None,
+                    "solar": None,
+                    "clocked": None,
+                }
+
+            periodic_task, _created = PeriodicTask.objects.get_or_create(
+                name=self._periodic_task_name(),
+                defaults={
+                    "task": self._celery_task_name(),
+                    "args": f"[{self.id}]",
+                    "kwargs": "{}",
+                    "enabled": True,
+                    "one_off": False,
+                    **schedule_defaults,
+                },
+            )
+
+            periodic_task.task = self._celery_task_name()
+            periodic_task.args = f"[{self.id}]"
+            periodic_task.kwargs = "{}"
+            periodic_task.enabled = True
+            periodic_task.crontab = schedule_defaults.get("crontab")
+            periodic_task.interval = schedule_defaults.get("interval")
+            periodic_task.solar = schedule_defaults.get("solar")
+            periodic_task.clocked = schedule_defaults.get("clocked")
 
             # Do not keep running stale retries if a task is disabled/reconfigured.
             periodic_task.one_off = False
