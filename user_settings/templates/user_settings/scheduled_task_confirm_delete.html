@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load i18n %}
 
-{% block title %}{% trans "Delete Scheduled Task" %}{% endblock %}
+{% block title %}{% trans "Delete Task" %}{% endblock %}
 
 {% block content %}
 <div class="container mt-4">
@@ -9,11 +9,11 @@
         <div class="col-md-6">
             <div class="card">
                 <div class="card-header">
-                    <h5 class="mb-0">{% trans "Delete Scheduled Task" %}</h5>
+                    <h5 class="mb-0">{% trans "Delete Task" %}</h5>
                 </div>
                 <div class="card-body">
                     <p class="mb-3">
-                        {% trans "Are you sure you want to delete the scheduled task" %} <strong>"{{ task.name }}"</strong>?
+                        {% trans "Are you sure you want to delete the task" %} <strong>"{{ task.name }}"</strong>?
                     </p>
                     <p class="text-muted small">
                         {% trans "This action cannot be undone." %}

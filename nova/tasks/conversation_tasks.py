@@ -288,7 +288,7 @@ def nightly_summarize_continuous_daysegments_task(self):
 def nightly_summarize_continuous_daysegments_for_user_task(self, user_id: int):
     """Nightly maintenance task, scoped to a single user.
 
-    This is the task scheduled via user-owned ScheduledTask so users can edit the time.
+    This is the task scheduled via user-owned TaskDefinition so users can edit the time.
     """
 
     from django.utils import timezone

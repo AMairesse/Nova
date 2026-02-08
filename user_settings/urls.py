@@ -87,7 +87,17 @@ urlpatterns += [
 ]
 
 urlpatterns += [
-    # Scheduled Tasks
+    # Tasks
+    path("tasks/", scheduled_tasks_list, name="tasks"),
+    path("tasks/add/", scheduled_task_create, name="task_create"),
+    path("tasks/<int:pk>/edit/", scheduled_task_edit, name="task_edit"),
+    path("tasks/<int:pk>/delete/", scheduled_task_delete, name="task_delete"),
+    path("tasks/<int:pk>/toggle-active/", scheduled_task_toggle_active, name="task_toggle_active"),
+    path("tasks/<int:pk>/run-now/", scheduled_task_run_now, name="task_run_now"),
+    path("tasks/<int:pk>/clear-error/", scheduled_task_clear_error, name="task_clear_error"),
+    path("tasks/cron-preview/", scheduled_task_cron_preview, name="task_cron_preview"),
+
+    # Legacy scheduled-tasks aliases (kept for compatibility)
     path("scheduled-tasks/", scheduled_tasks_list, name="scheduled_tasks"),
     path("scheduled-tasks/add/", scheduled_task_create, name="scheduled_task_create"),
     path("scheduled-tasks/<int:pk>/edit/", scheduled_task_edit, name="scheduled_task_edit"),

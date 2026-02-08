@@ -10,8 +10,8 @@ from nova.models.Interaction import Interaction
 from nova.models.Memory import MemoryTheme, MemoryItem, MemoryItemEmbedding
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
-from nova.models.ScheduledTask import ScheduledTask
 from nova.models.Task import Task
+from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.TranscriptChunk import TranscriptChunk
@@ -185,10 +185,22 @@ class MemoryItemEmbeddingAdmin(admin.ModelAdmin):
     ordering = ("-updated_at",)
 
 
-@admin.register(ScheduledTask)
-class ScheduledTaskAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "user", "task_kind", "maintenance_task", "cron_expression", "is_active", "updated_at")
-    list_filter = ("task_kind", "is_active", "updated_at")
+@admin.register(TaskDefinition)
+class TaskDefinitionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "user",
+        "task_kind",
+        "trigger_type",
+        "run_mode",
+        "maintenance_task",
+        "cron_expression",
+        "poll_interval_minutes",
+        "is_active",
+        "updated_at",
+    )
+    list_filter = ("task_kind", "trigger_type", "run_mode", "is_active", "updated_at")
     search_fields = ("name", "user__username", "maintenance_task")
 
 

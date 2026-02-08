@@ -46,8 +46,8 @@ def ensure_continuous_thread(user) -> Thread:
     with transaction.atomic():
         thread = Thread.objects.filter(user=user, mode=Thread.Mode.CONTINUOUS).first()
         if thread:
-            # Best-effort: ensure the per-user nightly maintenance scheduled task exists.
-            # This keeps the behavior user-visible/editable via Scheduled Tasks.
+            # Best-effort: ensure the per-user nightly maintenance task exists.
+            # This keeps the behavior user-visible/editable via Tasks.
             try:
                 ensure_continuous_nightly_summary_scheduled_task(user)
             except Exception:
@@ -80,25 +80,26 @@ def ensure_continuous_thread(user) -> Thread:
 def ensure_continuous_nightly_summary_scheduled_task(user) -> None:
     """Ensure the per-user nightly summary maintenance task exists.
 
-    This is implemented as a user-owned ScheduledTask so it appears in the UI
-    (Scheduled Tasks) and the user can modify the schedule.
+    This is implemented as a user-owned TaskDefinition so it appears in the UI
+    (Tasks) and the user can modify the schedule.
     """
 
-    from nova.models.ScheduledTask import ScheduledTask
+    from nova.models.TaskDefinition import TaskDefinition
 
     # Default: 02:00 UTC daily.
     name = "Continuous: nightly day summaries"
-    ScheduledTask.objects.get_or_create(
+    TaskDefinition.objects.get_or_create(
         user=user,
         name=name,
         defaults={
-            "task_kind": ScheduledTask.TaskKind.MAINTENANCE,
+            "task_kind": TaskDefinition.TaskKind.MAINTENANCE,
+            "trigger_type": TaskDefinition.TriggerType.CRON,
             "maintenance_task": "continuous_nightly_daysegment_summaries_for_user",
             "cron_expression": "0 2 * * *",
             "timezone": "UTC",
-            "keep_thread": False,
+            "run_mode": TaskDefinition.RunMode.EPHEMERAL,
             "is_active": True,
-            # Kept for backward compatibility with the existing form/UI.
+            # Kept for backward compatibility with existing form/UI until Tasks UI lands.
             "prompt": "",
             "agent": None,
         },

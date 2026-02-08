@@ -96,6 +96,15 @@
         const cronInput = byId('id_cron_expression');
         const presetSelect = byId('cron_preset');
         const paramsRow = byId('cron_params');
+        const taskKindInput = byId('id_task_kind');
+        const triggerTypeInput = byId('id_trigger_type');
+        const timezoneInput = byId('id_timezone');
+        const agentInput = byId('id_agent');
+        const promptInput = byId('id_prompt');
+        const runModeInput = byId('id_run_mode');
+        const maintenanceInput = byId('id_maintenance_task');
+        const emailToolInput = byId('id_email_tool');
+        const pollIntervalInput = byId('id_poll_interval_minutes');
 
         const everyMinutesInput = byId('cron_every_minutes');
         const timeInput = byId('cron_time');
@@ -110,6 +119,53 @@
 
         let isProgrammatic = false;
         let previewTimer = null;
+
+        function fieldWrapper(el) {
+            if (!el) return null;
+            let cur = el;
+            while (cur && cur !== document.body) {
+                if (cur.classList && (cur.classList.contains('mb-3') || cur.classList.contains('form-group'))) {
+                    return cur;
+                }
+                cur = cur.parentElement;
+            }
+            return el.parentElement;
+        }
+
+        function setFieldVisible(el, visible) {
+            const wrapper = fieldWrapper(el);
+            if (!wrapper) return;
+            wrapper.style.display = visible ? '' : 'none';
+        }
+
+        function applyTaskModeVisibility() {
+            const kind = taskKindInput ? taskKindInput.value : 'agent';
+            const trigger = triggerTypeInput ? triggerTypeInput.value : 'cron';
+            const isMaintenance = kind === 'maintenance';
+            const isEmailPoll = !isMaintenance && trigger === 'email_poll';
+            const usesCron = isMaintenance || trigger === 'cron';
+
+            if (isMaintenance && triggerTypeInput && triggerTypeInput.value !== 'cron') {
+                triggerTypeInput.value = 'cron';
+            }
+
+            setFieldVisible(maintenanceInput, isMaintenance);
+            setFieldVisible(agentInput, !isMaintenance);
+            setFieldVisible(promptInput, !isMaintenance);
+            setFieldVisible(runModeInput, !isMaintenance);
+            setFieldVisible(triggerTypeInput, !isMaintenance);
+
+            setFieldVisible(emailToolInput, isEmailPoll);
+            setFieldVisible(pollIntervalInput, isEmailPoll);
+
+            setFieldVisible(cronInput, usesCron);
+            setFieldVisible(timezoneInput, usesCron);
+
+            const cronHelper = byId('cron_helper');
+            if (cronHelper) {
+                cronHelper.style.display = usesCron ? '' : 'none';
+            }
+        }
 
         function renderPreviewState(state) {
             preview.classList.remove('text-danger', 'text-success', 'text-muted');
@@ -283,6 +339,13 @@
             schedulePreview(cronInput.value.trim());
         });
 
+        if (taskKindInput) {
+            taskKindInput.addEventListener('change', applyTaskModeVisibility);
+        }
+        if (triggerTypeInput) {
+            triggerTypeInput.addEventListener('change', applyTaskModeVisibility);
+        }
+
         // --- Initial state
         const initial = cronInput.value.trim();
         const parsed = parseSimpleCron(initial);
@@ -308,6 +371,7 @@
         }
 
         schedulePreview(initial);
+        applyTaskModeVisibility();
     }
 
     if (document.readyState === 'loading') {

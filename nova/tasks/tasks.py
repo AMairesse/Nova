@@ -3,6 +3,7 @@ import asyncio
 import datetime as dt
 import logging
 from asgiref.sync import sync_to_async
+from celery import current_app
 from celery import shared_task
 
 from django.contrib.auth.models import User
@@ -14,10 +15,12 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
-from nova.models.ScheduledTask import ScheduledTask
 from nova.models.Task import Task, TaskStatus
+from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
+from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
+from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
 
 logger = logging.getLogger(__name__)
 
@@ -319,78 +322,120 @@ class SummarizationTaskExecutor(TaskExecutor):
             await agent.cleanup()
 
 
-@shared_task(bind=True, name="run_scheduled_agent_task")
-def run_scheduled_agent_task(self, scheduled_task_id):
-    """
-    Celery task to execute a scheduled agent task.
-    """
+def _mark_task_definition_success(task_definition: TaskDefinition):
+    task_definition.last_run_at = timezone.now()
+    task_definition.last_error = None
+    task_definition.save(update_fields=["last_run_at", "last_error", "updated_at"])
+
+
+def _mark_task_definition_error(task_definition_id: int, error: Exception):
     try:
-        # Get the scheduled task
-        scheduled_task = ScheduledTask.objects.get(id=scheduled_task_id)
+        task_definition = TaskDefinition.objects.get(id=task_definition_id)
+        task_definition.last_error = str(error)
+        task_definition.last_run_at = timezone.now()
+        task_definition.save(update_fields=["last_error", "last_run_at", "updated_at"])
+    except Exception as inner_e:
+        logger.error("Failed to update task definition %s with error: %s", task_definition_id, inner_e)
 
-        # Maintenance tasks should never be executed through this legacy entrypoint.
-        if scheduled_task.task_kind == ScheduledTask.TaskKind.MAINTENANCE:
-            logger.warning(
-                "Scheduled task %s is maintenance; skipping legacy run_scheduled_agent_task.",
-                scheduled_task.name,
-            )
-            return
 
-        if not scheduled_task.is_active:
-            logger.info(f"Scheduled task {scheduled_task.name} is not active, skipping.")
-            return
+@shared_task(bind=True, name="run_task_definition_cron")
+def run_task_definition_cron(self, task_definition_id: int):
+    """Run an agent task definition configured with a cron trigger."""
+    try:
+        task_definition = TaskDefinition.objects.select_related("user", "agent").get(id=task_definition_id)
+        if not task_definition.is_active:
+            logger.info("Task definition %s is inactive. Skipping.", task_definition.name)
+            return {"status": "skipped", "reason": "inactive"}
 
-        # Create a new thread for this execution
-        thread = Thread.objects.create(
-            user=scheduled_task.user,
-            subject=scheduled_task.name
-        )
+        if task_definition.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
+            return run_task_definition_maintenance(task_definition_id)
 
-        # Add the prompt as a user message if thread will be kept
-        if scheduled_task.keep_thread:
-            thread.add_message(scheduled_task.prompt, Actor.USER, "standard")
+        if task_definition.trigger_type != TaskDefinition.TriggerType.CRON:
+            logger.info("Task definition %s is not cron-triggered. Skipping cron runner.", task_definition.name)
+            return {"status": "skipped", "reason": "wrong_trigger"}
 
-        # Create a Task instance for consistency with other agent executions
-        task = Task.objects.create(
-            user=scheduled_task.user,
-            thread=thread,
-            agent_config=scheduled_task.agent,
-            status=TaskStatus.RUNNING
-        )
-
-        # Use AgentTaskExecutor for consistent execution
-        executor = AgentTaskExecutor(task, scheduled_task.user, thread, scheduled_task.agent, scheduled_task.prompt)
-        asyncio.run(executor.execute_or_resume())
-
-        # IMPORTANT: TaskExecutor swallows exceptions and marks the Task as FAILED.
-        # Refresh and surface failure as a scheduled_task error.
-        task.refresh_from_db()
-        if task.status == TaskStatus.FAILED:
-            raise RuntimeError(task.result or "scheduled agent task failed")
-
-        # Mark task as completed
-        task.status = TaskStatus.COMPLETED
-        task.save()
-
-        # Update last run time
-        scheduled_task.last_run_at = timezone.now()
-        scheduled_task.last_error = None  # Clear any previous error
-        scheduled_task.save()
-
-        # Optionally delete the thread
-        if not scheduled_task.keep_thread:
-            thread.delete()
-
-        logger.info(f"Scheduled task {scheduled_task.name} executed successfully.")
-
+        result = execute_agent_task_definition(task_definition)
+        _mark_task_definition_success(task_definition)
+        logger.info("Task definition %s executed successfully.", task_definition.name)
+        return {"status": "ok", **result}
     except Exception as e:
-        logger.error(f"Error executing scheduled task {scheduled_task_id}: {e}", exc_info=True)
+        logger.error("Error executing task definition %s: %s", task_definition_id, e, exc_info=True)
+        _mark_task_definition_error(task_definition_id, e)
+        raise
 
-        # Update the scheduled task with the error
-        try:
-            scheduled_task = ScheduledTask.objects.get(id=scheduled_task_id)
-            scheduled_task.last_error = str(e)
-            scheduled_task.last_run_at = timezone.now()
-            scheduled_task.save()
-        except Exception as inner_e:
-            logger.error(f"Failed to update scheduled task with error: {inner_e}")
+
+@shared_task(bind=True, name="poll_task_definition_email")
+def poll_task_definition_email(self, task_definition_id: int):
+    """Poll email and run an agent task definition when new unseen emails arrive."""
+    try:
+        task_definition = TaskDefinition.objects.select_related("user", "agent", "email_tool").get(id=task_definition_id)
+        if not task_definition.is_active:
+            logger.info("Task definition %s is inactive. Skipping email polling.", task_definition.name)
+            return {"status": "skipped", "reason": "inactive"}
+        if task_definition.trigger_type != TaskDefinition.TriggerType.EMAIL_POLL:
+            logger.info("Task definition %s is not email polling. Skipping email runner.", task_definition.name)
+            return {"status": "skipped", "reason": "wrong_trigger"}
+
+        poll_result = poll_new_unseen_email_headers(task_definition)
+        headers = poll_result["headers"]
+        task_definition.runtime_state = poll_result["state"]
+
+        if poll_result.get("skip_reason") == "backlog_skipped":
+            task_definition.save(update_fields=["runtime_state", "updated_at"])
+            return {"status": "skipped", "reason": "backlog_skipped"}
+
+        if not headers:
+            task_definition.save(update_fields=["runtime_state", "updated_at"])
+            return {"status": "noop", "new_email_count": 0}
+
+        variables = build_email_prompt_variables(headers)
+        result = execute_agent_task_definition(task_definition, variables=variables)
+        _mark_task_definition_success(task_definition)
+        task_definition.runtime_state = poll_result["state"]
+        task_definition.save(update_fields=["runtime_state", "updated_at"])
+        logger.info(
+            "Task definition %s executed after email poll (new_email_count=%s).",
+            task_definition.name,
+            len(headers),
+        )
+        return {"status": "ok", "new_email_count": len(headers), **result}
+    except Exception as e:
+        logger.error("Error polling task definition %s: %s", task_definition_id, e, exc_info=True)
+        _mark_task_definition_error(task_definition_id, e)
+        raise
+
+
+@shared_task(bind=True, name="run_task_definition_maintenance")
+def run_task_definition_maintenance(self, task_definition_id: int):
+    """Run a maintenance task definition by dispatching its configured Celery task."""
+    try:
+        task_definition = TaskDefinition.objects.select_related("user").get(id=task_definition_id)
+        if not task_definition.is_active:
+            logger.info("Task definition %s is inactive. Skipping maintenance run.", task_definition.name)
+            return {"status": "skipped", "reason": "inactive"}
+        if task_definition.task_kind != TaskDefinition.TaskKind.MAINTENANCE:
+            logger.info("Task definition %s is not maintenance. Skipping maintenance runner.", task_definition.name)
+            return {"status": "skipped", "reason": "wrong_kind"}
+        if not (task_definition.maintenance_task or "").strip():
+            raise ValueError("maintenance_task is required for maintenance task definition")
+
+        task_impl = current_app.tasks.get(task_definition.maintenance_task)
+        if not task_impl:
+            raise ValueError(f"Unknown maintenance task: {task_definition.maintenance_task}")
+
+        # Maintenance tasks in Nova are currently user-scoped.
+        task_impl.delay(user_id=task_definition.user_id)
+
+        _mark_task_definition_success(task_definition)
+        logger.info("Maintenance task definition %s dispatched successfully.", task_definition.name)
+        return {"status": "ok", "maintenance_task": task_definition.maintenance_task}
+    except Exception as e:
+        logger.error("Error executing maintenance task definition %s: %s", task_definition_id, e, exc_info=True)
+        _mark_task_definition_error(task_definition_id, e)
+        raise
+
+
+@shared_task(bind=True, name="run_scheduled_agent_task")
+def run_scheduled_agent_task(self, task_definition_id):
+    """Legacy alias kept for backward compatibility with old beat entries."""
+    return run_task_definition_cron(task_definition_id)
