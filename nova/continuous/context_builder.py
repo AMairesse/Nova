@@ -93,12 +93,12 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(s) // 4)
 
 
-def _trim_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool]:
+def _trim_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool, int]:
     s = (text or "").strip()
     if not s:
-        return "", False
+        return "", False, 0
     if budget_tokens <= 0:
-        return "", bool(s)
+        return "", bool(s), 0
 
     # Word-level trim for deterministic output.
     words = re.findall(r"\S+", s, flags=re.UNICODE)
@@ -115,7 +115,7 @@ def _trim_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool]:
     truncated = len(trimmed) < len(s)
     if truncated and trimmed:
         trimmed += "\n\n…(summary truncated due to strict context budget)…"
-    return trimmed, truncated
+    return trimmed, truncated, used
 
 
 def _make_summary_system_message(label: str, summary_md: str) -> List[BaseMessage]:
@@ -216,12 +216,10 @@ def load_continuous_context(
 
     # Prioritize J-1 then J-2 under one strict budget.
     budget_left = PREVIOUS_SUMMARIES_TOKEN_BUDGET
-    p1_budget = min(budget_left, _approx_tokens(p1_summary_raw))
-    p1_summary, p1_truncated = _trim_to_token_budget(p1_summary_raw, p1_budget)
-    budget_left = max(0, budget_left - _approx_tokens(p1_summary))
+    p1_summary, p1_truncated, p1_used_tokens = _trim_to_token_budget(p1_summary_raw, budget_left)
+    budget_left = max(0, budget_left - p1_used_tokens)
 
-    p2_budget = min(budget_left, _approx_tokens(p2_summary_raw))
-    p2_summary, p2_truncated = _trim_to_token_budget(p2_summary_raw, p2_budget)
+    p2_summary, p2_truncated, _p2_used_tokens = _trim_to_token_budget(p2_summary_raw, budget_left)
 
     previous_summaries_truncated = p1_truncated or p2_truncated
 

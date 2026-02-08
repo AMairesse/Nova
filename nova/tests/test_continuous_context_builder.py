@@ -133,6 +133,72 @@ class ContinuousContextBuilderTests(TestCase):
         self.assertIn("conversation_search", joined)
         self.assertIn("conversation_get", joined)
 
+    def test_does_not_add_truncation_notice_when_previous_summaries_fit_budget(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        today = now.date()
+        d1 = today - dt.timedelta(days=1)
+        d2 = today - dt.timedelta(days=2)
+
+        m2 = self._mk_msg("m2")
+        m1 = self._mk_msg("m1")
+
+        # Keep summaries compact enough to fit the strict previous-days budget.
+        # This guards against false-positive truncation notices.
+        compact = "A short complete summary. " * 40
+        DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=d2,
+            starts_at_message=m2,
+            summary_markdown=compact,
+        )
+        DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=d1,
+            starts_at_message=m1,
+            summary_markdown=compact,
+        )
+
+        snapshot, messages = load_continuous_context(self.user, self.thread)
+
+        self.assertFalse(snapshot.previous_summaries_truncated)
+        rendered = "\n".join(str(m.content) for m in messages if isinstance(m, SystemMessage))
+        self.assertNotIn("summary truncated due to strict context budget", rendered)
+        self.assertNotIn("[Continuous context notice]", rendered)
+
+    def test_marks_summary_as_truncated_and_adds_notice_when_budget_exceeded(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        today = now.date()
+        d1 = today - dt.timedelta(days=1)
+        d2 = today - dt.timedelta(days=2)
+
+        m2 = self._mk_msg("m2")
+        m1 = self._mk_msg("m1")
+
+        huge = "verylong " * 10000
+        DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=d2,
+            starts_at_message=m2,
+            summary_markdown=huge,
+        )
+        DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=d1,
+            starts_at_message=m1,
+            summary_markdown=huge,
+        )
+
+        snapshot, messages = load_continuous_context(self.user, self.thread)
+
+        self.assertTrue(snapshot.previous_summaries_truncated)
+        rendered = "\n".join(str(m.content) for m in messages if isinstance(m, SystemMessage))
+        self.assertIn("summary truncated due to strict context budget", rendered)
+        self.assertIn("[Continuous context notice]", rendered)
+
     def test_injects_today_summary_and_filters_messages_after_boundary(self):
         now = dt.datetime.now(dt.timezone.utc)
         today = now.date()
