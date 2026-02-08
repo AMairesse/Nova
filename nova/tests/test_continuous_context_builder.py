@@ -132,3 +132,61 @@ class ContinuousContextBuilderTests(TestCase):
         joined = "\n".join(str(m.content) for m in sys_msgs)
         self.assertIn("conversation_search", joined)
         self.assertIn("conversation_get", joined)
+
+    def test_injects_today_summary_and_filters_messages_after_boundary(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        today = now.date()
+
+        m1 = self._mk_msg("today-before-1")
+        m2 = self._mk_msg("today-before-2")
+        self._mk_msg("today-after")
+
+        DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=today,
+            starts_at_message=m1,
+            summary_markdown="Today summary",
+            summary_until_message=m2,
+        )
+
+        _, messages = load_continuous_context(self.user, self.thread)
+
+        rendered = [str(m.content) for m in messages]
+
+        # Today summary is injected.
+        self.assertTrue(any(f"Summary of {today.isoformat()}" in c for c in rendered))
+
+        # Messages at/before boundary are excluded.
+        self.assertFalse(any("today-before-1" in c for c in rendered))
+        self.assertFalse(any("today-before-2" in c for c in rendered))
+        self.assertTrue(any("today-after" in c for c in rendered))
+
+    def test_does_not_apply_boundary_when_today_summary_is_empty(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        today = now.date()
+
+        m1 = self._mk_msg("today-before-1")
+        m2 = self._mk_msg("today-before-2")
+        self._mk_msg("today-after")
+
+        DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=today,
+            starts_at_message=m1,
+            summary_markdown="   ",
+            summary_until_message=m2,
+        )
+
+        _, messages = load_continuous_context(self.user, self.thread)
+
+        rendered = [str(m.content) for m in messages]
+
+        # No today summary injected when empty.
+        self.assertFalse(any(f"Summary of {today.isoformat()}" in c for c in rendered))
+
+        # Boundary is not applied without summary content.
+        self.assertTrue(any("today-before-1" in c for c in rendered))
+        self.assertTrue(any("today-before-2" in c for c in rendered))
+        self.assertTrue(any("today-after" in c for c in rendered))

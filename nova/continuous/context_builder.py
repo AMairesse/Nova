@@ -245,11 +245,21 @@ def load_continuous_context(
 
     today_last_message_id: Optional[int] = None
 
-    # If we have a summary for today, and it defines a boundary, we only include
-    # messages AFTER the summary boundary.
+    # If we have a summary for today and it defines a boundary, inject the
+    # summary and include only messages AFTER the summary boundary.
+    #
+    # This avoids losing same-day information covered by the summary.
     today_summary_until_message_id: Optional[int] = None
-    if t_seg and t_seg.summary_until_message_id:
-        today_summary_until_message_id = t_seg.summary_until_message_id
+    if t_seg:
+        today_summary_raw = (t_seg.summary_markdown or "").strip()
+        if today_summary_raw and t_seg.summary_until_message_id:
+            today_summary_until_message_id = t_seg.summary_until_message_id
+            out.extend(
+                _make_summary_system_message(
+                    f"Summary of {today.isoformat()}",
+                    today_summary_raw,
+                )
+            )
 
     if today_start_dt:
         qs = Message.objects.filter(user=user, thread=thread, created_at__gte=today_start_dt)
