@@ -1,4 +1,4 @@
-/* Hybrid cron helper (vanilla JS)
+/* Hybrid task cron helper (vanilla JS)
  * - Keeps a real cron text field (server-side validation remains source of truth)
  * - Provides lightweight presets (Bootstrap-native)
  * - Shows server-generated human-readable preview
@@ -92,7 +92,7 @@
     }
 
     function setup() {
-        const form = byId('scheduled_task_form');
+        const form = byId('task_form');
         const cronInput = byId('id_cron_expression');
         const presetSelect = byId('cron_preset');
         const paramsRow = byId('cron_params');

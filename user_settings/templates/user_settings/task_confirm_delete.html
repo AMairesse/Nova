@@ -21,7 +21,7 @@
                     <form method="post">
                         {% csrf_token %}
                         <div class="d-flex justify-content-between">
-                            <a href="{% url 'user_settings:scheduled_tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
+                            <a href="{% url 'user_settings:tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
                             <button type="submit" class="btn btn-danger">{% trans "Delete" %}</button>
                         </div>
                     </form>

@@ -49,7 +49,7 @@ def ensure_continuous_thread(user) -> Thread:
             # Best-effort: ensure the per-user nightly maintenance task exists.
             # This keeps the behavior user-visible/editable via Tasks.
             try:
-                ensure_continuous_nightly_summary_scheduled_task(user)
+                ensure_continuous_nightly_summary_task_definition(user)
             except Exception:
                 pass
             return thread
@@ -63,7 +63,7 @@ def ensure_continuous_thread(user) -> Thread:
             )
             # Best-effort: schedule nightly summaries for this user.
             try:
-                ensure_continuous_nightly_summary_scheduled_task(user)
+                ensure_continuous_nightly_summary_task_definition(user)
             except Exception:
                 pass
             return thread
@@ -71,13 +71,13 @@ def ensure_continuous_thread(user) -> Thread:
             # Another request created it.
             thread = Thread.objects.get(user=user, mode=Thread.Mode.CONTINUOUS)
             try:
-                ensure_continuous_nightly_summary_scheduled_task(user)
+                ensure_continuous_nightly_summary_task_definition(user)
             except Exception:
                 pass
             return thread
 
 
-def ensure_continuous_nightly_summary_scheduled_task(user) -> None:
+def ensure_continuous_nightly_summary_task_definition(user) -> None:
     """Ensure the per-user nightly summary maintenance task exists.
 
     This is implemented as a user-owned TaskDefinition so it appears in the UI

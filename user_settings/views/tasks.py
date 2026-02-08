@@ -1,4 +1,4 @@
-# user_settings/views/scheduled_tasks.py
+# user_settings/views/tasks.py
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -14,7 +14,7 @@ from cron_descriptor import get_description
 from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
-from nova.continuous.utils import ensure_continuous_nightly_summary_scheduled_task
+from nova.continuous.utils import ensure_continuous_nightly_summary_task_definition
 from nova.tasks.tasks import (
     poll_task_definition_email,
     run_task_definition_cron,
@@ -86,11 +86,11 @@ class TaskDefinitionForm(ModelForm):
 
 
 @login_required
-def scheduled_tasks_list(request):
+def tasks_list(request):
     """List all user task definitions."""
     # Ensure the system maintenance task exists and remains visible in the Tasks UI.
     try:
-        ensure_continuous_nightly_summary_scheduled_task(request.user)
+        ensure_continuous_nightly_summary_task_definition(request.user)
     except Exception:
         pass
 
@@ -105,11 +105,11 @@ def scheduled_tasks_list(request):
         "inactive_tasks": inactive_tasks,
         "maintenance_tasks": maintenance_tasks,
     }
-    return render(request, "user_settings/scheduled_tasks.html", context)
+    return render(request, "user_settings/tasks.html", context)
 
 
 @login_required
-def scheduled_task_create(request):
+def task_create(request):
     """Create a new task definition."""
     if request.method == "POST":
         form = TaskDefinitionForm(request.POST, user=request.user)
@@ -120,7 +120,7 @@ def scheduled_task_create(request):
             task.task_kind = TaskDefinition.TaskKind.AGENT
             task.save()
             messages.success(request, _("Task created successfully."))
-            return redirect("user_settings:scheduled_tasks")
+            return redirect("user_settings:tasks")
     else:
         form = TaskDefinitionForm(user=request.user)
 
@@ -128,16 +128,16 @@ def scheduled_task_create(request):
         "form": form,
         "title": _("Create Task"),
     }
-    return render(request, "user_settings/scheduled_task_form.html", context)
+    return render(request, "user_settings/task_form.html", context)
 
 
 @login_required
-def scheduled_task_edit(request, pk):
+def task_edit(request, pk):
     """Edit an existing task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
     if task.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
         messages.error(request, _("This system maintenance task cannot be edited."))
-        return redirect("user_settings:scheduled_tasks")
+        return redirect("user_settings:tasks")
 
     if request.method == "POST":
         form = TaskDefinitionForm(request.POST, instance=task, user=request.user)
@@ -146,7 +146,7 @@ def scheduled_task_edit(request, pk):
             task.task_kind = TaskDefinition.TaskKind.AGENT
             task.save()
             messages.success(request, _("Task updated successfully."))
-            return redirect("user_settings:scheduled_tasks")
+            return redirect("user_settings:tasks")
     else:
         form = TaskDefinitionForm(instance=task, user=request.user)
 
@@ -155,43 +155,43 @@ def scheduled_task_edit(request, pk):
         "task": task,
         "title": _("Edit Task"),
     }
-    return render(request, "user_settings/scheduled_task_form.html", context)
+    return render(request, "user_settings/task_form.html", context)
 
 
 @login_required
-def scheduled_task_delete(request, pk):
+def task_delete(request, pk):
     """Delete an existing task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
 
     if task.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
         messages.error(request, _("This maintenance task cannot be deleted."))
-        return redirect("user_settings:scheduled_tasks")
+        return redirect("user_settings:tasks")
     if request.method == "POST":
         task.delete()
         messages.success(request, _("Task deleted successfully."))
-        return redirect("user_settings:scheduled_tasks")
+        return redirect("user_settings:tasks")
 
-    return render(request, "user_settings/scheduled_task_confirm_delete.html", {"task": task})
+    return render(request, "user_settings/task_confirm_delete.html", {"task": task})
 
 
 @login_required
-def scheduled_task_toggle_active(request, pk):
+def task_toggle_active(request, pk):
     """Toggle active status of an agent task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
 
     if task.task_kind == TaskDefinition.TaskKind.MAINTENANCE:
         messages.error(request, _("This maintenance task cannot be disabled."))
-        return redirect("user_settings:scheduled_tasks")
+        return redirect("user_settings:tasks")
 
     task.is_active = not task.is_active
     task.save(update_fields=["is_active", "updated_at"])
     status = _("activated") if task.is_active else _("deactivated")
     messages.success(request, _("Task %(status)s successfully.") % {"status": status})
-    return redirect("user_settings:scheduled_tasks")
+    return redirect("user_settings:tasks")
 
 
 @login_required
-def scheduled_task_run_now(request, pk):
+def task_run_now(request, pk):
     """Manually trigger a task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
 
@@ -203,21 +203,21 @@ def scheduled_task_run_now(request, pk):
         run_task_definition_cron.delay(task.id)
 
     messages.success(request, _("Task execution started."))
-    return redirect("user_settings:scheduled_tasks")
+    return redirect("user_settings:tasks")
 
 
 @login_required
-def scheduled_task_clear_error(request, pk):
+def task_clear_error(request, pk):
     """Clear the last error field of a task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
     task.last_error = None
     task.save(update_fields=["last_error", "updated_at"])
     messages.success(request, _("Error cleared successfully."))
-    return redirect("user_settings:scheduled_tasks")
+    return redirect("user_settings:tasks")
 
 
 @login_required
-def scheduled_task_cron_preview(request):
+def task_cron_preview(request):
     """Validate a cron expression and return a human-readable description (AJAX helper)."""
     expr = (request.GET.get("cron_expression") or "").strip()
     if not expr:

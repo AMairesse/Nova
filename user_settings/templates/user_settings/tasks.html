@@ -7,7 +7,7 @@
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1>{% trans "Tasks" %}</h1>
-        <a href="{% url 'user_settings:scheduled_task_create' %}" class="btn btn-primary">
+        <a href="{% url 'user_settings:task_create' %}" class="btn btn-primary">
             <i class="fas fa-plus"></i> {% trans "Create New Task" %}
         </a>
     </div>
@@ -44,9 +44,9 @@
                     <div class="text-end">
                         <span class="badge bg-success">{% trans "Active" %}</span>
                         <div class="mt-2">
-                            <a href="{% url 'user_settings:scheduled_task_edit' task.pk %}" class="btn btn-sm btn-outline-primary">{% trans "Edit" %}</a>
-                            <a href="{% url 'user_settings:scheduled_task_run_now' task.pk %}" class="btn btn-sm btn-outline-secondary">{% trans "Run Now" %}</a>
-                            <a href="{% url 'user_settings:scheduled_task_toggle_active' task.pk %}" class="btn btn-sm btn-outline-warning">{% trans "Disable" %}</a>
+                            <a href="{% url 'user_settings:task_edit' task.pk %}" class="btn btn-sm btn-outline-primary">{% trans "Edit" %}</a>
+                            <a href="{% url 'user_settings:task_run_now' task.pk %}" class="btn btn-sm btn-outline-secondary">{% trans "Run Now" %}</a>
+                            <a href="{% url 'user_settings:task_toggle_active' task.pk %}" class="btn btn-sm btn-outline-warning">{% trans "Disable" %}</a>
                         </div>
                     </div>
                 </div>
@@ -93,12 +93,12 @@
                     <div class="text-end">
                         <span class="badge bg-secondary">{% trans "Inactive" %}</span>
                         <div class="mt-2">
-                            <a href="{% url 'user_settings:scheduled_task_edit' task.pk %}" class="btn btn-sm btn-outline-primary">{% trans "Edit" %}</a>
+                            <a href="{% url 'user_settings:task_edit' task.pk %}" class="btn btn-sm btn-outline-primary">{% trans "Edit" %}</a>
                             {% if task.last_error %}
-                            <a href="{% url 'user_settings:scheduled_task_clear_error' task.pk %}" class="btn btn-sm btn-outline-info">{% trans "Clear Error" %}</a>
+                            <a href="{% url 'user_settings:task_clear_error' task.pk %}" class="btn btn-sm btn-outline-info">{% trans "Clear Error" %}</a>
                             {% endif %}
-                            <a href="{% url 'user_settings:scheduled_task_toggle_active' task.pk %}" class="btn btn-sm btn-outline-success">{% trans "Enable" %}</a>
-                            <a href="{% url 'user_settings:scheduled_task_delete' task.pk %}" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
+                            <a href="{% url 'user_settings:task_toggle_active' task.pk %}" class="btn btn-sm btn-outline-success">{% trans "Enable" %}</a>
+                            <a href="{% url 'user_settings:task_delete' task.pk %}" class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
                         </div>
                     </div>
                 </div>
@@ -140,9 +140,9 @@
                     <div class="text-end">
                         <span class="badge bg-info">{% trans "Maintenance" %}</span>
                         <div class="mt-2">
-                            <a href="{% url 'user_settings:scheduled_task_run_now' task.pk %}" class="btn btn-sm btn-outline-secondary">{% trans "Run Now" %}</a>
+                            <a href="{% url 'user_settings:task_run_now' task.pk %}" class="btn btn-sm btn-outline-secondary">{% trans "Run Now" %}</a>
                             {% if task.last_error %}
-                            <a href="{% url 'user_settings:scheduled_task_clear_error' task.pk %}" class="btn btn-sm btn-outline-info">{% trans "Clear Error" %}</a>
+                            <a href="{% url 'user_settings:task_clear_error' task.pk %}" class="btn btn-sm btn-outline-info">{% trans "Clear Error" %}</a>
                             {% endif %}
                         </div>
                     </div>
@@ -156,7 +156,7 @@
     {% if not active_tasks and not inactive_tasks and not maintenance_tasks %}
     <div class="text-center mt-5">
         <p class="text-muted">{% trans "No tasks yet." %}</p>
-        <a href="{% url 'user_settings:scheduled_task_create' %}" class="btn btn-primary">
+        <a href="{% url 'user_settings:task_create' %}" class="btn btn-primary">
             {% trans "Create your first task" %}
         </a>
     </div>

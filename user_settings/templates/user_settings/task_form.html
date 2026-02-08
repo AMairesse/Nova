@@ -4,7 +4,7 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block extra_head %}
-<script defer src="{% static 'user_settings/js/scheduled_task_form.js' %}"></script>
+<script defer src="{% static 'user_settings/js/task_form.js' %}"></script>
 {% endblock %}
 
 {% block content %}
@@ -16,7 +16,7 @@
                     <h5 class="mb-0">{{ title }}</h5>
                 </div>
                 <div class="card-body">
-                    <form method="post" id="scheduled_task_form" data-cron-preview-url="{% url 'user_settings:scheduled_task_cron_preview' %}">
+                    <form method="post" id="task_form" data-cron-preview-url="{% url 'user_settings:task_cron_preview' %}">
                         {% csrf_token %}
 
                         {{ form.name|as_crispy_field }}
@@ -82,7 +82,7 @@
                         {{ form.poll_interval_minutes|as_crispy_field }}
 
                         <div class="d-flex justify-content-between">
-                            <a href="{% url 'user_settings:scheduled_tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
+                            <a href="{% url 'user_settings:tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
                             <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
                         </div>
                     </form>

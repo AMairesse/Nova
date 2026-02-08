@@ -14,7 +14,7 @@ Nova
 |  |        ├─ agent.js                     # JavaScript for the agent form page
 |  │        ├─ dashboard_tabs.js            # JavaScript for the dashboard tabs
 |  │        ├─ provider.js                  # JavaScript for the provider page
-|  │        ├─ scheduled_task_form.js       # JavaScript for the scheduled task form
+|  │        ├─ task_form.js                 # JavaScript for the task form
 |  │        ├─ tool_configure.js            # JavaScript for the tool configuration page
 |  │        └─ tool.js                      # JavaScript for the tool form page
 |  ├─ templates/                            # HTML templates

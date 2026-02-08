@@ -24,6 +24,41 @@ from nova.tasks.task_definition_runner import build_email_prompt_variables, exec
 
 logger = logging.getLogger(__name__)
 
+TRIGGER_TASK_MAX_RETRIES = 5
+TRIGGER_TASK_RETRY_BASE_SECONDS = 30
+TRIGGER_TASK_RETRY_MAX_SECONDS = 15 * 60
+
+
+def compute_trigger_retry_countdown(retries: int) -> int:
+    """Compute exponential backoff countdown for trigger task retries."""
+    retries = max(int(retries or 0), 0)
+    raw_countdown = TRIGGER_TASK_RETRY_BASE_SECONDS * (2 ** retries)
+    return min(raw_countdown, TRIGGER_TASK_RETRY_MAX_SECONDS)
+
+
+def schedule_trigger_task_retry(task, error: Exception, *, task_definition_id: int, runner_name: str) -> bool:
+    """Schedule a retry for trigger-driven tasks, or return False when exhausted."""
+    retries = int(getattr(getattr(task, "request", None), "retries", 0) or 0)
+    if retries >= TRIGGER_TASK_MAX_RETRIES:
+        logger.error(
+            "Task definition %s (%s) reached max retries (%s).",
+            task_definition_id,
+            runner_name,
+            TRIGGER_TASK_MAX_RETRIES,
+        )
+        return False
+
+    countdown = compute_trigger_retry_countdown(retries)
+    logger.warning(
+        "Retrying task definition %s (%s) in %ss (attempt %s/%s).",
+        task_definition_id,
+        runner_name,
+        countdown,
+        retries + 2,
+        TRIGGER_TASK_MAX_RETRIES + 1,
+    )
+    raise task.retry(exc=error, countdown=countdown, max_retries=TRIGGER_TASK_MAX_RETRIES)
+
 
 class AgentTaskExecutor (TaskExecutor):
     """
@@ -361,14 +396,24 @@ def run_task_definition_cron(self, task_definition_id: int):
     except Exception as e:
         logger.error("Error executing task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
-        raise
+        if not schedule_trigger_task_retry(
+            self,
+            e,
+            task_definition_id=task_definition_id,
+            runner_name="cron",
+        ):
+            raise
 
 
 @shared_task(bind=True, name="poll_task_definition_email")
 def poll_task_definition_email(self, task_definition_id: int):
     """Poll email and run an agent task definition when new unseen emails arrive."""
     try:
-        task_definition = TaskDefinition.objects.select_related("user", "agent", "email_tool").get(id=task_definition_id)
+        task_definition = TaskDefinition.objects.select_related(
+            "user",
+            "agent",
+            "email_tool",
+        ).get(id=task_definition_id)
         if not task_definition.is_active:
             logger.info("Task definition %s is inactive. Skipping email polling.", task_definition.name)
             return {"status": "skipped", "reason": "inactive"}
@@ -402,7 +447,13 @@ def poll_task_definition_email(self, task_definition_id: int):
     except Exception as e:
         logger.error("Error polling task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
-        raise
+        if not schedule_trigger_task_retry(
+            self,
+            e,
+            task_definition_id=task_definition_id,
+            runner_name="email_poll",
+        ):
+            raise
 
 
 @shared_task(bind=True, name="run_task_definition_maintenance")
