@@ -14,9 +14,11 @@ from typing import List
 from celery import shared_task
 from django.db import transaction
 
+from nova.models.ConversationEmbedding import TranscriptChunkEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
 from nova.models.TranscriptChunk import TranscriptChunk
+from nova.tasks.conversation_embedding_tasks import compute_transcript_chunk_embedding_task
 
 logger = logging.getLogger(__name__)
 
@@ -131,8 +133,38 @@ def _index_transcript_append(day_segment_id: int) -> dict:
                     obj.content_hash = content_hash
                     obj.token_estimate = tok
                     obj.save(update_fields=["content_text", "content_hash", "token_estimate", "updated_at"])
+                    emb, _ = TranscriptChunkEmbedding.objects.get_or_create(
+                        user=seg.user,
+                        transcript_chunk=obj,
+                    )
+                    emb.state = "pending"
+                    emb.error = None
+                    emb.vector = None
+                    emb.save(update_fields=["state", "error", "vector", "updated_at"])
+                    try:
+                        compute_transcript_chunk_embedding_task.delay(emb.id)
+                    except Exception:
+                        logger.exception(
+                            "[index_transcript_append] failed to enqueue embedding chunk_id=%s",
+                            obj.id,
+                        )
             else:
                 created += 1
+                emb, _ = TranscriptChunkEmbedding.objects.get_or_create(
+                    user=seg.user,
+                    transcript_chunk=obj,
+                )
+                emb.state = "pending"
+                emb.error = None
+                emb.vector = None
+                emb.save(update_fields=["state", "error", "vector", "updated_at"])
+                try:
+                    compute_transcript_chunk_embedding_task.delay(emb.id)
+                except Exception:
+                    logger.exception(
+                        "[index_transcript_append] failed to enqueue embedding chunk_id=%s",
+                        obj.id,
+                    )
 
         # Apply overlap: rewind index by some messages until we have overlap_tokens.
         if overlap_tokens > 0 and i < len(msgs):

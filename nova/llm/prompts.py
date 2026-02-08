@@ -75,7 +75,24 @@ async def nova_system_prompt(request: ModelRequest) -> str:
         # When no thread is associated (e.g. /api/ask/), skip DB access
         base_prompt += "\nNo attached files available.\n"
 
+    # Add tool-owned usage hints collected during tool loading.
+    tool_hints = _get_tool_prompt_hints(runtime_context)
+    if tool_hints:
+        base_prompt += "\n\nTool usage policy:\n"
+        for hint in tool_hints:
+            base_prompt += f"- {hint}\n"
+
     return base_prompt
+
+
+def _get_tool_prompt_hints(runtime_context) -> list[str]:
+    hints = list(getattr(runtime_context, "tool_prompt_hints", []) or [])
+    out: list[str] = []
+    for h in hints:
+        s = str(h or "").strip()
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 async def _is_memory_tool_enabled(agent_config) -> bool:
@@ -91,9 +108,9 @@ async def _is_memory_tool_enabled(agent_config) -> bool:
 
 
 async def _get_user_memory(user) -> Optional[str]:
-    """Return a small prompt hint describing how to use long-term memory.
+    """Return lightweight memory discovery hints.
 
-    New memory design is tool-driven: we do NOT inject memory content.
+    Memory v2 is tool-driven: do NOT inject memory content, only compact discovery.
     """
     try:
         # Include lightweight discovery hints: top themes + active item counts.
@@ -111,10 +128,7 @@ async def _get_user_memory(user) -> Optional[str]:
         theme_hints = await sync_to_async(_load_theme_hints, thread_sensitive=True)()
 
         # Keep this block intentionally short to avoid prompt bloat.
-        lines = [
-            "\nLong-term memory is available.",
-            "Use the memory tools when you need user-specific facts or preferences\n",
-        ]
+        lines = ["\nLong-term memory themes available:\n"]
 
         if theme_hints:
             # Limit how many themes we list.
@@ -126,7 +140,7 @@ async def _get_user_memory(user) -> Optional[str]:
         return "\n".join(lines)
     except Exception as e:
         logger.warning(f"Failed to load memory themes: {e}")
-        return "\nLong-term memory is available via tools (`memory.search`, `memory.get`, `memory.add`).\n"
+        return "\nLong-term memory is available.\n"
 
 
 async def _get_file_context(thread, user) -> Optional[str]:

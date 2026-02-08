@@ -4,9 +4,11 @@
 #
 #    pip-compile --output-file=requirements.txt pyproject.toml
 #
-aioboto3==7.0.0
+aioboto3==15.5.0
     # via nova (pyproject.toml)
-aiobotocore[boto3]==3.0.0
+aiobotocore[boto3]==2.25.1
+    # via aioboto3
+aiofiles==25.1.0
     # via aioboto3
 aiohappyeyeballs==2.6.1
     # via aiohttp
@@ -30,7 +32,7 @@ anyio==4.12.1
     #   openai
     #   sse-starlette
     #   starlette
-asgiref==3.11.0
+asgiref==3.11.1
     # via
     #   channels
     #   channels-redis
@@ -45,7 +47,7 @@ attrs==25.4.0
     #   referencing
     #   service-identity
     #   twisted
-authlib==1.6.6
+authlib==1.6.7
     # via fastmcp
 autobahn==25.12.2
     # via daphne
@@ -63,17 +65,19 @@ billiard==4.2.4
     # via celery
 bleach==6.3.0
     # via nova (pyproject.toml)
-boto3==1.42.5
-    # via nova (pyproject.toml)
-botocore==1.42.5
+boto3==1.40.61
+    # via
+    #   aiobotocore
+    #   nova (pyproject.toml)
+botocore==1.40.61
     # via
     #   aiobotocore
     #   boto3
     #   nova (pyproject.toml)
     #   s3transfer
-cachetools==6.2.4
+cachetools==7.0.0
     # via py-key-value-aio
-caldav==2.2.3
+caldav==2.2.6
     # via nova (pyproject.toml)
 cbor2==5.8.0
     # via autobahn
@@ -127,8 +131,10 @@ cron-descriptor==2.0.6
     #   django-celery-beat
     #   nova (pyproject.toml)
 croniter==6.0.0
-    # via nova (pyproject.toml)
-cryptography==46.0.3
+    # via
+    #   nova (pyproject.toml)
+    #   pydocket
+cryptography==46.0.4
     # via
     #   authlib
     #   autobahn
@@ -137,19 +143,19 @@ cryptography==46.0.3
     #   pyopenssl
     #   secretstorage
     #   service-identity
-cyclopts==4.4.4
+cyclopts==4.5.1
     # via fastmcp
 daphne==4.2.1
     # via nova (pyproject.toml)
 dataclasses-json==0.6.7
     # via langchain-community
-debugpy==1.8.19
+debugpy==1.8.20
     # via nova (pyproject.toml)
 diskcache==5.6.3
     # via py-key-value-aio
 distro==1.9.0
     # via openai
-django==5.2.9
+django==5.2.11
     # via
     #   channels
     #   crispy-bootstrap5
@@ -185,7 +191,7 @@ exceptiongroup==1.3.1
     # via fastmcp
 fakeredis[lua]==2.33.0
     # via pydocket
-fastmcp==2.14.3
+fastmcp==2.14.5
     # via nova (pyproject.toml)
 filelock==3.20.3
     # via huggingface-hub
@@ -193,11 +199,11 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-fsspec==2026.1.0
+fsspec==2026.2.0
     # via huggingface-hub
 googleapis-common-protos==1.72.0
     # via opentelemetry-exporter-otlp-proto-http
-greenlet==3.3.0
+greenlet==3.3.1
     # via
     #   playwright
     #   sqlalchemy
@@ -227,7 +233,7 @@ httpx-sse==0.4.3
     #   langchain-community
     #   langchain-mistralai
     #   mcp
-huggingface-hub==1.3.2
+huggingface-hub==1.4.1
     # via tokenizers
 hyperlink==21.0.0
     # via
@@ -251,7 +257,7 @@ idna==3.11
     #   requests
     #   twisted
     #   yarl
-imapclient==3.0.1
+imapclient==3.1.0
     # via nova (pyproject.toml)
 importlib-metadata==8.7.1
     # via opentelemetry-api
@@ -269,9 +275,9 @@ jeepney==0.9.0
     #   secretstorage
 jh2==5.0.10
     # via urllib3-future
-jiter==0.12.0
+jiter==0.13.0
     # via openai
-jmespath==1.0.1
+jmespath==1.1.0
     # via
     #   aiobotocore
     #   boto3
@@ -280,6 +286,8 @@ jsonpatch==1.33
     # via langchain-core
 jsonpointer==3.0.0
     # via jsonpatch
+jsonref==1.1.0
+    # via fastmcp
 jsonschema==4.26.0
     # via mcp
 jsonschema-path==0.3.4
@@ -290,13 +298,13 @@ keyring==25.7.0
     # via py-key-value-aio
 kombu==5.6.2
     # via celery
-langchain==1.2.6
+langchain==1.2.9
     # via nova (pyproject.toml)
 langchain-classic==1.0.1
     # via langchain-community
 langchain-community==0.4.1
     # via nova (pyproject.toml)
-langchain-core==1.2.7
+langchain-core==1.2.9
     # via
     #   langchain
     #   langchain-classic
@@ -317,9 +325,9 @@ langchain-openai==1.1.7
     # via nova (pyproject.toml)
 langchain-text-splitters==1.1.0
     # via langchain-classic
-langfuse==3.12.0
+langfuse==3.13.0
     # via nova (pyproject.toml)
-langgraph==1.0.6
+langgraph==1.0.8
     # via
     #   langchain
     #   nova (pyproject.toml)
@@ -328,13 +336,13 @@ langgraph-checkpoint==4.0.0
     #   langgraph
     #   langgraph-checkpoint-postgres
     #   langgraph-prebuilt
-langgraph-checkpoint-postgres==3.0.3
+langgraph-checkpoint-postgres==3.0.4
     # via nova (pyproject.toml)
-langgraph-prebuilt==1.0.6
+langgraph-prebuilt==1.0.7
     # via langgraph
-langgraph-sdk==0.3.3
+langgraph-sdk==0.3.4
     # via langgraph
-langsmith==0.6.4
+langsmith==0.6.9
     # via
     #   langchain-classic
     #   langchain-community
@@ -343,13 +351,13 @@ lupa==2.6
     # via fakeredis
 lxml==6.0.2
     # via caldav
-markdown==3.10
+markdown==3.10.1
     # via nova (pyproject.toml)
 markdown-it-py==4.0.0
     # via rich
 marshmallow==3.26.2
     # via dataclasses-json
-mcp==1.25.0
+mcp==1.26.0
     # via fastmcp
 mdurl==0.1.2
     # via markdown-it-py
@@ -361,7 +369,7 @@ msgpack==1.1.2
     # via
     #   autobahn
     #   channels-redis
-multidict==6.7.0
+multidict==6.7.1
     # via
     #   aiobotocore
     #   aiohttp
@@ -370,13 +378,13 @@ mypy-extensions==1.1.0
     # via typing-inspect
 niquests==3.17.0
     # via caldav
-numpy==2.4.1
+numpy==2.4.2
     # via
     #   langchain-community
     #   pgvector
 ollama==0.6.1
     # via langchain-ollama
-openai==2.15.0
+openai==2.17.0
     # via
     #   langchain-openai
     #   langfuse
@@ -386,8 +394,6 @@ opentelemetry-api==1.39.1
     # via
     #   langfuse
     #   opentelemetry-exporter-otlp-proto-http
-    #   opentelemetry-exporter-prometheus
-    #   opentelemetry-instrumentation
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
     #   pydocket
@@ -395,10 +401,6 @@ opentelemetry-exporter-otlp-proto-common==1.39.1
     # via opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-http==1.39.1
     # via langfuse
-opentelemetry-exporter-prometheus==0.60b1
-    # via pydocket
-opentelemetry-instrumentation==0.60b1
-    # via pydocket
 opentelemetry-proto==1.39.1
     # via
     #   opentelemetry-exporter-otlp-proto-common
@@ -407,20 +409,18 @@ opentelemetry-sdk==1.39.1
     # via
     #   langfuse
     #   opentelemetry-exporter-otlp-proto-http
-    #   opentelemetry-exporter-prometheus
 opentelemetry-semantic-conventions==0.60b1
-    # via
-    #   opentelemetry-instrumentation
-    #   opentelemetry-sdk
-orjson==3.11.5
+    # via opentelemetry-sdk
+orjson==3.11.7
     # via
     #   langgraph-checkpoint-postgres
     #   langgraph-sdk
     #   langsmith
-ormsgpack==1.12.1
+ormsgpack==1.12.2
     # via langgraph-checkpoint
 packaging==25.0
     # via
+    #   fastmcp
     #   huggingface-hub
     #   incremental
     #   kombu
@@ -428,7 +428,6 @@ packaging==25.0
     #   langfuse
     #   langsmith
     #   marshmallow
-    #   opentelemetry-instrumentation
 pathable==0.4.4
     # via jsonschema-path
 pathvalidate==3.3.1
@@ -437,19 +436,17 @@ pgvector==0.4.2
     # via nova (pyproject.toml)
 platformdirs==4.5.1
     # via fastmcp
-playwright==1.57.0
+playwright==1.58.0
     # via nova (pyproject.toml)
 prometheus-client==0.24.1
-    # via
-    #   opentelemetry-exporter-prometheus
-    #   pydocket
+    # via pydocket
 prompt-toolkit==3.0.52
     # via click-repl
 propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
-protobuf==6.33.4
+protobuf==6.33.5
     # via
     #   googleapis-common-protos
     #   opentelemetry-proto
@@ -475,7 +472,7 @@ pyasn1==0.6.2
     #   service-identity
 pyasn1-modules==0.4.2
     # via service-identity
-pycparser==2.23
+pycparser==3.0
     # via cffi
 pydantic[email]==2.12.5
     # via
@@ -498,13 +495,13 @@ pydantic-settings==2.12.0
     # via
     #   langchain-community
     #   mcp
-pydocket==0.16.6
+pydocket==0.17.5
     # via fastmcp
 pyee==13.0.0
     # via playwright
 pygments==2.19.2
     # via rich
-pyjwt[crypto]==2.10.1
+pyjwt[crypto]==2.11.0
     # via mcp
 pyopenssl==25.3.0
     # via twisted
@@ -516,6 +513,7 @@ python-dateutil==2.9.0.post0
     # via
     #   aiobotocore
     #   botocore
+    #   caldav
     #   celery
     #   croniter
     #   icalendar
@@ -529,12 +527,13 @@ python-json-logger==4.0.0
     # via pydocket
 python-magic==0.4.27
     # via nova (pyproject.toml)
-python-multipart==0.0.21
+python-multipart==0.0.22
     # via mcp
 pytz==2025.2
     # via croniter
 pyyaml==6.0.3
     # via
+    #   caldav
     #   huggingface-hub
     #   jsonschema-path
     #   langchain-classic
@@ -571,7 +570,7 @@ requests==2.32.5
     #   tiktoken
 requests-toolbelt==1.0.0
     # via langsmith
-rich==14.2.0
+rich==14.3.2
     # via
     #   cyclopts
     #   fastmcp
@@ -584,7 +583,7 @@ rpds-py==0.30.0
     # via
     #   jsonschema
     #   referencing
-s3transfer==0.16.0
+s3transfer==0.14.0
     # via boto3
 secretstorage==3.5.0
     # via keyring
@@ -600,21 +599,21 @@ sniffio==1.3.1
     # via openai
 sortedcontainers==2.4.0
     # via fakeredis
-soupsieve==2.8.1
+soupsieve==2.8.3
     # via beautifulsoup4
-sqlalchemy==2.0.45
+sqlalchemy==2.0.46
     # via
     #   langchain-classic
     #   langchain-community
 sqlparse==0.5.5
     # via django
-sse-starlette==3.1.2
+sse-starlette==3.2.0
     # via mcp
-starlette==0.51.0
+starlette==0.52.1
     # via
     #   mcp
     #   sse-starlette
-tenacity==9.1.2
+tenacity==9.1.4
     # via
     #   langchain-community
     #   langchain-core
@@ -622,7 +621,7 @@ tiktoken==0.12.0
     # via langchain-openai
 tokenizers==0.22.2
     # via langchain-mistralai
-tqdm==4.67.1
+tqdm==4.67.3
     # via
     #   huggingface-hub
     #   openai
@@ -689,7 +688,7 @@ urllib3==2.6.3
     #   requests
 urllib3-future==2.15.901
     # via niquests
-uuid-utils==0.13.0
+uuid-utils==0.14.0
     # via
     #   langchain-core
     #   langsmith
@@ -702,9 +701,9 @@ vine==5.1.0
     #   amqp
     #   celery
     #   kombu
-wassima==2.0.4
+wassima==2.0.5
     # via niquests
-wcwidth==0.2.14
+wcwidth==0.6.0
     # via prompt-toolkit
 webencodings==0.5.1
     # via bleach
@@ -716,11 +715,12 @@ wrapt==1.17.3
     # via
     #   aiobotocore
     #   langfuse
-    #   opentelemetry-instrumentation
 x-wr-timezone==2.0.1
     # via recurring-ical-events
 xxhash==3.6.0
-    # via langgraph
+    # via
+    #   langgraph
+    #   langsmith
 yarl==1.22.0
     # via aiohttp
 zipp==3.23.0

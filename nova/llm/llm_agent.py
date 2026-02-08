@@ -389,7 +389,8 @@ class LLMAgent:
             agent_config=self.agent_config,
             user=self.user,
             thread=self.thread,
-            progress_handler=progress_handler
+            progress_handler=progress_handler,
+            tool_prompt_hints=list(getattr(self, "tool_prompt_hints", []) or []),
         )
 
         full_question = f"{question}"
@@ -484,7 +485,8 @@ class LLMAgent:
             agent_config=self.agent_config,
             user=self.user,
             thread=self.thread,
-            progress_handler=progress_handler
+            progress_handler=progress_handler,
+            tool_prompt_hints=list(getattr(self, "tool_prompt_hints", []) or []),
         )
 
         while True:

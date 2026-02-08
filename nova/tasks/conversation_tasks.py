@@ -13,9 +13,11 @@ from django.db import transaction
 from langchain_core.messages import HumanMessage
 
 from nova.llm.llm_agent import LLMAgent
+from nova.models.ConversationEmbedding import DaySegmentEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
 from nova.models.UserObjects import UserProfile
+from nova.tasks.conversation_embedding_tasks import compute_day_segment_embedding_task
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +163,22 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
                 # V1: we summarize from `starts_at_message` up to the last message we read.
                 seg.summary_until_message_id = messages[-1].id if messages else None
                 seg.save(update_fields=["summary_markdown", "summary_until_message", "updated_at"])
+
+                emb, _ = DaySegmentEmbedding.objects.get_or_create(
+                    user=seg.user,
+                    day_segment=seg,
+                )
+                emb.state = "pending"
+                emb.error = None
+                emb.vector = None
+                emb.save(update_fields=["state", "error", "vector", "updated_at"])
+                try:
+                    compute_day_segment_embedding_task.delay(emb.id)
+                except Exception:
+                    logger.exception(
+                        "[summarize_day_segment] failed to enqueue summary embedding day_segment_id=%s",
+                        seg.id,
+                    )
 
         await sync_to_async(_persist, thread_sensitive=True)()
 
