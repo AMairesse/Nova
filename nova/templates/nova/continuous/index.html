@@ -2,7 +2,21 @@
 {% load i18n %} {% load static %}
 
 {% block content %}
-<div class="container-fluid h-100 p-0" style="overflow: hidden;">
+<div
+  class="container-fluid h-100 p-0"
+  style="overflow: hidden;"
+  id="continuous-page-root"
+  data-url-index="{% url 'index' %}"
+  data-url-add-message="{% url 'continuous_add_message' %}"
+  data-url-message-list="{% url 'continuous_messages' %}"
+  data-url-running-tasks-base="/running-tasks/"
+  data-url-load-days="{% url 'continuous_days' %}"
+  data-url-regenerate-summary="{% url 'continuous_regenerate_summary' %}"
+  data-url-day-summary="{% url 'continuous_day' '__DAY__' %}"
+  data-url-file-list="{% url 'file_list' 0 %}"
+  data-url-file-upload="{% url 'file_upload' 0 %}"
+  data-url-file-delete="{% url 'file_delete' 0 %}"
+>
   <div class="row g-0 main-content-row">
     <!-- Days Sidebar (Desktop) -->
     <div class="col-lg-2 d-none d-lg-block border-end d-flex flex-column h-100" id="threads-sidebar">
@@ -122,231 +136,6 @@
   </div>
 </div>
 
-<script>
-  window.NovaApp = window.NovaApp || {};
-  window.NovaApp.urls = {
-    index: "{% url 'index' %}",
-    // Continuous-specific endpoints
-    addMessage: "{% url 'continuous_add_message' %}",
-    messageList: "{% url 'continuous_messages' %}",
-    runningTasksBase: "/running-tasks/",
-    // Threads endpoints are not used from this page; keep minimal set.
-    loadDays: "{% url 'continuous_days' %}",
-    regenerateSummary: "{% url 'continuous_regenerate_summary' %}",
-    // Files endpoints (same as thread mode; URLs require thread_id substitution handled by FileManager)
-    fileList: "{% url 'file_list' 0 %}",
-    fileUpload: "{% url 'file_upload' 0 %}",
-    fileDelete: "{% url 'file_delete' 0 %}",
-  };
-</script>
-
-  <script>
-  (async function () {
-    let selectedDay = null;
-    let isDayPinnedInUrl = false;
-
-    function getLocalISODate() {
-      const d = new Date();
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-    }
-
-    function isTodayDayLabel(day) {
-      return !!day && day === getLocalISODate();
-    }
-
-    function applyPostingVisibility(day) {
-      // When browsing a day different from today, posting must be disabled.
-      // We enforce it client-side as well, because the message input lives in the
-      // server-rendered message container and we want this to be bulletproof
-      // across navigation + refresh.
-      const allowPosting = !day || isTodayDayLabel(day);
-      document.querySelectorAll('#message-container .message-input-area').forEach((el) => {
-        el.style.display = allowPosting ? '' : 'none';
-      });
-    }
-
-    function getSelectedDayFromUrl() {
-      const qs = new URLSearchParams(window.location.search);
-      return qs.get('day');
-    }
-
-    function setSelectedDay(day) {
-      selectedDay = day || null;
-      isDayPinnedInUrl = !!selectedDay;
-      const qs = new URLSearchParams(window.location.search);
-      if (selectedDay) qs.set('day', selectedDay); else qs.delete('day');
-      const nextUrl = `${window.location.pathname}${qs.toString() ? '?' + qs.toString() : ''}`;
-      window.history.replaceState({}, '', nextUrl);
-    }
-
-    async function loadDaysInto(containerId) {
-      const el = document.getElementById(containerId);
-      if (!el) return;
-      const resp = await fetch(`${window.NovaApp.urls.loadDays}?offset=0&limit=30`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-      const data = await resp.json();
-      el.innerHTML = data.html || '<div class="text-muted p-3">No days yet.</div>';
-    }
-
-    function ensureSummaryInsideScroll() {
-      const panel = document.getElementById('continuous-day-summary');
-      const scroll = document.querySelector('#message-container #conversation-container');
-      if (!panel || !scroll) return;
-
-      // Prepend so the summary is above the timeline inside the same scroll area.
-      if (panel.parentElement !== scroll) {
-        scroll.prepend(panel);
-      }
-    }
-
-    async function loadMessages(day) {
-      // If the summary panel was previously moved into #message-container, detach it
-      // before replacing innerHTML so it doesn't get destroyed.
-      const summaryPanel = document.getElementById('continuous-day-summary');
-      if (summaryPanel && summaryPanel.parentElement) {
-        summaryPanel.remove();
-      }
-
-      const params = day ? `?day=${encodeURIComponent(day)}` : '';
-      const resp = await fetch(`${window.NovaApp.urls.messageList}${params}`, { headers: { 'X-AJAX': 'true' } });
-      const html = await resp.text();
-      const mc = document.getElementById('message-container');
-      if (mc) mc.innerHTML = html;
-
-      applyPostingVisibility(day);
-
-      // Re-attach summary panel and ensure it scrolls with the conversation.
-      if (summaryPanel) {
-        const scroll = document.querySelector('#message-container #conversation-container');
-        if (scroll) {
-          scroll.prepend(summaryPanel);
-        }
-      }
-
-      // Make sure the day summary panel scrolls with the conversation.
-      ensureSummaryInsideScroll();
-
-      // Announce thread id for other modules (files/webapps)
-      // Thread id is embedded in the message container hidden field.
-      const tid = document.querySelector('#message-container input[name="thread_id"]')?.value;
-      document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: tid || null } }));
-    }
-
-    async function loadSummary(day) {
-      const panel = document.getElementById('continuous-day-summary');
-      const htmlEl = document.getElementById('continuous-summary-html');
-      const titleEl = document.getElementById('continuous-day-summary-title');
-      const eventEl = document.getElementById('continuous-summary-updated-event');
-      if (!panel || !htmlEl || !titleEl || !eventEl) return;
-
-      // Summary is only visible when the day is explicitly present in the URL.
-      // This keeps `/continuous/` focused on "today" without showing an (often empty)
-      // summary panel for the current day.
-      if (!day || !isDayPinnedInUrl) {
-        panel.style.display = 'none';
-        return;
-      }
-
-      const resp = await fetch(`/continuous/day/${encodeURIComponent(day)}/`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-      const data = await resp.json();
-
-      titleEl.textContent = `${gettext('Day Summary')} (${day})`;
-      htmlEl.innerHTML = data.summary_html || '<div class="text-muted">No summary yet.</div>';
-
-      // UI event derived from DaySegment.updated_at (no SYSTEM message persisted).
-      if (data.updated_at) {
-        eventEl.style.display = '';
-        eventEl.textContent = `${gettext('Day summary updated')}: ${data.updated_at}`;
-      } else {
-        eventEl.style.display = 'none';
-        eventEl.textContent = '';
-      }
-
-      panel.style.display = '';
-
-      // If messages were already loaded, ensure summary is inside the scroll container.
-      ensureSummaryInsideScroll();
-    }
-
-    async function selectDay(day) {
-      setSelectedDay(day);
-      // The panel is shown only when `day` is explicitly present in the URL.
-      // (handled by loadSummary)
-
-      // Load messages first (this re-renders the scroll container), then load the summary.
-      // This ordering avoids edge cases where the summary is rendered but the panel
-      // gets moved/removed during message refresh.
-      await loadMessages(day);
-      await loadSummary(day);
-    }
-
-    function bindDayClicks() {
-      // Global delegation so it keeps working even after partial HTML updates.
-      document.addEventListener('click', (e) => {
-        const a = e.target.closest('a[data-day-label]');
-        if (!a) return;
-        e.preventDefault();
-        selectDay(a.dataset.dayLabel);
-
-        // Mobile: close days offcanvas after selection
-        if (window.innerWidth < 992) {
-          const ocEl = document.getElementById('threadsOffcanvas');
-          if (ocEl && window.bootstrap && bootstrap.Offcanvas) {
-            bootstrap.Offcanvas.getOrCreateInstance(ocEl).hide();
-          }
-        }
-      }, { capture: true });
-    }
-
-    document.getElementById('continuous-load-days')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      loadDaysInto('threads-list');
-    });
-    document.getElementById('continuous-load-days-mobile')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      loadDaysInto('mobile-threads-list');
-    });
-
-    document.getElementById('continuous-regenerate-summary')?.addEventListener('click', async (e) => {
-      e.preventDefault();
-      if (!selectedDay) return;
-      const body = new URLSearchParams({ day: selectedDay });
-      const resp = await window.DOMUtils.csrfFetch(window.NovaApp.urls.regenerateSummary, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-      });
-      if (resp.ok) {
-        // Reload summary (messages are unchanged)
-        await loadSummary(selectedDay);
-      }
-    });
-
-    loadDaysInto('threads-list');
-    loadDaysInto('mobile-threads-list');
-
-    bindDayClicks();
-
-    // Initial selection:
-    // - If the URL has `?day=...`, we are in "pinned day" mode (summary visible).
-    // - If the URL is `/continuous/` (no param), we render today's messages but keep the URL
-    //   unchanged and keep the summary panel hidden.
-    const initialDay = getSelectedDayFromUrl();
-    if (initialDay) {
-      isDayPinnedInUrl = true;
-      await selectDay(initialDay);
-    } else {
-      isDayPinnedInUrl = false;
-      selectedDay = null;
-      // Keep URL as `/continuous/` (no `?day=`) for the default “today” view.
-      await loadMessages(getLocalISODate());
-      await loadSummary(null);
-    }
-  })();
-  </script>
-
 <script src="{% static 'js/responsive.js' %}" defer></script>
 <script src="{% static 'js/voice_recognition.js' %}" defer></script>
 <script src="{% static 'js/message-renderer.js' %}" defer></script>
@@ -354,6 +143,7 @@
 <script src="{% static 'js/message-manager.js' %}" defer></script>
 <script src="{% static 'js/preview-manager.js' %}" defer></script>
 <script src="{% static 'js/thread-manager.js' %}" defer></script>
+<script src="{% static 'js/continuous-page.js' %}" defer></script>
 <script src="{% static 'js/file-operations.js' %}" defer></script>
 <script src="{% static 'js/sidebar-manager.js' %}" defer></script>
 <script src="{% static 'js/websocket-manager.js' %}" defer></script>

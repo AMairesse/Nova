@@ -280,6 +280,10 @@
                     text: ''
                 });
 
+                // Notify page-specific controllers (e.g. Continuous mode) so they
+                // can refresh side panels/day lists without coupling to this class.
+                document.dispatchEvent(new CustomEvent('nova:message-posted', { detail: data }));
+
                 // Clear textarea
                 if (textarea) {
                     textarea.value = '';
@@ -592,6 +596,10 @@
         }
 
         loadInitialThread() {
+            // Continuous page has its own day-based loader orchestration.
+            if (window.NovaApp?.isContinuousPage) {
+                return;
+            }
             // Default behavior: server decides which thread to show when none is selected.
             this.loadMessages(null);
         }
