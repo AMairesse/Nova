@@ -4,7 +4,7 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block extra_head %}
-<script defer src="{% static 'user_settings/js/scheduled_task_form.js' %}"></script>
+<script defer src="{% static 'user_settings/js/task_form.js' %}"></script>
 {% endblock %}
 
 {% block content %}
@@ -16,26 +16,27 @@
                     <h5 class="mb-0">{{ title }}</h5>
                 </div>
                 <div class="card-body">
-                    <form method="post" id="scheduled_task_form" data-cron-preview-url="{% url 'user_settings:scheduled_task_cron_preview' %}">
+                    <form method="post" id="task_form" data-cron-preview-url="{% url 'user_settings:task_cron_preview' %}">
                         {% csrf_token %}
 
                         {{ form.name|as_crispy_field }}
-
-                        {% if form.instance.task_kind != "maintenance" %}
-                            {{ form.agent|as_crispy_field }}
-                            {{ form.prompt|as_crispy_field }}
-                        {% else %}
-                            <div class="alert alert-info">
-                                <strong>{% trans "Maintenance task" %}</strong><br>
-                                {% trans "This task generates/refreshes daily summaries for your continuous discussion days (past days only)." %}
-                                <br>
-                                {% trans "You can only edit the schedule." %}
+                        {{ form.trigger_type|as_crispy_field }}
+                        {{ form.agent|as_crispy_field }}
+                        {{ form.prompt|as_crispy_field }}
+                        <div class="alert alert-secondary py-2 px-3" id="prompt_variables_email" hidden>
+                            <div class="small fw-semibold mb-1">
+                                {% trans "Prompt variables available for Email polling trigger" %}
                             </div>
-                        {% endif %}
+                            <ul class="small mb-0">
+                                <li><code>{% templatetag openvariable %} new_email_count {% templatetag closevariable %}</code>: {% trans "Number of newly detected emails." %}</li>
+                                <li><code>{% templatetag openvariable %} new_emails_markdown {% templatetag closevariable %}</code>: {% trans "Bullet list of new email headers (uid, sender, subject, date)." %}</li>
+                                <li><code>{% templatetag openvariable %} new_emails_json {% templatetag closevariable %}</code>: {% trans "Structured JSON array with the new email headers." %}</li>
+                                <li><code>{% templatetag openvariable %} trigger_time_iso {% templatetag closevariable %}</code>: {% trans "Execution timestamp in ISO format (UTC)." %}</li>
+                            </ul>
+                        </div>
+                        {{ form.run_mode|as_crispy_field }}
 
                         {{ form.cron_expression|as_crispy_field }}
-
-                        {% if form.instance.task_kind != "maintenance" %}
                         <div class="card mb-3" id="cron_helper">
                             <div class="card-body">
                                 <div class="mb-2">
@@ -86,23 +87,13 @@
                                 </div>
                             </div>
                         </div>
-                        {% endif %}
 
                         {{ form.timezone|as_crispy_field }}
+                        {{ form.email_tool|as_crispy_field }}
+                        {{ form.poll_interval_minutes|as_crispy_field }}
 
-                        {% if form.instance.task_kind != "maintenance" %}
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="checkbox" id="keep_thread" name="keep_thread" {% if form.instance.keep_thread %}checked{% endif %}>
-                            <label class="form-check-label" for="keep_thread">
-                                {% trans "Keep thread after execution (for review)" %}
-                            </label>
-                            <small class="form-text text-muted">
-                                {% trans "If unchecked, the thread will be deleted after successful execution." %}
-                            </small>
-                        </div>
-                        {% endif %}
                         <div class="d-flex justify-content-between">
-                            <a href="{% url 'user_settings:scheduled_tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
+                            <a href="{% url 'user_settings:tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
                             <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
                         </div>
                     </form>

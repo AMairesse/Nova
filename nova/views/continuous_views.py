@@ -264,6 +264,8 @@ def continuous_add_message(request):
             "thread_id": thread.id,
             "task_id": task.id,
             "day_segment_id": seg.id,
+            "day_label": day_label.isoformat(),
+            "opened_new_day": opened_new_day,
             # Keep response shape compatible with thread mode callers.
             "threadHtml": None,
             "uploaded_file_ids": [],
@@ -291,5 +293,12 @@ def continuous_regenerate_summary(request):
         return JsonResponse({"error": "no_day_segment"}, status=404)
 
     # Manual summary refresh is allowed (even for today's segment).
-    summarize_day_segment_task.delay(seg.id, mode="manual")
-    return JsonResponse({"status": "OK", "day_segment_id": seg.id})
+    async_result = summarize_day_segment_task.delay(seg.id, mode="manual")
+    return JsonResponse(
+        {
+            "status": "OK",
+            "day_segment_id": seg.id,
+            "day_label": day_label.isoformat(),
+            "task_id": str(async_result.id),
+        }
+    )

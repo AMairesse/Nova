@@ -8,6 +8,8 @@ from typing import List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from celery import shared_task
+from celery.exceptions import MaxRetriesExceededError
+from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from langchain_core.messages import HumanMessage
@@ -22,6 +24,23 @@ from nova.tasks.conversation_embedding_tasks import compute_day_segment_embeddin
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
+
+
+async def _publish_task_update(task_id: str | None, message_type: str, data: dict | None = None) -> None:
+    """Publish task progress events to the task websocket group."""
+    if not task_id:
+        return
+    channel_layer = get_channel_layer()
+    if not channel_layer:
+        return
+    payload = {"type": message_type, **(data or {})}
+    try:
+        await channel_layer.group_send(
+            f"task_{task_id}",
+            {"type": "task_update", "message": payload},
+        )
+    except Exception:
+        logger.exception("[summarize_day_segment] websocket publish failed task_id=%s", task_id)
 
 
 def _format_messages_for_summary(messages: List[Message]) -> str:
@@ -69,7 +88,7 @@ def _build_day_summary_prompt(day_label: str, transcript: str) -> str:
     )
 
 
-async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
+async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: str | None = None) -> dict:
     # Django ORM is synchronous and must not run in an async context.
     # Use sync_to_async for all DB access.
 
@@ -123,17 +142,42 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
+    await _publish_task_update(task_id, "progress_update", {"progress_log": "Preparing day summary..."})
     segment, messages, carry_over = await _fetch_segment_and_messages()
     if not segment:
+        await _publish_task_update(task_id, "task_error", {"message": "Day segment not found", "category": "summary"})
         return {"status": "not_found", "day_segment_id": day_segment_id}
 
     user = segment.user
     agent_config = await _fetch_default_agent_config(user)
     if not agent_config:
+        await _publish_task_update(
+            task_id,
+            "task_error",
+            {"message": "No default agent configured for summary generation", "category": "summary"},
+        )
         return {"status": "error", "error": "no_default_agent", "day_segment_id": day_segment_id}
 
     transcript = _format_messages_for_summary(messages)
     if not transcript.strip():
+        await _publish_task_update(
+            task_id,
+            "continuous_summary_ready",
+            {
+                "day_segment_id": day_segment_id,
+                "day_label": segment.day_label.isoformat(),
+                "updated_at": segment.updated_at.isoformat() if segment.updated_at else None,
+            },
+        )
+        await _publish_task_update(
+            task_id,
+            "task_complete",
+            {
+                "result": "summary_up_to_date",
+                "thread_id": segment.thread_id,
+                "thread_subject": segment.thread.subject,
+            },
+        )
         return {"status": "ok", "day_segment_id": day_segment_id, "summary": ""}
 
     # Option A: include carry-over explicitly so "open loops" stay visible across days,
@@ -149,6 +193,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
 
     agent = await LLMAgent.create(user=user, thread=segment.thread, agent_config=agent_config)
     try:
+        await _publish_task_update(task_id, "progress_update", {"progress_log": "Generating day summary..."})
         # Use the same underlying chat model as the agent; call it directly.
         llm = agent.create_llm_agent()
         resp = await llm.ainvoke([HumanMessage(content=prompt)])
@@ -175,12 +220,32 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
                 try:
                     compute_day_segment_embedding_task.delay(emb.id)
                 except Exception:
-                    logger.exception(
-                        "[summarize_day_segment] failed to enqueue summary embedding day_segment_id=%s",
-                        seg.id,
-                    )
+                        logger.exception(
+                            "[summarize_day_segment] failed to enqueue summary embedding day_segment_id=%s",
+                            seg.id,
+                        )
+                return seg.day_label.isoformat(), seg.updated_at.isoformat() if seg.updated_at else None, seg.thread_id
 
-        await sync_to_async(_persist, thread_sensitive=True)()
+        day_label_iso, updated_at_iso, thread_id = await sync_to_async(_persist, thread_sensitive=True)()
+        await _publish_task_update(task_id, "progress_update", {"progress_log": "Day summary updated."})
+        await _publish_task_update(
+            task_id,
+            "continuous_summary_ready",
+            {
+                "day_segment_id": day_segment_id,
+                "day_label": day_label_iso,
+                "updated_at": updated_at_iso,
+            },
+        )
+        await _publish_task_update(
+            task_id,
+            "task_complete",
+            {
+                "result": "summary_complete",
+                "thread_id": thread_id,
+                "thread_subject": segment.thread.subject,
+            },
+        )
 
         logger.info(
             "[summarize_day_segment] ok day_segment_id=%s mode=%s chars=%s",
@@ -188,7 +253,13 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str) -> dict:
             mode,
             len(summary_md),
         )
-        return {"status": "ok", "day_segment_id": day_segment_id, "mode": mode}
+        return {
+            "status": "ok",
+            "day_segment_id": day_segment_id,
+            "day_label": day_label_iso,
+            "updated_at": updated_at_iso,
+            "mode": mode,
+        }
     finally:
         await agent.cleanup()
 
@@ -202,11 +273,29 @@ def summarize_day_segment_task(self, day_segment_id: int, mode: str = "heuristic
     - persists to DaySegment only (no synthetic system Message)
     """
 
+    task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
     try:
-        return asyncio.run(_summarize_day_segment_async(day_segment_id=day_segment_id, mode=mode))
+        return asyncio.run(_summarize_day_segment_async(day_segment_id=day_segment_id, mode=mode, task_id=task_id))
     except Exception as e:
         logger.exception("[summarize_day_segment] failed day_segment_id=%s", day_segment_id)
-        raise self.retry(countdown=60, exc=e)
+        asyncio.run(
+            _publish_task_update(
+                task_id,
+                "progress_update",
+                {"progress_log": "Summary generation failed, retrying..."},
+            )
+        )
+        try:
+            raise self.retry(countdown=60, exc=e)
+        except MaxRetriesExceededError:
+            asyncio.run(
+                _publish_task_update(
+                    task_id,
+                    "task_error",
+                    {"message": str(e), "category": "summary"},
+                )
+            )
+            raise
 
 
 def _daysegment_needs_nightly_refresh(seg: DaySegment) -> bool:
@@ -288,7 +377,7 @@ def nightly_summarize_continuous_daysegments_task(self):
 def nightly_summarize_continuous_daysegments_for_user_task(self, user_id: int):
     """Nightly maintenance task, scoped to a single user.
 
-    This is the task scheduled via user-owned ScheduledTask so users can edit the time.
+    This is the task scheduled via user-owned TaskDefinition so users can edit the time.
     """
 
     from django.utils import timezone

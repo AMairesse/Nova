@@ -6,8 +6,8 @@
   </a>
 </li>
 <li>
-  <a class="dropdown-item" href="{% url 'user_settings:scheduled_tasks' %}">
-    <i class="bi bi-clock me-2"></i>{% trans "Scheduled Tasks" %}
+  <a class="dropdown-item" href="{% url 'user_settings:tasks' %}">
+    <i class="bi bi-clock me-2"></i>{% trans "Tasks" %}
   </a>
 </li>
 {% if user.is_superuser %}
