@@ -9,14 +9,11 @@ from typing import Any
 
 from django.db import transaction
 
-from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
-from nova.models.DaySegment import DaySegment
+from nova.continuous.utils import append_continuous_user_message, enqueue_continuous_followups
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
-from nova.tasks.conversation_tasks import summarize_day_segment_task
-from nova.tasks.transcript_index_tasks import index_transcript_append_task
 
 logger = logging.getLogger(__name__)
 
@@ -58,35 +55,16 @@ def build_email_prompt_variables(email_headers: list[dict[str, Any]]) -> dict[st
 
 
 def _prepare_continuous_message(task_definition: TaskDefinition, prompt: str):
-    thread = ensure_continuous_thread(task_definition.user)
-    msg = thread.add_message(prompt, actor=Actor.USER)
-
-    day_label = get_day_label_for_user(task_definition.user)
-    seg = DaySegment.objects.filter(user=task_definition.user, thread=thread, day_label=day_label).first()
-    opened_new_day = False
-    if not seg:
-        seg = get_or_create_day_segment(task_definition.user, thread, day_label, starts_at_message=msg)
-        opened_new_day = True
-
-    # best effort background tasks, same behavior as continuous_add_message()
-    try:
-        index_transcript_append_task.delay(seg.id)
-    except Exception:
-        logger.exception("Failed to enqueue transcript indexing in task definition runner")
-
-    if opened_new_day:
-        try:
-            prev_seg = (
-                DaySegment.objects.filter(user=task_definition.user, thread=thread, day_label__lt=day_label)
-                .order_by("-day_label")
-                .first()
-            )
-            if prev_seg:
-                summarize_day_segment_task.delay(prev_seg.id, mode="nightly")
-        except Exception:
-            logger.exception("Failed to enqueue previous day summarization in task definition runner")
-
-    return thread, msg
+    thread, message, segment, day_label, opened_new_day = append_continuous_user_message(task_definition.user, prompt)
+    enqueue_continuous_followups(
+        user=task_definition.user,
+        thread=thread,
+        day_label=day_label,
+        segment=segment,
+        opened_new_day=opened_new_day,
+        source="task_definition_runner",
+    )
+    return thread, message
 
 
 def _prepare_thread_and_message(task_definition: TaskDefinition, prompt: str):

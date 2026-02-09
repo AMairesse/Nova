@@ -199,8 +199,10 @@ class MCPClientTests(SimpleTestCase):
                    lambda transport: fake_client_404), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="http://x")
-            with self.assertRaises(Http404):
-                asyncio.run(c.acall("any", x=1))
+            with self.assertLogs("nova.mcp.client", level="ERROR") as logs_404:
+                with self.assertRaises(Http404):
+                    asyncio.run(c.acall("any", x=1))
+            self.assertTrue(any("HTTP error calling any: not found" in line for line in logs_404.output))
 
         # 500 -> re-raised HTTPStatusError
         fake_client_500 = self._FakeAsyncClient(raise_on_call=err_500)
@@ -208,8 +210,10 @@ class MCPClientTests(SimpleTestCase):
                    lambda transport: fake_client_500), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="http://x")
-            with self.assertRaises(httpx.HTTPStatusError):
-                asyncio.run(c.acall("any", x=1))
+            with self.assertLogs("nova.mcp.client", level="ERROR") as logs_500:
+                with self.assertRaises(httpx.HTTPStatusError):
+                    asyncio.run(c.acall("any", x=1))
+            self.assertTrue(any("HTTP error calling any: server err" in line for line in logs_500.output))
 
         # RequestError -> ConnectionError
         err_conn = httpx.RequestError("boom", request=req)
@@ -218,8 +222,10 @@ class MCPClientTests(SimpleTestCase):
                    lambda transport: fake_client_conn), \
              patch.object(MCPClient, "_transport", return_value=object()):
             c = MCPClient(endpoint="http://x")
-            with self.assertRaises(ConnectionError):
-                asyncio.run(c.acall("any", x=1))
+            with self.assertLogs("nova.mcp.client", level="ERROR") as logs_conn:
+                with self.assertRaises(ConnectionError):
+                    asyncio.run(c.acall("any", x=1))
+            self.assertTrue(any("Connection error calling any: boom" in line for line in logs_conn.output))
 
     # ------------- _validate_inputs -----------------
 

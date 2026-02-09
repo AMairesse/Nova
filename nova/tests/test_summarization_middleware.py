@@ -184,7 +184,9 @@ class SummarizerAgentTest(BaseTestCase):
             AIMessage(content="Hi there")
         ]
 
-        result = await self.summarizer._summarize_conversation(messages, 100)
+        with self.assertLogs("nova.llm.summarization_middleware", level="WARNING") as logs:
+            result = await self.summarizer._summarize_conversation(messages, 100)
 
         # Should return fallback summary
         self.assertIn("LLM failed", result)
+        self.assertTrue(any("LLM summarization failed: LLM error" in line for line in logs.output))

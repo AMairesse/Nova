@@ -114,18 +114,20 @@ class TaskDefinitionTaskRunnerTests(TestCase):
             retry=Mock(side_effect=retry_error),
         )
 
-        with self.assertRaisesMessage(RuntimeError, "retry queued"):
-            schedule_trigger_task_retry(
-                dummy_task,
-                RuntimeError("boom"),
-                task_definition_id=123,
-                runner_name="cron",
-            )
+        with self.assertLogs("nova.tasks.tasks", level="WARNING") as logs:
+            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+                schedule_trigger_task_retry(
+                    dummy_task,
+                    RuntimeError("boom"),
+                    task_definition_id=123,
+                    runner_name="cron",
+                )
 
         dummy_task.retry.assert_called_once()
         kwargs = dummy_task.retry.call_args.kwargs
         self.assertEqual(kwargs["countdown"], compute_trigger_retry_countdown(2))
         self.assertEqual(kwargs["max_retries"], TRIGGER_TASK_MAX_RETRIES)
+        self.assertTrue(any("Retrying task definition 123 (cron)" in line for line in logs.output))
 
     def test_schedule_trigger_task_retry_returns_false_when_exhausted(self):
         dummy_task = SimpleNamespace(
@@ -133,15 +135,17 @@ class TaskDefinitionTaskRunnerTests(TestCase):
             retry=Mock(),
         )
 
-        should_retry = schedule_trigger_task_retry(
-            dummy_task,
-            RuntimeError("boom"),
-            task_definition_id=456,
-            runner_name="email_poll",
-        )
+        with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
+            should_retry = schedule_trigger_task_retry(
+                dummy_task,
+                RuntimeError("boom"),
+                task_definition_id=456,
+                runner_name="email_poll",
+            )
 
         self.assertFalse(should_retry)
         dummy_task.retry.assert_not_called()
+        self.assertTrue(any("Task definition 456 (email_poll) reached max retries" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.execute_agent_task_definition")
     def test_run_task_definition_cron_success_updates_status(self, mocked_execute):
@@ -167,12 +171,14 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         mocked_execute.side_effect = RuntimeError("execution failed")
         mocked_retry_policy.side_effect = RuntimeError("retry queued")
 
-        with self.assertRaisesMessage(RuntimeError, "retry queued"):
-            run_task_definition_cron.run(task_def.id)
+        with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
+            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+                run_task_definition_cron.run(task_def.id)
 
         mocked_retry_policy.assert_called_once()
         task_def.refresh_from_db()
         self.assertIn("execution failed", task_def.last_error or "")
+        self.assertTrue(any("Error executing task definition" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
     def test_poll_task_definition_email_noop_when_no_new_email(self, mocked_poll):
@@ -228,12 +234,14 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         mocked_poll.side_effect = RuntimeError("imap unavailable")
         mocked_retry_policy.side_effect = RuntimeError("retry queued")
 
-        with self.assertRaisesMessage(RuntimeError, "retry queued"):
-            poll_task_definition_email.run(task_def.id)
+        with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
+            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+                poll_task_definition_email.run(task_def.id)
 
         mocked_retry_policy.assert_called_once()
         task_def.refresh_from_db()
         self.assertIn("imap unavailable", task_def.last_error or "")
+        self.assertTrue(any("Error polling task definition" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.current_app.tasks.get")
     def test_run_task_definition_maintenance_dispatches_configured_task(self, mocked_get_task):
