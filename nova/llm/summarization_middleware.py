@@ -150,6 +150,7 @@ class SummarizationMiddleware(BaseAgentMiddleware):
 
     async def manual_summarize(self, context: AgentContext) -> dict:
         """Perform manual summarization and return status."""
+        checkpointer = None
         try:
             # Check if we have enough messages
             checkpointer = await get_checkpointer()
@@ -166,8 +167,6 @@ class SummarizationMiddleware(BaseAgentMiddleware):
                 )
                 return {"status": "error", "message": message}
 
-            await checkpointer.conn.close()
-
             # Perform summarization
             await self._perform_summarization(context)
             return {"status": "success", "message": "Summarization completed successfully"}
@@ -175,6 +174,9 @@ class SummarizationMiddleware(BaseAgentMiddleware):
         except Exception as e:
             logger.error(f"Manual summarization failed: {e}")
             return {"status": "error", "message": f"Summarization failed: {str(e)}"}
+        finally:
+            if checkpointer is not None:
+                await checkpointer.conn.close()
 
     async def _should_summarize(self, context: AgentContext) -> bool:
         """Determine if summarization should be triggered."""

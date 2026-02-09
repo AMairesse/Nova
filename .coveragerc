@@ -2,3 +2,4 @@
 omit = 
     manage.py
     */tests/*
+    */migrations/*

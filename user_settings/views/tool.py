@@ -9,7 +9,6 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Q, Count
-from django.forms import inlineformset_factory
 from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -36,18 +35,6 @@ from nova.models.Tool import check_and_create_searxng_tool, check_and_create_jud
 from nova.mcp.client import MCPClient
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------#
-#  Helpers                                                                   #
-# ---------------------------------------------------------------------------#
-ToolCredentialFormSet = inlineformset_factory(
-    Tool,
-    ToolCredential,
-    form=ToolCredentialForm,
-    fields="__all__",
-    extra=1,
-    can_delete=True,
-)
 
 
 class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):

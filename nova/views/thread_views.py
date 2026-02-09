@@ -1,5 +1,5 @@
 # nova/views/thread_views.py
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
 from django.shortcuts import render, get_object_or_404
@@ -184,8 +184,12 @@ def message_list(request):
             }
             return render(request, 'nova/message_container.html', context)
 
-        except Exception:
+        except Http404:
             # Thread doesn't exist or user doesn't have access - return empty state
+            selected_thread_id = None
+            messages = None
+        except Exception:
+            logger.exception("Unexpected error while rendering message list for thread %s", selected_thread_id)
             selected_thread_id = None
             messages = None
     return render(request, 'nova/message_container.html', {
