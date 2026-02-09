@@ -23,6 +23,17 @@
                         {{ form.trigger_type|as_crispy_field }}
                         {{ form.agent|as_crispy_field }}
                         {{ form.prompt|as_crispy_field }}
+                        <div class="alert alert-secondary py-2 px-3" id="prompt_variables_email" hidden>
+                            <div class="small fw-semibold mb-1">
+                                {% trans "Prompt variables available for Email polling trigger" %}
+                            </div>
+                            <ul class="small mb-0">
+                                <li><code>{% templatetag openvariable %} new_email_count {% templatetag closevariable %}</code>: {% trans "Number of newly detected emails." %}</li>
+                                <li><code>{% templatetag openvariable %} new_emails_markdown {% templatetag closevariable %}</code>: {% trans "Bullet list of new email headers (uid, sender, subject, date)." %}</li>
+                                <li><code>{% templatetag openvariable %} new_emails_json {% templatetag closevariable %}</code>: {% trans "Structured JSON array with the new email headers." %}</li>
+                                <li><code>{% templatetag openvariable %} trigger_time_iso {% templatetag closevariable %}</code>: {% trans "Execution timestamp in ISO format (UTC)." %}</li>
+                            </ul>
+                        </div>
                         {{ form.run_mode|as_crispy_field }}
 
                         {{ form.cron_expression|as_crispy_field }}

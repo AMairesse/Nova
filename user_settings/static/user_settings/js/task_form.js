@@ -101,6 +101,7 @@
         const timezoneInput = byId('id_timezone');
         const agentInput = byId('id_agent');
         const promptInput = byId('id_prompt');
+        const promptVariablesEmail = byId('prompt_variables_email');
         const runModeInput = byId('id_run_mode');
         const maintenanceInput = byId('id_maintenance_task');
         const emailToolInput = byId('id_email_tool');
@@ -154,6 +155,9 @@
             setFieldVisible(promptInput, !isMaintenance);
             setFieldVisible(runModeInput, !isMaintenance);
             setFieldVisible(triggerTypeInput, !isMaintenance);
+            if (promptVariablesEmail) {
+                promptVariablesEmail.hidden = !isEmailPoll;
+            }
 
             setFieldVisible(emailToolInput, isEmailPoll);
             setFieldVisible(pollIntervalInput, isEmailPoll);
