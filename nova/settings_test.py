@@ -76,19 +76,21 @@ LOGGING = {
     },
     'root': {
         'handlers': ['console'],
-        'level': 'ERROR',
+        # Keep test output focused on failures/assertions rather than expected
+        # error-path logs emitted by negative-path tests.
+        'level': 'CRITICAL',
     },
     'loggers': {
         # 404/400 request logs are expected in many negative-path tests.
         'django.request': {
             'handlers': ['console'],
-            'level': 'ERROR',
+            'level': 'CRITICAL',
             'propagate': False,
         },
         # Silence asyncio slow-task warnings in CI/test environments.
         'asyncio': {
             'handlers': ['console'],
-            'level': 'ERROR',
+            'level': 'CRITICAL',
             'propagate': False,
         },
     },

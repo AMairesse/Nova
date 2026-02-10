@@ -40,7 +40,6 @@ class LLMAgentTestMixin:
             "nova.tools.agent_tool_wrapper",
             "nova.tools", "nova.mcp.client", "nova.tools.files",
             "nova.llm.checkpoints",
-            "nova.models.Provider", "nova.models.Thread",
             "asgiref.sync",
         ]
         for mod in mocked_modules:
