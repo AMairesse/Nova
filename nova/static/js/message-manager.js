@@ -912,10 +912,6 @@
             const cardBody = messageCard.querySelector('.card-body');
             this.currentMessageText = cardBody ? cardBody.textContent.trim() : '';
 
-            // Check if this is the last agent message (for compact/regenerate options)
-            const isAgentMessage = messageCard.classList.contains('border-secondary');
-            const isLastMessage = this.isLastAgentMessage(messageEl);
-
             // Update context info if available
             const contextInfo = document.getElementById('context-menu-info');
             const tokensEl = document.getElementById('context-menu-tokens');
@@ -931,28 +927,8 @@
                 if (contextInfo) contextInfo.classList.add('d-none');
             }
 
-            // Show/hide regenerate button (only for last agent message)
-            const regenerateBtn = document.getElementById('context-menu-regenerate');
-            if (regenerateBtn) {
-                regenerateBtn.classList.toggle('d-none', !isAgentMessage || !isLastMessage);
-            }
-
-
             // Show the offcanvas
             this.contextMenuOffcanvas.show();
-        }
-
-        isLastAgentMessage(messageEl) {
-            const messagesList = document.getElementById('messages-list');
-            if (!messagesList) return false;
-
-            // Get all agent messages
-            const agentMessages = messagesList.querySelectorAll('.message .card.border-secondary');
-            if (agentMessages.length === 0) return false;
-
-            // Check if this message contains the last agent message card
-            const lastAgentCard = agentMessages[agentMessages.length - 1];
-            return messageEl.contains(lastAgentCard);
         }
 
         initContextMenuActions() {
@@ -961,16 +937,6 @@
             if (copyBtn) {
                 copyBtn.addEventListener('click', () => {
                     this.copyMessageToClipboard();
-                    this.contextMenuOffcanvas.hide();
-                });
-            }
-
-            // Regenerate response (placeholder - would need backend support)
-            const regenerateBtn = document.getElementById('context-menu-regenerate');
-            if (regenerateBtn) {
-                regenerateBtn.addEventListener('click', () => {
-                    // TODO: Implement regenerate functionality
-                    console.log('Regenerate not yet implemented');
                     this.contextMenuOffcanvas.hide();
                 });
             }

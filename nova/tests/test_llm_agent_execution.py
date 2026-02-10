@@ -4,7 +4,7 @@ Tests for LLM agent execution and invocation.
 """
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from langgraph.checkpoint.memory import InMemorySaver
 
 import nova.llm.llm_agent as llm_agent_mod
@@ -254,7 +254,7 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
     async def test_cleanup_closes_checkpointer(self):
         """Test that cleanup properly closes the checkpointer."""
         mock_checkpointer = MagicMock()
-        mock_checkpointer.conn.close = MagicMock()
+        mock_checkpointer.conn.close = AsyncMock()
 
         agent = llm_agent_mod.LLMAgent(
             user=self.create_mock_user(),
@@ -274,7 +274,7 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
         await agent.cleanup()
 
         # Verify checkpointer.conn.close was called
-        mock_checkpointer.conn.close.assert_called_once()
+        mock_checkpointer.conn.close.assert_awaited_once()
 
         # Verify Langfuse cleanup was called
         agent._langfuse_client.flush.assert_called_once()

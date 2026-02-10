@@ -286,13 +286,15 @@ class ToolsViewsTests(TestCase):
             endpoint="https://mcp.example.com",
             transport_type="http",
         )
-        response = self.client.post(
-            reverse("user_settings:tool-test", args=[tool.id]),
-            data={"auth_type": "basic"},
-        )
+        with self.assertLogs("user_settings.views.tool", level="ERROR") as logs:
+            response = self.client.post(
+                reverse("user_settings:tool-test", args=[tool.id]),
+                data={"auth_type": "basic"},
+            )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "error")
         self.assertIn("boom", response.json()["message"])
+        self.assertTrue(any("boom" in line for line in logs.output))
 
     @patch("nova.tools.builtins.code_execution.test_judge0_access", new_callable=AsyncMock)
     def test_tool_test_connection_codegen(self, mock_test):

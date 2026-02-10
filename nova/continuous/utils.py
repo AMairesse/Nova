@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+import logging
 
-from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from nova.models.Thread import Thread
 
-
-User = get_user_model()
-
-
-@dataclass(frozen=True)
-class ContinuousContext:
-    thread: Thread
-    day_label: dt.date
+logger = logging.getLogger(__name__)
 
 
 def _get_user_tz(user) -> dt.tzinfo:
@@ -106,11 +98,48 @@ def ensure_continuous_nightly_summary_task_definition(user) -> None:
     )
 
 
-def ensure_day_segment(user, thread: Thread, day_label: dt.date):
-    """Return the DaySegment for (user, thread, day_label) if it exists."""
+def append_continuous_user_message(user, text: str):
+    """Append a user message to the user's continuous thread and ensure the day segment."""
     from nova.models.DaySegment import DaySegment
+    from nova.models.Message import Actor
 
-    return DaySegment.objects.filter(user=user, thread=thread, day_label=day_label).first()
+    thread = ensure_continuous_thread(user)
+    day_label = get_day_label_for_user(user)
+    message = thread.add_message(text, actor=Actor.USER)
+
+    segment = DaySegment.objects.filter(user=user, thread=thread, day_label=day_label).first()
+    opened_new_day = False
+    if not segment:
+        segment = get_or_create_day_segment(user, thread, day_label, starts_at_message=message)
+        opened_new_day = True
+
+    return thread, message, segment, day_label, opened_new_day
+
+
+def enqueue_continuous_followups(*, user, thread: Thread, day_label: dt.date, segment, opened_new_day: bool, source: str):
+    """Best-effort follow-up tasks after appending a continuous message."""
+    from nova.models.DaySegment import DaySegment
+    from nova.tasks.conversation_tasks import summarize_day_segment_task
+    from nova.tasks.transcript_index_tasks import index_transcript_append_task
+
+    try:
+        index_transcript_append_task.delay(segment.id)
+    except Exception:
+        logger.exception("Failed to enqueue transcript indexing (%s)", source)
+
+    if not opened_new_day:
+        return
+
+    try:
+        prev_segment = (
+            DaySegment.objects.filter(user=user, thread=thread, day_label__lt=day_label)
+            .order_by("-day_label")
+            .first()
+        )
+        if prev_segment:
+            summarize_day_segment_task.delay(prev_segment.id, mode="nightly")
+    except Exception:
+        logger.exception("Failed to enqueue previous day summarization (%s)", source)
 
 
 def get_or_create_day_segment(user, thread: Thread, day_label: dt.date, *, starts_at_message):

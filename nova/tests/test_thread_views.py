@@ -7,10 +7,12 @@ from django.urls import reverse
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from nova.models.AgentConfig import AgentConfig
+from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
+from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
 
 
@@ -246,3 +248,153 @@ class MainViewsTests(TestCase):
         resp = self.client.get(reverse("running_tasks",
                                        args=[foreign_thread.id]))
         self.assertEqual(resp.status_code, 404)
+
+    def test_message_list_returns_empty_state_for_missing_thread(self):
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["template"] = tpl
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/", {"thread_id": "999999"})
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["template"], "nova/message_container.html")
+        self.assertIsNone(captured["context"]["messages"])
+        self.assertEqual(captured["context"]["thread_id"], "")
+
+    def test_message_list_logs_unexpected_exception_and_returns_empty_state(self):
+        thread = Thread.objects.create(user=self.user, subject="broken")
+        thread.add_message("hello", actor=Actor.USER)
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["template"] = tpl
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/", {"thread_id": str(thread.id)})
+        request.user = self.user
+        with patch("nova.views.thread_views.markdown_to_html", side_effect=RuntimeError("boom")):
+            with patch("nova.views.thread_views.render", side_effect=fake_render):
+                with self.assertLogs("nova.views.thread_views", level="ERROR") as logs:
+                    response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any("Unexpected error while rendering message list" in line for line in logs.output))
+        self.assertIsNone(captured["context"]["messages"])
+        self.assertEqual(captured["context"]["thread_id"], "")
+
+    def test_summarize_thread_requires_default_agent(self):
+        thread = Thread.objects.create(user=self.user, subject="Need agent")
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("No default agent configured", response.json()["message"])
+
+    def test_summarize_thread_rejects_when_not_enough_messages(self):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Default Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=3,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(user=self.user, subject="Few messages")
+        thread.add_message("only one", actor=Actor.USER)
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("Not enough messages to summarize", response.json()["message"])
+
+    @patch("nova.views.thread_views.get_checkpointer")
+    @patch("nova.views.thread_views.LLMAgent.create")
+    def test_summarize_thread_returns_confirmation_when_sub_agents_have_context(
+        self,
+        mocked_create_agent,
+        mocked_get_checkpointer,
+    ):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov2",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        default_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Default Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=1,
+        )
+        sub_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Sub Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=1,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = default_agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(user=self.user, subject="Many messages")
+        thread.add_message("m1", actor=Actor.USER)
+        thread.add_message("m2", actor=Actor.AGENT)
+        thread.add_message("m3", actor=Actor.USER)
+
+        CheckpointLink.objects.create(thread=thread, agent=sub_agent)
+
+        fake_llm = MagicMock()
+        fake_llm.config = {"configurable": {"thread_id": "sub-agent-thread"}}
+        fake_llm.count_tokens = AsyncMock(return_value=123)
+        fake_llm.cleanup = AsyncMock()
+        mocked_create_agent.return_value = fake_llm
+
+        fake_checkpointer = AsyncMock()
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {"channel_values": {"messages": [1, 2, 3]}}
+        fake_checkpointer.aget_tuple = AsyncMock(return_value=fake_checkpoint)
+        fake_checkpointer.conn.close = AsyncMock()
+        mocked_get_checkpointer.return_value = fake_checkpointer
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "CONFIRMATION_NEEDED")
+        self.assertEqual(payload["thread_id"], thread.id)
+        self.assertEqual(len(payload["sub_agents"]), 1)
+        self.assertEqual(payload["sub_agents"][0]["id"], sub_agent.id)
+
+    def test_confirm_summarize_thread_requires_default_agent(self):
+        self.client.login(username="alice", password="pass")
+        thread = Thread.objects.create(user=self.user, subject="Confirm no agent")
+        response = self.client.post(
+            reverse("confirm_summarize_thread", args=[thread.id]),
+            data={"include_sub_agents": "false", "sub_agent_ids": "[]"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("No default agent configured", response.json()["message"])

@@ -11,6 +11,7 @@ from nova.models.Tool import Tool
 from nova.tasks.tasks import (
     TRIGGER_TASK_MAX_RETRIES,
     compute_trigger_retry_countdown,
+    run_scheduled_agent_task,
     poll_task_definition_email,
     run_task_definition_cron,
     run_task_definition_maintenance,
@@ -102,6 +103,7 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         return task_def
 
     def test_compute_trigger_retry_countdown_uses_exponential_backoff_with_cap(self):
+        self.assertEqual(compute_trigger_retry_countdown(-1), 30)
         self.assertEqual(compute_trigger_retry_countdown(0), 30)
         self.assertEqual(compute_trigger_retry_countdown(1), 60)
         self.assertEqual(compute_trigger_retry_countdown(2), 120)
@@ -114,18 +116,20 @@ class TaskDefinitionTaskRunnerTests(TestCase):
             retry=Mock(side_effect=retry_error),
         )
 
-        with self.assertRaisesMessage(RuntimeError, "retry queued"):
-            schedule_trigger_task_retry(
-                dummy_task,
-                RuntimeError("boom"),
-                task_definition_id=123,
-                runner_name="cron",
-            )
+        with self.assertLogs("nova.tasks.tasks", level="WARNING") as logs:
+            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+                schedule_trigger_task_retry(
+                    dummy_task,
+                    RuntimeError("boom"),
+                    task_definition_id=123,
+                    runner_name="cron",
+                )
 
         dummy_task.retry.assert_called_once()
         kwargs = dummy_task.retry.call_args.kwargs
         self.assertEqual(kwargs["countdown"], compute_trigger_retry_countdown(2))
         self.assertEqual(kwargs["max_retries"], TRIGGER_TASK_MAX_RETRIES)
+        self.assertTrue(any("Retrying task definition 123 (cron)" in line for line in logs.output))
 
     def test_schedule_trigger_task_retry_returns_false_when_exhausted(self):
         dummy_task = SimpleNamespace(
@@ -133,15 +137,17 @@ class TaskDefinitionTaskRunnerTests(TestCase):
             retry=Mock(),
         )
 
-        should_retry = schedule_trigger_task_retry(
-            dummy_task,
-            RuntimeError("boom"),
-            task_definition_id=456,
-            runner_name="email_poll",
-        )
+        with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
+            should_retry = schedule_trigger_task_retry(
+                dummy_task,
+                RuntimeError("boom"),
+                task_definition_id=456,
+                runner_name="email_poll",
+            )
 
         self.assertFalse(should_retry)
         dummy_task.retry.assert_not_called()
+        self.assertTrue(any("Task definition 456 (email_poll) reached max retries" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.execute_agent_task_definition")
     def test_run_task_definition_cron_success_updates_status(self, mocked_execute):
@@ -167,12 +173,14 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         mocked_execute.side_effect = RuntimeError("execution failed")
         mocked_retry_policy.side_effect = RuntimeError("retry queued")
 
-        with self.assertRaisesMessage(RuntimeError, "retry queued"):
-            run_task_definition_cron.run(task_def.id)
+        with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
+            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+                run_task_definition_cron.run(task_def.id)
 
         mocked_retry_policy.assert_called_once()
         task_def.refresh_from_db()
         self.assertIn("execution failed", task_def.last_error or "")
+        self.assertTrue(any("Error executing task definition" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
     def test_poll_task_definition_email_noop_when_no_new_email(self, mocked_poll):
@@ -228,12 +236,14 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         mocked_poll.side_effect = RuntimeError("imap unavailable")
         mocked_retry_policy.side_effect = RuntimeError("retry queued")
 
-        with self.assertRaisesMessage(RuntimeError, "retry queued"):
-            poll_task_definition_email.run(task_def.id)
+        with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
+            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+                poll_task_definition_email.run(task_def.id)
 
         mocked_retry_policy.assert_called_once()
         task_def.refresh_from_db()
         self.assertIn("imap unavailable", task_def.last_error or "")
+        self.assertTrue(any("Error polling task definition" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.current_app.tasks.get")
     def test_run_task_definition_maintenance_dispatches_configured_task(self, mocked_get_task):
@@ -246,3 +256,119 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         self.assertEqual(result["status"], "ok")
         mocked_get_task.assert_called_once_with("fake.maintenance")
         mocked_task_impl.delay.assert_called_once_with(user_id=self.user.id)
+
+    @patch("nova.tasks.tasks.execute_agent_task_definition")
+    def test_run_task_definition_cron_skips_inactive(self, mocked_execute):
+        task_def = self._create_agent_cron_task(name="cron-inactive")
+        task_def.is_active = False
+        task_def.save(update_fields=["is_active", "updated_at"])
+
+        result = run_task_definition_cron.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "inactive")
+        mocked_execute.assert_not_called()
+
+    @patch("nova.tasks.tasks.execute_agent_task_definition")
+    def test_run_task_definition_cron_skips_wrong_trigger(self, mocked_execute):
+        task_def = self._create_agent_email_task(name="email-in-cron-runner")
+
+        result = run_task_definition_cron.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "wrong_trigger")
+        mocked_execute.assert_not_called()
+
+    @patch("nova.tasks.tasks.run_task_definition_maintenance")
+    def test_run_task_definition_cron_delegates_maintenance(self, mocked_maintenance_runner):
+        task_def = self._create_maintenance_task(name="cron-maintenance")
+        mocked_maintenance_runner.return_value = {"status": "ok", "maintenance_task": "fake"}
+
+        result = run_task_definition_cron.run(task_def.id)
+
+        mocked_maintenance_runner.assert_called_once_with(task_def.id)
+        self.assertEqual(result["status"], "ok")
+
+    @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
+    @patch("nova.tasks.tasks.execute_agent_task_definition")
+    def test_poll_task_definition_email_skips_backlog(self, mocked_execute, mocked_poll):
+        task_def = self._create_agent_email_task(name="email-backlog")
+        mocked_poll.return_value = {
+            "headers": [],
+            "state": {"last_uid": 99},
+            "skip_reason": "backlog_skipped",
+        }
+
+        result = poll_task_definition_email.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "backlog_skipped")
+        mocked_execute.assert_not_called()
+        task_def.refresh_from_db()
+        self.assertEqual(task_def.runtime_state.get("last_uid"), 99)
+
+    @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
+    def test_poll_task_definition_email_skips_inactive(self, mocked_poll):
+        task_def = self._create_agent_email_task(name="email-inactive")
+        task_def.is_active = False
+        task_def.save(update_fields=["is_active", "updated_at"])
+
+        result = poll_task_definition_email.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "inactive")
+        mocked_poll.assert_not_called()
+
+    @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
+    def test_poll_task_definition_email_skips_wrong_trigger(self, mocked_poll):
+        task_def = self._create_agent_cron_task(name="cron-in-email-runner")
+
+        result = poll_task_definition_email.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "wrong_trigger")
+        mocked_poll.assert_not_called()
+
+    @patch("nova.tasks.tasks.current_app.tasks.get")
+    def test_run_task_definition_maintenance_skips_inactive(self, mocked_get_task):
+        task_def = self._create_maintenance_task(name="maintenance-inactive", maintenance_task="fake.maintenance")
+        task_def.is_active = False
+        task_def.save(update_fields=["is_active", "updated_at"])
+
+        result = run_task_definition_maintenance.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "inactive")
+        mocked_get_task.assert_not_called()
+
+    @patch("nova.tasks.tasks.current_app.tasks.get")
+    def test_run_task_definition_maintenance_skips_wrong_kind(self, mocked_get_task):
+        task_def = self._create_agent_cron_task(name="agent-not-maintenance")
+
+        result = run_task_definition_maintenance.run(task_def.id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "wrong_kind")
+        mocked_get_task.assert_not_called()
+
+    def test_run_task_definition_maintenance_raises_when_missing_maintenance_task(self):
+        task_def = self._create_maintenance_task(name="maintenance-missing", maintenance_task="fake.maintenance")
+        task_def.maintenance_task = ""
+        task_def.save(update_fields=["maintenance_task", "updated_at"])
+
+        with self.assertRaisesMessage(ValueError, "maintenance_task is required"):
+            run_task_definition_maintenance.run(task_def.id)
+
+    @patch("nova.tasks.tasks.current_app.tasks.get", return_value=None)
+    def test_run_task_definition_maintenance_raises_for_unknown_task(self, mocked_get_task):
+        task_def = self._create_maintenance_task(name="maintenance-unknown", maintenance_task="unknown.task")
+
+        with self.assertRaisesMessage(ValueError, "Unknown maintenance task"):
+            run_task_definition_maintenance.run(task_def.id)
+        mocked_get_task.assert_called_once_with("unknown.task")
+
+    @patch("nova.tasks.tasks.run_task_definition_cron", return_value={"status": "ok"})
+    def test_run_scheduled_agent_task_is_alias_of_cron(self, mocked_cron):
+        result = run_scheduled_agent_task.run(42)
+        mocked_cron.assert_called_once_with(42)
+        self.assertEqual(result["status"], "ok")

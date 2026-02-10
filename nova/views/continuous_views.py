@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import logging
 
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -12,18 +11,19 @@ from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_GET, require_POST
 
-from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
+from nova.continuous.utils import (
+    append_continuous_user_message,
+    enqueue_continuous_followups,
+    ensure_continuous_thread,
+    get_day_label_for_user,
+)
 from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
 from nova.models.Task import Task, TaskStatus
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
-from nova.tasks.transcript_index_tasks import index_transcript_append_task
 from nova.utils import markdown_to_html
-
-logger = logging.getLogger(__name__)
-
 
 @login_required(login_url="login")
 def continuous_home(request):
@@ -201,20 +201,7 @@ def continuous_add_message(request):
     new_message = request.POST.get("new_message", "")
     selected_agent = request.POST.get("selected_agent")
 
-    thread = ensure_continuous_thread(request.user)
-    day_label = get_day_label_for_user(request.user)
-
-    # Create user message first (defines the day segment start if first message of the day)
-    msg = thread.add_message(new_message, actor=Actor.USER)
-
-    # Ensure day segment exists for today.
-    # If we just opened a new day segment, we trigger summarization for the
-    # previous day segment (V1 policy: summarize only when a new day starts).
-    seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
-    opened_new_day = False
-    if not seg:
-        seg = get_or_create_day_segment(request.user, thread, day_label, starts_at_message=msg)
-        opened_new_day = True
+    thread, msg, seg, day_label, opened_new_day = append_continuous_user_message(request.user, new_message)
 
     # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
     agent_config = None
@@ -227,25 +214,14 @@ def continuous_add_message(request):
 
     run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, msg.id)
 
-    # Kick lightweight continuous maintenance tasks (best-effort)
-    try:
-        index_transcript_append_task.delay(seg.id)
-    except Exception:
-        pass
-
-    # Summary policy (V1): do NOT summarize on every post.
-    # Only summarize the previous day once we open a new day segment.
-    if opened_new_day:
-        try:
-            prev_seg = (
-                DaySegment.objects.filter(user=request.user, thread=thread, day_label__lt=day_label)
-                .order_by("-day_label")
-                .first()
-            )
-            if prev_seg:
-                summarize_day_segment_task.delay(prev_seg.id, mode="nightly")
-        except Exception:
-            pass
+    enqueue_continuous_followups(
+        user=request.user,
+        thread=thread,
+        day_label=day_label,
+        segment=seg,
+        opened_new_day=opened_new_day,
+        source="continuous_add_message",
+    )
 
     # Match the JSON contract expected by [`MessageManager.handleFormSubmit()`](nova/static/js/message-manager.js:235)
     # so Continuous can reuse the same client logic as Threads.

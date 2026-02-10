@@ -1,4 +1,11 @@
 [run]
+source =
+    nova
+    user_settings
 omit = 
     manage.py
     */tests/*
+    */migrations/*
+    */settings.py
+    */wsgi.py
+    /opt/*

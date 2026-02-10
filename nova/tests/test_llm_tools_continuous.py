@@ -1,6 +1,8 @@
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from langchain_core.tools import StructuredTool
 
@@ -45,9 +47,11 @@ class LLMToolsContinuousPolicyTests(IsolatedAsyncioTestCase):
 
         conv_module = SimpleNamespace(get_functions=_conversation_get_functions)
         conv_module.get_prompt_instructions = lambda: ["use conversation_search first"]
+        fake_files_module = ModuleType("nova.tools.files")
+        fake_files_module.get_functions = AsyncMock(return_value=[])
 
         with patch("nova.continuous.tools.conversation_tools", conv_module, create=True):
-            with patch("nova.tools.files.get_functions", return_value=[]):
+            with patch.dict(sys.modules, {"nova.tools.files": fake_files_module}):
                 tools = await load_tools(agent)
 
         names = {t.name for t in tools}
@@ -65,8 +69,10 @@ class LLMToolsContinuousPolicyTests(IsolatedAsyncioTestCase):
             agent_config=SimpleNamespace(is_tool=True),
             _loaded_builtin_modules=[],
         )
+        fake_files_module = ModuleType("nova.tools.files")
+        fake_files_module.get_functions = AsyncMock(return_value=[])
 
-        with patch("nova.tools.files.get_functions", return_value=[]):
+        with patch.dict(sys.modules, {"nova.tools.files": fake_files_module}):
             tools = await load_tools(agent)
 
         names = {t.name for t in tools}

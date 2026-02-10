@@ -9,8 +9,6 @@ from nova.models.Thread import Thread
 @login_required
 def running_tasks(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-    if thread.user != request.user:
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
 
     running_tasks = Task.objects.filter(
         thread=thread,

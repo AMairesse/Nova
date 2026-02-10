@@ -2,7 +2,7 @@ import asyncio
 from channels.layers import get_channel_layer
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import JsonResponse, HttpResponseBadRequest
+from django.http import JsonResponse
 from django.shortcuts import render, get_object_or_404
 from django.views import View
 from django.views.decorators.http import require_POST, require_GET
@@ -56,8 +56,6 @@ async def async_read_file(file) -> bytes:
 @login_required(login_url='login')
 def file_download_url(request, file_id):
     file = get_object_or_404(UserFile, id=file_id, user=request.user)
-    if file.thread.user != request.user:  # Extra ownership check
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
 
     try:
         url = file.get_download_url(expires_in=3600)  # 1-hour expiry
@@ -77,14 +75,12 @@ def file_download_url(request, file_id):
 @login_required(login_url='login')
 async def file_upload(request, thread_id):
     try:
-        thread = await sync_to_async(Thread.objects.get)(id=thread_id,
-                                                         user=request.user)
-        if not thread:
-            return JsonResponse({'error': 'Thread not found or unauthorized'},
-                                status=403)
-
+        thread = await sync_to_async(Thread.objects.get)(id=thread_id, user=request.user)
+    except Thread.DoesNotExist:
+        return JsonResponse({'error': 'Thread not found'}, status=404)
+    try:
         if 'files' not in request.FILES:
-            return HttpResponseBadRequest({'error': 'No files provided'})
+            return JsonResponse({'error': 'No files provided'}, status=400)
 
         paths = request.POST.getlist('paths')
         files_list = request.FILES.getlist('files')

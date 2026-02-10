@@ -1,5 +1,6 @@
 # nova/tests/test_summarization_middleware.py
 import asyncio
+from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -184,7 +185,112 @@ class SummarizerAgentTest(BaseTestCase):
             AIMessage(content="Hi there")
         ]
 
-        result = await self.summarizer._summarize_conversation(messages, 100)
+        with self.assertLogs("nova.llm.summarization_middleware", level="WARNING") as logs:
+            result = await self.summarizer._summarize_conversation(messages, 100)
 
         # Should return fallback summary
         self.assertIn("LLM failed", result)
+        self.assertTrue(any("LLM summarization failed: LLM error" in line for line in logs.output))
+
+
+class SummarizationMiddlewareAsyncTests(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.agent_config = MagicMock()
+        self.agent_config.auto_summarize = True
+        self.agent_config.token_threshold = 100
+        self.agent_config.preserve_recent = 2
+        self.agent_config.strategy = "conversation"
+        self.agent_config.max_summary_length = 300
+        self.agent_config.summary_model = None
+        self.agent = MagicMock()
+        self.agent.config = {"configurable": {"thread_id": "thread-1"}}
+        self.agent.agent_config.llm_provider.max_context_tokens = 120
+        self.middleware = SummarizationMiddleware(self.agent_config, self.agent)
+
+    async def test_token_counter_returns_zero_without_checkpoint_and_closes_connection(self):
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = None
+        fake_checkpointer.conn.close = AsyncMock()
+
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer):
+            count = await TokenCounter.count_context_tokens(self.agent)
+
+        self.assertEqual(count, 0)
+        fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_manual_summarize_no_history_closes_connection(self):
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = None
+        fake_checkpointer.conn.close = AsyncMock()
+
+        context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer):
+            result = await self.middleware.manual_summarize(context)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("No conversation history", result["message"])
+        fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_manual_summarize_not_enough_messages_closes_connection(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {"channel_values": {"messages": [HumanMessage(content="only one")]}}
+
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = fake_checkpoint
+        fake_checkpointer.conn.close = AsyncMock()
+
+        context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer):
+            result = await self.middleware.manual_summarize(context)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Not enough messages to summarize", result["message"])
+        fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_manual_summarize_success_calls_perform_and_closes_connection(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {
+            "channel_values": {
+                "messages": [
+                    HumanMessage(content="m1"),
+                    AIMessage(content="m2"),
+                    HumanMessage(content="m3"),
+                ]
+            }
+        }
+
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = fake_checkpoint
+        fake_checkpointer.conn.close = AsyncMock()
+
+        context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer):
+            with patch.object(self.middleware, "_perform_summarization", new_callable=AsyncMock) as mocked_perform:
+                result = await self.middleware.manual_summarize(context)
+
+        self.assertEqual(result["status"], "success")
+        mocked_perform.assert_awaited_once_with(context)
+        fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_should_summarize_uses_max_context_cap(self):
+        # max_context_tokens=120 => threshold capped at 96 (80%)
+        context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
+        with patch.object(TokenCounter, "count_context_tokens", return_value=97):
+            should = await self.middleware._should_summarize(context)
+        self.assertTrue(should)
+
+    async def test_perform_summarization_no_checkpoint_still_closes_connection(self):
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = None
+        fake_checkpointer.conn.close = AsyncMock()
+        context = AgentContext(
+            agent_config=MagicMock(name="agent"),
+            user=MagicMock(),
+            thread=MagicMock(),
+            progress_handler=AsyncMock(),
+        )
+
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer):
+            await self.middleware._perform_summarization(context)
+
+        fake_checkpointer.conn.close.assert_awaited_once()
