@@ -1,9 +1,10 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v3';  // Updated version for new caching logic
+const CACHE_NAME = 'nova-v4';  // Updated version for view/preferences persistence changes
 const urlsToCache = [
   '/',
   '/static/css/main.css',
   '/static/js/utils.js',
+  '/static/js/view-preferences.js',
   'https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css',
   'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css',
   'https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.bundle.min.js',

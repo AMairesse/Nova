@@ -1,30 +1,42 @@
 {% load i18n %}
 
-{% if day_segments %}
-  <ul class="list-group list-group-flush">
-    {% for seg in day_segments %}
-      <li class="list-group-item d-flex justify-content-between align-items-center">
-        <a
-          href="?day={{ seg.day_label|date:'Y-m-d' }}"
-          class="text-decoration-none"
-          data-day-label="{{ seg.day_label|date:'Y-m-d' }}"
-        >
-          {% if today and seg.day_label == today %}
-            {% trans "Today" %}
-          {% else %}
-            {{ seg.day_label|date:'Y-m-d' }}
-          {% endif %}
-        </a>
-        {% if seg.summary_markdown %}
-          <span class="badge text-bg-success">{% trans "Summary" %}</span>
-        {% elif today and seg.day_label == today %}
-          {# Today is expected to have no summary by default; show no badge. #}
+<ul class="list-group list-group-flush">
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <a
+      href="?"
+      class="text-decoration-none"
+      data-day-label=""
+      data-default-view="true"
+    >
+      {% trans "Latest messages" %}
+    </a>
+    <span class="badge text-bg-primary">{{ default_recent_messages_limit }}</span>
+  </li>
+
+  {% for seg in day_segments %}
+    <li class="list-group-item d-flex justify-content-between align-items-center">
+      <a
+        href="?day={{ seg.day_label|date:'Y-m-d' }}"
+        class="text-decoration-none"
+        data-day-label="{{ seg.day_label|date:'Y-m-d' }}"
+      >
+        {% if today and seg.day_label == today %}
+          {% trans "Today" %}
         {% else %}
-          <span class="badge text-bg-secondary">{% trans "Empty" %}</span>
+          {{ seg.day_label|date:'Y-m-d' }}
         {% endif %}
-      </li>
-    {% endfor %}
-  </ul>
-{% else %}
-  <div class="text-muted">{% trans "No days yet." %}</div>
+      </a>
+      {% if seg.summary_markdown %}
+        <span class="badge text-bg-success">{% trans "Summary" %}</span>
+      {% elif today and seg.day_label == today %}
+        {# Today is expected to have no summary by default; show no badge. #}
+      {% else %}
+        <span class="badge text-bg-secondary">{% trans "Empty" %}</span>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
+
+{% if not day_segments %}
+  <div class="text-muted small p-3">{% trans "No days yet." %}</div>
 {% endif %}

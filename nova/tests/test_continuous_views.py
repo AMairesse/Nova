@@ -5,7 +5,6 @@ import datetime as dt
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
-from django.utils import timezone
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
 from nova.models.DaySegment import DaySegment
@@ -105,6 +104,30 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(list(response.context["messages"]), [])
         self.assertTrue(response.context["allow_posting"])
+
+    def test_continuous_messages_default_view_shows_recent_history_without_day_segment(self):
+        thread = ensure_continuous_thread(self.user)
+        thread.add_message("First", actor=Actor.USER)
+        thread.add_message("Second", actor=Actor.AGENT)
+
+        response = self.client.get(reverse("continuous_messages"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([m.text for m in response.context["messages"]], ["First", "Second"])
+        self.assertTrue(response.context["allow_posting"])
+        self.assertTrue(response.context["is_continuous_default_mode"])
+
+    def test_continuous_messages_default_view_respects_recent_limit_setting(self):
+        thread = ensure_continuous_thread(self.user)
+        self.user.userparameters.continuous_default_messages_limit = 2
+        self.user.userparameters.save(update_fields=["continuous_default_messages_limit"])
+
+        for idx in range(5):
+            thread.add_message(f"msg-{idx}", actor=Actor.USER)
+
+        response = self.client.get(reverse("continuous_messages"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([m.text for m in response.context["messages"]], ["msg-3", "msg-4"])
+        self.assertEqual(response.context["recent_messages_limit"], 2)
 
     def test_continuous_home_invalid_day_falls_back_to_today(self):
         response = self.client.get(reverse("continuous_home"), data={"day": "invalid"})

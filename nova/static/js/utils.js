@@ -76,6 +76,14 @@
       return `sidebarTab:${threadId}`;
     },
 
+    getLastViewModeKey: function () {
+      return 'nova:lastViewMode';
+    },
+
+    getFilesSidebarVisibleKey: function () {
+      return 'nova:filesSidebarVisible';
+    },
+
     // Generic storage helpers
     getItem: function (key, defaultValue = null) {
       try {

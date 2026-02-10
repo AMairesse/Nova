@@ -1,13 +1,15 @@
 <!-- user_settings/templates/user_settings/fragments/general_form.html -->
 {% load crispy_forms_tags i18n %}
 
-<form hx-post="{% url 'user_settings:general' %}?partial=1"
-      hx-swap="none" novalidate>
+<!-- Change Password Section (separate form) -->
+{% include "user_settings/fragments/password_change_form.html" %}
+
+<form id="general-settings-form"
+      hx-post="{% url 'user_settings:general' %}?partial=1"
+      hx-swap="none"
+      novalidate>
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
-
-  <!-- Change Password Section -->
-  {% include "user_settings/fragments/password_change_form.html" %}
 
   <!-- Langfuse Configuration Section -->
   <div class="card mb-4">
@@ -19,6 +21,19 @@
       {{ form.langfuse_public_key|as_crispy_field }}
       {{ form.langfuse_secret_key|as_crispy_field }}
       {{ form.langfuse_host|as_crispy_field }}
+    </div>
+  </div>
+
+  <!-- Continuous Mode Section -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">{% trans "Continuous mode" %}</h5>
+    </div>
+    <div class="card-body">
+      {{ form.continuous_default_messages_limit|as_crispy_field }}
+      <small class="text-muted">
+        {% trans "Used by the default Continuous view when no day is selected." %}
+      </small>
     </div>
   </div>
 

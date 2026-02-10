@@ -48,7 +48,7 @@
     }
 
     function getEffectiveDay() {
-        return state.selectedDay || state.todayLabel;
+        return state.selectedDay;
     }
 
     function getSelectedDayFromUrl() {
@@ -115,7 +115,10 @@
         if (!container) return;
         const activeDay = getEffectiveDay();
         container.querySelectorAll('a[data-day-label]').forEach((a) => {
-            const isActive = !!activeDay && a.dataset.dayLabel === activeDay;
+            const isDefaultViewLink = a.dataset.defaultView === 'true';
+            const isActive = activeDay
+                ? a.dataset.dayLabel === activeDay
+                : isDefaultViewLink;
             a.classList.toggle('fw-semibold', isActive);
             a.classList.toggle('text-primary', isActive);
         });
@@ -199,6 +202,20 @@
                 window.NovaApp.messageManager.checkAndReconnectRunningTasks();
             }
         }
+
+        // Match thread opening behavior: on default continuous view (no day filter),
+        // land at the end of the conversation.
+        if (!day) {
+            if (window.NovaApp.messageManager && typeof window.NovaApp.messageManager.scrollToBottom === 'function') {
+                window.NovaApp.messageManager.scrollToBottom();
+            } else {
+                const container = document.getElementById('conversation-container');
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
+        }
+
         document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: tid || null } }));
     }
 
@@ -395,7 +412,7 @@
         } else {
             state.isDayPinnedInUrl = false;
             state.selectedDay = null;
-            await loadMessages(state.todayLabel);
+            await loadMessages(null);
             await loadSummary(null);
             applyActiveDayInAllLists();
         }

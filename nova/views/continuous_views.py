@@ -21,9 +21,18 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
 from nova.models.Task import Task, TaskStatus
+from nova.models.UserObjects import UserParameters
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
+
+
+def _get_recent_messages_limit(user) -> int:
+    params = UserParameters.objects.filter(user=user).only("continuous_default_messages_limit").first()
+    if params:
+        return params.continuous_default_messages_limit
+    return UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT
+
 
 @login_required(login_url="login")
 def continuous_home(request):
@@ -90,7 +99,13 @@ def continuous_days(request):
 
     html = render_to_string(
         "nova/continuous/partials/day_selector.html",
-        {"day_segments": segments, "offset": offset, "limit": limit, "today": today},
+        {
+            "day_segments": segments,
+            "offset": offset,
+            "limit": limit,
+            "today": today,
+            "default_recent_messages_limit": _get_recent_messages_limit(request.user),
+        },
         request=request,
     )
     return JsonResponse({"html": html, "count": len(segments)})
@@ -138,14 +153,12 @@ def continuous_messages(request):
         except Exception:
             return JsonResponse({"error": "invalid_day"}, status=400)
 
-    # Default behavior for continuous: if no explicit `?day=...` is provided,
-    # show *today's* slice (not the whole continuous thread).
+    recent_messages_limit = _get_recent_messages_limit(request.user)
     today_label = get_day_label_for_user(request.user)
-    effective_day_label = day_label or today_label
 
     # Posting is only allowed for today's day label.
     # If the user is browsing a past day, the UI should be read-only.
-    allow_posting = effective_day_label == today_label
+    allow_posting = day_label is None or day_label == today_label
 
     user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
     agent_id = request.GET.get("agent_id")
@@ -155,13 +168,19 @@ def continuous_messages(request):
     if not default_agent:
         default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
 
-    if effective_day_label:
-        seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=effective_day_label).first()
+    if day_label is None:
+        latest_messages = list(
+            Message.objects.filter(user=request.user, thread=thread)
+            .order_by("-created_at", "-id")[:recent_messages_limit]
+        )
+        messages = list(reversed(latest_messages))
+    else:
+        seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
         if not seg or not seg.starts_at_message_id:
             messages = []
         else:
             next_seg = (
-                DaySegment.objects.filter(user=request.user, thread=thread, day_label__gt=effective_day_label)
+                DaySegment.objects.filter(user=request.user, thread=thread, day_label__gt=day_label)
                 .order_by("day_label")
                 .first()
             )
@@ -171,8 +190,6 @@ def continuous_messages(request):
             if end_dt:
                 qs = qs.filter(created_at__lt=end_dt)
             messages = list(qs.order_by("created_at", "id"))
-    else:
-        messages = []
     for m in messages:
         m.rendered_html = markdown_to_html(m.text)
 
@@ -188,6 +205,9 @@ def continuous_messages(request):
             "pending_interactions": [],
             "Actor": Actor,
             "allow_posting": allow_posting,
+            "is_continuous_default_mode": day_label is None,
+            "show_day_separators": day_label is None,
+            "recent_messages_limit": recent_messages_limit,
         },
     )
 

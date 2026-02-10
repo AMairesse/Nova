@@ -7,7 +7,32 @@
   <div id="conversation-container" class="flex-grow-1 overflow-auto p-2 p-sm-3" style="min-height: 0;">
     <!-- Messages list container -->
     <div id="messages-list">
+      {% if is_continuous_default_mode %}
+      <div class="alert alert-light border small py-2 px-3 mb-3">
+        {% blocktrans with count=recent_messages_limit %}
+          Showing the latest {{ count }} messages across all days. Select a day to filter.
+        {% endblocktrans %}
+      </div>
+      {% endif %}
+
+      {% if not messages %}
+      <div class="text-muted small px-2 py-1">
+        {% if is_continuous_default_mode %}
+          {% trans "No messages yet in your continuous history." %}
+        {% else %}
+          {% trans "No messages yet." %}
+        {% endif %}
+      </div>
+      {% endif %}
+
       {% for message in messages %}
+      {% if show_day_separators %}
+      {% ifchanged message.created_at|date:"Y-m-d" %}
+      <div class="text-center my-3">
+        <span class="badge text-bg-light border">{{ message.created_at|date:"Y-m-d" }}</span>
+      </div>
+      {% endifchanged %}
+      {% endif %}
       <div id="message-{{ message.id }}" class="message mb-3" data-message-id="{{ message.id }}">
         {% if message.message_type == 'interaction_question' %}
         <!-- Interaction question message -->

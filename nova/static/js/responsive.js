@@ -9,7 +9,7 @@
   class ResponsiveManager {
     constructor() {
       this.isDesktop = window.innerWidth >= 992;
-      this.filesVisible = true;
+      this.filesVisible = this.readSavedFilesVisibility();
 
       // Idempotence
       this._bound = false;
@@ -29,6 +29,11 @@
       this.setupFilesToggle();
       this.setupBootstrapEventListeners();
       this.setupMutationObserver();
+
+      // Restore desktop right sidebar visibility from browser preference.
+      if (this.isDesktop) {
+        this.applySavedFilesVisibility();
+      }
 
       // Listen for file content updates:
       // This event is dispatched ONLY from syncFilesContent().
@@ -51,9 +56,9 @@
 
         if (wasDesktop !== this.isDesktop) {
           this.syncMobileContent();
-          // Reset files visibility when switching between desktop/mobile
+          // Restore preferred files visibility when switching back to desktop.
           if (this.isDesktop) {
-            this.showFiles();
+            this.applySavedFilesVisibility();
           }
         }
       }, 250);
@@ -108,6 +113,7 @@
         }
 
         this.filesVisible = false;
+        this.saveFilesVisibility(false);
       }
     }
 
@@ -130,6 +136,7 @@
         }
 
         this.filesVisible = true;
+        this.saveFilesVisibility(true);
 
         // When showing files panel, update FileManager for current thread
         if (window.FileManager && window.FileManager.currentThreadId) {
@@ -270,6 +277,48 @@
         this.syncThreadLists();
       });
       this._mutationObserver.observe(desktopThreadList, { childList: true, subtree: true });
+    }
+
+    getFilesSidebarVisibilityKey() {
+      if (window.StorageUtils && typeof window.StorageUtils.getFilesSidebarVisibleKey === 'function') {
+        return window.StorageUtils.getFilesSidebarVisibleKey();
+      }
+      return 'nova:filesSidebarVisible';
+    }
+
+    readSavedFilesVisibility() {
+      const key = this.getFilesSidebarVisibilityKey();
+      if (window.StorageUtils && typeof window.StorageUtils.getItem === 'function') {
+        return window.StorageUtils.getItem(key, 'true') !== 'false';
+      }
+      try {
+        return localStorage.getItem(key) !== 'false';
+      } catch (e) {
+        return true;
+      }
+    }
+
+    saveFilesVisibility(visible) {
+      const key = this.getFilesSidebarVisibilityKey();
+      document.documentElement.classList.toggle('pref-files-hidden', !visible);
+
+      if (window.StorageUtils && typeof window.StorageUtils.setItem === 'function') {
+        window.StorageUtils.setItem(key, visible ? 'true' : 'false');
+        return;
+      }
+      try {
+        localStorage.setItem(key, visible ? 'true' : 'false');
+      } catch (e) {
+        // no-op
+      }
+    }
+
+    applySavedFilesVisibility() {
+      if (this.readSavedFilesVisibility()) {
+        this.showFiles();
+      } else {
+        this.hideFiles();
+      }
     }
 
     // Utility function for debouncing

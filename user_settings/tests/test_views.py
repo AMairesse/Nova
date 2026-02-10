@@ -42,12 +42,14 @@ class GeneralSettingsViewTest(TestCase):
         self.assertTemplateUsed(response, "user_settings/fragments/general_form.html")
         self.assertIn("password_form", response.context)
         self.assertContains(response, "Change Password")
+        self.assertContains(response, "<form", count=2, html=False)
 
     def test_get_general_settings_full_page_includes_sections(self):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/general_form.html")
         self.assertContains(response, "Langfuse Configuration")
+        self.assertContains(response, "Continuous mode")
         self.assertContains(response, "API Token Management")
 
     def test_update_general_settings_form_htmx_refreshes_fragment(self):
@@ -56,6 +58,7 @@ class GeneralSettingsViewTest(TestCase):
             "langfuse_public_key": "pk_test",
             "langfuse_secret_key": "sk_test",
             "langfuse_host": "https://langfuse.example.com",
+            "continuous_default_messages_limit": "75",
             "api_token_status": "",
         }
         response = self.client.post(
@@ -71,6 +74,7 @@ class GeneralSettingsViewTest(TestCase):
         self.assertEqual(
             self.user_parameters.langfuse_host, "https://langfuse.example.com"
         )
+        self.assertEqual(self.user_parameters.continuous_default_messages_limit, 75)
 
     def test_update_general_settings_form_invalid_host_returns_errors(self):
         payload = {
@@ -78,6 +82,7 @@ class GeneralSettingsViewTest(TestCase):
             "langfuse_public_key": "",
             "langfuse_secret_key": "",
             "langfuse_host": "not-a-valid-url",
+            "continuous_default_messages_limit": "40",
             "api_token_status": "",
         }
         response = self.client.post(

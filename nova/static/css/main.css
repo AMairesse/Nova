@@ -253,6 +253,18 @@ body {
         transform: translateX(100%);
         pointer-events: none;
     }
+
+    /* Pre-paint preference (from localStorage) to avoid flash on reload. */
+    html.pref-files-hidden #message-area {
+        flex: 0 0 83.333333%;
+        max-width: 83.333333%;
+    }
+
+    html.pref-files-hidden #files-sidebar {
+        opacity: 0;
+        transform: translateX(100%);
+        pointer-events: none;
+    }
 }
 
 /* Message Area */

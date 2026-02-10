@@ -1,6 +1,7 @@
 # nova/models/UserObjects.py
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
@@ -9,6 +10,10 @@ from nova.utils import validate_relaxed_url
 
 
 class UserParameters(models.Model):
+    CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT = 40
+    CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN = 10
+    CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MAX = 200
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL,
                                 on_delete=models.CASCADE)
     allow_langfuse = models.BooleanField(default=False)
@@ -56,6 +61,15 @@ class UserParameters(models.Model):
     has_api_token = models.BooleanField(
         default=False,
         help_text=_("Whether user has generated an API token")
+    )
+
+    continuous_default_messages_limit = models.PositiveIntegerField(
+        default=CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT,
+        validators=[
+            MinValueValidator(CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN),
+            MaxValueValidator(CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MAX),
+        ],
+        help_text=_("Number of recent messages shown in Continuous mode when no day is selected."),
     )
 
     def __str__(self):

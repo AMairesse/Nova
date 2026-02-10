@@ -485,6 +485,7 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
             "langfuse_public_key",
             "langfuse_secret_key",
             "langfuse_host",
+            "continuous_default_messages_limit",
             "api_token_status",
         ]
         widgets = {
@@ -506,6 +507,14 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
         else:
             self.fields['api_token_status'].initial = _("No token generated")
 
+        self.fields["continuous_default_messages_limit"].widget.attrs.update(
+            {
+                "min": UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN,
+                "max": UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MAX,
+                "step": 1,
+            }
+        )
+
         # Crispy forms helper for better layout
         self.helper = FormHelper()
         self.helper.form_tag = False
@@ -517,6 +526,10 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
                 Field("langfuse_secret_key"),
                 Field("langfuse_host"),
                 css_class="mb-4"
+            ),
+            Div(
+                Field("continuous_default_messages_limit"),
+                css_class="mb-4",
             ),
             Div(
                 Field("api_token_status"),

@@ -27,6 +27,10 @@ class UserObjectsModelsTest(BaseTestCase):
         params = UserParameters.objects.get(user=self.user)
         self.assertEqual(params.user, self.user)
         self.assertFalse(params.allow_langfuse)
+        self.assertEqual(
+            params.continuous_default_messages_limit,
+            UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT,
+        )
 
     def test_user_profile_creation(self):
         """
