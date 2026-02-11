@@ -314,21 +314,22 @@
             // Create message element for the new message
             const messageElement = window.MessageRenderer.createMessageElement(messageData, thread_id);
 
-            // Add to message container
-            const messagesList = document.getElementById('messages-list');
-            if (messagesList) {
-                messagesList.appendChild(messageElement);
-            } else {
-                console.error('Messages list not found for new message');
-            }
-
-            // Update compact link visibility after adding new message
+            // Reuse MessageManager append flow to keep empty-state handling consistent.
             if (this.messageManager) {
-                this.messageManager.updateCompactLinkVisibility();
+                this.messageManager.appendMessage(messageElement);
+                return;
             }
 
-            // Scroll to bottom to show new message
-            this.messageManager.scrollToBottom();
+            const messagesList = document.getElementById('messages-list');
+            if (!messagesList) {
+                console.error('Messages list not found for new message');
+                return;
+            }
+            const emptyState = messagesList.querySelector('#messages-empty-state,[data-empty-state="true"]');
+            if (emptyState) {
+                emptyState.remove();
+            }
+            messagesList.appendChild(messageElement);
         }
 
         // Disable/enable the main input area while waiting for an interaction

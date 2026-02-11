@@ -302,6 +302,10 @@
         appendMessage(messageElement) {
             const messagesList = document.getElementById('messages-list');
             if (messagesList) {
+                const emptyState = messagesList.querySelector('#messages-empty-state,[data-empty-state="true"]');
+                if (emptyState) {
+                    emptyState.remove();
+                }
                 messagesList.appendChild(messageElement);
             } else {
                 console.error('Messages list not found!');
