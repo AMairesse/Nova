@@ -196,7 +196,10 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
         await _publish_task_update(task_id, "progress_update", {"progress_log": "Generating day summary..."})
         # Use the same underlying chat model as the agent; call it directly.
         llm = agent.create_llm_agent()
-        resp = await llm.ainvoke([HumanMessage(content=prompt)])
+        resp = await llm.ainvoke(
+            [HumanMessage(content=prompt)],
+            config=agent.silent_config,
+        )
         summary_md = (getattr(resp, "content", None) or str(resp)).strip()
 
         # Persist summary (sync ORM in sync_to_async).

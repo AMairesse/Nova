@@ -104,6 +104,14 @@ register_provider(
 # --------------------------------------------------------------------- #
 
 
+def create_provider_llm(provider: LLMProvider):
+    """Create a LangChain chat model from a provider configuration."""
+    factory = _provider_factories.get(provider.provider_type)
+    if not factory:
+        raise ValueError(f"Unsupported provider type: {provider.provider_type}")
+    return factory(provider)
+
+
 class LLMAgent:
     @classmethod
     def fetch_user_params_sync(cls, user):
@@ -281,14 +289,17 @@ class LLMAgent:
                 langfuse_handler = CallbackHandler(public_key=langfuse_public_key)
                 self._langfuse_handler = langfuse_handler
 
-                if langfuse.auth_check():
-                    self.config = {"callbacks": [langfuse_handler],
-                                   "metadata": {
-                                     "langfuse_session_id": str(langgraph_thread_id),
-                                  },
-                                  }
-                else:
-                    self.config = {}
+                if not langfuse.auth_check():
+                    logger.warning(
+                        "Langfuse auth check failed for user %s. Tracing will still be attempted.",
+                        getattr(self.user, "id", "unknown"),
+                    )
+                self.config = {
+                    "callbacks": [langfuse_handler],
+                    "metadata": {
+                        "langfuse_session_id": str(langgraph_thread_id),
+                    },
+                }
             except Exception as e:
                 logger.error(f"Failed to create Langfuse client: {e}",
                              exc_info=e)  # Log error but continue without
@@ -363,12 +374,7 @@ class LLMAgent:
         if not self._llm_provider:
             raise Exception("No LLM provider configured")
 
-        provider = self._llm_provider
-
-        factory = _provider_factories.get(provider.provider_type)
-        if not factory:
-            raise ValueError(f"Unsupported provider type: {provider.provider_type}")
-        return factory(provider)
+        return create_provider_llm(self._llm_provider)
 
     async def ainvoke(self, question: str, silent_mode=False):
         config = self.silent_config if silent_mode else self.config

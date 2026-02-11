@@ -173,6 +173,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         fake_llm.ainvoke.return_value = SimpleNamespace(content="## Summary\nAll good")
         fake_agent = SimpleNamespace(
             create_llm_agent=lambda: fake_llm,
+            silent_config={"callbacks": ["langfuse"]},
             cleanup=AsyncMock(),
         )
         mocked_create_agent.return_value = fake_agent
@@ -192,6 +193,9 @@ class ConversationTasksDbTests(TransactionTestCase):
         emb = DaySegmentEmbedding.objects.get(day_segment=seg)
         self.assertEqual(emb.state, "pending")
         mocked_delay.assert_called_once_with(emb.id)
+        fake_llm.ainvoke.assert_awaited_once()
+        _, invoke_kwargs = fake_llm.ainvoke.await_args
+        self.assertEqual(invoke_kwargs["config"], fake_agent.silent_config)
         fake_agent.cleanup.assert_awaited_once()
         self.assertTrue(any(call.args[1] == "continuous_summary_ready" for call in mocked_publish.await_args_list))
 

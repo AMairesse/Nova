@@ -15,6 +15,14 @@
             this.messageManager = manager;
         }
 
+        updateThreadSubject(threadId, threadSubject) {
+            if (!threadId || !threadSubject) return;
+            const links = document.querySelectorAll(`.thread-link[data-thread-id="${threadId}"]`);
+            links.forEach(a => {
+                a.textContent = threadSubject;
+            });
+        }
+
         createMessageElement(task_id) {
             // Create agent message element with a streaming class
             const agentMessageEl = window.MessageRenderer.createMessageElement({
@@ -179,12 +187,12 @@
                 'task_complete': (data) => {
                     // Update thread title in sidebars if backend provided it
                     if (data.thread_id && data.thread_subject) {
-                        const links = document.querySelectorAll(`.thread-link[data-thread-id="${data.thread_id}"]`);
-                        links.forEach(a => {
-                            a.textContent = data.thread_subject;
-                        });
+                        this.updateThreadSubject(data.thread_id, data.thread_subject);
                     }
                     this.onStreamComplete(taskId);
+                },
+                'thread_subject_updated': (data) => {
+                    this.updateThreadSubject(data.thread_id, data.thread_subject);
                 },
                 'user_prompt': (data) => {
                     this.onUserPrompt(taskId, data);

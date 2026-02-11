@@ -112,7 +112,10 @@ Conversation:
 Summary:"""
 
         try:
-            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            invoke_kwargs = {}
+            if self.agent and getattr(self.agent, "silent_config", None):
+                invoke_kwargs["config"] = self.agent.silent_config
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)], **invoke_kwargs)
             return response.content.strip()
         except Exception as e:
             logger.warning(f"LLM summarization failed: {e}")

@@ -1,5 +1,6 @@
 # nova/tests/test_summarization_middleware.py
 import asyncio
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
@@ -161,6 +162,7 @@ class SummarizerAgentTest(BaseTestCase):
         mock_response.content = "Test summary"
         mock_llm.ainvoke.return_value = mock_response
         self.summarizer.llm = mock_llm
+        self.summarizer.agent = SimpleNamespace(silent_config={"callbacks": ["langfuse"]})
 
         messages = [
             HumanMessage(content="Hello"),
@@ -170,7 +172,9 @@ class SummarizerAgentTest(BaseTestCase):
         result = await self.summarizer._summarize_conversation(messages, 100)
 
         # Verify LLM was called
-        mock_llm.ainvoke.assert_called_once()
+        mock_llm.ainvoke.assert_awaited_once()
+        _, invoke_kwargs = mock_llm.ainvoke.await_args
+        self.assertEqual(invoke_kwargs["config"], {"callbacks": ["langfuse"]})
         self.assertEqual(result, "Test summary")
 
     async def test_summarize_conversation_llm_failure(self):

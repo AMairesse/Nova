@@ -2,15 +2,17 @@
 import asyncio
 import datetime as dt
 import logging
-from asgiref.sync import sync_to_async
+from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
 from celery import shared_task
+from channels.layers import get_channel_layer
 
 from django.contrib.auth.models import User
 from django.utils import timezone
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from nova.llm.checkpoints import get_checkpointer
+from nova.llm.llm_agent import LLMAgent, create_provider_llm
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
@@ -21,12 +23,18 @@ from nova.models.Thread import Thread
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
+from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 
 logger = logging.getLogger(__name__)
 
 TRIGGER_TASK_MAX_RETRIES = 5
 TRIGGER_TASK_RETRY_BASE_SECONDS = 30
 TRIGGER_TASK_RETRY_MAX_SECONDS = 15 * 60
+THREAD_TITLE_PROMPT = (
+    "Generate a concise thread title (2-6 words) from this conversation excerpt. "
+    "Use the same language as the conversation. "
+    "Return title only, with no punctuation wrapper and no explanation."
+)
 
 
 def compute_trigger_retry_countdown(retries: int) -> int:
@@ -102,20 +110,21 @@ class AgentTaskExecutor (TaskExecutor):
         })
         await sync_to_async(message.save, thread_sensitive=False)()
 
-        # Update thread subject if needed
-        await self._update_thread_subject()
+        # Trigger title generation asynchronously when the thread still has its default title.
+        await self._enqueue_thread_title_generation()
 
-    async def _update_thread_subject(self):
-        """Update thread subject if it's a default title."""
-        if self.thread.subject.startswith("thread n°"):
-            title = await self.llm.ainvoke(
-                "Give a short title for this conversation (1–3 words). "
-                "Use the same language as the conversation. "
-                "Answer by giving only the title, nothing else.",
-                silent_mode=True
-            )
-            self.thread.subject = title.strip()
-            await sync_to_async(self.thread.save, thread_sensitive=False)()
+    async def _enqueue_thread_title_generation(self):
+        """Schedule thread title generation asynchronously for default subjects."""
+        if not self.thread or not self.agent_config:
+            return
+        if not is_default_thread_subject(self.thread.subject):
+            return
+        await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
+            thread_id=self.thread.id,
+            user_id=self.user.id,
+            agent_config_id=self.agent_config.id,
+            source_task_id=self.task.id,
+        )
 
 
 class ContextConsumptionTracker:
@@ -194,6 +203,148 @@ async def delete_checkpoints(ckp_id):
         await checkpointer.adelete_thread(ckp_id)
     finally:
         await checkpointer.conn.close()
+
+
+def _build_langfuse_invoke_config(user, *, session_id: str):
+    """Build Langfuse callbacks/config for direct LLM invocations outside LangGraph."""
+    try:
+        allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = LLMAgent.fetch_user_params_sync(user)
+    except Exception:
+        logger.warning(
+            "Could not load Langfuse user parameters for user %s. Continuing without tracing.",
+            getattr(user, "id", "unknown"),
+        )
+        return {}, None
+    if not (allow_langfuse and langfuse_public_key and langfuse_secret_key):
+        return {}, None
+
+    try:
+        from langfuse import Langfuse
+        from langfuse.langchain import CallbackHandler
+
+        client = Langfuse(
+            public_key=langfuse_public_key,
+            secret_key=langfuse_secret_key,
+            host=langfuse_host,
+        )
+        if not client.auth_check():
+            logger.warning(
+                "Langfuse auth check failed for user %s during direct LLM call. Tracing will still be attempted.",
+                getattr(user, "id", "unknown"),
+            )
+
+        invoke_config = {
+            "callbacks": [CallbackHandler(public_key=langfuse_public_key)],
+            "metadata": {
+                "langfuse_session_id": session_id,
+            },
+        }
+        return invoke_config, client
+    except Exception:
+        logger.exception(
+            "Failed to initialize Langfuse callback for direct LLM call (user_id=%s).",
+            getattr(user, "id", "unknown"),
+        )
+        return {}, None
+
+
+def _build_thread_title_prompt(messages: list[Message]) -> str:
+    """Build a short prompt from the first thread messages."""
+    lines = []
+    for msg in messages:
+        role = "User" if msg.actor == Actor.USER else "Agent"
+        text = (msg.text or "").strip()
+        if not text:
+            continue
+        lines.append(f"{role}: {text}")
+    transcript = "\n".join(lines)
+    return f"{THREAD_TITLE_PROMPT}\n\nConversation excerpt:\n{transcript}\n\nTitle:"
+
+
+def _publish_thread_subject_update(source_task_id: int | None, thread_id: int, thread_subject: str) -> None:
+    """Push a websocket update so the sidebar title updates live in the UI."""
+    if not source_task_id:
+        return
+    channel_layer = get_channel_layer()
+    if not channel_layer:
+        return
+
+    async_to_sync(channel_layer.group_send)(
+        f"task_{source_task_id}",
+        {
+            "type": "task_update",
+            "message": {
+                "type": "thread_subject_updated",
+                "thread_id": thread_id,
+                "thread_subject": thread_subject,
+            },
+        },
+    )
+
+
+@shared_task(bind=True, name="generate_thread_title")
+def generate_thread_title_task(
+    self,
+    *,
+    thread_id: int,
+    user_id: int,
+    agent_config_id: int,
+    source_task_id: int | None = None,
+):
+    """Generate a short thread title asynchronously without touching agent checkpoints."""
+    try:
+        thread = Thread.objects.select_related("user").get(id=thread_id, user_id=user_id)
+        if not is_default_thread_subject(thread.subject):
+            return {"status": "skipped", "reason": "subject_already_customized"}
+
+        messages = list(
+            Message.objects.filter(thread_id=thread_id, actor__in=[Actor.USER, Actor.AGENT])
+            .order_by("created_at", "id")[:4]
+        )
+        if len(messages) < 2:
+            return {"status": "skipped", "reason": "not_enough_messages"}
+
+        agent_config = AgentConfig.objects.select_related("llm_provider").get(id=agent_config_id, user_id=user_id)
+        llm = create_provider_llm(agent_config.llm_provider)
+
+        invoke_config, langfuse_client = _build_langfuse_invoke_config(
+            thread.user,
+            session_id=f"thread_title_{thread_id}",
+        )
+        try:
+            response = asyncio.run(
+                llm.ainvoke(
+                    [HumanMessage(content=_build_thread_title_prompt(messages))],
+                    config=invoke_config or None,
+                )
+            )
+        finally:
+            if langfuse_client is not None:
+                try:
+                    langfuse_client.flush()
+                    langfuse_client.shutdown()
+                except Exception:
+                    logger.warning("Failed to cleanup Langfuse client for thread title generation.")
+
+        raw_title = getattr(response, "content", None) or str(response)
+        normalized_title = normalize_generated_thread_title(raw_title)
+        if not normalized_title:
+            return {"status": "skipped", "reason": "empty_generated_title"}
+
+        # Do not overwrite if subject changed since task start (manual rename or parallel update).
+        updated = Thread.objects.filter(
+            id=thread_id,
+            user_id=user_id,
+            subject=thread.subject,
+        ).update(subject=normalized_title)
+        if not updated:
+            return {"status": "skipped", "reason": "subject_changed_during_generation"}
+
+        _publish_thread_subject_update(source_task_id, thread_id, normalized_title)
+        return {"status": "ok", "thread_id": thread_id, "thread_subject": normalized_title}
+    except Exception as e:
+        logger.error("Thread title generation failed for thread %s: %s", thread_id, e, exc_info=True)
+        raise
 
 
 @shared_task(bind=True, name="run_ai_task")
