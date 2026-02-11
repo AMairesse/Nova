@@ -57,6 +57,17 @@ class TaskDefinitionForm(ModelForm):
                 Q(tool_subtype="email"),
                 Q(user=self.user) | Q(user__isnull=True),
             )
+            # Used by the UI warning for email-triggered tasks.
+            self.agent_email_tool_ids_map = {
+                str(agent.pk): [
+                    str(tool.pk)
+                    for tool in agent.tools.all()
+                    if tool.tool_subtype == "email"
+                ]
+                for agent in self.fields["agent"].queryset.prefetch_related("tools")
+            }
+        else:
+            self.agent_email_tool_ids_map = {}
 
         self.fields["trigger_type"].label = _("Trigger")
         self.fields["run_mode"].help_text = _(
@@ -69,6 +80,58 @@ class TaskDefinitionForm(ModelForm):
         self.fields["poll_interval_minutes"].help_text = _(
             "Email polling interval in minutes (1 to 15)."
         )
+
+    def _selected_value(self, field_name: str) -> str:
+        if self.is_bound:
+            value = self.data.get(self.add_prefix(field_name))
+        elif field_name in {"agent", "email_tool"}:
+            value = getattr(self.instance, f"{field_name}_id", None) or self.initial.get(field_name)
+        else:
+            value = getattr(self.instance, field_name, None) or self.initial.get(field_name)
+
+        if value in ("", None):
+            return ""
+        return str(value)
+
+    def _choice_values(self, field_name: str) -> set[str]:
+        return {
+            str(choice_value)
+            for choice_value, _ in self.fields[field_name].choices
+            if choice_value not in ("", None)
+        }
+
+    def _choice_label(self, field_name: str, selected_value: str) -> str:
+        for choice_value, choice_label in self.fields[field_name].choices:
+            if str(choice_value) == str(selected_value):
+                return str(choice_label)
+        return selected_value
+
+    def get_email_tool_access_warning(self) -> dict | None:
+        """Return a warning payload when email trigger tool is not available to the selected agent."""
+        if self._selected_value("trigger_type") != TaskDefinition.TriggerType.EMAIL_POLL:
+            return None
+
+        agent_id = self._selected_value("agent")
+        email_tool_id = self._selected_value("email_tool")
+        if not agent_id or not email_tool_id:
+            return None
+
+        if (
+            agent_id not in self._choice_values("agent")
+            or email_tool_id not in self._choice_values("email_tool")
+        ):
+            return None
+
+        allowed_email_tool_ids = set(self.agent_email_tool_ids_map.get(agent_id, []))
+        if email_tool_id in allowed_email_tool_ids:
+            return None
+
+        return {
+            "agent_id": agent_id,
+            "agent_label": self._choice_label("agent", agent_id),
+            "email_tool_id": email_tool_id,
+            "email_tool_label": self._choice_label("email_tool", email_tool_id),
+        }
 
     def clean(self):
         cleaned_data = super().clean()
@@ -127,6 +190,7 @@ def task_create(request):
     context = {
         "form": form,
         "title": _("Create Task"),
+        "email_tool_access_warning": form.get_email_tool_access_warning(),
     }
     return render(request, "user_settings/task_form.html", context)
 
@@ -154,6 +218,7 @@ def task_edit(request, pk):
         "form": form,
         "task": task,
         "title": _("Edit Task"),
+        "email_tool_access_warning": form.get_email_tool_access_warning(),
     }
     return render(request, "user_settings/task_form.html", context)
 

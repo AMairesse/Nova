@@ -90,7 +90,20 @@
 
                         {{ form.timezone|as_crispy_field }}
                         {{ form.email_tool|as_crispy_field }}
+                        <div class="alert alert-warning py-2 px-3" id="email_tool_access_warning"
+                             data-warning-template="{% trans 'The selected agent does not have access to the email tool {tool}. It can still use email trigger variables, but it will not be able to call this mail tool directly.' %}"
+                             {% if not email_tool_access_warning %}hidden{% endif %}>
+                            <div class="small fw-semibold mb-1">
+                                {% trans "Agent email tool access" %}
+                            </div>
+                            <div class="small mb-0" id="email_tool_access_warning_text">
+                                {% if email_tool_access_warning %}
+                                    {% blocktrans with tool_name=email_tool_access_warning.email_tool_label %}The selected agent does not have access to the email tool {{ tool_name }}. It can still use email trigger variables, but it will not be able to call this mail tool directly.{% endblocktrans %}
+                                {% endif %}
+                            </div>
+                        </div>
                         {{ form.poll_interval_minutes|as_crispy_field }}
+                        {{ form.agent_email_tool_ids_map|json_script:"agent_email_tool_ids_map" }}
 
                         <div class="d-flex justify-content-between">
                             <a href="{% url 'user_settings:tasks' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
