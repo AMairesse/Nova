@@ -159,7 +159,7 @@ class SummarizerAgentTest(BaseTestCase):
         # Setup mock LLM
         mock_llm = AsyncMock()
         mock_response = MagicMock()
-        mock_response.content = "Test summary"
+        mock_response.content = "[THINK]internal[/THINK] Test summary"
         mock_llm.ainvoke.return_value = mock_response
         self.summarizer.llm = mock_llm
         self.summarizer.agent = SimpleNamespace(silent_config={"callbacks": ["langfuse"]})

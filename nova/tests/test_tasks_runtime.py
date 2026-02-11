@@ -156,7 +156,7 @@ class GenerateThreadTitleTaskTests(SimpleTestCase):
         mocked_agent_select_related.return_value.get.return_value = agent_config
 
         fake_llm = AsyncMock()
-        fake_llm.ainvoke.return_value = SimpleNamespace(content="Trip planning")
+        fake_llm.ainvoke.return_value = SimpleNamespace(content="[THINK]internal[/THINK]\nTrip planning")
         mocked_create_provider_llm.return_value = fake_llm
 
         mocked_thread_filter.return_value.update.return_value = 1

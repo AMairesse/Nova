@@ -24,6 +24,7 @@ from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
+from nova.utils import strip_thinking_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +327,7 @@ def generate_thread_title_task(
                 except Exception:
                     logger.warning("Failed to cleanup Langfuse client for thread title generation.")
 
-        raw_title = getattr(response, "content", None) or str(response)
+        raw_title = strip_thinking_blocks(getattr(response, "content", None) or str(response))
         normalized_title = normalize_generated_thread_title(raw_title)
         if not normalized_title:
             return {"status": "skipped", "reason": "empty_generated_title"}

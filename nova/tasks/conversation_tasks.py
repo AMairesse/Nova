@@ -20,6 +20,7 @@ from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
 from nova.models.UserObjects import UserProfile
 from nova.tasks.conversation_embedding_tasks import compute_day_segment_embedding_task
+from nova.utils import strip_thinking_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
             [HumanMessage(content=prompt)],
             config=agent.silent_config,
         )
-        summary_md = (getattr(resp, "content", None) or str(resp)).strip()
+        summary_md = strip_thinking_blocks(getattr(resp, "content", None) or str(resp))
 
         # Persist summary (sync ORM in sync_to_async).
         def _persist():

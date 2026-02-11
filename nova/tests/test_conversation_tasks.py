@@ -170,7 +170,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
 
         fake_llm = AsyncMock()
-        fake_llm.ainvoke.return_value = SimpleNamespace(content="## Summary\nAll good")
+        fake_llm.ainvoke.return_value = SimpleNamespace(content="[THINK]internal[/THINK]\n## Summary\nAll good")
         fake_agent = SimpleNamespace(
             create_llm_agent=lambda: fake_llm,
             silent_config={"callbacks": ["langfuse"]},
@@ -189,6 +189,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         self.assertEqual(result["status"], "ok")
         seg.refresh_from_db()
         self.assertIn("## Summary", seg.summary_markdown)
+        self.assertNotIn("[THINK]", seg.summary_markdown)
         self.assertEqual(seg.summary_until_message_id, m2.id)
         emb = DaySegmentEmbedding.objects.get(day_segment=seg)
         self.assertEqual(emb.state, "pending")
