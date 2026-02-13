@@ -207,6 +207,45 @@ class UserSettingsTasksViewsTests(TestCase):
         task.refresh_from_db()
         self.assertTrue(task.is_active)
 
+    def test_task_view_renders_maintenance_details_and_prompt_template(self):
+        task = self._create_maintenance_task(name="Nightly summaries")
+
+        response = self.client.get(reverse("user_settings:task_view", args=[task.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nightly summaries")
+        self.assertContains(response, "continuous_nightly_daysegment_summaries_for_user")
+        self.assertContains(response, "You are generating a day summary for a continuous discussion.")
+        self.assertContains(response, "{{day_label}}")
+        self.assertContains(response, "{{transcript}}")
+
+    def test_task_view_rejects_other_user_task(self):
+        other_provider = create_provider(self.other, name="provider-other-task-view")
+        other_agent = create_agent(self.other, other_provider, name="agent-other-task-view")
+        foreign_task = TaskDefinition.objects.create(
+            user=self.other,
+            name="Other user task",
+            task_kind=TaskDefinition.TaskKind.AGENT,
+            trigger_type=TaskDefinition.TriggerType.CRON,
+            agent=other_agent,
+            prompt="x",
+            run_mode=TaskDefinition.RunMode.NEW_THREAD,
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+            is_active=True,
+        )
+
+        response = self.client.get(reverse("user_settings:task_view", args=[foreign_task.id]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_tasks_list_shows_view_button_for_maintenance_task(self):
+        task = self._create_maintenance_task(name="Inspect me")
+
+        response = self.client.get(reverse("user_settings:tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("user_settings:task_view", args=[task.id]))
+
     @patch("user_settings.views.tasks.run_task_definition_cron.delay")
     @patch("user_settings.views.tasks.poll_task_definition_email.delay")
     @patch("user_settings.views.tasks.run_task_definition_maintenance.delay")

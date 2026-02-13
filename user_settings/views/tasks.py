@@ -148,6 +148,28 @@ class TaskDefinitionForm(ModelForm):
         return cleaned_data
 
 
+def _build_maintenance_doc(task: TaskDefinition) -> dict | None:
+    """Return read-only documentation context for known maintenance tasks."""
+    if (task.maintenance_task or "").strip() == "continuous_nightly_daysegment_summaries_for_user":
+        from nova.tasks.conversation_tasks import _build_day_summary_prompt
+
+        return {
+            "title": _("Nightly day summaries"),
+            "description": _(
+                "This maintenance task scans your Continuous day segments and refreshes summaries for days "
+                "that need an update."
+            ),
+            "steps": [
+                _("Find day segments with missing or stale summaries."),
+                _("Build a transcript window for each selected day."),
+                _("Generate a Markdown summary with the default agent."),
+                _("Store the summary and trigger embedding refresh."),
+            ],
+            "prompt_template": _build_day_summary_prompt("{{day_label}}", "{{transcript}}"),
+        }
+    return None
+
+
 @login_required
 def tasks_list(request):
     """List all user task definitions."""
@@ -221,6 +243,18 @@ def task_edit(request, pk):
         "email_tool_access_warning": form.get_email_tool_access_warning(),
     }
     return render(request, "user_settings/task_form.html", context)
+
+
+@login_required
+def task_view(request, pk):
+    """Display task definition details in read-only mode."""
+    task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
+    context = {
+        "task": task,
+        "maintenance_doc": _build_maintenance_doc(task),
+        "title": _("Task details"),
+    }
+    return render(request, "user_settings/task_detail.html", context)
 
 
 @login_required

@@ -140,6 +140,7 @@
                     <div class="text-end">
                         <span class="badge bg-info">{% trans "Maintenance" %}</span>
                         <div class="mt-2">
+                            <a href="{% url 'user_settings:task_view' task.pk %}" class="btn btn-sm btn-outline-primary">{% trans "View" %}</a>
                             <a href="{% url 'user_settings:task_run_now' task.pk %}" class="btn btn-sm btn-outline-secondary">{% trans "Run Now" %}</a>
                             {% if task.last_error %}
                             <a href="{% url 'user_settings:task_clear_error' task.pk %}" class="btn btn-sm btn-outline-info">{% trans "Clear Error" %}</a>
