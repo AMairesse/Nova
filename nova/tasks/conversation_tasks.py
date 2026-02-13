@@ -132,6 +132,7 @@ def _build_day_summary_prompt_with_context(
 async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: str | None = None) -> dict:
     # Django ORM is synchronous and must not run in an async context.
     # Use sync_to_async for all DB access.
+    force_full_refresh = (mode or "").strip().lower() == "manual"
 
     async def _fetch_segment_and_messages() -> Tuple[
         Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool
@@ -164,7 +165,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                 qs = qs.filter(created_at__lt=end_dt)
 
             current_summary = (segment.summary_markdown or "").strip()
-            delta_mode = bool(current_summary and segment.summary_until_message_id)
+            delta_mode = (not force_full_refresh) and bool(current_summary and segment.summary_until_message_id)
             if delta_mode:
                 qs = qs.filter(id__gt=segment.summary_until_message_id)
 

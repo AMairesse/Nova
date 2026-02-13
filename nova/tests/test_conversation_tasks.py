@@ -202,6 +202,50 @@ class ConversationTasksDbTests(TransactionTestCase):
         fake_agent.cleanup.assert_awaited_once()
         self.assertTrue(any(call.args[1] == "continuous_summary_ready" for call in mocked_publish.await_args_list))
 
+    @patch("nova.tasks.conversation_tasks.compute_day_segment_embedding_task.delay")
+    @patch("nova.tasks.conversation_tasks.LLMAgent.create", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)
+    def test_manual_regenerate_ignores_delta_boundary(self, mocked_publish, mocked_create_agent, mocked_delay):
+        m1 = self.thread.add_message("Initial context", actor=Actor.USER)
+        m2 = self.thread.add_message("Initial answer", actor=Actor.AGENT)
+        seg = DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=timezone.now().date(),
+            starts_at_message=m1,
+            summary_markdown="Old summary",
+            summary_until_message=m2,
+        )
+        UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
+
+        fake_checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
+        fake_agent = SimpleNamespace(
+            ainvoke=AsyncMock(return_value="## Summary\nRegenerated"),
+            checkpointer=fake_checkpointer,
+            cleanup=AsyncMock(),
+        )
+        mocked_create_agent.return_value = fake_agent
+
+        result = asyncio.run(
+            conversation_tasks._summarize_day_segment_async(
+                day_segment_id=seg.id,
+                mode="manual",
+                task_id="task-manual-regenerate",
+            )
+        )
+
+        self.assertEqual(result["status"], "ok")
+        fake_agent.ainvoke.assert_awaited_once()
+        prompt = fake_agent.ainvoke.await_args.args[0]
+        self.assertIn("Messages for this day:", prompt)
+        self.assertNotIn("New messages since the previous summary for this day", prompt)
+        seg.refresh_from_db()
+        self.assertEqual(seg.summary_markdown, "## Summary\nRegenerated")
+        self.assertEqual(seg.summary_until_message_id, m2.id)
+        emb = DaySegmentEmbedding.objects.get(day_segment=seg)
+        mocked_delay.assert_called_once_with(emb.id)
+        self.assertTrue(any(call.args[1] == "task_complete" for call in mocked_publish.await_args_list))
+
     @patch("nova.tasks.conversation_tasks.summarize_day_segment_task.delay")
     @patch("nova.tasks.conversation_tasks._daysegment_needs_nightly_refresh")
     def test_nightly_task_queues_only_needed_segments(self, mocked_needs_refresh, mocked_delay):
