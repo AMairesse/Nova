@@ -101,6 +101,29 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             await executor._enqueue_thread_title_generation()
         mocked_delay.assert_not_called()
 
+    async def test_enqueue_thread_title_generation_ignores_publish_failures(self):
+        task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
+        thread = SimpleNamespace(id=42, subject="New thread 42")
+        agent_config = SimpleNamespace(id=9, llm_provider=SimpleNamespace(max_context_tokens=1000))
+        executor = AgentTaskExecutor(
+            task=task,
+            user=SimpleNamespace(id=1),
+            thread=thread,
+            agent_config=agent_config,
+            prompt="hello",
+        )
+
+        with (
+            patch("nova.tasks.tasks.generate_thread_title_task.delay", side_effect=RuntimeError("broker down")),
+            self.assertLogs("nova.tasks.tasks", level="WARNING") as logs,
+        ):
+            await executor._enqueue_thread_title_generation()
+
+        self.assertTrue(
+            any("Could not enqueue thread title generation" in line for line in logs.output),
+            logs.output,
+        )
+
     async def test_process_result_updates_message_and_context_info(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock(), result=None)
         message = SimpleNamespace(internal_data={}, save=Mock())

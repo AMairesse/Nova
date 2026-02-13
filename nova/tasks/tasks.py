@@ -120,12 +120,20 @@ class AgentTaskExecutor (TaskExecutor):
             return
         if not is_default_thread_subject(self.thread.subject):
             return
-        await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
-            thread_id=self.thread.id,
-            user_id=self.user.id,
-            agent_config_id=self.agent_config.id,
-            source_task_id=self.task.id,
-        )
+        try:
+            await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
+                thread_id=self.thread.id,
+                user_id=self.user.id,
+                agent_config_id=self.agent_config.id,
+                source_task_id=self.task.id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not enqueue thread title generation (thread_id=%s, task_id=%s): %s",
+                getattr(self.thread, "id", None),
+                getattr(self.task, "id", None),
+                exc,
+            )
 
 
 class ContextConsumptionTracker:
