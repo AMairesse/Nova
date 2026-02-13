@@ -302,6 +302,10 @@
         appendMessage(messageElement) {
             const messagesList = document.getElementById('messages-list');
             if (messagesList) {
+                const emptyState = messagesList.querySelector('#messages-empty-state,[data-empty-state="true"]');
+                if (emptyState) {
+                    emptyState.remove();
+                }
                 messagesList.appendChild(messageElement);
             } else {
                 console.error('Messages list not found!');
@@ -357,6 +361,7 @@
         updateCompactLinkVisibility() {
             const messagesList = document.getElementById('messages-list');
             if (!messagesList) return;
+            const isContinuousPage = Boolean(window.NovaApp?.isContinuousPage);
 
             // Get all messages and agent messages
             const allMessages = messagesList.querySelectorAll('.message');
@@ -369,6 +374,9 @@
                     compactLink.classList.add('d-none');
                 }
             });
+            if (isContinuousPage) {
+                return;
+            }
 
             // Show compact link only on the last agent message if there are enough messages for compaction
             // (more messages than preserve_recent setting - we assume default of 2 for client-side)
@@ -420,6 +428,9 @@
         }
 
         async summarizeCurrentThread() {
+            if (window.NovaApp?.isContinuousPage) {
+                return;
+            }
             if (!this.currentThreadId) {
                 alert('No thread selected');
                 return;

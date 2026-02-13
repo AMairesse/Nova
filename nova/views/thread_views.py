@@ -15,6 +15,7 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
+from nova.thread_titles import build_default_thread_subject
 from nova.utils import markdown_to_html
 import logging
 
@@ -202,7 +203,7 @@ def message_list(request):
 
 def new_thread(request):
     count = Thread.objects.filter(user=request.user).count() + 1
-    thread_subject = f"thread n°{count}"
+    thread_subject = build_default_thread_subject(count)
     thread = Thread.objects.create(subject=thread_subject, user=request.user)
     thread_html = render_to_string('nova/partials/_thread_item.html',
                                    {'thread': thread}, request=request)

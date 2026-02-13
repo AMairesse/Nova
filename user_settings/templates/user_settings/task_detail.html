@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-md-9">
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">{{ task.name }}</h5>
+                    {% if task.task_kind == "maintenance" %}
+                    <span class="badge bg-info">{% trans "Maintenance" %}</span>
+                    {% elif task.is_active %}
+                    <span class="badge bg-success">{% trans "Active" %}</span>
+                    {% else %}
+                    <span class="badge bg-secondary">{% trans "Inactive" %}</span>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-4">{% trans "Task kind" %}</dt>
+                        <dd class="col-sm-8">{{ task.get_task_kind_display }}</dd>
+
+                        <dt class="col-sm-4">{% trans "Trigger" %}</dt>
+                        <dd class="col-sm-8">{{ task.get_trigger_type_display }}</dd>
+
+                        <dt class="col-sm-4">{% trans "Schedule" %}</dt>
+                        <dd class="col-sm-8">
+                            {{ task.get_schedule_description }}
+                            {% if task.trigger_type == "cron" %}
+                            ({{ task.timezone }})
+                            {% endif %}
+                        </dd>
+
+                        {% if task.task_kind == "agent" %}
+                        <dt class="col-sm-4">{% trans "Agent" %}</dt>
+                        <dd class="col-sm-8">{{ task.agent.name }}</dd>
+
+                        <dt class="col-sm-4">{% trans "Run mode" %}</dt>
+                        <dd class="col-sm-8">{{ task.get_run_mode_display }}</dd>
+
+                        <dt class="col-sm-4">{% trans "Prompt" %}</dt>
+                        <dd class="col-sm-8">
+                            <pre class="bg-light border rounded p-3 mb-0 small">{{ task.prompt|default:"" }}</pre>
+                        </dd>
+                        {% else %}
+                        <dt class="col-sm-4">{% trans "Maintenance task" %}</dt>
+                        <dd class="col-sm-8"><code>{{ task.maintenance_task }}</code></dd>
+                        {% endif %}
+
+                        {% if task.last_run_at %}
+                        <dt class="col-sm-4">{% trans "Last run" %}</dt>
+                        <dd class="col-sm-8">{{ task.last_run_at|date:"Y-m-d H:i" }}</dd>
+                        {% endif %}
+
+                        {% if task.last_error %}
+                        <dt class="col-sm-4">{% trans "Last error" %}</dt>
+                        <dd class="col-sm-8 text-danger">{{ task.last_error }}</dd>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+
+            {% if maintenance_doc %}
+            <div class="card mb-3">
+                <div class="card-header">
+                    <h6 class="mb-0">{{ maintenance_doc.title }}</h6>
+                </div>
+                <div class="card-body">
+                    <p class="mb-3 text-muted">{{ maintenance_doc.description }}</p>
+                    <ul class="mb-3">
+                        {% for step in maintenance_doc.steps %}
+                        <li>{{ step }}</li>
+                        {% endfor %}
+                    </ul>
+                    <label class="form-label mb-1">{% trans "Summary prompt template" %}</label>
+                    <pre class="bg-light border rounded p-3 mb-0 small">{{ maintenance_doc.prompt_template }}</pre>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="d-flex justify-content-between">
+                <a href="{% url 'user_settings:tasks' %}" class="btn btn-secondary">{% trans "Back" %}</a>
+                {% if task.task_kind == "agent" %}
+                <a href="{% url 'user_settings:task_edit' task.pk %}" class="btn btn-primary">{% trans "Edit" %}</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

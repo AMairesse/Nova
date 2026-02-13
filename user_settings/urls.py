@@ -36,6 +36,7 @@ from user_settings.views.tasks import (
     task_edit,
     task_run_now,
     task_toggle_active,
+    task_view,
     tasks_list,
 )
 
@@ -90,6 +91,7 @@ urlpatterns += [
     # Tasks
     path("tasks/", tasks_list, name="tasks"),
     path("tasks/add/", task_create, name="task_create"),
+    path("tasks/<int:pk>/view/", task_view, name="task_view"),
     path("tasks/<int:pk>/edit/", task_edit, name="task_edit"),
     path("tasks/<int:pk>/delete/", task_delete, name="task_delete"),
     path("tasks/<int:pk>/toggle-active/", task_toggle_active, name="task_toggle_active"),

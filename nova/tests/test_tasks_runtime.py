@@ -14,6 +14,7 @@ from nova.tasks.tasks import (
     ContextConsumptionTracker,
     SummarizationTaskExecutor,
     delete_checkpoints,
+    generate_thread_title_task,
     resume_ai_task_celery,
     run_ai_task_celery,
     summarize_thread_task,
@@ -74,29 +75,54 @@ class ContextConsumptionTrackerTests(IsolatedAsyncioTestCase):
 
 
 class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
-    async def test_update_thread_subject_only_for_default_titles(self):
+    async def test_enqueue_thread_title_generation_only_for_default_titles(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
-        thread = SimpleNamespace(subject="thread n°42", save=Mock())
+        thread = SimpleNamespace(id=42, subject="New thread 42")
+        agent_config = SimpleNamespace(id=9, llm_provider=SimpleNamespace(max_context_tokens=1000))
         executor = AgentTaskExecutor(
             task=task,
             user=SimpleNamespace(id=1),
             thread=thread,
-            agent_config=SimpleNamespace(llm_provider=SimpleNamespace(max_context_tokens=1000)),
+            agent_config=agent_config,
             prompt="hello",
         )
-        executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Refined Title"))
 
-        await executor._update_thread_subject()
+        with patch("nova.tasks.tasks.generate_thread_title_task.delay") as mocked_delay:
+            await executor._enqueue_thread_title_generation()
+        mocked_delay.assert_called_once_with(
+            thread_id=42,
+            user_id=1,
+            agent_config_id=9,
+            source_task_id=1,
+        )
 
-        self.assertEqual(thread.subject, "Refined Title")
-        thread.save.assert_called_once()
-
-        thread.save.reset_mock()
-        executor.llm.ainvoke.reset_mock()
         thread.subject = "Custom subject"
-        await executor._update_thread_subject()
-        executor.llm.ainvoke.assert_not_called()
-        thread.save.assert_not_called()
+        with patch("nova.tasks.tasks.generate_thread_title_task.delay") as mocked_delay:
+            await executor._enqueue_thread_title_generation()
+        mocked_delay.assert_not_called()
+
+    async def test_enqueue_thread_title_generation_ignores_publish_failures(self):
+        task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
+        thread = SimpleNamespace(id=42, subject="New thread 42")
+        agent_config = SimpleNamespace(id=9, llm_provider=SimpleNamespace(max_context_tokens=1000))
+        executor = AgentTaskExecutor(
+            task=task,
+            user=SimpleNamespace(id=1),
+            thread=thread,
+            agent_config=agent_config,
+            prompt="hello",
+        )
+
+        with (
+            patch("nova.tasks.tasks.generate_thread_title_task.delay", side_effect=RuntimeError("broker down")),
+            self.assertLogs("nova.tasks.tasks", level="WARNING") as logs,
+        ):
+            await executor._enqueue_thread_title_generation()
+
+        self.assertTrue(
+            any("Could not enqueue thread title generation" in line for line in logs.output),
+            logs.output,
+        )
 
     async def test_process_result_updates_message_and_context_info(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock(), result=None)
@@ -114,7 +140,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
 
         with (
             patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(50, None, 1000)),
-            patch.object(executor, "_update_thread_subject", new_callable=AsyncMock) as mocked_update_subject,
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock) as mocked_enqueue_title,
         ):
             await executor._process_result("Agent answer")
 
@@ -122,7 +148,72 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         thread.add_message.assert_called_once_with("Agent answer", actor=Actor.AGENT)
         self.assertEqual(message.internal_data["real_tokens"], 50)
         executor.handler.on_context_consumption.assert_awaited_once_with(50, None, 1000)
-        mocked_update_subject.assert_awaited_once()
+        mocked_enqueue_title.assert_awaited_once()
+
+
+class GenerateThreadTitleTaskTests(SimpleTestCase):
+    @patch("nova.tasks.tasks.Thread.objects.filter")
+    @patch("nova.tasks.tasks.AgentConfig.objects.select_related")
+    @patch("nova.tasks.tasks.Message.objects.filter")
+    @patch("nova.tasks.tasks.Thread.objects.select_related")
+    @patch("nova.tasks.tasks.create_provider_llm")
+    def test_generate_thread_title_updates_default_subject_and_publishes(
+        self,
+        mocked_create_provider_llm,
+        mocked_thread_select_related,
+        mocked_message_filter,
+        mocked_agent_select_related,
+        mocked_thread_filter,
+    ):
+        user = SimpleNamespace(id=7)
+        thread = SimpleNamespace(id=11, user=user, subject="New thread 3")
+        mocked_thread_select_related.return_value.get.return_value = thread
+
+        mocked_message_filter.return_value.order_by.return_value.__getitem__.return_value = [
+            SimpleNamespace(actor=Actor.USER, text="Need a travel plan"),
+            SimpleNamespace(actor=Actor.AGENT, text="Sure, where and when?"),
+        ]
+
+        provider = SimpleNamespace()
+        agent_config = SimpleNamespace(llm_provider=provider)
+        mocked_agent_select_related.return_value.get.return_value = agent_config
+
+        fake_llm = AsyncMock()
+        fake_llm.ainvoke.return_value = SimpleNamespace(content="[THINK]internal[/THINK]\nTrip planning")
+        mocked_create_provider_llm.return_value = fake_llm
+
+        mocked_thread_filter.return_value.update.return_value = 1
+
+        with (
+            patch("nova.tasks.tasks._build_langfuse_invoke_config", return_value=({}, None)),
+            patch("nova.tasks.tasks._publish_thread_subject_update") as mocked_publish,
+        ):
+            result = generate_thread_title_task.run(
+                thread_id=11,
+                user_id=7,
+                agent_config_id=13,
+                source_task_id=19,
+            )
+
+        self.assertEqual(result["status"], "ok")
+        mocked_thread_filter.assert_called_once_with(id=11, user_id=7, subject="New thread 3")
+        mocked_publish.assert_called_once_with(19, 11, "Trip planning")
+
+    @patch("nova.tasks.tasks.Thread.objects.select_related")
+    def test_generate_thread_title_skips_when_subject_not_default(self, mocked_thread_select_related):
+        user = SimpleNamespace(id=7)
+        thread = SimpleNamespace(id=11, user=user, subject="Custom title")
+        mocked_thread_select_related.return_value.get.return_value = thread
+
+        result = generate_thread_title_task.run(
+            thread_id=11,
+            user_id=7,
+            agent_config_id=13,
+            source_task_id=19,
+        )
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "subject_already_customized")
 
 
 class CeleryEntryPointTests(SimpleTestCase):

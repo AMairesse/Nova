@@ -38,6 +38,11 @@ ALLOWED_ATTRS = {
 
 logger = logging.getLogger(__name__)
 
+_THINK_BLOCK_PATTERNS = (
+    re.compile(r"\[THINK\].*?\[/THINK\]", flags=re.IGNORECASE | re.DOTALL),
+    re.compile(r"<think>.*?</think>", flags=re.IGNORECASE | re.DOTALL),
+)
+
 
 def normalize_url(urlish) -> str:
     """
@@ -101,6 +106,24 @@ def extract_final_answer(output):
     if isinstance(output, dict) and "messages" in output:
         return extract_final_answer(output["messages"])
     return str(output)
+
+
+def strip_thinking_blocks(text: str | None) -> str:
+    """Remove internal reasoning blocks from model output."""
+    cleaned = "" if text is None else str(text)
+    if not cleaned:
+        return ""
+
+    for pattern in _THINK_BLOCK_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+
+    # Best-effort cleanup when tags are unbalanced.
+    cleaned = re.sub(r"\[THINK\].*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"\[/?THINK\]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def get_theme_content(content: str, theme: str) -> str:

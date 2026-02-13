@@ -507,11 +507,29 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
         else:
             self.fields['api_token_status'].initial = _("No token generated")
 
-        self.fields["continuous_default_messages_limit"].widget.attrs.update(
+        limit_field = self.fields["continuous_default_messages_limit"]
+        limit_field.label = _("Latest messages")
+        limit_field.help_text = _(
+            "Shown by default in Continuous when no day is selected."
+        )
+        existing_classes = limit_field.widget.attrs.get("class", "")
+        limit_field.widget.attrs.update(
             {
                 "min": UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN,
                 "max": UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MAX,
                 "step": 1,
+                "inputmode": "numeric",
+                "class": " ".join(filter(None, [existing_classes, "form-control"])),
+            }
+        )
+        limit_field.error_messages.update(
+            {
+                "min_value": _(
+                    "Choose at least %(limit_value)s messages."
+                ),
+                "max_value": _(
+                    "Choose at most %(limit_value)s messages."
+                ),
             }
         )
 

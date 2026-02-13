@@ -9,6 +9,24 @@
         return document.getElementById(id);
     }
 
+    function parseJsonScript(id) {
+        const el = byId(id);
+        if (!el) return {};
+        try {
+            return JSON.parse(el.textContent || '{}');
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function selectedOptionText(selectEl) {
+        if (!selectEl) return '';
+        const idx = selectEl.selectedIndex;
+        if (idx < 0) return '';
+        const option = selectEl.options[idx];
+        return option ? String(option.text || '').trim() : '';
+    }
+
     function parseTimeToHM(value) {
         // HTML <input type="time"> usually returns "HH:MM"
         if (!value || typeof value !== 'string' || !value.includes(':')) return null;
@@ -104,6 +122,9 @@
         const runModeInput = byId('id_run_mode');
         const emailToolInput = byId('id_email_tool');
         const pollIntervalInput = byId('id_poll_interval_minutes');
+        const emailToolAccessWarning = byId('email_tool_access_warning');
+        const emailToolAccessWarningText = byId('email_tool_access_warning_text');
+        const agentEmailToolIdsMap = parseJsonScript('agent_email_tool_ids_map');
 
         const everyMinutesInput = byId('cron_every_minutes');
         const timeInput = byId('cron_time');
@@ -137,6 +158,37 @@
             wrapper.style.display = visible ? '' : 'none';
         }
 
+        function updateEmailToolAccessWarning() {
+            if (!emailToolAccessWarning || !emailToolAccessWarningText) return;
+
+            const trigger = triggerTypeInput ? triggerTypeInput.value : 'cron';
+            const isEmailPoll = trigger === 'email_poll';
+            if (!isEmailPoll) {
+                emailToolAccessWarning.hidden = true;
+                return;
+            }
+
+            const selectedAgentId = agentInput ? String(agentInput.value || '') : '';
+            const selectedEmailToolId = emailToolInput ? String(emailToolInput.value || '') : '';
+            if (!selectedAgentId || !selectedEmailToolId) {
+                emailToolAccessWarning.hidden = true;
+                return;
+            }
+
+            const allowedToolIds = Array.isArray(agentEmailToolIdsMap[selectedAgentId])
+                ? agentEmailToolIdsMap[selectedAgentId].map((item) => String(item))
+                : [];
+            if (allowedToolIds.includes(selectedEmailToolId)) {
+                emailToolAccessWarning.hidden = true;
+                return;
+            }
+
+            const warningTemplate = emailToolAccessWarning.getAttribute('data-warning-template') || '';
+            const selectedToolName = selectedOptionText(emailToolInput) || selectedEmailToolId;
+            emailToolAccessWarningText.textContent = warningTemplate.replace('{tool}', selectedToolName);
+            emailToolAccessWarning.hidden = false;
+        }
+
         function applyTaskModeVisibility() {
             const trigger = triggerTypeInput ? triggerTypeInput.value : 'cron';
             const isEmailPoll = trigger === 'email_poll';
@@ -160,6 +212,8 @@
             if (cronHelper) {
                 cronHelper.style.display = usesCron ? '' : 'none';
             }
+
+            updateEmailToolAccessWarning();
         }
 
         function renderPreviewState(state) {
@@ -337,6 +391,12 @@
         if (triggerTypeInput) {
             triggerTypeInput.addEventListener('change', applyTaskModeVisibility);
         }
+        if (agentInput) {
+            agentInput.addEventListener('change', updateEmailToolAccessWarning);
+        }
+        if (emailToolInput) {
+            emailToolInput.addEventListener('change', updateEmailToolAccessWarning);
+        }
 
         // --- Initial state
         const initial = cronInput.value.trim();
@@ -364,6 +424,7 @@
 
         schedulePreview(initial);
         applyTaskModeVisibility();
+        updateEmailToolAccessWarning();
     }
 
     if (document.readyState === 'loading') {

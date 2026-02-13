@@ -8,6 +8,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from nova.llm.agent_middleware import BaseAgentMiddleware, AgentContext
 from nova.llm.checkpoints import get_checkpointer
+from nova.utils import strip_thinking_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +113,11 @@ Conversation:
 Summary:"""
 
         try:
-            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
-            return response.content.strip()
+            invoke_kwargs = {}
+            if self.agent and getattr(self.agent, "silent_config", None):
+                invoke_kwargs["config"] = self.agent.silent_config
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)], **invoke_kwargs)
+            return strip_thinking_blocks(getattr(response, "content", None) or str(response))
         except Exception as e:
             logger.warning(f"LLM summarization failed: {e}")
             # Fallback

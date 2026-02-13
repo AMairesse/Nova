@@ -50,8 +50,9 @@ class LLMAgentExecutionTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                 self.assertIn("messages", payload)
                 self.assertEqual(payload["messages"].content, "Hello world")
 
-                # Default config (non-silent) is used
-                self.assertIs(config, agent.config)
+                # Default config content (non-silent) is used
+                self.assertEqual(config.get("configurable"), agent.config.get("configurable"))
+                self.assertEqual(config.get("callbacks"), agent.config.get("callbacks"))
 
                 # extract_final_answer called with agent result
                 mock_extract.assert_called_once()
@@ -75,9 +76,32 @@ class LLMAgentExecutionTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
 
                 await agent.ainvoke("Test", silent_mode=True)
 
-                # Verify silent_config was used
+                # Verify silent_config content was used
                 payload, config = mock_agent.invocations[0]
-                self.assertIs(config, agent.silent_config)
+                self.assertEqual(config.get("configurable"), agent.silent_config.get("configurable"))
+                self.assertEqual(config.get("callbacks"), agent.silent_config.get("callbacks"))
+
+    async def test_ainvoke_allows_thread_id_override(self):
+        """Thread override should target an isolated checkpoint namespace."""
+        mock_agent = self.create_mock_langchain_agent()
+        with patch.object(llm_agent_mod, "extract_final_answer", return_value="OK"):
+            with patch("nova.llm.prompts.UserFile.objects.filter") as mock_filter:
+                mock_filter.return_value.count.return_value = 0
+
+                agent = llm_agent_mod.LLMAgent(
+                    user=self.create_mock_user(),
+                    thread=self.create_mock_thread(),
+                    langgraph_thread_id="fake_id",
+                    agent_config=None,
+                    system_prompt=None,
+                    llm_provider=self.create_mock_provider(),
+                )
+                agent.langchain_agent = mock_agent
+
+                await agent.ainvoke("Test", silent_mode=True, thread_id_override="ephemeral-id")
+
+                _, config = mock_agent.invocations[0]
+                self.assertEqual(config.get("configurable", {}).get("thread_id"), "ephemeral-id")
 
     async def test_ainvoke_includes_file_context_in_prompt(self):
         """

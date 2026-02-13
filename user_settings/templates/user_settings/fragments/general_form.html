@@ -1,85 +1,106 @@
 <!-- user_settings/templates/user_settings/fragments/general_form.html -->
 {% load crispy_forms_tags i18n %}
 
-<!-- Change Password Section (separate form) -->
-{% include "user_settings/fragments/password_change_form.html" %}
+<div id="general-settings-fragment">
+  <!-- Change Password Section (separate form) -->
+  {% include "user_settings/fragments/password_change_form.html" %}
 
-<form id="general-settings-form"
-      hx-post="{% url 'user_settings:general' %}?partial=1"
-      hx-swap="none"
-      novalidate>
-  {% csrf_token %}
-  <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+  <form id="general-settings-form"
+        hx-post="{% url 'user_settings:general' %}?partial=1"
+        hx-target="#general-settings-fragment"
+        hx-swap="outerHTML"
+        method="post"
+        novalidate>
+    {% csrf_token %}
+    <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
 
-  <!-- Langfuse Configuration Section -->
-  <div class="card mb-4">
-    <div class="card-header">
-      <h5 class="mb-0">{% trans "Langfuse Configuration" %}</h5>
-    </div>
-    <div class="card-body">
-      {{ form.allow_langfuse|as_crispy_field }}
-      {{ form.langfuse_public_key|as_crispy_field }}
-      {{ form.langfuse_secret_key|as_crispy_field }}
-      {{ form.langfuse_host|as_crispy_field }}
-    </div>
-  </div>
-
-  <!-- Continuous Mode Section -->
-  <div class="card mb-4">
-    <div class="card-header">
-      <h5 class="mb-0">{% trans "Continuous mode" %}</h5>
-    </div>
-    <div class="card-body">
-      {{ form.continuous_default_messages_limit|as_crispy_field }}
-      <small class="text-muted">
-        {% trans "Used by the default Continuous view when no day is selected." %}
-      </small>
-    </div>
-  </div>
-
-  <!-- API Token Management Section -->
-  <div class="card mb-4">
-    <div class="card-header">
-      <h5 class="mb-0">{% trans "API Token Management" %}</h5>
-    </div>
-    <div class="card-body">
-      {{ form.api_token_status|as_crispy_field }}
-      
-      {# Pre-translate messages and escape for safe JS interpolation #}
-      {% translate "This will replace any existing token. Continue?" as confirm_generate %}
-      {% translate "Are you sure you want to delete your API token?" as confirm_delete %}
-
-      <div class="d-flex gap-2 mt-3">
-        <button type="submit"
-                class="btn btn-warning"
-                formaction="{% url 'user_settings:api-token-generate' %}"
-                formmethod="post"
-                formnovalidate
-                onclick="return confirm('{{ confirm_generate|escapejs }}')">
-          {% trans "Generate New Token" %}
-        </button>
-
-        {% if form.instance.has_api_token %}
-        <button type="submit"
-                class="btn btn-outline-danger"
-                formaction="{% url 'user_settings:api-token-delete' %}"
-                formmethod="post"
-                formnovalidate
-                onclick="return confirm('{{ confirm_delete|escapejs }}')">
-          {% trans "Delete Token" %}
-        </button>
-        {% endif %}
+    <!-- Langfuse Configuration Section -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">{% trans "Langfuse Configuration" %}</h5>
       </div>
-      
-      <div class="mt-3">
-        <small class="text-muted">
-          {% trans "Use your API token to authenticate with the Nova API. The token will only be displayed once when generated." %}
-        </small>
+      <div class="card-body">
+        {{ form.allow_langfuse|as_crispy_field }}
+        {{ form.langfuse_public_key|as_crispy_field }}
+        {{ form.langfuse_secret_key|as_crispy_field }}
+        {{ form.langfuse_host|as_crispy_field }}
       </div>
     </div>
-  </div>
 
-  <button type="submit" class="btn btn-primary">
-    {% trans "Save Settings" %}
-  </button>
-</form>
+    <!-- Continuous Mode Section -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">{% trans "Continuous mode" %}</h5>
+      </div>
+      <div class="card-body">
+        {{ form.continuous_default_messages_limit|as_crispy_field }}
+
+        <label class="form-label mt-1" for="id_continuous_default_messages_limit_range">
+          {% trans "Quick adjust" %}
+        </label>
+        <div>
+          <input
+            id="id_continuous_default_messages_limit_range"
+            type="range"
+            class="form-range"
+            min="{{ form.continuous_default_messages_limit.field.widget.attrs.min }}"
+            max="{{ form.continuous_default_messages_limit.field.widget.attrs.max }}"
+            step="1"
+            value="{{ form.continuous_default_messages_limit.value|default_if_none:form.instance.continuous_default_messages_limit }}"
+            aria-describedby="continuous_default_messages_limit_help"
+          >
+          <div class="d-flex justify-content-between small text-muted">
+            <span>{{ form.continuous_default_messages_limit.field.widget.attrs.min }}</span>
+            <span>{{ form.continuous_default_messages_limit.field.widget.attrs.max }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Token Management Section -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">{% trans "API Token Management" %}</h5>
+      </div>
+      <div class="card-body">
+        {{ form.api_token_status|as_crispy_field }}
+
+        {# Pre-translate messages and escape for safe JS interpolation #}
+        {% translate "This will replace any existing token. Continue?" as confirm_generate %}
+        {% translate "Are you sure you want to delete your API token?" as confirm_delete %}
+
+        <div class="d-flex gap-2 mt-3">
+          <button type="submit"
+                  class="btn btn-warning"
+                  formaction="{% url 'user_settings:api-token-generate' %}"
+                  formmethod="post"
+                  formnovalidate
+                  onclick="return confirm('{{ confirm_generate|escapejs }}')">
+            {% trans "Generate New Token" %}
+          </button>
+
+          {% if form.instance.has_api_token %}
+          <button type="submit"
+                  class="btn btn-outline-danger"
+                  formaction="{% url 'user_settings:api-token-delete' %}"
+                  formmethod="post"
+                  formnovalidate
+                  onclick="return confirm('{{ confirm_delete|escapejs }}')">
+            {% trans "Delete Token" %}
+          </button>
+          {% endif %}
+        </div>
+
+        <div class="mt-3">
+          <small class="text-muted">
+            {% trans "Use your API token to authenticate with the Nova API. The token will only be displayed once when generated." %}
+          </small>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+      {% trans "Save Settings" %}
+    </button>
+  </form>
+</div>

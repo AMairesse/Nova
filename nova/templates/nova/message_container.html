@@ -16,7 +16,7 @@
       {% endif %}
 
       {% if not messages %}
-      <div class="text-muted small px-2 py-1">
+      <div id="messages-empty-state" class="text-muted small px-2 py-1" data-empty-state="true">
         {% if is_continuous_default_mode %}
           {% trans "No messages yet in your continuous history." %}
         {% else %}

@@ -11,6 +11,7 @@
             messageDiv.className = 'message mb-3';
             messageDiv.id = `message-${messageData.id}`;
             messageDiv.setAttribute('data-message-id', messageData.id);
+            const isContinuousPage = Boolean(window.NovaApp?.isContinuousPage);
 
             if (messageData.actor === 'SYS' || messageData.actor === 'system') {
                 return this.createSystemMessageElement(messageData);
@@ -24,6 +25,11 @@
           </div>
         `;
             } else if (messageData.actor === 'agent') {
+                const compactLinkHtml = isContinuousPage ? '' : `
+              <a href="#" class="compact-thread-link text-decoration-none small me-2 d-none" title="${gettext('Summarize conversation to save context space')}">
+                <i class="bi bi-compress me-1"></i>${gettext('Compact')}
+              </a>
+              `;
                 // Agent message structure
                 messageDiv.innerHTML = `
           <div class="card border-secondary">
@@ -31,9 +37,7 @@
               <div class="streaming-content">${window.DOMUtils.escapeHTML(messageData.text)}</div>
             </div>
             <div class="card-footer py-1 text-muted small d-flex justify-content-end align-items-center d-none">
-              <a href="#" class="compact-thread-link text-decoration-none small me-2 d-none" title="${gettext('Summarize conversation to save context space')}">
-                <i class="bi bi-compress me-1"></i>${gettext('Compact')}
-              </a>
+              ${compactLinkHtml}
               <div class="card-footer-consumption">
               </div>
             </div>

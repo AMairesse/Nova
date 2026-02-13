@@ -41,8 +41,20 @@ class GeneralSettingsViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/fragments/general_form.html")
         self.assertIn("password_form", response.context)
+        self.assertContains(response, 'id="general-settings-fragment"', html=False)
         self.assertContains(response, "Change Password")
         self.assertContains(response, "<form", count=2, html=False)
+        self.assertContains(response, 'id="id_continuous_default_messages_limit_range"', html=False)
+        self.assertContains(
+            response,
+            f'min="{UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN}"',
+            html=False,
+        )
+        self.assertContains(
+            response,
+            f'max="{UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MAX}"',
+            html=False,
+        )
 
     def test_get_general_settings_full_page_includes_sections(self):
         response = self.client.get(self.url)
@@ -90,6 +102,28 @@ class GeneralSettingsViewTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Enter a valid URL", status_code=200)
+
+    def test_update_general_settings_form_invalid_messages_limit_returns_errors(self):
+        payload = {
+            "allow_langfuse": "",
+            "langfuse_public_key": "",
+            "langfuse_secret_key": "",
+            "langfuse_host": "",
+            "continuous_default_messages_limit": str(
+                UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN - 1
+            ),
+            "api_token_status": "",
+        }
+        response = self.client.post(
+            self.partial_url, payload, HTTP_HX_REQUEST="true"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            f"Choose at least {UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN} messages.",
+            status_code=200,
+        )
 
     def test_password_change_success_htmx(self):
         response = self._post_password_change()
