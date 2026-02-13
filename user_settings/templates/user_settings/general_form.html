@@ -1,6 +1,11 @@
 <!-- user_settings/templates/user_settings/general_form.html -->
 {% extends "base.html" %}
-{% load i18n %}
+{% load static i18n %}
+
+{% block extra_js %}
+  {{ block.super }}
+  <script src="{% static 'user_settings/js/general_settings.js' %}"></script>
+{% endblock %}
 
 {% block content %}
 <div class="container py-4" style="max-width: 640px;">
