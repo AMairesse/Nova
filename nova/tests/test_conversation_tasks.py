@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from django.test import SimpleTestCase, TransactionTestCase
 from django.utils import timezone
@@ -169,11 +169,10 @@ class ConversationTasksDbTests(TransactionTestCase):
         )
         UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
 
-        fake_llm = AsyncMock()
-        fake_llm.ainvoke.return_value = SimpleNamespace(content="[THINK]internal[/THINK]\n## Summary\nAll good")
+        fake_checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
         fake_agent = SimpleNamespace(
-            create_llm_agent=lambda: fake_llm,
-            silent_config={"callbacks": ["langfuse"]},
+            ainvoke=AsyncMock(return_value="[THINK]internal[/THINK]\n## Summary\nAll good"),
+            checkpointer=fake_checkpointer,
             cleanup=AsyncMock(),
         )
         mocked_create_agent.return_value = fake_agent
@@ -194,9 +193,12 @@ class ConversationTasksDbTests(TransactionTestCase):
         emb = DaySegmentEmbedding.objects.get(day_segment=seg)
         self.assertEqual(emb.state, "pending")
         mocked_delay.assert_called_once_with(emb.id)
-        fake_llm.ainvoke.assert_awaited_once()
-        _, invoke_kwargs = fake_llm.ainvoke.await_args
-        self.assertEqual(invoke_kwargs["config"], fake_agent.silent_config)
+        fake_agent.ainvoke.assert_awaited_once_with(
+            ANY,
+            silent_mode=True,
+            thread_id_override=ANY,
+        )
+        fake_checkpointer.adelete_thread.assert_awaited_once()
         fake_agent.cleanup.assert_awaited_once()
         self.assertTrue(any(call.args[1] == "continuous_summary_ready" for call in mocked_publish.await_args_list))
 

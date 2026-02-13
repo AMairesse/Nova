@@ -376,12 +376,30 @@ class LLMAgent:
 
         return create_provider_llm(self._llm_provider)
 
-    async def ainvoke(self, question: str, silent_mode=False):
-        config = self.silent_config if silent_mode else self.config
+    def _build_runtime_config(self, *, silent_mode: bool = False, thread_id_override: str | None = None):
+        """Build an invocation config without mutating shared config dictionaries."""
+        base = self.silent_config if silent_mode else self.config
+        runtime = base.copy()
+
+        runtime_callbacks = list(base.get("callbacks", []))
+        runtime["callbacks"] = runtime_callbacks
+
+        configurable = dict(base.get("configurable", {}))
+        if thread_id_override is not None:
+            configurable["thread_id"] = str(thread_id_override)
+        if configurable:
+            runtime["configurable"] = configurable
 
         # Set the recursion limit
         if self.recursion_limit is not None:
-            config.update({"recursion_limit": self.recursion_limit})
+            runtime.update({"recursion_limit": self.recursion_limit})
+        return runtime
+
+    async def ainvoke(self, question: str, silent_mode=False, thread_id_override: str | None = None):
+        config = self._build_runtime_config(
+            silent_mode=silent_mode,
+            thread_id_override=thread_id_override,
+        )
 
         # Create context for middleware
         # Find progress handler from callbacks if available
@@ -472,12 +490,11 @@ class LLMAgent:
                 final_msg = extract_final_answer(result)
                 return final_msg
 
-    async def aresume(self, command, silent_mode=False):
-        config = self.silent_config if silent_mode else self.config
-
-        # Set the recursion limit
-        if self.recursion_limit is not None:
-            config.update({"recursion_limit": self.recursion_limit})
+    async def aresume(self, command, silent_mode=False, thread_id_override: str | None = None):
+        config = self._build_runtime_config(
+            silent_mode=silent_mode,
+            thread_id_override=thread_id_override,
+        )
 
         # Create context for middleware
         # Find progress handler from callbacks if available

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
@@ -12,7 +13,6 @@ from celery.exceptions import MaxRetriesExceededError
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from langchain_core.messages import HumanMessage
 
 from nova.llm.llm_agent import LLMAgent
 from nova.models.ConversationEmbedding import DaySegmentEmbedding
@@ -68,10 +68,44 @@ def _format_messages_for_summary(messages: List[Message]) -> str:
 
 
 def _build_day_summary_prompt(day_label: str, transcript: str) -> str:
+    return _build_day_summary_prompt_with_context(day_label, transcript)
+
+
+def _build_day_summary_prompt_with_context(
+    day_label: str,
+    transcript: str,
+    *,
+    previous_summaries: List[tuple[str, str]] | None = None,
+    current_summary: str = "",
+    delta_mode: bool = False,
+) -> str:
+    previous_summaries = previous_summaries or []
+    previous_block_lines: List[str] = []
+    for prev_day, prev_summary in previous_summaries:
+        summary_text = (prev_summary or "").strip()
+        if not summary_text:
+            continue
+        previous_block_lines.append(f"### {prev_day}\n{summary_text}")
+    previous_block = "\n\n".join(previous_block_lines) or "(none)"
+
+    current_summary = (current_summary or "").strip()
+    if not current_summary:
+        current_summary = "(none)"
+
+    transcript_label = (
+        "New messages since the previous summary for this day"
+        if delta_mode
+        else "Messages for this day"
+    )
+
     return (
         "You are generating a day summary for a continuous discussion.\n"
-        "Write a concise Markdown summary using this template and nothing else.\n\n"
-        "Template:\n"
+        "You can use available tools if useful.\n"
+        "If long-term memory tools are available, store durable facts, decisions, and follow-ups.\n"
+        "Write a concise Markdown summary for this day.\n"
+        "Keep Goals/Open loops/Next steps only if they are still valid; remove resolved or stale items.\n"
+        "If a section has no item, write '- None'.\n\n"
+        "Output template:\n"
         "## Summary\n"
         "<short narrative>\n\n"
         "## Goals\n"
@@ -82,8 +116,14 @@ def _build_day_summary_prompt(day_label: str, transcript: str) -> str:
         "- ...\n\n"
         "## Next steps\n"
         "- ...\n\n"
-        f"Day: {day_label}\n\n"
-        "Transcript:\n"
+        "## Memory updates\n"
+        "- ...\n\n"
+        f"Day to summarize: {day_label}\n\n"
+        "Previous day summaries (most recent first):\n"
+        f"{previous_block}\n\n"
+        f"Current summary for {day_label} (if any):\n"
+        f"{current_summary}\n\n"
+        f"{transcript_label}:\n"
         f"{transcript}\n\n"
         "Markdown Summary:\n"
     )
@@ -93,15 +133,17 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
     # Django ORM is synchronous and must not run in an async context.
     # Use sync_to_async for all DB access.
 
-    async def _fetch_segment_and_messages() -> Tuple[Optional[DaySegment], List[Message], str]:
-        def _impl() -> Tuple[Optional[DaySegment], List[Message], str]:
+    async def _fetch_segment_and_messages() -> Tuple[
+        Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool
+    ]:
+        def _impl() -> Tuple[Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool]:
             segment = (
                 DaySegment.objects.select_related("thread", "user", "starts_at_message")
                 .filter(id=day_segment_id)
                 .first()
             )
             if not segment:
-                return None, [], ""
+                return None, [], "", [], False
 
             # Bound the day segment using the next segment start.
             next_seg = (
@@ -121,16 +163,29 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
             if end_dt:
                 qs = qs.filter(created_at__lt=end_dt)
 
+            current_summary = (segment.summary_markdown or "").strip()
+            delta_mode = bool(current_summary and segment.summary_until_message_id)
+            if delta_mode:
+                qs = qs.filter(id__gt=segment.summary_until_message_id)
+
             msgs = list(qs.order_by("created_at", "id"))
 
-            # Carry-over from previous day summary (optional).
-            prev_seg = (
-                DaySegment.objects.filter(user=segment.user, thread=segment.thread, day_label__lt=segment.day_label)
+            prev_segments = list(
+                DaySegment.objects.filter(
+                    user=segment.user,
+                    thread=segment.thread,
+                    day_label__lt=segment.day_label,
+                    summary_markdown__isnull=False,
+                )
+                .exclude(summary_markdown="")
                 .order_by("-day_label")
-                .first()
             )
-            carry_over = (prev_seg.summary_markdown or "").strip() if prev_seg else ""
-            return segment, msgs, carry_over
+            previous_summaries = [
+                (seg.day_label.isoformat(), (seg.summary_markdown or "").strip())
+                for seg in prev_segments[:2]
+                if (seg.summary_markdown or "").strip()
+            ]
+            return segment, msgs, current_summary, previous_summaries, delta_mode
 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
@@ -144,7 +199,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
     await _publish_task_update(task_id, "progress_update", {"progress_log": "Preparing day summary..."})
-    segment, messages, carry_over = await _fetch_segment_and_messages()
+    segment, messages, current_summary, previous_summaries, delta_mode = await _fetch_segment_and_messages()
     if not segment:
         await _publish_task_update(task_id, "task_error", {"message": "Day segment not found", "category": "summary"})
         return {"status": "not_found", "day_segment_id": day_segment_id}
@@ -181,27 +236,26 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
         )
         return {"status": "ok", "day_segment_id": day_segment_id, "summary": ""}
 
-    # Option A: include carry-over explicitly so "open loops" stay visible across days,
-    # but keep the transcript source-of-truth for the day.
-    if carry_over:
-        transcript = (
-            "Carry-over (yesterday summary):\n"
-            f"{carry_over}\n\n"
-            "Today transcript:\n"
-            f"{transcript}"
-        )
-    prompt = _build_day_summary_prompt(str(segment.day_label), transcript)
+    prompt = _build_day_summary_prompt_with_context(
+        str(segment.day_label),
+        transcript,
+        previous_summaries=previous_summaries,
+        current_summary=current_summary,
+        delta_mode=delta_mode,
+    )
 
     agent = await LLMAgent.create(user=user, thread=segment.thread, agent_config=agent_config)
+    ephemeral_thread_id = f"day_summary_{segment.id}_{uuid.uuid4()}"
     try:
         await _publish_task_update(task_id, "progress_update", {"progress_log": "Generating day summary..."})
-        # Use the same underlying chat model as the agent; call it directly.
-        llm = agent.create_llm_agent()
-        resp = await llm.ainvoke(
-            [HumanMessage(content=prompt)],
-            config=agent.silent_config,
+        resp = await agent.ainvoke(
+            prompt,
+            silent_mode=True,
+            thread_id_override=ephemeral_thread_id,
         )
-        summary_md = strip_thinking_blocks(getattr(resp, "content", None) or str(resp))
+        if isinstance(resp, dict) and "__interrupt__" in resp:
+            raise RuntimeError("Summary agent requested user input, which is unsupported for nightly summarization.")
+        summary_md = strip_thinking_blocks(resp)
 
         # Persist summary (sync ORM in sync_to_async).
         def _persist():
@@ -265,6 +319,15 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
             "mode": mode,
         }
     finally:
+        checkpointer = getattr(agent, "checkpointer", None)
+        if checkpointer is not None:
+            try:
+                await checkpointer.adelete_thread(ephemeral_thread_id)
+            except Exception:
+                logger.warning(
+                    "[summarize_day_segment] failed cleanup for ephemeral checkpoint_id=%s",
+                    ephemeral_thread_id,
+                )
         await agent.cleanup()
 
 
