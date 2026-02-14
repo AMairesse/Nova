@@ -39,7 +39,7 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(payload["day_label"], day_label.isoformat())
         self.assertEqual(payload["task_id"], "summary-task-123")
 
-    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.continuous.message_ingest.enqueue_continuous_followups")
     @patch("nova.views.continuous_views.run_ai_task_celery.delay")
     def test_continuous_add_message_reports_opened_new_day(
         self,
@@ -58,6 +58,10 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(payload_1["status"], "OK")
         self.assertTrue(payload_1["opened_new_day"])
         self.assertEqual(payload_1["day_label"], get_day_label_for_user(self.user).isoformat())
+
+        created_message = Message.objects.get(id=payload_1["message"]["id"])
+        self.assertEqual(created_message.internal_data.get("source", {}).get("channel"), "web")
+        self.assertEqual(created_message.internal_data.get("source", {}).get("transport"), "web_ui")
 
         response_2 = self.client.post(
             reverse("continuous_add_message"),
