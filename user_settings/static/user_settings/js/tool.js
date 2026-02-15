@@ -14,6 +14,7 @@ document.addEventListener("DOMContentLoaded", () => {
     ["name", "description", "tool_subtype", "endpoint", "transport_type", "input_schema", "output_schema"].forEach(hideRow);
     switch (typeSelect.value) {
       case "builtin":
+        showRow("name", true);
         showRow("tool_subtype", true);
         break;
       case "api":

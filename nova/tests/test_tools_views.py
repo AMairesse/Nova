@@ -107,6 +107,47 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response["Location"], reverse("user_settings:tool-configure", args=[tool.pk]))
         self.assertEqual(tool.python_path, "nova.tools.builtins.date")
 
+    def test_create_builtin_email_tool_keeps_custom_alias_name(self):
+        response = self.client.post(
+            reverse("user_settings:tool-add"),
+            data={
+                "tool_type": Tool.ToolType.BUILTIN,
+                "tool_subtype": "email",
+                "name": "Work Mailbox",
+                "is_active": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        tool = Tool.objects.get(user=self.user, tool_subtype="email")
+        self.assertEqual(tool.name, "Work Mailbox")
+
+    def test_create_builtin_email_tool_rejects_duplicate_alias_for_user(self):
+        create_tool(
+            self.user,
+            name="Shared Inbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-add"),
+            data={
+                "tool_type": Tool.ToolType.BUILTIN,
+                "tool_subtype": "email",
+                "name": "shared inbox",
+                "is_active": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.context["form"].errors)
+        self.assertEqual(
+            Tool.objects.filter(user=self.user, tool_type=Tool.ToolType.BUILTIN, tool_subtype="email").count(),
+            1,
+        )
+
     def test_create_api_tool_validates_required_fields(self):
         response = self.client.post(
             reverse("user_settings:tool-add"),

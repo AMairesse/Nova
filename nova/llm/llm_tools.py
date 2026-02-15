@@ -7,6 +7,48 @@ from langchain_core.tools import StructuredTool
 logger = logging.getLogger(__name__)
 
 
+def _dedupe_tool_names(tools: list[StructuredTool]) -> list[StructuredTool]:
+    """Ensure tool names are globally unique for LangGraph ToolNode indexing."""
+    seen: set[str] = set()
+    max_len = 64
+
+    for idx, tool in enumerate(tools, start=1):
+        original = (getattr(tool, "name", "") or "").strip() or f"tool_{idx}"
+        candidate = original
+        final_name = original
+
+        if candidate in seen:
+            counter = 2
+            while True:
+                suffix = f"__dup{counter}"
+                base = original[: max(1, max_len - len(suffix))]
+                candidate = f"{base}{suffix}"
+                if candidate not in seen:
+                    break
+                counter += 1
+
+            logger.warning(
+                "Duplicate tool name '%s' detected; renaming to '%s'.",
+                original,
+                candidate,
+            )
+            try:
+                tool.name = candidate
+                final_name = candidate
+            except Exception:
+                logger.warning(
+                    "Could not set tool name on %s; duplicate name '%s' may remain.",
+                    type(tool).__name__,
+                    original,
+                )
+        else:
+            final_name = candidate
+
+        seen.add(final_name)
+
+    return tools
+
+
 async def load_tools(agent) -> List[StructuredTool]:
     """
     Load and initialize tools associated with the agent.
@@ -171,4 +213,4 @@ async def load_tools(agent) -> List[StructuredTool]:
     file_tools = await files.get_functions(agent)
     tools.extend(file_tools)
 
-    return tools
+    return _dedupe_tool_names(tools)

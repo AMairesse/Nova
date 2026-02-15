@@ -144,6 +144,61 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertIn("read_email", names)
         self.assertIn("send_email", names)
         self.assertIn("save_draft", names)
+        self.assertEqual(names.count("send_email"), 1)
+
+    def test_get_functions_scopes_names_when_agent_has_multiple_email_tools(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(builtin_tools=[self.tool, second_tool])
+        first_tools = asyncio.run(email_tools.get_functions(self.tool, agent=agent))
+        second_tools = asyncio.run(email_tools.get_functions(second_tool, agent=agent))
+
+        expected_first_name = email_tools._scoped_tool_name("list_emails", self.tool.name, self.tool.id)
+        expected_second_name = email_tools._scoped_tool_name("list_emails", second_tool.name, second_tool.id)
+        self.assertIn(expected_first_name, [tool.name for tool in first_tools])
+        self.assertIn(expected_second_name, [tool.name for tool in second_tools])
+
+        first_list_tool = next(tool for tool in first_tools if tool.name == expected_first_name)
+        second_list_tool = next(tool for tool in second_tools if tool.name == expected_second_name)
+
+        first_closure_values = [
+            cell.cell_contents
+            for cell in (first_list_tool.coroutine.__closure__ or [])
+        ]
+        second_closure_values = [
+            cell.cell_contents
+            for cell in (second_list_tool.coroutine.__closure__ or [])
+        ]
+        self.assertIn(self.tool.id, first_closure_values)
+        self.assertNotIn(second_tool.id, first_closure_values)
+        self.assertIn(second_tool.id, second_closure_values)
+        self.assertNotIn(self.tool.id, second_closure_values)
+
+    def test_get_functions_keeps_legacy_names_for_single_email_tool(self):
+        agent = SimpleNamespace(builtin_tools=[self.tool])
+
+        tools = asyncio.run(email_tools.get_functions(self.tool, agent=agent))
+        names = [tool.name for tool in tools]
+        self.assertIn("list_emails", names)
+        self.assertFalse(any(name.startswith("list_emails__") for name in names))
+
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+        self.assertIn("[Mailbox:", list_tool.description)
 
     def test_decode_safe_get_capability_and_format_helpers(self):
         self.assertEqual(email_tools.decode_str("plain"), "plain")

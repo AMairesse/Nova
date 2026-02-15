@@ -151,6 +151,9 @@ class AgentForm(forms.ModelForm):
             self.fields["tools"].queryset = Tool.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             )
+            self.fields["tools"].label_from_instance = (
+                lambda tool: f"{tool.name} (#{tool.id}, {tool.get_tool_type_display()})"
+            )
             self.fields["agent_tools"].queryset = AgentConfig.objects.filter(
                 user=user, is_tool=True
             ).exclude(pk=self.instance.pk if self.instance.pk else None)
@@ -276,26 +279,6 @@ class ToolForm(forms.ModelForm):
     # ------------------------------------------------------------------ #
     def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
         self.user = user
-
-        # ----------------------------------------------------------------
-        # Duplicate POST data for BUILTIN so that the form sees defaults
-        # ----------------------------------------------------------------
-        if args and hasattr(args[0], "get"):
-            data = args[0]
-            if (
-                data.get("tool_type") == Tool.ToolType.BUILTIN
-                and data.get("tool_subtype")
-            ):
-                data = data.copy()            # QueryDict -> mutable copy
-                from nova.tools import get_tool_type
-
-                meta = get_tool_type(data["tool_subtype"])
-                if meta:
-                    data["name"] = meta["name"]
-                    data["description"] = meta["description"]
-                    data["python_path"] = meta["python_path"]
-                args = (data,) + args[1:]
-
         super().__init__(*args, **kwargs)
 
         # Crispy helper
@@ -347,8 +330,11 @@ class ToolForm(forms.ModelForm):
 
             meta = get_tool_type(tool_subtype)
             if meta:
-                cleaned["name"] = meta["name"]
-                cleaned["description"] = meta["description"]
+                # Keep builtin names editable by users. Use metadata as defaults only.
+                if not (cleaned.get("name") or "").strip():
+                    cleaned["name"] = meta["name"]
+                if not (cleaned.get("description") or "").strip():
+                    cleaned["description"] = meta["description"]
                 cleaned["python_path"] = meta["python_path"]
                 cleaned["input_schema"] = (
                     cleaned.get("input_schema") or meta.get("input_schema", {})
@@ -356,6 +342,25 @@ class ToolForm(forms.ModelForm):
                 cleaned["output_schema"] = (
                     cleaned.get("output_schema") or meta.get("output_schema", {})
                 )
+
+            if (
+                self.user
+                and tool_subtype == "email"
+                and (cleaned.get("name") or "").strip()
+            ):
+                duplicate_qs = Tool.objects.filter(
+                    user=self.user,
+                    tool_type=Tool.ToolType.BUILTIN,
+                    tool_subtype="email",
+                    name__iexact=cleaned["name"].strip(),
+                )
+                if self.instance.pk:
+                    duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+                if duplicate_qs.exists():
+                    self.add_error(
+                        "name",
+                        _("An email tool with this name already exists. Choose a distinct mailbox alias."),
+                    )
         else:
             # API / MCP validation
             for f in ["name", "description", "endpoint"]:

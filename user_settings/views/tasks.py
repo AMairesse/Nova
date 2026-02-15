@@ -57,6 +57,9 @@ class TaskDefinitionForm(ModelForm):
                 Q(tool_subtype="email"),
                 Q(user=self.user) | Q(user__isnull=True),
             )
+            self.fields["email_tool"].label_from_instance = (
+                lambda tool: f"{tool.name} (#{tool.id})"
+            )
             # Used by the UI warning for email-triggered tasks.
             self.agent_email_tool_ids_map = {
                 str(agent.pk): [
