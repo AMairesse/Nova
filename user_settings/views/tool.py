@@ -242,7 +242,9 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
             title = group_name
             if group_name != ungrouped_key:
                 # Basic prettifying for plain identifiers like "imap" -> "Imap".
-                title = str(group_name).replace("_", " ").strip().title()
+                pretty_group = str(group_name).replace("_", " ").strip()
+                acronyms = {"imap": "IMAP", "smtp": "SMTP"}
+                title = acronyms.get(pretty_group.lower(), pretty_group.title())
             fieldsets.append(
                 Fieldset(
                     title,

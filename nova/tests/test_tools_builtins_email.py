@@ -217,6 +217,19 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertIn("ID: 10", formatted)
         self.assertIn("Subject: Subject", formatted)
 
+    def test_metadata_groups_sending_controls_under_smtp_with_conditional_fields(self):
+        fields_by_name = {
+            item["name"]: item for item in email_tools.METADATA.get("config_fields", [])
+        }
+
+        self.assertEqual(fields_by_name["enable_sending"]["group"], "smtp")
+        self.assertIn("smtp_server", fields_by_name)
+        self.assertIn("smtp_port", fields_by_name)
+        self.assertIn("smtp_use_tls", fields_by_name)
+        self.assertEqual(fields_by_name["smtp_server"]["visible_if"]["field"], "enable_sending")
+        self.assertEqual(fields_by_name["smtp_port"]["visible_if"]["field"], "enable_sending")
+        self.assertEqual(fields_by_name["smtp_use_tls"]["visible_if"]["field"], "enable_sending")
+
     @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
     def test_list_emails_returns_empty_and_formats_results(self, mocked_get_imap_client):
         client = Mock()

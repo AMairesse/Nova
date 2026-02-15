@@ -658,26 +658,24 @@ METADATA = {
         {'name': 'use_ssl', 'type': 'boolean', 'label': _('Use SSL for IMAP'), 'required': False, 'default': True,
          'group': 'imap'},
 
-        # SMTP Settings
+        # Authentication
+        {'name': 'username', 'type': 'text', 'label': _('Username'), 'required': True, 'group': 'auth'},
+        {'name': 'password', 'type': 'password', 'label': _('Password'), 'required': True, 'group': 'auth'},
+
+        # SMTP / Sending options
+        {'name': 'enable_sending', 'type': 'boolean',
+         'label': _('Enable email sending (drafts always available)'), 'required': False, 'default': False,
+         'group': 'smtp'},
         {'name': 'smtp_server', 'type': 'text', 'label': _('SMTP Server'), 'required': False, 'group': 'smtp',
          'visible_if': {'field': 'enable_sending', 'equals': True}},
         {'name': 'smtp_port', 'type': 'integer', 'label': _('SMTP Port'), 'required': False, 'default': 587,
          'group': 'smtp', 'visible_if': {'field': 'enable_sending', 'equals': True}},
         {'name': 'smtp_use_tls', 'type': 'boolean', 'label': _('Use TLS for SMTP'), 'required': False, 'default': True,
          'group': 'smtp', 'visible_if': {'field': 'enable_sending', 'equals': True}},
-
-        # Authentication
-        {'name': 'username', 'type': 'text', 'label': _('Username'), 'required': True, 'group': 'auth'},
-        {'name': 'password', 'type': 'password', 'label': _('Password'), 'required': True, 'group': 'auth'},
-
-        # Sending Options
-        {'name': 'enable_sending', 'type': 'boolean',
-         'label': _('Enable email sending (drafts always available)'), 'required': False, 'default': False,
-         'group': 'sending'},
         {'name': 'from_address', 'type': 'text', 'label': _('From Address (needed if username is not an email)'),
-         'required': False, 'group': 'sending', 'visible_if': {'field': 'enable_sending', 'equals': True}},
+         'required': False, 'group': 'smtp', 'visible_if': {'field': 'enable_sending', 'equals': True}},
         {'name': 'sent_folder', 'type': 'text', 'label': _('Sent Folder Name (to move sent emails to)'),
-         'required': False, 'default': 'Sent', 'group': 'sending',
+         'required': False, 'default': 'Sent', 'group': 'smtp',
          'visible_if': {'field': 'enable_sending', 'equals': True}},
     ],
     'test_function': 'test_email_access',

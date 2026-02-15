@@ -264,6 +264,22 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(credential.config["username"], "alice")
         self.assertEqual(credential.config["password"], "secret")
 
+    def test_configure_email_tool_displays_imap_and_smtp_sections(self):
+        tool = create_tool(
+            self.user,
+            name="Mailbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "IMAP")
+        self.assertContains(response, "SMTP")
+        self.assertContains(response, "Enable email sending")
+
     def test_configure_non_builtin_creates_credential_if_missing(self):
         tool = create_tool(self.user, tool_type=Tool.ToolType.API, endpoint="https://api.example.com")
         response = self.client.post(
