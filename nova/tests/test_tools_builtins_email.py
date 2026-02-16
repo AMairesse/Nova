@@ -146,7 +146,8 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertIn("save_draft", names)
         self.assertEqual(names.count("send_email"), 1)
 
-    def test_get_functions_scopes_names_when_agent_has_multiple_email_tools(self):
+    @patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock)
+    def test_get_aggregated_functions_routes_calls_by_mailbox_alias(self, mocked_list_emails):
         second_tool = create_tool(
             self.user,
             name="Personal mailbox",
@@ -164,30 +165,106 @@ class EmailBuiltinsTests(TransactionTestCase):
             },
         )
 
-        agent = SimpleNamespace(builtin_tools=[self.tool, second_tool])
-        first_tools = asyncio.run(email_tools.get_functions(self.tool, agent=agent))
-        second_tools = asyncio.run(email_tools.get_functions(second_tool, agent=agent))
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        mocked_list_emails.return_value = "ok"
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
 
-        expected_first_name = email_tools._scoped_tool_name("list_emails", self.tool.name, self.tool.id)
-        expected_second_name = email_tools._scoped_tool_name("list_emails", second_tool.name, second_tool.id)
-        self.assertIn(expected_first_name, [tool.name for tool in first_tools])
-        self.assertIn(expected_second_name, [tool.name for tool in second_tools])
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+        first = asyncio.run(list_tool.coroutine(mailbox=self.tool.name, folder="INBOX", limit=2))
+        second = asyncio.run(list_tool.coroutine(mailbox=second_tool.name, folder="INBOX", limit=3))
 
-        first_list_tool = next(tool for tool in first_tools if tool.name == expected_first_name)
-        second_list_tool = next(tool for tool in second_tools if tool.name == expected_second_name)
+        self.assertEqual(first, "ok")
+        self.assertEqual(second, "ok")
+        self.assertEqual(mocked_list_emails.await_count, 2)
+        self.assertEqual(mocked_list_emails.await_args_list[0].args[1], self.tool.id)
+        self.assertEqual(mocked_list_emails.await_args_list[1].args[1], second_tool.id)
 
-        first_closure_values = [
-            cell.cell_contents
-            for cell in (first_list_tool.coroutine.__closure__ or [])
-        ]
-        second_closure_values = [
-            cell.cell_contents
-            for cell in (second_list_tool.coroutine.__closure__ or [])
-        ]
-        self.assertIn(self.tool.id, first_closure_values)
-        self.assertNotIn(second_tool.id, first_closure_values)
-        self.assertIn(second_tool.id, second_closure_values)
-        self.assertNotIn(self.tool.id, second_closure_values)
+    def test_get_aggregated_functions_rejects_unknown_mailbox_alias(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+
+        result = asyncio.run(list_tool.coroutine(mailbox="unknown"))
+        self.assertIn("Unknown mailbox", result)
+        self.assertIn(self.tool.name, result)
+        self.assertIn(second_tool.name, result)
+
+    def test_get_aggregated_functions_blocks_send_when_sending_disabled(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        send_tool = next(tool for tool in tools if tool.name == "send_email")
+
+        result = asyncio.run(
+            send_tool.coroutine(
+                mailbox=self.tool.name,
+                to="bob@example.com",
+                subject="Subject",
+                body="Body",
+            )
+        )
+        self.assertIn("Sending is disabled", result)
+
+    def test_get_aggregated_prompt_instructions_include_mailbox_map(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": True,
+                "from_address": "mailbox@example.com",
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        hints = asyncio.run(
+            email_tools.get_aggregated_prompt_instructions([self.tool, second_tool], agent=agent)
+        )
+
+        self.assertTrue(any(hint.startswith("Email mailbox map:") for hint in hints))
+        self.assertTrue(any(self.tool.name in hint for hint in hints))
+        self.assertTrue(any(second_tool.name in hint for hint in hints))
 
     def test_get_functions_keeps_legacy_names_for_single_email_tool(self):
         agent = SimpleNamespace(builtin_tools=[self.tool])

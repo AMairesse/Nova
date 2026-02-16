@@ -1,6 +1,7 @@
 # nova/llm/llm_tools.py
 import logging
 import re
+import inspect
 from typing import List
 from langchain_core.tools import StructuredTool
 
@@ -58,24 +59,39 @@ async def load_tools(agent) -> List[StructuredTool]:
     loaded_builtin_modules = []
     collected_prompt_hints: list[str] = []
 
-    def _collect_prompt_hints_from_module(module):
+    def _append_prompt_hints(hints):
+        if not hints:
+            return
+        if isinstance(hints, str):
+            hints = [hints]
+        for hint in hints:
+            text = str(hint or "").strip()
+            if text and text not in collected_prompt_hints:
+                collected_prompt_hints.append(text)
+
+    async def _collect_prompt_hints(module, *, grouped_tools=None):
         try:
+            if grouped_tools is not None:
+                provider = getattr(module, "get_aggregated_prompt_instructions", None)
+                if callable(provider):
+                    hints = provider(tools=grouped_tools, agent=agent)
+                    if inspect.isawaitable(hints):
+                        hints = await hints
+                    _append_prompt_hints(hints)
+                    return
+
             provider = getattr(module, "get_prompt_instructions", None)
             if not callable(provider):
                 return
             hints = provider()
-            if not hints:
-                return
-            if isinstance(hints, str):
-                hints = [hints]
-            for hint in hints:
-                text = str(hint or "").strip()
-                if text and text not in collected_prompt_hints:
-                    collected_prompt_hints.append(text)
+            if inspect.isawaitable(hints):
+                hints = await hints
+            _append_prompt_hints(hints)
         except Exception as e:
             logger.debug(f"Skipping prompt instructions for module {getattr(module, '__name__', module)}: {e}")
 
-    # Load builtin tools (pre-fetched)
+    # Filter builtin tools by policy first, then group by python_path for optional aggregation.
+    builtin_groups: dict[str, list] = {}
     for tool_obj in agent.builtin_tools:
         try:
             # ------------------------------------------------------------------
@@ -96,27 +112,75 @@ async def load_tools(agent) -> List[StructuredTool]:
                 if getattr(tool_obj, "tool_subtype", None) == "conversation":
                     continue
 
-            from nova.tools import import_module
-            module = import_module(tool_obj.python_path)
-            if not module:
-                logger.warning(f"Failed to import module for builtin tool: {tool_obj.python_path}")
+            python_path = getattr(tool_obj, "python_path", "") or ""
+            if not python_path:
+                logger.warning("Builtin tool %s has no python_path; skipping.", getattr(tool_obj, "id", "unknown"))
                 continue
+            builtin_groups.setdefault(python_path, []).append(tool_obj)
+        except Exception as e:
+            logger.error(f"Error preparing builtin tool {getattr(tool_obj, 'tool_subtype', 'unknown')}: {str(e)}")
 
-            # Call init if available (async)
+    from nova.tools import import_module
+
+    for python_path, grouped_tools in builtin_groups.items():
+        module = import_module(python_path)
+        if not module:
+            logger.warning(f"Failed to import module for builtin tool: {python_path}")
+            continue
+
+        try:
+            # Call init once per module if available.
             if hasattr(module, 'init'):
                 await module.init(agent)
 
-            # Get tools (new signature, await in case async)
-            loaded_tools = await module.get_functions(tool=tool_obj, agent=agent)
+            aggregation_used = False
+            aggregate_provider = getattr(module, "get_aggregated_functions", None)
+            if callable(aggregate_provider):
+                spec = getattr(module, "AGGREGATION_SPEC", {}) or {}
+                min_instances = spec.get("min_instances", 2)
+                try:
+                    min_instances = max(1, int(min_instances))
+                except (TypeError, ValueError):
+                    min_instances = 2
 
-            # Add to list
-            tools.extend(loaded_tools)
-            _collect_prompt_hints_from_module(module)
+                if len(grouped_tools) >= min_instances:
+                    try:
+                        loaded_tools = await aggregate_provider(
+                            tools=grouped_tools,
+                            agent=agent,
+                        )
+                        tools.extend(loaded_tools)
+                        aggregation_used = True
+                    except Exception as e:
+                        logger.error(
+                            "Error loading aggregated builtin tools for %s: %s",
+                            python_path,
+                            str(e),
+                        )
 
-            # Track module for cleanup
+            if aggregation_used:
+                await _collect_prompt_hints(module, grouped_tools=grouped_tools)
+            else:
+                tool_loader = getattr(module, "get_functions", None)
+                if not callable(tool_loader):
+                    logger.warning(
+                        "Builtin module %s has no get_functions() and aggregation was not used.",
+                        python_path,
+                    )
+                    continue
+
+                for tool_obj in grouped_tools:
+                    try:
+                        loaded_tools = await tool_loader(tool=tool_obj, agent=agent)
+                        tools.extend(loaded_tools)
+                    except Exception as e:
+                        logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
+                await _collect_prompt_hints(module)
+
+            # Track module for cleanup once.
             loaded_builtin_modules.append(module)
         except Exception as e:
-            logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
+            logger.error("Error loading builtin module %s: %s", python_path, str(e))
 
     # ------------------------------------------------------------------
     # Continuous discussion policy (auto-attach conversation tools):
@@ -138,7 +202,7 @@ async def load_tools(agent) -> List[StructuredTool]:
             loaded_tools = await conversation_tools.get_functions(tool=None, agent=agent)
             tools.extend(loaded_tools)
             loaded_builtin_modules.append(conversation_tools)
-            _collect_prompt_hints_from_module(conversation_tools)
+            await _collect_prompt_hints(conversation_tools)
     except Exception as e:
         logger.warning(f"Failed to auto-load conversation builtin tools: {e}")
 

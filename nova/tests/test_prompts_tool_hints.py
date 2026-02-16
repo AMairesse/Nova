@@ -11,3 +11,11 @@ class PromptToolHintsTests(TestCase):
         out = _get_tool_prompt_hints(ctx)
 
         self.assertEqual(out, ["hint-a", "hint-b"])
+
+    def test_get_tool_prompt_hints_keeps_mailbox_mapping_hint(self):
+        mailbox_hint = "Email mailbox map: Work (sending: enabled); Support (sending: disabled)."
+        ctx = SimpleNamespace(tool_prompt_hints=[mailbox_hint, ""])
+
+        out = _get_tool_prompt_hints(ctx)
+
+        self.assertEqual(out, [mailbox_hint])
