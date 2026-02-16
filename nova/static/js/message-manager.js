@@ -198,13 +198,19 @@
 
 
         async answerInteraction(interactionId, answer) {
+            const answerUrlTemplate = window.NovaApp?.urls?.interactionAnswer;
+            if (!answerUrlTemplate) {
+                console.error('Interaction answer URL is not configured');
+                this.showToast(gettext('Interaction action is not configured on this page.'), 'warning');
+                return;
+            }
             const clickedBtn = document.querySelector(`.interaction-answer-btn[data-interaction-id="${interactionId}"]`);
             if (!clickedBtn || clickedBtn.disabled) return;
             const originalHtml = clickedBtn.innerHTML;
             clickedBtn.disabled = true;
             clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
             try {
-                const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionAnswer.replace('0', interactionId), {
+                const response = await window.DOMUtils.csrfFetch(answerUrlTemplate.replace('0', interactionId), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ answer: answer || '' })
@@ -221,13 +227,19 @@
         }
 
         async cancelInteraction(interactionId) {
+            const cancelUrlTemplate = window.NovaApp?.urls?.interactionCancel;
+            if (!cancelUrlTemplate) {
+                console.error('Interaction cancel URL is not configured');
+                this.showToast(gettext('Interaction action is not configured on this page.'), 'warning');
+                return;
+            }
             const clickedBtn = document.querySelector(`.interaction-cancel-btn[data-interaction-id="${interactionId}"]`);
             if (!clickedBtn || clickedBtn.disabled) return;
             const originalHtml = clickedBtn.innerHTML;
             clickedBtn.disabled = true;
             clickedBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> ' + gettext('Processing…');
             try {
-                const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.interactionCancel.replace('0', interactionId), { method: 'POST' });
+                const response = await window.DOMUtils.csrfFetch(cancelUrlTemplate.replace('0', interactionId), { method: 'POST' });
                 if (!response.ok) throw new Error('Server error');
                 const data = await response.json();
                 // Re-enable main input
