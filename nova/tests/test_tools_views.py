@@ -107,6 +107,47 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response["Location"], reverse("user_settings:tool-configure", args=[tool.pk]))
         self.assertEqual(tool.python_path, "nova.tools.builtins.date")
 
+    def test_create_builtin_email_tool_keeps_custom_alias_name(self):
+        response = self.client.post(
+            reverse("user_settings:tool-add"),
+            data={
+                "tool_type": Tool.ToolType.BUILTIN,
+                "tool_subtype": "email",
+                "name": "Work Mailbox",
+                "is_active": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        tool = Tool.objects.get(user=self.user, tool_subtype="email")
+        self.assertEqual(tool.name, "Work Mailbox")
+
+    def test_create_builtin_email_tool_rejects_duplicate_alias_for_user(self):
+        create_tool(
+            self.user,
+            name="Shared Inbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-add"),
+            data={
+                "tool_type": Tool.ToolType.BUILTIN,
+                "tool_subtype": "email",
+                "name": "shared inbox",
+                "is_active": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.context["form"].errors)
+        self.assertEqual(
+            Tool.objects.filter(user=self.user, tool_type=Tool.ToolType.BUILTIN, tool_subtype="email").count(),
+            1,
+        )
+
     def test_create_api_tool_validates_required_fields(self):
         response = self.client.post(
             reverse("user_settings:tool-add"),
@@ -222,6 +263,22 @@ class ToolsViewsTests(TestCase):
         credential = tool.credentials.get(user=self.user)
         self.assertEqual(credential.config["username"], "alice")
         self.assertEqual(credential.config["password"], "secret")
+
+    def test_configure_email_tool_displays_imap_and_smtp_sections(self):
+        tool = create_tool(
+            self.user,
+            name="Mailbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "IMAP")
+        self.assertContains(response, "SMTP")
+        self.assertContains(response, "Enable email sending")
 
     def test_configure_non_builtin_creates_credential_if_missing(self):
         tool = create_tool(self.user, tool_type=Tool.ToolType.API, endpoint="https://api.example.com")

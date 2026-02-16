@@ -3,6 +3,7 @@ from django.urls import reverse
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
+from nova.models.Tool import Tool
 from nova.models.UserObjects import UserProfile
 from nova.tests.base import BaseTestCase
 from nova.tests.factories import (
@@ -144,6 +145,31 @@ class AgentViewsTest(BaseTestCase):
             set(created_agent.agent_tools.values_list("pk", flat=True)),
             {helper_agent.pk},
         )
+
+    def test_create_form_tool_labels_include_tool_ids_for_disambiguation(self):
+        self._create_provider()
+        tool_a = create_tool(
+            self.user,
+            name="Email (IMAP/SMTP)",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        tool_b = create_tool(
+            self.user,
+            name="Email (IMAP/SMTP)",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+
+        response = self.client.get(reverse("user_settings:agent-add"))
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        labels_by_pk = {str(value): label for value, label in form.fields["tools"].choices if value}
+        self.assertIn(f"(#{tool_a.id},", labels_by_pk[str(tool_a.id)])
+        self.assertIn(f"(#{tool_b.id},", labels_by_pk[str(tool_b.id)])
 
     def test_update_agent_successfully_changes_name(self):
         provider = self._create_provider()

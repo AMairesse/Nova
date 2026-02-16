@@ -3,6 +3,7 @@ import imapclient
 import logging
 import os
 import smtplib
+import copy
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Optional
@@ -15,6 +16,12 @@ from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Tool import Tool, ToolCredential
+from nova.tools.multi_instance import (
+    build_selector_schema,
+    dedupe_instance_labels,
+    format_invalid_instance_message,
+    normalize_instance_key,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -657,26 +664,24 @@ METADATA = {
         {'name': 'use_ssl', 'type': 'boolean', 'label': _('Use SSL for IMAP'), 'required': False, 'default': True,
          'group': 'imap'},
 
-        # SMTP Settings
+        # Authentication
+        {'name': 'username', 'type': 'text', 'label': _('Username'), 'required': True, 'group': 'auth'},
+        {'name': 'password', 'type': 'password', 'label': _('Password'), 'required': True, 'group': 'auth'},
+
+        # SMTP / Sending options
+        {'name': 'enable_sending', 'type': 'boolean',
+         'label': _('Enable email sending (drafts always available)'), 'required': False, 'default': False,
+         'group': 'smtp'},
         {'name': 'smtp_server', 'type': 'text', 'label': _('SMTP Server'), 'required': False, 'group': 'smtp',
          'visible_if': {'field': 'enable_sending', 'equals': True}},
         {'name': 'smtp_port', 'type': 'integer', 'label': _('SMTP Port'), 'required': False, 'default': 587,
          'group': 'smtp', 'visible_if': {'field': 'enable_sending', 'equals': True}},
         {'name': 'smtp_use_tls', 'type': 'boolean', 'label': _('Use TLS for SMTP'), 'required': False, 'default': True,
          'group': 'smtp', 'visible_if': {'field': 'enable_sending', 'equals': True}},
-
-        # Authentication
-        {'name': 'username', 'type': 'text', 'label': _('Username'), 'required': True, 'group': 'auth'},
-        {'name': 'password', 'type': 'password', 'label': _('Password'), 'required': True, 'group': 'auth'},
-
-        # Sending Options
-        {'name': 'enable_sending', 'type': 'boolean',
-         'label': _('Enable email sending (drafts always available)'), 'required': False, 'default': False,
-         'group': 'sending'},
         {'name': 'from_address', 'type': 'text', 'label': _('From Address (needed if username is not an email)'),
-         'required': False, 'group': 'sending', 'visible_if': {'field': 'enable_sending', 'equals': True}},
+         'required': False, 'group': 'smtp', 'visible_if': {'field': 'enable_sending', 'equals': True}},
         {'name': 'sent_folder', 'type': 'text', 'label': _('Sent Folder Name (to move sent emails to)'),
-         'required': False, 'default': 'Sent', 'group': 'sending',
+         'required': False, 'default': 'Sent', 'group': 'smtp',
          'visible_if': {'field': 'enable_sending', 'equals': True}},
     ],
     'test_function': 'test_email_access',
@@ -684,29 +689,546 @@ METADATA = {
 }
 
 
-async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
-    """
-    Return a list of StructuredTool instances for the available functions,
-    with user and id injected via partial.
-    """
-    # Wrap ORM check in sync_to_async
-    has_required_data = await sync_to_async(lambda: bool(tool and tool.user and tool.id), thread_sensitive=False)()
-    if not has_required_data:
-        raise ValueError("Tool instance missing required data (user or id).")
+AGGREGATION_SPEC = {
+    "min_instances": 2,
+}
 
-    # Wrap ORM accesses for user/id
-    user = await sync_to_async(lambda: tool.user, thread_sensitive=False)()
-    tool_id = await sync_to_async(lambda: tool.id, thread_sensitive=False)()
 
-    # Check if sending is enabled
-    enable_sending = False
+_EMAIL_TOOL_SPECS = [
+    (
+        "list_emails",
+        "List recent emails from a mailbox folder",
+        {
+            "type": "object",
+            "properties": {
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "maximum number of emails to return",
+                    "default": 10,
+                },
+            },
+            "required": [],
+        },
+    ),
+    (
+        "read_email",
+        "Read the full content of an email by its message ID",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+            },
+            "required": ["message_id"],
+        },
+    ),
+    (
+        "search_emails",
+        "Search emails by subject or sender",
+        {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "search term",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "maximum number of results",
+                    "default": 10,
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    (
+        "list_mailboxes",
+        "List all available mailbox folders on the email server",
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    (
+        "move_email_to_folder",
+        "Move an email to a different folder (useful for marking as spam)",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID to move",
+                },
+                "source_folder": {
+                    "type": "string",
+                    "description": "source mailbox folder name",
+                    "default": "INBOX",
+                },
+                "target_folder": {
+                    "type": "string",
+                    "description": "target mailbox folder name",
+                    "default": "Junk",
+                },
+            },
+            "required": ["message_id"],
+        },
+    ),
+    (
+        "mark_email_as_read",
+        "Mark an email as read",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+            },
+            "required": ["message_id"],
+        },
+    ),
+    (
+        "mark_email_as_unread",
+        "Mark an email as unread",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+            },
+            "required": ["message_id"],
+        },
+    ),
+    (
+        "delete_email",
+        "Delete an email",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+            },
+            "required": ["message_id"],
+        },
+    ),
+    (
+        "get_server_capabilities",
+        "Get IMAP server capabilities and supported features",
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    (
+        "send_email",
+        "Send an email via SMTP",
+        {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "recipient email address",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "email subject",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "email body content",
+                },
+                "cc": {
+                    "type": "string",
+                    "description": "CC recipients (comma-separated)",
+                    "default": None,
+                },
+            },
+            "required": ["to", "subject", "body"],
+        },
+    ),
+    (
+        "save_draft",
+        "Save an email as draft in the specified folder",
+        {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "recipient email address",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "email subject",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "email body content",
+                },
+                "cc": {
+                    "type": "string",
+                    "description": "CC recipients (comma-separated)",
+                    "default": None,
+                },
+                "draft_folder": {
+                    "type": "string",
+                    "description": "folder to save draft in",
+                    "default": "Drafts",
+                },
+            },
+            "required": ["to", "subject", "body"],
+        },
+    ),
+]
+
+
+def _mailbox_prefix(alias: str, credential: ToolCredential | None) -> str:
+    alias = (alias or "").strip() or "Email"
+    account = ""
+    if credential:
+        cfg = credential.config or {}
+        account = cfg.get("from_address") or cfg.get("username") or ""
+    if account:
+        return f"[Mailbox: {alias}; account: {account}]"
+    return f"[Mailbox: {alias}]"
+
+
+def _with_mailbox_selector(args_schema: dict, mailbox_schema: dict | None) -> dict:
+    schema = copy.deepcopy(args_schema)
+    if not mailbox_schema:
+        return schema
+
+    properties = dict(schema.get("properties") or {})
+    schema["properties"] = {"mailbox": copy.deepcopy(mailbox_schema), **properties}
+    required = list(schema.get("required") or [])
+    if "mailbox" not in required:
+        required.insert(0, "mailbox")
+    schema["required"] = required
+    return schema
+
+
+def _build_toolset(
+    *,
+    wrappers: dict[str, object],
+    description_prefix: str = "",
+    mailbox_schema: dict | None = None,
+) -> list[StructuredTool]:
+    result: list[StructuredTool] = []
+    for name, description, args_schema in _EMAIL_TOOL_SPECS:
+        full_description = f"{description_prefix} {description}".strip()
+        result.append(
+            StructuredTool.from_function(
+                coroutine=wrappers[name],
+                name=name,
+                description=full_description,
+                args_schema=_with_mailbox_selector(args_schema, mailbox_schema),
+            )
+        )
+    return result
+
+
+async def _resolve_user_for_tool(tool: Tool, agent: LLMAgent | None):
+    user = getattr(agent, "user", None) if agent else None
+    if user:
+        return user
+    return await sync_to_async(lambda: tool.user, thread_sensitive=False)()
+
+
+async def _get_credential(user, tool_id: int) -> ToolCredential | None:
     try:
-        credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
-        enable_sending = credential.config.get('enable_sending', False)
+        return await sync_to_async(
+            ToolCredential.objects.get,
+            thread_sensitive=False,
+        )(user=user, tool_id=tool_id)
     except ToolCredential.DoesNotExist:
-        pass  # Will use default False
+        return None
 
-    # Create wrapper functions as langchain 1.1 does not support partial() anymore
+
+def _mailbox_account(credential: ToolCredential | None) -> str:
+    if not credential:
+        return ""
+    cfg = credential.config or {}
+    return (cfg.get("from_address") or cfg.get("username") or "").strip()
+
+
+async def _build_mailbox_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
+    if not tools:
+        raise ValueError("No email tools provided for aggregation.")
+
+    user = getattr(agent, "user", None) or getattr(tools[0], "user", None)
+    if not user:
+        raise ValueError("Cannot resolve user for aggregated email tool.")
+
+    raw_aliases = [((tool.name or "").strip() or "Email") for tool in tools]
+    deduped_aliases = dedupe_instance_labels(raw_aliases, default_label="Email")
+
+    entries = []
+    for tool, base_alias, alias in zip(tools, raw_aliases, deduped_aliases):
+        tool_id = getattr(tool, "id", None)
+        if not tool_id:
+            continue
+
+        if alias != base_alias:
+            logger.warning(
+                "Duplicate or empty email alias '%s' detected for tool_id=%s; using '%s'.",
+                base_alias,
+                tool_id,
+                alias,
+            )
+
+        credential = await _get_credential(user, tool_id)
+        if not credential:
+            logger.warning(
+                "Skipping email alias '%s' (tool_id=%s): no credential configured for user_id=%s.",
+                alias,
+                tool_id,
+                getattr(user, "id", "unknown"),
+            )
+            continue
+
+        config = credential.config or {}
+        if not all([config.get("imap_server"), config.get("username"), config.get("password")]):
+            logger.warning(
+                "Skipping email alias '%s' (tool_id=%s): incomplete IMAP configuration.",
+                alias,
+                tool_id,
+            )
+            continue
+
+        entries.append(
+            {
+                "alias": alias,
+                "tool_id": tool_id,
+                "credential": credential,
+                "account": _mailbox_account(credential),
+                "can_send": bool(config.get("enable_sending", False)),
+            }
+        )
+
+    if not entries:
+        raise ValueError("No configured email mailbox available for aggregation.")
+
+    aliases = [entry["alias"] for entry in entries]
+    lookup = {normalize_instance_key(entry["alias"]): entry for entry in entries}
+    mailbox_schema = build_selector_schema(
+        selector_name="mailbox",
+        labels=aliases,
+        description=f"Mailbox alias to use. Available aliases: {', '.join(aliases)}.",
+    )
+    return user, entries, lookup, mailbox_schema
+
+
+def _resolve_mailbox(mailbox: str, lookup: dict, aliases: list[str]) -> tuple:
+    entry = lookup.get(normalize_instance_key(mailbox))
+    if entry:
+        return entry, None
+    return None, format_invalid_instance_message(
+        selector_name="mailbox",
+        value=mailbox,
+        available_labels=aliases,
+    )
+
+
+async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[StructuredTool]:
+    user, entries, lookup, mailbox_schema = await _build_mailbox_registry(tools, agent)
+    aliases = [entry["alias"] for entry in entries]
+    description_prefix = "[Multi-mailbox email, select a mailbox alias.]"
+
+    async def list_emails_wrapper(mailbox: str, folder: str = "INBOX", limit: int = 10) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await list_emails(user, entry["tool_id"], folder, limit)
+
+    async def read_email_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await read_email(user, entry["tool_id"], message_id, folder)
+
+    async def search_emails_wrapper(
+        mailbox: str,
+        query: str,
+        folder: str = "INBOX",
+        limit: int = 10,
+    ) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await search_emails(user, entry["tool_id"], query, folder, limit)
+
+    async def list_mailboxes_wrapper(mailbox: str) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await list_mailboxes(user, entry["tool_id"])
+
+    async def move_email_to_folder_wrapper(
+        mailbox: str,
+        message_id: int,
+        source_folder: str = "INBOX",
+        target_folder: str = "Junk",
+    ) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await move_email_to_folder(
+            user,
+            entry["tool_id"],
+            message_id,
+            source_folder,
+            target_folder,
+        )
+
+    async def mark_email_as_read_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await mark_email_as_read(user, entry["tool_id"], message_id, folder)
+
+    async def mark_email_as_unread_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await mark_email_as_unread(user, entry["tool_id"], message_id, folder)
+
+    async def delete_email_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await delete_email(user, entry["tool_id"], message_id, folder)
+
+    async def get_server_capabilities_wrapper(mailbox: str) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await get_server_capabilities(user, entry["tool_id"])
+
+    async def send_email_wrapper(
+        mailbox: str,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+    ) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        if not entry["can_send"]:
+            return _(
+                "Sending is disabled for mailbox '{mailbox}'. Enable sending in this mailbox configuration."
+            ).format(mailbox=entry["alias"])
+        return await send_email(user, entry["tool_id"], to, subject, body, cc)
+
+    async def save_draft_wrapper(
+        mailbox: str,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        draft_folder: str = "Drafts",
+    ) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        if err:
+            return err
+        return await save_draft(user, entry["tool_id"], to, subject, body, cc, draft_folder)
+
+    wrappers = {
+        "list_emails": list_emails_wrapper,
+        "read_email": read_email_wrapper,
+        "search_emails": search_emails_wrapper,
+        "list_mailboxes": list_mailboxes_wrapper,
+        "move_email_to_folder": move_email_to_folder_wrapper,
+        "mark_email_as_read": mark_email_as_read_wrapper,
+        "mark_email_as_unread": mark_email_as_unread_wrapper,
+        "delete_email": delete_email_wrapper,
+        "get_server_capabilities": get_server_capabilities_wrapper,
+        "send_email": send_email_wrapper,
+        "save_draft": save_draft_wrapper,
+    }
+    return _build_toolset(
+        wrappers=wrappers,
+        description_prefix=description_prefix,
+        mailbox_schema=mailbox_schema,
+    )
+
+
+async def get_aggregated_prompt_instructions(tools: list[Tool], agent: LLMAgent) -> List[str]:
+    try:
+        _, entries, _, _ = await _build_mailbox_registry(tools, agent)
+    except Exception as e:
+        logger.warning("Could not build aggregated email prompt instructions: %s", str(e))
+        return []
+
+    mailbox_parts = []
+    for entry in entries:
+        account_part = f", account: {entry['account']}" if entry["account"] else ""
+        send_part = "enabled" if entry["can_send"] else "disabled"
+        mailbox_parts.append(f"{entry['alias']} (sending: {send_part}{account_part})")
+
+    return [
+        f"Email mailbox map: {'; '.join(mailbox_parts)}.",
+        "When multiple mailboxes are plausible, ask which mailbox to use.",
+        "Do not send emails from a mailbox where sending is disabled.",
+        "Reuse the current mailbox in the same workflow unless the user asks to switch.",
+    ]
+
+
+async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
+    """Legacy single-mailbox email toolset."""
+    has_required_data = await sync_to_async(
+        lambda: bool(tool and tool.id),
+        thread_sensitive=False,
+    )()
+    if not has_required_data:
+        raise ValueError("Tool instance missing required data (id).")
+
+    user = await _resolve_user_for_tool(tool, agent)
+    if not user:
+        raise ValueError("Tool instance missing required data (user).")
+
+    tool_id = await sync_to_async(lambda: tool.id, thread_sensitive=False)()
+    alias = await sync_to_async(lambda: tool.name, thread_sensitive=False)()
+    credential = await _get_credential(user, tool_id)
+    description_prefix = _mailbox_prefix(alias, credential)
+
     async def list_emails_wrapper(folder: str = "INBOX", limit: int = 10) -> str:
         return await list_emails(user, tool_id, folder, limit)
 
@@ -719,10 +1241,18 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def list_mailboxes_wrapper() -> str:
         return await list_mailboxes(user, tool_id)
 
-    async def move_email_to_folder_wrapper(message_id: int,
-                                           source_folder: str = "INBOX",
-                                           target_folder: str = "Junk") -> str:
-        return await move_email_to_folder(user, tool_id, message_id, source_folder, target_folder)
+    async def move_email_to_folder_wrapper(
+        message_id: int,
+        source_folder: str = "INBOX",
+        target_folder: str = "Junk",
+    ) -> str:
+        return await move_email_to_folder(
+            user,
+            tool_id,
+            message_id,
+            source_folder,
+            target_folder,
+        )
 
     async def mark_email_as_read_wrapper(message_id: int, folder: str = "INBOX") -> str:
         return await mark_email_as_read(user, tool_id, message_id, folder)
@@ -739,277 +1269,29 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def send_email_wrapper(to: str, subject: str, body: str, cc: Optional[str] = None) -> str:
         return await send_email(user, tool_id, to, subject, body, cc)
 
-    async def save_draft_wrapper(to: str, subject: str, body: str,
-                                 cc: Optional[str] = None, draft_folder: str = "Drafts") -> str:
+    async def save_draft_wrapper(
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        draft_folder: str = "Drafts",
+    ) -> str:
         return await save_draft(user, tool_id, to, subject, body, cc, draft_folder)
 
-    # Base tools always available
-    tools = [
-        StructuredTool.from_function(
-            coroutine=list_emails_wrapper,
-            name="list_emails",
-            description="List recent emails from a mailbox folder",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "folder": {
-                        "type": "string",
-                        "description": "mailbox folder name",
-                        "default": "INBOX"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "maximum number of emails to return",
-                        "default": 10
-                    }
-                },
-                "required": []
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=read_email_wrapper,
-            name="read_email",
-            description="Read the full content of an email by its message ID",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "message_id": {
-                        "type": "integer",
-                        "description": "IMAP message ID"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "description": "mailbox folder name",
-                        "default": "INBOX"
-                    }
-                },
-                "required": ["message_id"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=search_emails_wrapper,
-            name="search_emails",
-            description="Search emails by subject or sender",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "search term"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "description": "mailbox folder name",
-                        "default": "INBOX"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "maximum number of results",
-                        "default": 10
-                    }
-                },
-                "required": ["query"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=list_mailboxes_wrapper,
-            name="list_mailboxes",
-            description="List all available mailbox folders on the email server",
-            args_schema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=move_email_to_folder_wrapper,
-            name="move_email_to_folder",
-            description="Move an email to a different folder (useful for marking as spam)",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "message_id": {
-                        "type": "integer",
-                        "description": "IMAP message ID to move"
-                    },
-                    "source_folder": {
-                        "type": "string",
-                        "description": "source mailbox folder name",
-                        "default": "INBOX"
-                    },
-                    "target_folder": {
-                        "type": "string",
-                        "description": "target mailbox folder name",
-                        "default": "Junk"
-                    }
-                },
-                "required": ["message_id"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=mark_email_as_read_wrapper,
-            name="mark_email_as_read",
-            description="Mark an email as read",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "message_id": {
-                        "type": "integer",
-                        "description": "IMAP message ID"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "description": "mailbox folder name",
-                        "default": "INBOX"
-                    }
-                },
-                "required": ["message_id"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=mark_email_as_unread_wrapper,
-            name="mark_email_as_unread",
-            description="Mark an email as unread",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "message_id": {
-                        "type": "integer",
-                        "description": "IMAP message ID"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "description": "mailbox folder name",
-                        "default": "INBOX"
-                    }
-                },
-                "required": ["message_id"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=delete_email_wrapper,
-            name="delete_email",
-            description="Delete an email",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "message_id": {
-                        "type": "integer",
-                        "description": "IMAP message ID"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "description": "mailbox folder name",
-                        "default": "INBOX"
-                    }
-                },
-                "required": ["message_id"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=get_server_capabilities_wrapper,
-            name="get_server_capabilities",
-            description="Get IMAP server capabilities and supported features",
-            args_schema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=send_email_wrapper,
-            name="send_email",
-            description="Send an email via SMTP",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "string",
-                        "description": "recipient email address"
-                    },
-                    "subject": {
-                        "type": "string",
-                        "description": "email subject"
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "email body content"
-                    },
-                    "cc": {
-                        "type": "string",
-                        "description": "CC recipients (comma-separated)",
-                        "default": None
-                    }
-                },
-                "required": ["to", "subject", "body"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=save_draft_wrapper,
-            name="save_draft",
-            description="Save an email as draft in the specified folder",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "string",
-                        "description": "recipient email address"
-                    },
-                    "subject": {
-                        "type": "string",
-                        "description": "email subject"
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "email body content"
-                    },
-                    "cc": {
-                        "type": "string",
-                        "description": "CC recipients (comma-separated)",
-                        "default": None
-                    },
-                    "draft_folder": {
-                        "type": "string",
-                        "description": "folder to save draft in",
-                        "default": "Drafts"
-                    }
-                },
-                "required": ["to", "subject", "body"]
-            }
-        )
-    ]
-
-    # Email sending only if enabled (requires SMTP configuration)
-    if enable_sending:
-        tools.append(
-            StructuredTool.from_function(
-                coroutine=send_email_wrapper,
-                name="send_email",
-                description="Send an email via SMTP",
-                args_schema={
-                    "type": "object",
-                    "properties": {
-                        "to": {
-                            "type": "string",
-                            "description": "recipient email address"
-                        },
-                        "subject": {
-                            "type": "string",
-                            "description": "email subject"
-                        },
-                        "body": {
-                            "type": "string",
-                            "description": "email body content"
-                        },
-                        "cc": {
-                            "type": "string",
-                            "description": "CC recipients (comma-separated)",
-                            "default": None
-                        }
-                    },
-                    "required": ["to", "subject", "body"]
-                }
-            )
-        )
-
-    return tools
+    wrappers = {
+        "list_emails": list_emails_wrapper,
+        "read_email": read_email_wrapper,
+        "search_emails": search_emails_wrapper,
+        "list_mailboxes": list_mailboxes_wrapper,
+        "move_email_to_folder": move_email_to_folder_wrapper,
+        "mark_email_as_read": mark_email_as_read_wrapper,
+        "mark_email_as_unread": mark_email_as_unread_wrapper,
+        "delete_email": delete_email_wrapper,
+        "get_server_capabilities": get_server_capabilities_wrapper,
+        "send_email": send_email_wrapper,
+        "save_draft": save_draft_wrapper,
+    }
+    return _build_toolset(
+        wrappers=wrappers,
+        description_prefix=description_prefix,
+    )

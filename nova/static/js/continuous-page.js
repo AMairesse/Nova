@@ -21,6 +21,8 @@
         fileList: root.dataset.urlFileList,
         fileUpload: root.dataset.urlFileUpload,
         fileDelete: root.dataset.urlFileDelete,
+        interactionAnswer: root.dataset.urlInteractionAnswer,
+        interactionCancel: root.dataset.urlInteractionCancel,
     };
 
     const t = (window.gettext && typeof window.gettext === 'function') ? window.gettext : (s) => s;

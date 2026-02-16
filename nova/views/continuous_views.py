@@ -19,6 +19,7 @@ from nova.continuous.utils import (
 )
 from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
+from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Task import Task, TaskStatus
 from nova.models.UserObjects import UserParameters
@@ -193,6 +194,15 @@ def continuous_messages(request):
     for m in messages:
         m.rendered_html = markdown_to_html(m.text)
 
+    pending_interactions = (
+        Interaction.objects.filter(
+            thread=thread,
+            status=InteractionStatus.PENDING,
+        )
+        .select_related("task", "agent_config")
+        .order_by("created_at", "id")
+    )
+
     # Keep template contract consistent with thread mode.
     return render(
         request,
@@ -202,7 +212,7 @@ def continuous_messages(request):
             "thread_id": thread.id,
             "user_agents": user_agents,
             "default_agent": default_agent,
-            "pending_interactions": [],
+            "pending_interactions": pending_interactions,
             "Actor": Actor,
             "allow_posting": allow_posting,
             "is_continuous_default_mode": day_label is None,

@@ -8,7 +8,10 @@ from django.urls import reverse
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
 from nova.models.DaySegment import DaySegment
+from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
+from nova.models.Task import Task, TaskStatus
+from nova.tests.factories import create_agent, create_provider
 
 
 User = get_user_model()
@@ -151,3 +154,38 @@ class ContinuousViewsTests(TestCase):
         response = self.client.get(reverse("continuous_days"), data={"offset": 0, "limit": 500})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 100)
+
+    def test_continuous_home_exposes_interaction_urls(self):
+        response = self.client.get(reverse("continuous_home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-url-interaction-answer="')
+        self.assertContains(response, 'data-url-interaction-cancel="')
+
+    def test_continuous_messages_includes_pending_interactions(self):
+        thread = ensure_continuous_thread(self.user)
+        provider = create_provider(self.user, name="Continuous Provider")
+        agent = create_agent(self.user, provider, name="Continuous Agent")
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            agent_config=agent,
+            status=TaskStatus.AWAITING_INPUT,
+        )
+
+        interaction = Interaction.objects.create(
+            task=task,
+            thread=thread,
+            agent_config=agent,
+            origin_name=agent.name,
+            question="Which mailbox should I use?",
+            schema={},
+            status=InteractionStatus.PENDING,
+        )
+
+        response = self.client.get(reverse("continuous_messages"))
+
+        self.assertEqual(response.status_code, 200)
+        pending = list(response.context["pending_interactions"])
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].id, interaction.id)

@@ -158,7 +158,10 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertIsNotNone(warning)
         self.assertEqual(warning["agent_id"], str(self.agent.id))
         self.assertEqual(warning["email_tool_id"], str(selected_email_tool.id))
-        self.assertEqual(warning["email_tool_label"], str(selected_email_tool))
+        self.assertEqual(
+            warning["email_tool_label"],
+            f"{selected_email_tool.name} (#{selected_email_tool.id})",
+        )
 
     def test_task_definition_form_email_trigger_no_warning_when_agent_can_use_selected_email_tool(self):
         selected_email_tool = create_tool(

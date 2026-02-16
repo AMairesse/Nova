@@ -144,6 +144,138 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertIn("read_email", names)
         self.assertIn("send_email", names)
         self.assertIn("save_draft", names)
+        self.assertEqual(names.count("send_email"), 1)
+
+    @patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock)
+    def test_get_aggregated_functions_routes_calls_by_mailbox_alias(self, mocked_list_emails):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        mocked_list_emails.return_value = "ok"
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+        first = asyncio.run(list_tool.coroutine(mailbox=self.tool.name, folder="INBOX", limit=2))
+        second = asyncio.run(list_tool.coroutine(mailbox=second_tool.name, folder="INBOX", limit=3))
+
+        self.assertEqual(first, "ok")
+        self.assertEqual(second, "ok")
+        self.assertEqual(mocked_list_emails.await_count, 2)
+        self.assertEqual(mocked_list_emails.await_args_list[0].args[1], self.tool.id)
+        self.assertEqual(mocked_list_emails.await_args_list[1].args[1], second_tool.id)
+
+    def test_get_aggregated_functions_rejects_unknown_mailbox_alias(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+
+        result = asyncio.run(list_tool.coroutine(mailbox="unknown"))
+        self.assertIn("Unknown mailbox", result)
+        self.assertIn(self.tool.name, result)
+        self.assertIn(second_tool.name, result)
+
+    def test_get_aggregated_functions_blocks_send_when_sending_disabled(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        send_tool = next(tool for tool in tools if tool.name == "send_email")
+
+        result = asyncio.run(
+            send_tool.coroutine(
+                mailbox=self.tool.name,
+                to="bob@example.com",
+                subject="Subject",
+                body="Body",
+            )
+        )
+        self.assertIn("Sending is disabled", result)
+
+    def test_get_aggregated_prompt_instructions_include_mailbox_map(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": True,
+                "from_address": "mailbox@example.com",
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        hints = asyncio.run(
+            email_tools.get_aggregated_prompt_instructions([self.tool, second_tool], agent=agent)
+        )
+
+        self.assertTrue(any(hint.startswith("Email mailbox map:") for hint in hints))
+        self.assertTrue(any(self.tool.name in hint for hint in hints))
+        self.assertTrue(any(second_tool.name in hint for hint in hints))
+
+    def test_get_functions_keeps_legacy_names_for_single_email_tool(self):
+        agent = SimpleNamespace(builtin_tools=[self.tool])
+
+        tools = asyncio.run(email_tools.get_functions(self.tool, agent=agent))
+        names = [tool.name for tool in tools]
+        self.assertIn("list_emails", names)
+        self.assertFalse(any(name.startswith("list_emails__") for name in names))
+
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+        self.assertIn("[Mailbox:", list_tool.description)
 
     def test_decode_safe_get_capability_and_format_helpers(self):
         self.assertEqual(email_tools.decode_str("plain"), "plain")
@@ -161,6 +293,19 @@ class EmailBuiltinsTests(TransactionTestCase):
         formatted = email_tools.format_email_info(10, envelope)
         self.assertIn("ID: 10", formatted)
         self.assertIn("Subject: Subject", formatted)
+
+    def test_metadata_groups_sending_controls_under_smtp_with_conditional_fields(self):
+        fields_by_name = {
+            item["name"]: item for item in email_tools.METADATA.get("config_fields", [])
+        }
+
+        self.assertEqual(fields_by_name["enable_sending"]["group"], "smtp")
+        self.assertIn("smtp_server", fields_by_name)
+        self.assertIn("smtp_port", fields_by_name)
+        self.assertIn("smtp_use_tls", fields_by_name)
+        self.assertEqual(fields_by_name["smtp_server"]["visible_if"]["field"], "enable_sending")
+        self.assertEqual(fields_by_name["smtp_port"]["visible_if"]["field"], "enable_sending")
+        self.assertEqual(fields_by_name["smtp_use_tls"]["visible_if"]["field"], "enable_sending")
 
     @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
     def test_list_emails_returns_empty_and_formats_results(self, mocked_get_imap_client):

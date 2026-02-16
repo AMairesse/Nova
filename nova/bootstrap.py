@@ -65,6 +65,17 @@ def _find_tool(subtype: str, user, require_user_cred: bool = False) -> Optional[
     If require_user_cred is True (e.g. for caldav), ensures there exists a ToolCredential
     for this user that looks configured.
     """
+    matches = _find_tools(subtype, user, require_user_cred=require_user_cred)
+    return matches[0] if matches else None
+
+
+def _find_tools(subtype: str, user, require_user_cred: bool = False) -> List[Tool]:
+    """
+    Find all builtin tools by subtype, visible to the user, ordered deterministically.
+
+    If require_user_cred is True (e.g. for email/caldav), only return tools with
+    configured credentials for this user.
+    """
     # Prefer user-owned then system
     tools = Tool.objects.filter(
         tool_type=Tool.ToolType.BUILTIN,
@@ -77,16 +88,18 @@ def _find_tool(subtype: str, user, require_user_cred: bool = False) -> Optional[
         "pk",
     )
 
+    matched_tools = []
     for tool in tools:
         if not require_user_cred:
-            return tool
+            matched_tools.append(tool)
+            continue
 
         # Require a credential for this user that has some config
         cred = ToolCredential.objects.filter(user=user, tool=tool).first()
         if cred and (cred.config or cred.token or cred.username or cred.password):
-            return tool
+            matched_tools.append(tool)
 
-    return None
+    return matched_tools
 
 
 def _get_or_create_builtin_tool(
@@ -451,8 +464,8 @@ def ensure_nova_agent(
 
 def ensure_email_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
     # Email tool is required but checked separately since it needs credentials
-    email_tool = _find_tool("email", user, require_user_cred=True)
-    if not email_tool:
+    email_tools = _find_tools("email", user, require_user_cred=True)
+    if not email_tools:
         summary.skipped_agents.append({
             "name": "Email Agent",
             "reason": "Email tool not configured (missing credentials)",
@@ -481,7 +494,7 @@ def ensure_email_agent(user, provider, tools: Dict[str, Tool], summary: Bootstra
             "email details for sending operations. Supports email threading, folder management, and "
             "automatic archiving of sent messages."
         ),
-        special_tools=[email_tool],
+        special_tools=email_tools,
     )
 
 
