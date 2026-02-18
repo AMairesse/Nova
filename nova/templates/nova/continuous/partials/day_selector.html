@@ -1,42 +1,92 @@
 {% load i18n %}
 
-<ul class="list-group list-group-flush">
-  <li class="list-group-item d-flex justify-content-between align-items-center">
-    <a
-      href="?"
-      class="text-decoration-none"
-      data-day-label=""
-      data-default-view="true"
-    >
-      {% trans "Latest messages" %}
-    </a>
-    <span class="badge text-bg-primary">{{ default_recent_messages_limit }}</span>
-  </li>
+<div class="continuous-days-fragment" data-days-offset="{{ offset }}" data-days-limit="{{ limit }}" data-days-query="{{ applied_query }}">
+  <ul class="list-group list-group-flush continuous-days-list-group">
+    {% if offset == 0 %}
+      <li class="list-group-item p-0 continuous-days-row continuous-days-row-latest">
+        <a
+          href="?"
+          class="continuous-day-link text-decoration-none"
+          data-day-link="true"
+          data-day-label=""
+          data-default-view="true"
+          aria-current="false"
+        >
+          <span class="continuous-day-labels">
+            <span class="continuous-day-main">{% trans "Latest messages" %}</span>
+            <span class="continuous-day-meta">
+              {% blocktrans with count=default_recent_messages_limit %}
+                Last {{ count }} messages
+              {% endblocktrans %}
+            </span>
+          </span>
+          <span class="badge text-bg-primary">{{ default_recent_messages_limit }}</span>
+        </a>
+      </li>
+    {% endif %}
 
-  {% for seg in day_segments %}
-    <li class="list-group-item d-flex justify-content-between align-items-center">
-      <a
-        href="?day={{ seg.day_label|date:'Y-m-d' }}"
-        class="text-decoration-none"
-        data-day-label="{{ seg.day_label|date:'Y-m-d' }}"
-      >
-        {% if today and seg.day_label == today %}
-          {% trans "Today" %}
-        {% else %}
-          {{ seg.day_label|date:'Y-m-d' }}
-        {% endif %}
-      </a>
-      {% if seg.summary_markdown %}
-        <span class="badge text-bg-success">{% trans "Summary" %}</span>
-      {% elif today and seg.day_label == today %}
-        {# Today is expected to have no summary by default; show no badge. #}
-      {% else %}
-        <span class="badge text-bg-secondary">{% trans "Empty" %}</span>
-      {% endif %}
-    </li>
-  {% endfor %}
-</ul>
+    {% for group in day_groups %}
+      <li class="list-group-item continuous-month-heading py-2" data-month-key-header="{{ group.month_key }}">
+        {{ group.month_start|date:"F Y" }}
+      </li>
 
-{% if not day_segments %}
-  <div class="text-muted small p-3">{% trans "No days yet." %}</div>
-{% endif %}
+      {% for seg in group.items %}
+        {% with day_iso=seg.day_label|date:'Y-m-d' %}
+          <li class="list-group-item p-0 continuous-days-row">
+            <a
+              href="?day={{ day_iso }}"
+              class="continuous-day-link text-decoration-none"
+              data-day-link="true"
+              data-day-label="{{ day_iso }}"
+              aria-current="false"
+            >
+              <span class="continuous-day-labels">
+                <span class="continuous-day-main">
+                  {% if today and seg.day_label == today %}
+                    {% trans "Today" %}
+                  {% else %}
+                    {{ day_iso }}
+                  {% endif %}
+                </span>
+                <span class="continuous-day-meta">
+                  {% blocktrans with updated=seg.updated_at|date:"Y-m-d H:i" %}
+                    Updated {{ updated }}
+                  {% endblocktrans %}
+                </span>
+              </span>
+
+              {% if seg.summary_markdown %}
+                <span class="badge text-bg-success">{% trans "Summary" %}</span>
+              {% else %}
+                <span class="badge text-bg-secondary">{% trans "No summary" %}</span>
+              {% endif %}
+            </a>
+          </li>
+        {% endwith %}
+      {% endfor %}
+    {% endfor %}
+
+    {% if has_more %}
+      <li class="list-group-item p-2 text-center" data-load-more-item="true">
+        <button
+          class="btn btn-outline-primary btn-sm"
+          type="button"
+          data-action="continuous-load-older"
+          data-next-offset="{{ next_offset }}"
+          data-limit="{{ limit }}"
+        >
+          <i class="bi bi-arrow-down-circle me-1"></i>
+          {% trans "Load older days" %}
+        </button>
+      </li>
+    {% endif %}
+  </ul>
+
+  {% if offset == 0 and not day_segments %}
+    {% if applied_query %}
+      <div class="text-muted small p-3">{% trans "No matching days." %}</div>
+    {% else %}
+      <div class="text-muted small p-3">{% trans "No days yet." %}</div>
+    {% endif %}
+  {% endif %}
+</div>

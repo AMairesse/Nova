@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -27,12 +28,75 @@ from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
 
+_YEAR_RE = re.compile(r"^\d{4}$")
+_YEAR_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def _get_recent_messages_limit(user) -> int:
     params = UserParameters.objects.filter(user=user).only("continuous_default_messages_limit").first()
     if params:
         return params.continuous_default_messages_limit
     return UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT
+
+
+def _parse_positive_int(value: str | None, default: int) -> int:
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_day_query(qs, raw_query: str | None):
+    """Apply structured date filtering to day segments.
+
+    Supported query formats:
+    - YYYY
+    - YYYY-MM
+    - YYYY-MM-DD
+    """
+    applied_query = (raw_query or "").strip()
+    if not applied_query:
+        return qs, ""
+
+    if _YEAR_RE.match(applied_query):
+        return qs.filter(day_label__year=int(applied_query)), applied_query
+
+    if _YEAR_MONTH_RE.match(applied_query):
+        year_str, month_str = applied_query.split("-", 1)
+        month = int(month_str)
+        if 1 <= month <= 12:
+            return qs.filter(day_label__year=int(year_str), day_label__month=month), applied_query
+        return qs.none(), applied_query
+
+    if _DATE_RE.match(applied_query):
+        try:
+            day_label = dt.date.fromisoformat(applied_query)
+        except ValueError:
+            return qs.none(), applied_query
+        return qs.filter(day_label=day_label), applied_query
+
+    return qs.none(), applied_query
+
+
+def _group_day_segments_by_month(day_segments: list[DaySegment]):
+    groups = []
+    current_group = None
+    current_key = None
+
+    for segment in day_segments:
+        key = segment.day_label.strftime("%Y-%m")
+        if key != current_key:
+            current_key = key
+            current_group = {
+                "month_key": key,
+                "month_start": segment.day_label.replace(day=1),
+                "items": [],
+            }
+            groups.append(current_group)
+        current_group["items"].append(segment)
+
+    return groups
 
 
 @login_required(login_url="login")
@@ -89,27 +153,44 @@ def continuous_home(request):
 @login_required(login_url="login")
 def continuous_days(request):
     thread = ensure_continuous_thread(request.user)
-    offset = int(request.GET.get("offset", 0))
-    limit = int(request.GET.get("limit", 30))
+    offset = max(0, _parse_positive_int(request.GET.get("offset"), 0))
+    limit = _parse_positive_int(request.GET.get("limit"), 30)
     limit = max(1, min(limit, 100))
+    query = request.GET.get("q")
 
     today = get_day_label_for_user(request.user)
 
     qs = DaySegment.objects.filter(user=request.user, thread=thread).order_by("-day_label")
+    qs, applied_query = _apply_day_query(qs, query)
+    total_count = qs.count()
     segments = list(qs[offset: offset + limit])
+    next_offset = offset + len(segments)
+    has_more = next_offset < total_count
 
     html = render_to_string(
         "nova/continuous/partials/day_selector.html",
         {
             "day_segments": segments,
+            "day_groups": _group_day_segments_by_month(segments),
             "offset": offset,
             "limit": limit,
             "today": today,
+            "has_more": has_more,
+            "next_offset": next_offset if has_more else None,
+            "applied_query": applied_query,
             "default_recent_messages_limit": _get_recent_messages_limit(request.user),
         },
         request=request,
     )
-    return JsonResponse({"html": html, "count": len(segments)})
+    return JsonResponse(
+        {
+            "html": html,
+            "count": len(segments),
+            "has_more": has_more,
+            "next_offset": next_offset if has_more else None,
+            "applied_query": applied_query,
+        }
+    )
 
 
 @require_GET
