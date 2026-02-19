@@ -1,5 +1,14 @@
 # Tasks Documentation
 
-This file is intentionally kept minimal.
+## Repetitive Workflow: Promote a builtin tool to on-demand skill
 
-Nova is still evolving quickly; add entries here only for **repetitive workflows** you want to preserve.
+1. Add `METADATA.loading` in the builtin module.
+2. Add/maintain `get_skill_instructions(...)` for activation-time guidance.
+3. Ensure runtime registers skill in catalog.
+4. Ensure `load_skill(<id>)` exposes tools only for current turn.
+5. Validate aggregated and non-aggregated tool behavior remains intact.
+6. Add/update tests:
+- visibility before/after activation
+- unknown skill errors
+- aggregation compatibility
+- safety constraints unchanged

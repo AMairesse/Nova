@@ -70,6 +70,15 @@
 - **coverage 7.11.0** - Code coverage measurement
 - **Django TestCase** - Built-in test framework
 
+## Skills Runtime Notes (V1)
+
+- Target integration style: tool-based agents (no shell-based skill loading).
+- Skill policy source: builtin Python module metadata (`METADATA.loading`).
+- Runtime control tools: `list_skills`, `load_skill`.
+- Tool visibility control uses LangChain middleware request override pattern.
+- No DB migration required for V1 skills.
+- V1 keeps skill instructions in code; filesystem `SKILL.md` packaging deferred.
+
 ## Development Setup
 
 ### Prerequisites
