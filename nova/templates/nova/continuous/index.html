@@ -59,12 +59,24 @@
     </div>
 
     <!-- Message Area (Center) -->
-    <div class="col-12 d-flex flex-column h-100" id="message-area" data-files-visible="true">
+    <div class="col-12 d-flex flex-column h-100" id="message-area" data-files-visible="true" data-days-visible="true">
       <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light d-none d-lg-flex">
         <h5 class="mb-0">{% trans "Continuous" %}</h5>
-        <button class="btn btn-sm btn-outline-secondary" type="button" id="files-toggle-btn" aria-expanded="true" aria-controls="files-sidebar">
-          <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
-        </button>
+        <div class="d-flex gap-2">
+          <button
+            class="btn btn-sm btn-outline-secondary"
+            type="button"
+            id="continuous-days-toggle-btn"
+            aria-expanded="true"
+            aria-controls="threads-sidebar"
+            title="{% trans 'Toggle days panel' %}"
+          >
+            <i class="bi bi-layout-sidebar-inset" id="continuous-days-toggle-icon"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" type="button" id="files-toggle-btn" aria-expanded="true" aria-controls="files-sidebar">
+            <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
+          </button>
+        </div>
       </div>
 
       <!-- Day summary (client-rendered from /continuous/day/<day>/, no SYSTEM message injection).

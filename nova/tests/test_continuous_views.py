@@ -277,6 +277,13 @@ class ContinuousViewsTests(TestCase):
         self.assertContains(response, 'data-url-interaction-answer="')
         self.assertContains(response, 'data-url-interaction-cancel="')
 
+    def test_continuous_home_exposes_days_sidebar_toggle_controls(self):
+        response = self.client.get(reverse("continuous_home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="continuous-days-toggle-btn"')
+        self.assertContains(response, 'id="continuous-days-toggle-icon"')
+
     def test_continuous_messages_includes_pending_interactions(self):
         thread = ensure_continuous_thread(self.user)
         provider = create_provider(self.user, name="Continuous Provider")

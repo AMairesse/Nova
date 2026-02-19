@@ -266,23 +266,78 @@ body {
         pointer-events: none;
     }
 
-    /* Continuous layout: days (3 cols) + messages (7 cols) + files (2 cols). */
-    #continuous-page-root #message-area[data-files-visible="true"] {
+    /* Continuous layout matrix */
+    #continuous-page-root #message-area[data-days-visible="true"][data-files-visible="true"] {
         flex: 0 0 58.333333%;
         /* col-lg-7 equivalent */
         max-width: 58.333333%;
     }
 
-    /* Continuous layout when files are hidden: days (3 cols) + messages (9 cols). */
-    #continuous-page-root #message-area[data-files-visible="false"] {
+    #continuous-page-root #message-area[data-days-visible="true"][data-files-visible="false"] {
         flex: 0 0 75%;
         /* col-lg-9 equivalent */
         max-width: 75%;
     }
 
-    html.pref-files-hidden #continuous-page-root #message-area {
+    #continuous-page-root #message-area[data-days-visible="false"][data-files-visible="true"] {
+        flex: 0 0 83.333333%;
+        /* col-lg-10 equivalent */
+        max-width: 83.333333%;
+    }
+
+    #continuous-page-root #message-area[data-days-visible="false"][data-files-visible="false"] {
+        flex: 0 0 100%;
+        /* col-lg-12 equivalent */
+        max-width: 100%;
+    }
+
+    html.pref-files-hidden #continuous-page-root #message-area[data-days-visible="true"] {
         flex: 0 0 75%;
         max-width: 75%;
+    }
+
+    html.pref-files-hidden #continuous-page-root #message-area[data-days-visible="false"] {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    #continuous-page-root #threads-sidebar {
+        transition: flex-basis 0.3s ease, max-width 0.3s ease, width 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    #continuous-page-root #threads-sidebar.days-hidden {
+        flex: 0 0 0 !important;
+        max-width: 0 !important;
+        width: 0 !important;
+        border-right: 0 !important;
+        opacity: 0;
+        transform: translateX(-100%);
+        pointer-events: none;
+    }
+
+    html.pref-continuous-days-hidden #continuous-page-root #threads-sidebar {
+        flex: 0 0 0 !important;
+        max-width: 0 !important;
+        width: 0 !important;
+        border-right: 0 !important;
+        opacity: 0;
+        transform: translateX(-100%);
+        pointer-events: none;
+    }
+
+    html.pref-continuous-days-hidden #continuous-page-root #message-area[data-files-visible="true"] {
+        flex: 0 0 83.333333%;
+        max-width: 83.333333%;
+    }
+
+    html.pref-continuous-days-hidden #continuous-page-root #message-area[data-files-visible="false"] {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    html.pref-continuous-days-hidden.pref-files-hidden #continuous-page-root #message-area {
+        flex: 0 0 100%;
+        max-width: 100%;
     }
 }
 

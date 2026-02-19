@@ -37,6 +37,7 @@
         reconnectChecked: false,
         daysRefreshTimer: null,
         regenerateBusy: false,
+        daysVisible: true,
         daysOffset: 0,
         daysHasMore: false,
         daysQuery: '',
@@ -100,6 +101,14 @@
         ].filter(Boolean);
     }
 
+    function getDaysToggleButton() {
+        return document.getElementById('continuous-days-toggle-btn');
+    }
+
+    function getDaysToggleIcon() {
+        return document.getElementById('continuous-days-toggle-icon');
+    }
+
     function getDaysScrollerForListId(listId) {
         if (listId === 'threads-list') {
             return document.getElementById('threads-container');
@@ -143,6 +152,84 @@
             btn.classList.toggle('active', isToday);
             btn.setAttribute('aria-pressed', isToday ? 'true' : 'false');
         });
+    }
+
+    function getDaysSidebarVisibilityKey() {
+        if (window.StorageUtils && typeof window.StorageUtils.getContinuousDaysSidebarVisibleKey === 'function') {
+            return window.StorageUtils.getContinuousDaysSidebarVisibleKey();
+        }
+        return 'nova:continuousDaysSidebarVisible';
+    }
+
+    function readSavedDaysVisibility() {
+        const key = getDaysSidebarVisibilityKey();
+        if (window.StorageUtils && typeof window.StorageUtils.getItem === 'function') {
+            return window.StorageUtils.getItem(key, 'true') !== 'false';
+        }
+        try {
+            return localStorage.getItem(key) !== 'false';
+        } catch (err) {
+            return true;
+        }
+    }
+
+    function saveDaysVisibility(visible) {
+        const key = getDaysSidebarVisibilityKey();
+        document.documentElement.classList.toggle('pref-continuous-days-hidden', !visible);
+        if (window.StorageUtils && typeof window.StorageUtils.setItem === 'function') {
+            window.StorageUtils.setItem(key, visible ? 'true' : 'false');
+            return;
+        }
+        try {
+            localStorage.setItem(key, visible ? 'true' : 'false');
+        } catch (err) {
+            // no-op
+        }
+    }
+
+    function applyDaysVisibility(visible, { persist = false } = {}) {
+        const normalized = Boolean(visible);
+        const daysSidebar = document.getElementById('threads-sidebar');
+        const messageArea = document.getElementById('message-area');
+        const toggleBtn = getDaysToggleButton();
+        const toggleIcon = getDaysToggleIcon();
+
+        if (daysSidebar) {
+            daysSidebar.classList.toggle('days-hidden', !normalized);
+        }
+        if (messageArea) {
+            messageArea.setAttribute('data-days-visible', normalized ? 'true' : 'false');
+        }
+        if (toggleBtn) {
+            toggleBtn.setAttribute('aria-expanded', normalized ? 'true' : 'false');
+        }
+        if (toggleIcon) {
+            toggleIcon.className = normalized ? 'bi bi-layout-sidebar-inset' : 'bi bi-layout-sidebar-inset-reverse';
+        }
+
+        state.daysVisible = normalized;
+        if (persist) {
+            saveDaysVisibility(normalized);
+        }
+    }
+
+    function showDaysSidebar() {
+        applyDaysVisibility(true, { persist: true });
+    }
+
+    function hideDaysSidebar() {
+        applyDaysVisibility(false, { persist: true });
+    }
+
+    function toggleDaysSidebar() {
+        if (window.innerWidth < 992) {
+            return;
+        }
+        if (state.daysVisible) {
+            hideDaysSidebar();
+        } else {
+            showDaysSidebar();
+        }
     }
 
     function buildDaySummaryUrl(day) {
@@ -637,6 +724,18 @@
         });
     }
 
+    function bindDaysSidebarToggle() {
+        const btn = getDaysToggleButton();
+        if (!btn || btn._novaBoundDaysToggle) {
+            return;
+        }
+        btn._novaBoundDaysToggle = true;
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            toggleDaysSidebar();
+        });
+    }
+
     document.getElementById('continuous-load-days')?.addEventListener('click', (e) => {
         e.preventDefault();
         loadDays({ offset: 0, append: false, withLoading: false, preserveScroll: true });
@@ -686,6 +785,10 @@
         bindQuickActionButtons();
         bindJumpInputs();
         bindSearchInputs();
+        bindDaysSidebarToggle();
+
+        state.daysVisible = readSavedDaysVisibility();
+        applyDaysVisibility(state.daysVisible, { persist: false });
 
         await loadDays({ offset: 0, append: false, withLoading: true, preserveScroll: false });
 
