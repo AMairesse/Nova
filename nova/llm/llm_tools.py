@@ -4,6 +4,13 @@ import re
 import inspect
 from typing import List
 from langchain_core.tools import StructuredTool
+from nova.llm.skill_policy import (
+    TOOL_SKILL_CONTROL_ATTR,
+    SkillLoadingPolicy,
+    apply_skill_policy_to_tool,
+    get_module_skill_policy,
+)
+from nova.llm.skill_runtime_tools import build_skill_control_tools
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +65,67 @@ async def load_tools(agent) -> List[StructuredTool]:
     tools = []
     loaded_builtin_modules = []
     collected_prompt_hints: list[str] = []
+    skill_catalog: dict[str, dict] = {}
+    skill_instructions_loaded_for: set[str] = set()
+
+    def _ensure_skill_entry(policy: SkillLoadingPolicy) -> dict:
+        return skill_catalog.setdefault(
+            policy.skill_id,
+            {
+                "id": policy.skill_id,
+                "label": policy.skill_label or policy.skill_id,
+                "tool_names": [],
+                "instructions": [],
+            },
+        )
+
+    async def _collect_skill_instructions(module, *, grouped_tools, policy: SkillLoadingPolicy):
+        if not policy.is_skill:
+            return
+
+        module_name = getattr(module, "__name__", repr(module))
+        dedupe_key = f"{module_name}:{policy.skill_id}"
+        if dedupe_key in skill_instructions_loaded_for:
+            return
+        skill_instructions_loaded_for.add(dedupe_key)
+
+        provider = getattr(module, "get_skill_instructions", None)
+        if not callable(provider):
+            return
+
+        try:
+            instructions = provider(agent=agent, tools=grouped_tools)
+            if inspect.isawaitable(instructions):
+                instructions = await instructions
+        except Exception as e:
+            logger.warning(
+                "Could not load skill instructions from %s (%s): %s",
+                module_name,
+                policy.skill_id,
+                str(e),
+            )
+            return
+
+        if isinstance(instructions, str):
+            instructions = [instructions]
+
+        entry = _ensure_skill_entry(policy)
+        for instruction in instructions or []:
+            text = str(instruction or "").strip()
+            if text and text not in entry["instructions"]:
+                entry["instructions"].append(text)
+
+    def _tag_loaded_tools_as_skill(loaded_tools: list[StructuredTool], policy: SkillLoadingPolicy):
+        for loaded_tool in loaded_tools:
+            apply_skill_policy_to_tool(loaded_tool, policy)
+
+            if not policy.is_skill:
+                continue
+
+            entry = _ensure_skill_entry(policy)
+            tool_name = str(getattr(loaded_tool, "name", "") or "").strip()
+            if tool_name and tool_name not in entry["tool_names"]:
+                entry["tool_names"].append(tool_name)
 
     def _append_prompt_hints(hints):
         if not hints:
@@ -127,6 +195,7 @@ async def load_tools(agent) -> List[StructuredTool]:
         if not module:
             logger.warning(f"Failed to import module for builtin tool: {python_path}")
             continue
+        module_skill_policy = get_module_skill_policy(module)
 
         try:
             # Call init once per module if available.
@@ -149,6 +218,7 @@ async def load_tools(agent) -> List[StructuredTool]:
                             tools=grouped_tools,
                             agent=agent,
                         )
+                        _tag_loaded_tools_as_skill(loaded_tools, module_skill_policy)
                         tools.extend(loaded_tools)
                         aggregation_used = True
                     except Exception as e:
@@ -160,6 +230,11 @@ async def load_tools(agent) -> List[StructuredTool]:
 
             if aggregation_used:
                 await _collect_prompt_hints(module, grouped_tools=grouped_tools)
+                await _collect_skill_instructions(
+                    module,
+                    grouped_tools=grouped_tools,
+                    policy=module_skill_policy,
+                )
             else:
                 tool_loader = getattr(module, "get_functions", None)
                 if not callable(tool_loader):
@@ -172,10 +247,16 @@ async def load_tools(agent) -> List[StructuredTool]:
                 for tool_obj in grouped_tools:
                     try:
                         loaded_tools = await tool_loader(tool=tool_obj, agent=agent)
+                        _tag_loaded_tools_as_skill(loaded_tools, module_skill_policy)
                         tools.extend(loaded_tools)
                     except Exception as e:
                         logger.error(f"Error loading builtin tool {tool_obj.tool_subtype}: {str(e)}")
                 await _collect_prompt_hints(module)
+                await _collect_skill_instructions(
+                    module,
+                    grouped_tools=grouped_tools,
+                    policy=module_skill_policy,
+                )
 
             # Track module for cleanup once.
             loaded_builtin_modules.append(module)
@@ -200,14 +281,19 @@ async def load_tools(agent) -> List[StructuredTool]:
             from nova.continuous.tools import conversation_tools
 
             loaded_tools = await conversation_tools.get_functions(tool=None, agent=agent)
+            _tag_loaded_tools_as_skill(loaded_tools, get_module_skill_policy(conversation_tools))
             tools.extend(loaded_tools)
             loaded_builtin_modules.append(conversation_tools)
             await _collect_prompt_hints(conversation_tools)
     except Exception as e:
         logger.warning(f"Failed to auto-load conversation builtin tools: {e}")
 
+    # Add skill control tools after builtins are loaded and skill catalog is known.
+    tools.extend(build_skill_control_tools(skill_catalog))
+
     agent._loaded_builtin_modules = loaded_builtin_modules
     agent.tool_prompt_hints = collected_prompt_hints
+    agent.skill_catalog = skill_catalog
 
     # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
     for tool_obj, cred, cached_func_metas, cred_user_id in agent.mcp_tools_data:
@@ -277,4 +363,10 @@ async def load_tools(agent) -> List[StructuredTool]:
     file_tools = await files.get_functions(agent)
     tools.extend(file_tools)
 
-    return _dedupe_tool_names(tools)
+    deduped_tools = _dedupe_tool_names(tools)
+    agent.skill_control_tool_names = [
+        str(getattr(tool, "name", "") or "").strip()
+        for tool in deduped_tools
+        if getattr(tool, TOOL_SKILL_CONTROL_ATTR, False)
+    ]
+    return deduped_tools

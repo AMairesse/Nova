@@ -13,6 +13,7 @@ from django.db.models import Count, Q
 from nova.models.UserFile import UserFile
 from nova.models.Memory import MemoryTheme
 from nova.models.Tool import Tool
+from nova.llm.skill_tool_filter import resolve_active_skills
 from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,51 @@ async def nova_system_prompt(request: ModelRequest) -> str:
         for hint in tool_hints:
             base_prompt += f"- {hint}\n"
 
+    skill_catalog = _get_skill_catalog(runtime_context)
+    if skill_catalog:
+        available = ", ".join(
+            [
+                f"{entry.get('label') or skill_id} ({skill_id})"
+                for skill_id, entry in sorted(skill_catalog.items())
+            ]
+        )
+        base_prompt += (
+            "\n\nOn-demand skills available: "
+            f"{available}. Use load_skill with the skill id to activate one for the current turn."
+        )
+
+        state = request.state if isinstance(request.state, dict) else {}
+        control_tool_names = {
+            str(name or "").strip()
+            for name in list(getattr(runtime_context, "skill_control_tool_names", []) or [])
+            if str(name or "").strip()
+        }
+        load_skill_tool_names = {
+            name
+            for name in control_tool_names
+            if name == "load_skill" or name.startswith("load_skill__dup")
+        }
+        if not load_skill_tool_names:
+            load_skill_tool_names = {"load_skill"}
+
+        active_skills = resolve_active_skills(
+            state.get("messages", []),
+            set(skill_catalog.keys()),
+            load_skill_tool_names=load_skill_tool_names,
+        )
+        if active_skills:
+            if runtime_context is not None:
+                runtime_context.active_skill_ids = sorted(active_skills)
+            base_prompt += "\n\nActive skills (current turn):\n"
+            for skill_id in sorted(active_skills):
+                entry = skill_catalog.get(skill_id, {})
+                skill_label = str(entry.get("label") or skill_id)
+                base_prompt += f"- {skill_label} ({skill_id})\n"
+                for instruction in list(entry.get("instructions", []) or []):
+                    text = str(instruction or "").strip()
+                    if text:
+                        base_prompt += f"  {text}\n"
+
     return base_prompt
 
 
@@ -96,6 +142,19 @@ def _get_tool_prompt_hints(runtime_context) -> list[str]:
         s = str(h or "").strip()
         if s and s not in out:
             out.append(s)
+    return out
+
+
+def _get_skill_catalog(runtime_context) -> dict[str, dict]:
+    raw = getattr(runtime_context, "skill_catalog", {}) or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for skill_id, payload in raw.items():
+        sid = str(skill_id or "").strip()
+        if not sid:
+            continue
+        out[sid] = payload if isinstance(payload, dict) else {}
     return out
 
 

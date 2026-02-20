@@ -655,6 +655,11 @@ async def test_email_access(user, tool_id):
 METADATA = {
     'name': 'Email (IMAP/SMTP)',
     'description': 'Read, send emails and manage drafts via IMAP/SMTP',
+    'loading': {
+        'mode': 'skill',
+        'skill_id': 'mail',
+        'skill_label': 'Mail',
+    },
     'requires_config': True,
     'config_fields': [
         # IMAP Settings
@@ -687,6 +692,14 @@ METADATA = {
     'test_function': 'test_email_access',
     'test_function_args': ['user', 'tool_id'],
 }
+
+
+def get_skill_instructions(agent=None, tools=None) -> list[str]:
+    return [
+        "Use preview-oriented reads first to keep context compact; read full content only when necessary.",
+        "Never send an email when key details are missing (recipient, subject, or message body intent). Ask first.",
+        "Use list_mailboxes before bulk organization to avoid invalid folder names and unintended moves.",
+    ]
 
 
 AGGREGATION_SPEC = {
