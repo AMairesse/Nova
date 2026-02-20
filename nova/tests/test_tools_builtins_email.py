@@ -147,7 +147,7 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertEqual(names.count("send_email"), 1)
 
     @patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock)
-    def test_get_aggregated_functions_routes_calls_by_mailbox_alias(self, mocked_list_emails):
+    def test_get_aggregated_functions_routes_calls_by_mailbox_email(self, mocked_list_emails):
         second_tool = create_tool(
             self.user,
             name="Personal mailbox",
@@ -170,8 +170,8 @@ class EmailBuiltinsTests(TransactionTestCase):
         tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
 
         list_tool = next(tool for tool in tools if tool.name == "list_emails")
-        first = asyncio.run(list_tool.coroutine(mailbox=self.tool.name, folder="INBOX", limit=2))
-        second = asyncio.run(list_tool.coroutine(mailbox=second_tool.name, folder="INBOX", limit=3))
+        first = asyncio.run(list_tool.coroutine(mailbox="alice@example.com", folder="INBOX", limit=2))
+        second = asyncio.run(list_tool.coroutine(mailbox="bob@example.com", folder="INBOX", limit=3))
 
         self.assertEqual(first, "ok")
         self.assertEqual(second, "ok")
@@ -179,7 +179,81 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertEqual(mocked_list_emails.await_args_list[0].args[1], self.tool.id)
         self.assertEqual(mocked_list_emails.await_args_list[1].args[1], second_tool.id)
 
-    def test_get_aggregated_functions_rejects_unknown_mailbox_alias(self):
+    @patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock)
+    def test_get_aggregated_functions_accepts_mailbox_account_identifier(self, mocked_list_emails):
+        second_tool = create_tool(
+            self.user,
+            name="Email - antoine.mairesse@free.fr",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.free.fr",
+                "username": "antoine.mairesse@free.fr",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        mocked_list_emails.return_value = "ok"
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+        result = asyncio.run(list_tool.coroutine(mailbox="antoine.mairesse@free.fr", folder="INBOX", limit=5))
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(mocked_list_emails.await_count, 1)
+        self.assertEqual(mocked_list_emails.await_args_list[0].args[1], second_tool.id)
+
+    @patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock)
+    def test_get_aggregated_functions_rejects_ambiguous_mailbox_identifier(self, mocked_list_emails):
+        second_tool = create_tool(
+            self.user,
+            name="Work mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        third_tool = create_tool(
+            self.user,
+            name="Support mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.work.example.com",
+                "username": "shared@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+        create_tool_credential(
+            self.user,
+            third_tool,
+            config={
+                "imap_server": "imap.support.example.com",
+                "username": "shared@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool, third_tool])
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool, third_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+
+        result = asyncio.run(list_tool.coroutine(mailbox="shared@example.com"))
+        self.assertIn("Ambiguous mailbox", result)
+        self.assertIn("shared@example.com", result)
+        mocked_list_emails.assert_not_awaited()
+
+    def test_get_aggregated_functions_rejects_unknown_mailbox_email(self):
         second_tool = create_tool(
             self.user,
             name="Personal mailbox",
@@ -203,8 +277,34 @@ class EmailBuiltinsTests(TransactionTestCase):
 
         result = asyncio.run(list_tool.coroutine(mailbox="unknown"))
         self.assertIn("Unknown mailbox", result)
-        self.assertIn(self.tool.name, result)
-        self.assertIn(second_tool.name, result)
+        self.assertIn("alice@example.com", result)
+        self.assertIn("bob@example.com", result)
+
+    def test_get_aggregated_functions_rejects_alias_values(self):
+        second_tool = create_tool(
+            self.user,
+            name="Personal mailbox",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(email_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_emails")
+
+        result = asyncio.run(list_tool.coroutine(mailbox=second_tool.name))
+        self.assertIn("Unknown mailbox", result)
+        self.assertIn("bob@example.com", result)
 
     def test_get_aggregated_functions_blocks_send_when_sending_disabled(self):
         second_tool = create_tool(
@@ -230,7 +330,7 @@ class EmailBuiltinsTests(TransactionTestCase):
 
         result = asyncio.run(
             send_tool.coroutine(
-                mailbox=self.tool.name,
+                mailbox="alice@example.com",
                 to="bob@example.com",
                 subject="Subject",
                 body="Body",
@@ -263,8 +363,8 @@ class EmailBuiltinsTests(TransactionTestCase):
         )
 
         self.assertTrue(any(hint.startswith("Email mailbox map:") for hint in hints))
-        self.assertTrue(any(self.tool.name in hint for hint in hints))
-        self.assertTrue(any(second_tool.name in hint for hint in hints))
+        self.assertTrue(any("alice@example.com" in hint for hint in hints))
+        self.assertTrue(any("bob@example.com" in hint for hint in hints))
 
     def test_get_functions_keeps_legacy_names_for_single_email_tool(self):
         agent = SimpleNamespace(builtin_tools=[self.tool])
