@@ -277,6 +277,13 @@ class ContinuousViewsTests(TestCase):
         self.assertContains(response, 'data-url-interaction-answer="')
         self.assertContains(response, 'data-url-interaction-cancel="')
 
+    def test_continuous_home_exposes_server_today_label_for_client(self):
+        response = self.client.get(reverse("continuous_home"), data={"day": "2020-01-01"})
+
+        self.assertEqual(response.status_code, 200)
+        expected_today = get_day_label_for_user(self.user).isoformat()
+        self.assertContains(response, f'data-today-label="{expected_today}"')
+
     def test_continuous_home_exposes_days_sidebar_toggle_controls(self):
         response = self.client.get(reverse("continuous_home"))
 

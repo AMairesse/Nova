@@ -108,6 +108,8 @@ def continuous_home(request):
 
     thread = ensure_continuous_thread(request.user)
 
+    today_label = get_day_label_for_user(request.user)
+
     # Allow selecting a day via query param for initial render.
     # If invalid/missing: default to today.
     day_qs = request.GET.get("day")
@@ -115,9 +117,9 @@ def continuous_home(request):
         try:
             day_label = dt.date.fromisoformat(day_qs)
         except Exception:
-            day_label = get_day_label_for_user(request.user)
+            day_label = today_label
     else:
-        day_label = get_day_label_for_user(request.user)
+        day_label = today_label
     day_segment = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
 
     # IMPORTANT:
@@ -141,6 +143,7 @@ def continuous_home(request):
         "nova/continuous/index.html",
         {
             "continuous_thread_id": thread.id,
+            "today_label": today_label,
             "day_label": day_label,
             "day_segment": day_segment,
             "timeline_messages": timeline_messages,

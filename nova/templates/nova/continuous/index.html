@@ -13,6 +13,7 @@
   data-url-load-days="{% url 'continuous_days' %}"
   data-url-regenerate-summary="{% url 'continuous_regenerate_summary' %}"
   data-url-day-summary="{% url 'continuous_day' '__DAY__' %}"
+  data-today-label="{{ today_label|date:'Y-m-d' }}"
   data-url-file-list="{% url 'file_list' 0 %}"
   data-url-file-upload="{% url 'file_upload' 0 %}"
   data-url-file-delete="{% url 'file_delete' 0 %}"

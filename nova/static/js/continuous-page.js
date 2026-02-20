@@ -9,6 +9,8 @@
     const DAY_PAGE_LIMIT = 30;
     const DAY_SEARCH_DEBOUNCE_MS = 200;
     const daySummaryUrlTemplate = root.dataset.urlDaySummary || '';
+    const serverTodayLabel = (root.dataset.todayLabel || '').trim();
+    const hasServerTodayLabel = /^\d{4}-\d{2}-\d{2}$/.test(serverTodayLabel);
 
     window.NovaApp = window.NovaApp || {};
     window.NovaApp.isContinuousPage = true;
@@ -32,7 +34,8 @@
     const state = {
         selectedDay: null,
         isDayPinnedInUrl: false,
-        todayLabel: getLocalISODate(),
+        // Must come from server/user timezone rather than browser local clock.
+        todayLabel: hasServerTodayLabel ? serverTodayLabel : getLocalISODate(),
         summarySocket: null,
         reconnectChecked: false,
         daysRefreshTimer: null,
