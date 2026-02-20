@@ -261,6 +261,11 @@ async def test_caldav_access(user, tool_id):
 METADATA = {
     'name': 'CalDav',
     'description': 'Interact with a CalDav server (calendars)',
+    'loading': {
+        'mode': 'skill',
+        'skill_id': 'caldav',
+        'skill_label': 'CalDav',
+    },
     'requires_config': True,
     'config_fields': [
         {'name': 'caldav_url', 'type': 'url', 'label': _('URL CalDav'), 'required': True},
@@ -270,6 +275,14 @@ METADATA = {
     'test_function': 'test_caldav_access',
     'test_function_args': ['user', 'tool_id'],
 }
+
+
+def get_skill_instructions(agent=None, tools=None) -> List[str]:
+    return [
+        "Call list_calendars first to confirm exact calendar names before listing or searching events.",
+        "For planning checks, start with list_events_to_come, then narrow with list_events or get_event_detail.",
+        "When date ranges are unclear, ask for missing dates instead of guessing a wide period.",
+    ]
 
 
 async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:

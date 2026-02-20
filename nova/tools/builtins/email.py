@@ -4,6 +4,8 @@ import logging
 import os
 import smtplib
 import copy
+import re
+from urllib.parse import urlparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Optional
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 EMAIL_CLIENT_TIMEOUT = int(os.getenv("NOVA_EMAIL_CLIENT_TIMEOUT", "30"))
+EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+LOCAL_PART_RE = re.compile(r"^[A-Za-z0-9._%+\-]+$")
+KNOWN_MAIL_HOST_PREFIXES = {"imap", "pop", "pop3", "smtp", "mail", "mx"}
 
 
 def safe_imap_logout(client):
@@ -1001,6 +1006,43 @@ def _mailbox_account(credential: ToolCredential | None) -> str:
     return (cfg.get("from_address") or cfg.get("username") or "").strip()
 
 
+def _extract_email_address(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = EMAIL_ADDRESS_RE.search(text)
+    return match.group(0).strip() if match else ""
+
+
+def _extract_host(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" in raw:
+        parsed = urlparse(raw)
+        return str(parsed.hostname or "").strip().lower()
+    return raw.split("/")[0].split(":")[0].strip().lower()
+
+
+def _derive_domain_from_imap_server(imap_server: str | None) -> str:
+    host = _extract_host(imap_server)
+    if not host or "." not in host:
+        return ""
+
+    parts = [part for part in host.split(".") if part]
+    while len(parts) > 2 and parts and parts[0] in KNOWN_MAIL_HOST_PREFIXES:
+        parts = parts[1:]
+    return ".".join(parts)
+
+
+def _clean_mailbox_alias_label(alias: str | None) -> str:
+    text = str(alias or "").strip()
+    if not text:
+        return ""
+    # Strip legacy UI prefix that became redundant in skill mode.
+    return re.sub(r"^\s*Email\s*-\s*", "", text, flags=re.IGNORECASE).strip()
+
+
 def _select_mailbox_email(config: dict, credential: ToolCredential | None) -> str:
     """Return canonical mailbox selector value (email-like string)."""
     username = str(config.get("username") or "").strip()
@@ -1008,11 +1050,29 @@ def _select_mailbox_email(config: dict, credential: ToolCredential | None) -> st
     account = _mailbox_account(credential)
 
     for candidate in (username, from_address, account):
-        text = str(candidate or "").strip()
-        if text and "@" in text:
+        text = _extract_email_address(candidate)
+        if text:
             return text
 
+    # Best-effort fallback: some providers store username as local-part only.
+    if username and LOCAL_PART_RE.fullmatch(username):
+        domain = _derive_domain_from_imap_server(config.get("imap_server"))
+        if domain:
+            inferred = f"{username}@{domain}"
+            inferred_email = _extract_email_address(inferred)
+            if inferred_email:
+                return inferred_email
+
     return username or from_address or account
+
+
+def _build_mailbox_display_label(alias: str | None, selector_email: str) -> str:
+    cleaned = _clean_mailbox_alias_label(alias)
+    if not cleaned:
+        return ""
+    if normalize_instance_key(cleaned) == normalize_instance_key(selector_email):
+        return ""
+    return cleaned
 
 
 def _mailbox_lookup_keys(entry: dict) -> list[str]:
@@ -1086,6 +1146,12 @@ async def _build_mailbox_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
                 "from_address": (config.get("from_address") or "").strip(),
                 "can_send": bool(config.get("enable_sending", False)),
             }
+        )
+
+    for entry in entries:
+        entry["display_label"] = _build_mailbox_display_label(
+            entry.get("alias"),
+            str(entry.get("selector_email") or ""),
         )
 
     if not entries:
@@ -1266,7 +1332,8 @@ async def get_aggregated_prompt_instructions(tools: list[Tool], agent: LLMAgent)
     mailbox_parts = []
     for entry in entries:
         send_part = "enabled" if entry["can_send"] else "disabled"
-        label_part = f", label: {entry['alias']}" if entry["alias"] else ""
+        display_label = str(entry.get("display_label") or "").strip()
+        label_part = f", label: {display_label}" if display_label else ""
         mailbox_parts.append(f"{entry['selector_email']} (sending: {send_part}{label_part})")
 
     return [

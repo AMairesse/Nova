@@ -105,3 +105,15 @@ class CaldavBuiltinsTests(TestCase):
         self.assertIn("get_event_detail", names)
         self.assertIn("search_events", names)
 
+    def test_metadata_marks_caldav_as_skill(self):
+        loading = (caldav_tools.METADATA or {}).get("loading", {})
+
+        self.assertEqual(loading.get("mode"), "skill")
+        self.assertEqual(loading.get("skill_id"), "caldav")
+        self.assertEqual(loading.get("skill_label"), "CalDav")
+
+    def test_get_skill_instructions_returns_non_empty_list(self):
+        instructions = caldav_tools.get_skill_instructions()
+
+        self.assertIsInstance(instructions, list)
+        self.assertTrue(any(str(item).strip() for item in instructions))
