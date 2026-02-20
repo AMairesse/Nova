@@ -12,6 +12,9 @@
           if (localStorage.getItem('nova:filesSidebarVisible') === 'false') {
             document.documentElement.classList.add('pref-files-hidden');
           }
+          if (localStorage.getItem('nova:continuousDaysSidebarVisible') === 'false') {
+            document.documentElement.classList.add('pref-continuous-days-hidden');
+          }
         } catch (e) {
           // no-op
         }

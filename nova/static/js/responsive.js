@@ -240,6 +240,10 @@
     }
 
     syncThreadLists() {
+      if (window.NovaApp && window.NovaApp.isContinuousPage) {
+        return;
+      }
+
       const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
       const mobileThreadList = document.querySelector('#threadsOffcanvas .list-group');
 
@@ -269,6 +273,10 @@
     }
 
     setupMutationObserver() {
+      if (window.NovaApp && window.NovaApp.isContinuousPage) {
+        return;
+      }
+
       // Watch for changes in desktop thread list and sync to mobile
       const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
       if (!desktopThreadList || this._mutationObserver) return;

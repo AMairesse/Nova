@@ -84,6 +84,10 @@
       return 'nova:filesSidebarVisible';
     },
 
+    getContinuousDaysSidebarVisibleKey: function () {
+      return 'nova:continuousDaysSidebarVisible';
+    },
+
     // Generic storage helpers
     getItem: function (key, defaultValue = null) {
       try {
