@@ -124,3 +124,50 @@ class LLMToolsAggregationTests(IsolatedAsyncioTestCase):
         self.assertIn("legacy_tool_32", names)
         self.assertEqual(fake_module.get_functions.await_count, 2)
         self.assertIn("regular-hint", getattr(agent, "tool_prompt_hints", []))
+
+    async def test_aggregated_skill_module_routes_prompt_hints_to_skill_catalog(self):
+        aggregated_tools = [_make_tool("list_emails")]
+        mail_hint = "Email mailbox map: Work (sending: enabled); Support (sending: disabled)."
+        fake_module = SimpleNamespace(
+            METADATA={
+                "name": "Email (IMAP/SMTP)",
+                "loading": {
+                    "mode": "skill",
+                    "skill_id": "mail",
+                    "skill_label": "Mail",
+                },
+            },
+            AGGREGATION_SPEC={"min_instances": 2},
+            get_functions=AsyncMock(return_value=[]),
+            get_aggregated_functions=AsyncMock(return_value=aggregated_tools),
+            get_aggregated_prompt_instructions=AsyncMock(return_value=[mail_hint]),
+            get_skill_instructions=lambda **kwargs: ["Use list_mailboxes before organizing emails."],
+        )
+        fake_files_module = ModuleType("nova.tools.files")
+        fake_files_module.get_functions = AsyncMock(return_value=[])
+
+        agent = SimpleNamespace(
+            builtin_tools=[
+                SimpleNamespace(id=81, tool_subtype="email", python_path="nova.tools.builtins.email"),
+                SimpleNamespace(id=82, tool_subtype="email", python_path="nova.tools.builtins.email"),
+            ],
+            mcp_tools_data=[],
+            has_agent_tools=False,
+            agent_tools=[],
+            thread=SimpleNamespace(mode="thread"),
+            agent_config=SimpleNamespace(is_tool=False),
+            _loaded_builtin_modules=[],
+        )
+
+        with patch("nova.tools.import_module", return_value=fake_module):
+            with patch.dict(sys.modules, {"nova.tools.files": fake_files_module}):
+                tools = await load_tools(agent)
+
+        self.assertIn("list_emails", [tool.name for tool in tools])
+        self.assertNotIn(mail_hint, getattr(agent, "tool_prompt_hints", []))
+        self.assertIn("mail", agent.skill_catalog)
+        self.assertIn(mail_hint, agent.skill_catalog["mail"]["instructions"])
+        self.assertIn(
+            "Use list_mailboxes before organizing emails.",
+            agent.skill_catalog["mail"]["instructions"],
+        )

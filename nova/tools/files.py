@@ -17,6 +17,24 @@ from nova.file_utils import batch_upload_files
 
 logger = logging.getLogger(__name__)
 
+METADATA = {
+    "name": "Files",
+    "description": "Manage thread files (list, read, create, delete, and image read).",
+    "loading": {
+        "mode": "skill",
+        "skill_id": "files",
+        "skill_label": "Files",
+    },
+}
+
+
+def get_skill_instructions(agent=None, tools=None) -> list[str]:
+    return [
+        "Use file_ls first to discover file ids and types before reading or deleting.",
+        "For large documents, iterate with file_read_chunk using small chunk_size values to control context usage.",
+        "Use file_read_image only for image/* mime types; use file_read_chunk for non-image files.",
+    ]
+
 
 async def async_get_object_or_404(model, **kwargs):
     """Async wrapper for get_object_or_404."""

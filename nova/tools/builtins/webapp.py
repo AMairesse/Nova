@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 METADATA = {
     "name": "WebApp",
     "description": "Create and manage a static mini web-app (HTML/CSS/JS) and expose it at /apps/<slug>/",
+    "loading": {
+        "mode": "skill",
+        "skill_id": "webapp",
+        "skill_label": "WebApp",
+    },
     "requires_config": False,
     "config_fields": [],
     "test_function": None,
@@ -285,4 +290,12 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
                 "required": ["slug"],
             },
         ),
+    ]
+
+
+def get_skill_instructions(agent=None, tools=None) -> list[str]:
+    return [
+        "Start with webapp_read before updates when a slug already exists to avoid overwriting the wrong files.",
+        "Keep updates scoped: provide only the files that must change and preserve untouched files.",
+        "After create or update, share the returned public_url so the user can preview immediately.",
     ]

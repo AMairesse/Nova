@@ -36,11 +36,24 @@ class LLMToolsSkillsTests(IsolatedAsyncioTestCase):
                 },
             },
             get_functions=AsyncMock(return_value=[_make_tool("list_emails")]),
-            get_prompt_instructions=lambda: [],
+            get_prompt_instructions=lambda: ["Use mailbox hints only after activation."],
             get_skill_instructions=lambda **kwargs: ["Use preview mode first."],
         )
+
         fake_files_module = ModuleType("nova.tools.files")
-        fake_files_module.get_functions = AsyncMock(return_value=[])
+        fake_files_module.METADATA = {
+            "name": "Files",
+            "loading": {
+                "mode": "skill",
+                "skill_id": "files",
+                "skill_label": "Files",
+            },
+        }
+        fake_files_module.get_functions = AsyncMock(return_value=[_make_tool("file_ls"), _make_tool("file_read_chunk")])
+        fake_files_module.get_prompt_instructions = lambda: ["Use file_ls first before any read."]
+        fake_files_module.get_skill_instructions = lambda **kwargs: [
+            "Use file_ls first before reading chunks.",
+        ]
 
         agent = SimpleNamespace(
             builtin_tools=[
@@ -71,4 +84,17 @@ class LLMToolsSkillsTests(IsolatedAsyncioTestCase):
         self.assertEqual(agent.skill_catalog["mail"]["label"], "Mail")
         self.assertIn("list_emails", agent.skill_catalog["mail"]["tool_names"])
         self.assertIn("Use preview mode first.", agent.skill_catalog["mail"]["instructions"])
+        self.assertIn("Use mailbox hints only after activation.", agent.skill_catalog["mail"]["instructions"])
+
+        self.assertIn("files", agent.skill_catalog)
+        self.assertEqual(agent.skill_catalog["files"]["label"], "Files")
+        self.assertIn("file_ls", agent.skill_catalog["files"]["tool_names"])
+        self.assertIn("file_read_chunk", agent.skill_catalog["files"]["tool_names"])
+        self.assertIn("Use file_ls first before any read.", agent.skill_catalog["files"]["instructions"])
+        self.assertIn(
+            "Use file_ls first before reading chunks.",
+            agent.skill_catalog["files"]["instructions"],
+        )
+        self.assertNotIn("Use mailbox hints only after activation.", getattr(agent, "tool_prompt_hints", []))
+        self.assertNotIn("Use file_ls first before any read.", getattr(agent, "tool_prompt_hints", []))
         self.assertIn("load_skill", agent.skill_control_tool_names)
