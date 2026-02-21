@@ -1,6 +1,8 @@
 # nova/tools/builtins/caldav.py
 import caldav
+import copy
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from icalendar import Event as iCalEvent
 from typing import Optional, List
@@ -13,9 +15,16 @@ from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Tool import Tool, ToolCredential
+from nova.tools.multi_instance import (
+    build_selector_schema,
+    dedupe_instance_labels,
+    format_invalid_instance_message,
+    normalize_instance_key,
+)
 
 
 logger = logging.getLogger(__name__)
+EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
 async def get_caldav_client(user, tool_id):
@@ -277,11 +286,371 @@ METADATA = {
 }
 
 
+AGGREGATION_SPEC = {
+    "min_instances": 2,
+}
+
+
 def get_skill_instructions(agent=None, tools=None) -> List[str]:
     return [
         "Call list_calendars first to confirm exact calendar names before listing or searching events.",
         "For planning checks, start with list_events_to_come, then narrow with list_events or get_event_detail.",
         "When date ranges are unclear, ask for missing dates instead of guessing a wide period.",
+    ]
+
+
+_CALDAV_TOOL_SPECS = [
+    (
+        "list_calendars",
+        "List all available calendars",
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    (
+        "list_events_to_come",
+        "List events for the next days_ahead.",
+        {
+            "type": "object",
+            "properties": {
+                "days_ahead": {
+                    "type": "integer",
+                    "description": "number of days to look ahead",
+                    "default": 7,
+                },
+                "calendar_name": {
+                    "type": "string",
+                    "description": "calendar's name",
+                },
+            },
+            "required": [],
+        },
+    ),
+    (
+        "list_events",
+        "List events between start_date and end_date.",
+        {
+            "type": "object",
+            "properties": {
+                "start_date": {
+                    "type": "string",
+                    "description": "start of the period (format: YYYY-MM-DD)",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "end of the period (format: YYYY-MM-DD)",
+                },
+                "calendar_name": {
+                    "type": "string",
+                    "description": "calendar's name",
+                },
+            },
+            "required": ["start_date", "end_date"],
+        },
+    ),
+    (
+        "get_event_detail",
+        "Get an event's details.",
+        {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "UID of the event",
+                },
+                "calendar_name": {
+                    "type": "string",
+                    "description": "calendar's name",
+                },
+            },
+            "required": ["event_id"],
+        },
+    ),
+    (
+        "search_events",
+        "Search for events containing the query",
+        {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "text to search",
+                },
+                "days_range": {
+                    "type": "integer",
+                    "description": "number of days to search (past and future)",
+                    "default": 30,
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+]
+
+
+def _with_calendar_account_selector(args_schema: dict, selector_schema: dict | None) -> dict:
+    schema = copy.deepcopy(args_schema)
+    if not selector_schema:
+        return schema
+
+    properties = dict(schema.get("properties") or {})
+    schema["properties"] = {"calendar_account": copy.deepcopy(selector_schema), **properties}
+    required = list(schema.get("required") or [])
+    if "calendar_account" not in required:
+        required.insert(0, "calendar_account")
+    schema["required"] = required
+    return schema
+
+
+def _build_toolset(*, wrappers: dict[str, object], selector_schema: dict | None = None) -> List[StructuredTool]:
+    result: List[StructuredTool] = []
+    for name, description, args_schema in _CALDAV_TOOL_SPECS:
+        result.append(
+            StructuredTool.from_function(
+                coroutine=wrappers[name],
+                name=name,
+                description=description,
+                args_schema=_with_calendar_account_selector(args_schema, selector_schema),
+            )
+        )
+    return result
+
+
+async def _resolve_user_for_tool(tool: Tool, agent: LLMAgent | None):
+    user = getattr(agent, "user", None) if agent else None
+    if user:
+        return user
+    return await sync_to_async(lambda: tool.user, thread_sensitive=False)()
+
+
+async def _get_credential(user, tool_id: int) -> ToolCredential | None:
+    try:
+        return await sync_to_async(
+            ToolCredential.objects.get,
+            thread_sensitive=False,
+        )(user=user, tool_id=tool_id)
+    except ToolCredential.DoesNotExist:
+        return None
+
+
+def _extract_email_address(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = EMAIL_ADDRESS_RE.search(text)
+    return match.group(0).strip() if match else ""
+
+
+def _select_calendar_account(config: dict) -> str:
+    username = str(config.get("username") or "").strip()
+    email = _extract_email_address(username)
+    return email or username
+
+
+def _build_calendar_display_label(alias: str | None, calendar_account: str) -> str:
+    cleaned = str(alias or "").strip()
+    if not cleaned:
+        return ""
+    if normalize_instance_key(cleaned) == normalize_instance_key(calendar_account):
+        return ""
+    return cleaned
+
+
+async def _build_calendar_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
+    if not tools:
+        raise ValueError("No CalDAV tools provided for aggregation.")
+
+    user = getattr(agent, "user", None) or getattr(tools[0], "user", None)
+    if not user:
+        raise ValueError("Cannot resolve user for aggregated CalDAV tools.")
+
+    raw_aliases = [((tool.name or "").strip() or "CalDav") for tool in tools]
+    deduped_aliases = dedupe_instance_labels(raw_aliases, default_label="CalDav")
+
+    entries = []
+    for tool, base_alias, alias in zip(tools, raw_aliases, deduped_aliases):
+        tool_id = getattr(tool, "id", None)
+        if not tool_id:
+            continue
+
+        if alias != base_alias:
+            logger.warning(
+                "Duplicate or empty CalDAV alias '%s' detected for tool_id=%s; using '%s'.",
+                base_alias,
+                tool_id,
+                alias,
+            )
+
+        credential = await _get_credential(user, tool_id)
+        if not credential:
+            logger.warning(
+                "Skipping CalDAV alias '%s' (tool_id=%s): no credential configured for user_id=%s.",
+                alias,
+                tool_id,
+                getattr(user, "id", "unknown"),
+            )
+            continue
+
+        config = credential.config or {}
+        if not all([config.get("caldav_url"), config.get("username"), config.get("password")]):
+            logger.warning(
+                "Skipping CalDAV alias '%s' (tool_id=%s): incomplete CalDAV configuration.",
+                alias,
+                tool_id,
+            )
+            continue
+
+        calendar_account = _select_calendar_account(config)
+        if not calendar_account:
+            logger.warning(
+                "Skipping CalDAV alias '%s' (tool_id=%s): could not derive calendar account.",
+                alias,
+                tool_id,
+            )
+            continue
+
+        entries.append(
+            {
+                "alias": alias,
+                "tool_id": tool_id,
+                "calendar_account": calendar_account,
+            }
+        )
+
+    if not entries:
+        raise ValueError("No configured CalDAV account available for aggregation.")
+
+    for entry in entries:
+        entry["display_label"] = _build_calendar_display_label(
+            entry.get("alias"),
+            str(entry.get("calendar_account") or ""),
+        )
+
+    selector_values: List[str] = []
+    for entry in entries:
+        selector = str(entry.get("calendar_account") or "").strip()
+        if selector and selector not in selector_values:
+            selector_values.append(selector)
+
+    lookup: dict[str, list[dict]] = {}
+    for entry in entries:
+        key = normalize_instance_key(entry.get("calendar_account"))
+        if key:
+            lookup.setdefault(key, []).append(entry)
+
+    selector_schema = build_selector_schema(
+        selector_name="calendar_account",
+        labels=selector_values,
+        description=(
+            "CalDAV account identifier to use. "
+            f"Available accounts: {', '.join(selector_values)}."
+        ),
+    )
+    return user, entries, lookup, selector_schema, selector_values
+
+
+def _resolve_calendar_account(
+    calendar_account: str,
+    lookup: dict[str, list[dict]],
+    selector_values: List[str],
+) -> tuple:
+    normalized = normalize_instance_key(calendar_account)
+    matches = lookup.get(normalized, [])
+    if len(matches) == 1:
+        return matches[0], None
+
+    if len(matches) > 1:
+        requested = str(calendar_account or "").strip() or "<empty>"
+        return None, (
+            f"Ambiguous calendar_account '{requested}'. Multiple CalDAV tools share this identifier. "
+            "Use a unique calendar_account value."
+        )
+
+    return None, format_invalid_instance_message(
+        selector_name="calendar_account",
+        value=calendar_account,
+        available_labels=selector_values,
+    )
+
+
+async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[StructuredTool]:
+    user, _, lookup, selector_schema, selector_values = await _build_calendar_registry(tools, agent)
+
+    async def list_calendars_wrapper(calendar_account: str) -> str:
+        entry, err = _resolve_calendar_account(calendar_account, lookup, selector_values)
+        if err:
+            return err
+        return await list_calendars(user, entry["tool_id"])
+
+    async def list_events_to_come_wrapper(
+        calendar_account: str,
+        days_ahead: int = 7,
+        calendar_name: str = None,
+    ) -> str:
+        entry, err = _resolve_calendar_account(calendar_account, lookup, selector_values)
+        if err:
+            return err
+        return await list_events_to_come(user, entry["tool_id"], days_ahead, calendar_name)
+
+    async def list_events_wrapper(
+        calendar_account: str,
+        start_date: str,
+        end_date: str,
+        calendar_name: str = None,
+    ) -> str:
+        entry, err = _resolve_calendar_account(calendar_account, lookup, selector_values)
+        if err:
+            return err
+        return await list_events(user, entry["tool_id"], start_date, end_date, calendar_name)
+
+    async def get_event_detail_wrapper(
+        calendar_account: str,
+        event_id: str,
+        calendar_name: str = None,
+    ) -> str:
+        entry, err = _resolve_calendar_account(calendar_account, lookup, selector_values)
+        if err:
+            return err
+        return await get_event_detail(user, entry["tool_id"], event_id, calendar_name)
+
+    async def search_events_wrapper(
+        calendar_account: str,
+        query: str,
+        days_range: int = 30,
+    ) -> str:
+        entry, err = _resolve_calendar_account(calendar_account, lookup, selector_values)
+        if err:
+            return err
+        return await search_events(user, entry["tool_id"], query, days_range)
+
+    wrappers = {
+        "list_calendars": list_calendars_wrapper,
+        "list_events_to_come": list_events_to_come_wrapper,
+        "list_events": list_events_wrapper,
+        "get_event_detail": get_event_detail_wrapper,
+        "search_events": search_events_wrapper,
+    }
+    return _build_toolset(wrappers=wrappers, selector_schema=selector_schema)
+
+
+async def get_aggregated_prompt_instructions(tools: list[Tool], agent: LLMAgent) -> List[str]:
+    try:
+        _, entries, _, _, _ = await _build_calendar_registry(tools, agent)
+    except Exception as e:
+        logger.warning("Could not build aggregated CalDAV prompt instructions: %s", str(e))
+        return []
+
+    account_parts = []
+    for entry in entries:
+        label = str(entry.get("display_label") or "").strip()
+        label_part = f", label: {label}" if label else ""
+        account_parts.append(f"{entry['calendar_account']}{label_part}")
+
+    return [
+        f"CalDAV account map: {'; '.join(account_parts)}.",
+        "Use calendar_account values exactly as listed when calling CalDAV tools.",
     ]
 
 
@@ -291,12 +660,14 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     with user and id injected via partial.
     """
     # Wrap ORM check in sync_to_async
-    has_required_data = await sync_to_async(lambda: bool(tool and tool.user and tool.id), thread_sensitive=False)()
+    has_required_data = await sync_to_async(lambda: bool(tool and tool.id), thread_sensitive=False)()
     if not has_required_data:
         raise ValueError("Tool instance missing required data (user or id).")
 
     # Wrap ORM accesses for user/id
-    user = await sync_to_async(lambda: tool.user, thread_sensitive=False)()
+    user = await _resolve_user_for_tool(tool, agent)
+    if not user:
+        raise ValueError("Tool instance missing required data (user).")
     tool_id = await sync_to_async(lambda: tool.id, thread_sensitive=False)()
 
     # Create wrapper functions as langchain 1.1 does not support partial() anymore
@@ -315,97 +686,11 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def search_events_wrapper(query: str, days_range: int = 30) -> str:
         return await search_events(user, tool_id, query, days_range)
 
-    return [
-        StructuredTool.from_function(
-            coroutine=list_calendars_wrapper,
-            name="list_calendars",
-            description="List all available calendars",
-            args_schema={
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=list_events_to_come_wrapper,
-            name="list_events_to_come",
-            description="List events for the next days_ahead.",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "days_ahead": {
-                        "type": "integer",
-                        "description": "number of days to look ahead",
-                        "default": 7
-                    },
-                    "calendar_name": {
-                        "type": "string",
-                        "description": "calendar's name"
-                    }
-                },
-                "required": []
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=list_events_wrapper,
-            name="list_events",
-            description="List events between start_date and end_date.",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "start_date": {
-                        "type": "string",
-                        "description": "start of the period (format: YYYY-MM-DD)",
-                    },
-                    "end_date": {
-                        "type": "string",
-                        "description": "end of the period (format: YYYY-MM-DD)",
-                    },
-                    "calendar_name": {
-                        "type": "string",
-                        "description": "calendar's name"
-                    }
-                },
-                "required": ["start_date", "end_date"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=get_event_detail_wrapper,
-            name="get_event_detail",
-            description="Get en event's details.",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "event_id": {
-                        "type": "string",
-                        "description": "UID of the event"
-                    },
-                    "calendar_name": {
-                        "type": "string",
-                        "description": "calendar's name"
-                    }
-                },
-                "required": ["event_id"]
-            }
-        ),
-        StructuredTool.from_function(
-            coroutine=search_events_wrapper,
-            name="search_events",
-            description="Search for events containing the query",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "text to search"
-                    },
-                    "days_range": {
-                        "type": "integer",
-                        "description": "number of days to search (past and future)",
-                        "default": 30
-                    }
-                },
-                "required": ["query"]
-            }
-        )
-    ]
+    wrappers = {
+        "list_calendars": list_calendars_wrapper,
+        "list_events_to_come": list_events_to_come_wrapper,
+        "list_events": list_events_wrapper,
+        "get_event_detail": get_event_detail_wrapper,
+        "search_events": search_events_wrapper,
+    }
+    return _build_toolset(wrappers=wrappers)
