@@ -98,3 +98,57 @@ class LLMToolsSkillsTests(IsolatedAsyncioTestCase):
         self.assertNotIn("Use mailbox hints only after activation.", getattr(agent, "tool_prompt_hints", []))
         self.assertNotIn("Use file_ls first before any read.", getattr(agent, "tool_prompt_hints", []))
         self.assertIn("load_skill", agent.skill_control_tool_names)
+
+    async def test_load_tools_with_only_regular_builtins_still_exposes_files_skill_controls(self):
+        fake_regular_module = SimpleNamespace(
+            METADATA={
+                "name": "Browser",
+                "loading": {
+                    "mode": "always",
+                },
+            },
+            get_functions=AsyncMock(return_value=[_make_tool("browser_open")]),
+        )
+
+        fake_files_module = ModuleType("nova.tools.files")
+        fake_files_module.METADATA = {
+            "name": "Files",
+            "loading": {
+                "mode": "skill",
+                "skill_id": "files",
+                "skill_label": "Files",
+            },
+        }
+        fake_files_module.get_functions = AsyncMock(
+            return_value=[_make_tool("file_ls"), _make_tool("file_read_chunk")]
+        )
+        fake_files_module.get_prompt_instructions = lambda: ["Use file_ls before reading chunks."]
+
+        agent = SimpleNamespace(
+            builtin_tools=[
+                SimpleNamespace(
+                    id=77,
+                    tool_subtype="browser",
+                    python_path="nova.tools.builtins.browser",
+                )
+            ],
+            mcp_tools_data=[],
+            has_agent_tools=False,
+            agent_tools=[],
+            thread=SimpleNamespace(mode="thread"),
+            agent_config=SimpleNamespace(is_tool=False),
+            _loaded_builtin_modules=[],
+        )
+
+        with patch("nova.tools.import_module", return_value=fake_regular_module):
+            with patch.dict(sys.modules, {"nova.tools.files": fake_files_module}):
+                tools = await load_tools(agent)
+
+        names = {tool.name for tool in tools}
+        self.assertIn("browser_open", names)
+        self.assertIn("file_ls", names)
+        self.assertIn("list_skills", names)
+        self.assertIn("load_skill", names)
+        self.assertIn("files", agent.skill_catalog)
+        self.assertIn("file_ls", agent.skill_catalog["files"]["tool_names"])
+        self.assertIn("load_skill", agent.skill_control_tool_names)

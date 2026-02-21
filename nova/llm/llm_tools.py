@@ -312,13 +312,6 @@ async def load_tools(agent) -> List[StructuredTool]:
     except Exception as e:
         logger.warning(f"Failed to auto-load conversation builtin tools: {e}")
 
-    # Add skill control tools after builtins are loaded and skill catalog is known.
-    tools.extend(build_skill_control_tools(skill_catalog))
-
-    agent._loaded_builtin_modules = loaded_builtin_modules
-    agent.tool_prompt_hints = collected_prompt_hints
-    agent.skill_catalog = skill_catalog
-
     # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
     for tool_obj, cred, cached_func_metas, cred_user_id in agent.mcp_tools_data:
         try:
@@ -396,6 +389,13 @@ async def load_tools(agent) -> List[StructuredTool]:
             policy=files_skill_policy,
         )
         await _collect_prompt_hints(files, policy=files_skill_policy)
+
+    # Add skill control tools once all skill-capable modules are loaded, including files.
+    tools.extend(build_skill_control_tools(skill_catalog))
+
+    agent._loaded_builtin_modules = loaded_builtin_modules
+    agent.tool_prompt_hints = collected_prompt_hints
+    agent.skill_catalog = skill_catalog
 
     deduped_tools = _dedupe_tool_names(tools)
     agent.skill_control_tool_names = [
