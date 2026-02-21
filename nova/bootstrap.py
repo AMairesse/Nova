@@ -159,7 +159,7 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
     Ensure the baseline builtin tools exist:
     - ask_user, date, memory, browser, webapp
-    - plus discover SearXNG, Judge0, CalDAV when available
+    - plus discover SearXNG and Judge0 when available
 
     Returns a dict mapping logical names to Tool instances.
     """
@@ -222,11 +222,6 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     tools["judge0"] = _find_tool("code_execution", user, require_user_cred=False)
     if tools["judge0"]:
         summary.reused_tools.append(tools["judge0"].name)
-
-    # CalDAV (user-configured)
-    tools["caldav"] = _find_tool("caldav", user, require_user_cred=True)
-    if tools["caldav"]:
-        summary.reused_tools.append(tools["caldav"].name)
 
     return tools
 
@@ -379,28 +374,6 @@ def ensure_internet_agent(user, provider, tools: Dict[str, Tool], summary: Boots
     )
 
 
-def ensure_calendar_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
-    return _ensure_agent(
-        user=user,
-        provider=provider,
-        tools=tools,
-        summary=summary,
-        name="Calendar Agent",
-        required_tools=["date_time", "caldav"],
-        system_prompt=(
-            "You are an AI Agent specialized in managing the user's calendar. "
-            "Use CalDAV tools to fetch events only for the authenticated user. "
-            "Do not fabricate or infer events. Unless explicitly instructed and technically "
-            "allowed, treat access as read-only."
-        ),
-        recursion_limit=25,
-        is_tool=True,
-        tool_description=(
-            "Use this agent to retrieve information from the user's calendar. Access is read-only."
-        ),
-    )
-
-
 def ensure_code_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
     return _ensure_agent(
         user=user,
@@ -431,71 +404,57 @@ def ensure_nova_agent(
     provider,
     tools: Dict[str, Tool],
     internet_agent: Optional[AgentConfig],
-    calendar_agent: Optional[AgentConfig],
     code_agent: Optional[AgentConfig],
-    email_agent: Optional[AgentConfig],
+    mail_tools: Optional[List[Tool]],
+    caldav_tools: Optional[List[Tool]],
     summary: BootstrapSummary,
 ) -> Optional[AgentConfig]:
-    sub_agents = [agent for agent in (internet_agent, calendar_agent, code_agent, email_agent) if agent]
+    sub_agents = [agent for agent in (internet_agent, code_agent) if agent]
+    special_tools = (mail_tools or []) + (caldav_tools or [])
 
-    return _ensure_agent(
+    nova_agent = _ensure_agent(
         user=user,
         provider=provider,
         tools=tools,
         summary=summary,
         name="Nova",
-        required_tools=["ask_user", "memory"],
+        required_tools=["ask_user", "memory", "date_time"],
         system_prompt=(
             "You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries;"
             "do not fabricate abilities or offer services beyond your tools. Default to the user’s "
             "language and reply in Markdown. Only call tools or sub‑agents when clearly needed. If "
             "you can read/store user data, persist relevant information and consult it before replying; "
             "only retrieve themes relevant to the current query (e.g., check stored location when asked the time). "
-            "When a query clearly belongs to a specialized agent (internet, calendar, code), delegate "
-            "to that agent instead of solving it yourself. Current date and time is {today}"
+            "When a query clearly belongs to a specialized agent (internet, code), delegate "
+            "to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. "
+            "Current date and time is {today}"
         ),
         recursion_limit=25,
         is_tool=False,
         extra_tools=["webapp"],
+        special_tools=special_tools,
         sub_agents=sub_agents,
         set_as_default=True,
     )
-
-
-def ensure_email_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
-    # Email tool is required but checked separately since it needs credentials
-    email_tools = _find_tools("email", user, require_user_cred=True)
-    if not email_tools:
-        summary.skipped_agents.append({
-            "name": "Email Agent",
-            "reason": "Email tool not configured (missing credentials)",
-        })
+    if not nova_agent:
         return None
 
-    return _ensure_agent(
-        user=user,
-        provider=provider,
-        tools=tools,
-        summary=summary,
-        name="Email Agent",
-        required_tools=["date_time"],
-        system_prompt=(
-            "You are an AI Agent specialized in managing the user's email with full IMAP/SMTP capabilities."
-            "CORE RULES: 1) Read emails in preview mode by default to save context. 2) NEVER send emails "
-            "with missing information (e.g., recipient, subject, sender name, or placeholders like [Your name]) "
-            "- always ask for clarification first. 3) Respect privacy - never send unsolicited emails. "
-            "4) Use list_mailboxes before organizing emails."
-        ),
-        recursion_limit=25,
-        is_tool=True,
-        tool_description=(
-            "Use this agent for comprehensive email management: reading, searching, organizing, drafting, "
-            "and sending emails. The agent has full access to IMAP/SMTP functions but requires complete "
-            "email details for sending operations. Supports email threading, folder management, and "
-            "automatic archiving of sent messages."
-        ),
-        special_tools=email_tools,
+    legacy_sub_agents = list(
+        nova_agent.agent_tools.filter(
+            name__in=["Calendar Agent", "Email Agent"],
+        )
     )
+    if legacy_sub_agents:
+        nova_agent.agent_tools.remove(*legacy_sub_agents)
+        detached = ", ".join(sorted({agent.name for agent in legacy_sub_agents}))
+        summary.notes.append(f"Detached legacy sub-agents from Nova: {detached}.")
+        if (
+            nova_agent.name not in summary.created_agents
+            and nova_agent.name not in summary.updated_agents
+        ):
+            summary.updated_agents.append(nova_agent.name)
+
+    return nova_agent
 
 
 # --------------------------------------------------------------------------- #
@@ -524,11 +483,14 @@ def bootstrap_default_setup(user) -> Dict:
     tools = ensure_common_tools(user, summary)
 
     internet_agent = ensure_internet_agent(user, provider, tools, summary)
-    calendar_agent = ensure_calendar_agent(user, provider, tools, summary)
     code_agent = ensure_code_agent(user, provider, tools, summary)
-    email_agent = ensure_email_agent(user, provider, tools, summary)
+    mail_tools = _find_tools("email", user, require_user_cred=True)
+    caldav_tools = _find_tools("caldav", user, require_user_cred=True)
+    for configured_tool in mail_tools + caldav_tools:
+        if configured_tool.name not in summary.reused_tools:
+            summary.reused_tools.append(configured_tool.name)
     nova_agent = ensure_nova_agent(
-        user, provider, tools, internet_agent, calendar_agent, code_agent, email_agent, summary
+        user, provider, tools, internet_agent, code_agent, mail_tools, caldav_tools, summary
     )
     if nova_agent is None:
         logger.info(

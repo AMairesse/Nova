@@ -1,5 +1,16 @@
 # Current Context
 
+## New Focus (2026-02-19): Tool-Based Skills Middleware (Mail)
+
+- We are planning a V1 skills runtime for tool-based agents.
+- Mail is the first builtin moved to on-demand skill mode.
+- Source of truth for "normal tool" vs "skill tool" is builtin `METADATA.loading`.
+- User settings remain unchanged for skill internals (read-only).
+- Activation is explicit via `load_skill("mail")`.
+- Activation lifetime is current turn only.
+- Existing email aggregation behavior must be preserved.
+- Reference plan: `/Users/toitoine/Documents/Nova/plans/skill_middleware_mail.md`.
+
 ## Current Work Focus
 
 **In progress: continuous discussion mode (implementation + context/checkpoint semantics)**

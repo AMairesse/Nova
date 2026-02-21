@@ -18,6 +18,7 @@ from nova.models.Thread import Thread
 from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
+from nova.llm.skill_tool_filter import apply_skill_tool_filter
 from nova.llm.tool_error_handling import handle_tool_errors
 from nova.llm.agent_middleware import AgentContext
 from nova.llm.summarization_middleware import SummarizationMiddleware
@@ -228,7 +229,7 @@ class LLMAgent:
                 mw.summarizer.agent_llm = llm
 
         # Create the ReAct agent with middleware
-        middleware = [nova_system_prompt, handle_tool_errors]
+        middleware = [nova_system_prompt, apply_skill_tool_filter, handle_tool_errors]
         if checkpointer:
             agent.langchain_agent = create_agent(
                 llm,
@@ -338,6 +339,8 @@ class LLMAgent:
         self._loaded_builtin_modules = []
         self.checkpointer = None
         self.middleware = []  # Agent middleware list
+        self.skill_catalog = {}
+        self.skill_control_tool_names = []
 
         # Add summarization middleware if configured
         # NOTE: In continuous mode we use day summaries + explicit checkpoint rebuild,
@@ -415,6 +418,8 @@ class LLMAgent:
             thread=self.thread,
             progress_handler=progress_handler,
             tool_prompt_hints=list(getattr(self, "tool_prompt_hints", []) or []),
+            skill_catalog=dict(getattr(self, "skill_catalog", {}) or {}),
+            skill_control_tool_names=list(getattr(self, "skill_control_tool_names", []) or []),
         )
 
         full_question = f"{question}"
@@ -510,6 +515,8 @@ class LLMAgent:
             thread=self.thread,
             progress_handler=progress_handler,
             tool_prompt_hints=list(getattr(self, "tool_prompt_hints", []) or []),
+            skill_catalog=dict(getattr(self, "skill_catalog", {}) or {}),
+            skill_control_tool_names=list(getattr(self, "skill_control_tool_names", []) or []),
         )
 
         while True:

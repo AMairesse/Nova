@@ -4,6 +4,8 @@ import logging
 import os
 import smtplib
 import copy
+import re
+from urllib.parse import urlparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Optional
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 EMAIL_CLIENT_TIMEOUT = int(os.getenv("NOVA_EMAIL_CLIENT_TIMEOUT", "30"))
+EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+LOCAL_PART_RE = re.compile(r"^[A-Za-z0-9._%+\-]+$")
+KNOWN_MAIL_HOST_PREFIXES = {"imap", "pop", "pop3", "smtp", "mail", "mx"}
 
 
 def safe_imap_logout(client):
@@ -655,6 +660,11 @@ async def test_email_access(user, tool_id):
 METADATA = {
     'name': 'Email (IMAP/SMTP)',
     'description': 'Read, send emails and manage drafts via IMAP/SMTP',
+    'loading': {
+        'mode': 'skill',
+        'skill_id': 'mail',
+        'skill_label': 'Mail',
+    },
     'requires_config': True,
     'config_fields': [
         # IMAP Settings
@@ -687,6 +697,14 @@ METADATA = {
     'test_function': 'test_email_access',
     'test_function_args': ['user', 'tool_id'],
 }
+
+
+def get_skill_instructions(agent=None, tools=None) -> list[str]:
+    return [
+        "Use preview-oriented reads first to keep context compact; read full content only when necessary.",
+        "Never send an email when key details are missing (recipient, subject, or message body intent). Ask first.",
+        "Use list_mailboxes before bulk organization to avoid invalid folder names and unintended moves.",
+    ]
 
 
 AGGREGATION_SPEC = {
@@ -988,6 +1006,91 @@ def _mailbox_account(credential: ToolCredential | None) -> str:
     return (cfg.get("from_address") or cfg.get("username") or "").strip()
 
 
+def _extract_email_address(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = EMAIL_ADDRESS_RE.search(text)
+    return match.group(0).strip() if match else ""
+
+
+def _extract_host(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" in raw:
+        parsed = urlparse(raw)
+        return str(parsed.hostname or "").strip().lower()
+    return raw.split("/")[0].split(":")[0].strip().lower()
+
+
+def _derive_domain_from_imap_server(imap_server: str | None) -> str:
+    host = _extract_host(imap_server)
+    if not host or "." not in host:
+        return ""
+
+    parts = [part for part in host.split(".") if part]
+    while len(parts) > 2 and parts and parts[0] in KNOWN_MAIL_HOST_PREFIXES:
+        parts = parts[1:]
+    return ".".join(parts)
+
+
+def _clean_mailbox_alias_label(alias: str | None) -> str:
+    text = str(alias or "").strip()
+    if not text:
+        return ""
+    # Strip legacy UI prefix that became redundant in skill mode.
+    return re.sub(r"^\s*Email\s*-\s*", "", text, flags=re.IGNORECASE).strip()
+
+
+def _select_mailbox_email(config: dict, credential: ToolCredential | None) -> str:
+    """Return canonical mailbox selector value (email-like string)."""
+    username = str(config.get("username") or "").strip()
+    from_address = str(config.get("from_address") or "").strip()
+    account = _mailbox_account(credential)
+
+    for candidate in (username, from_address, account):
+        text = _extract_email_address(candidate)
+        if text:
+            return text
+
+    # Best-effort fallback: some providers store username as local-part only.
+    if username and LOCAL_PART_RE.fullmatch(username):
+        domain = _derive_domain_from_imap_server(config.get("imap_server"))
+        if domain:
+            inferred = f"{username}@{domain}"
+            inferred_email = _extract_email_address(inferred)
+            if inferred_email:
+                return inferred_email
+
+    return username or from_address or account
+
+
+def _build_mailbox_display_label(alias: str | None, selector_email: str) -> str:
+    cleaned = _clean_mailbox_alias_label(alias)
+    if not cleaned:
+        return ""
+    if normalize_instance_key(cleaned) == normalize_instance_key(selector_email):
+        return ""
+    return cleaned
+
+
+def _mailbox_lookup_keys(entry: dict) -> list[str]:
+    """Build mailbox lookup keys from email addresses only (no alias fallback)."""
+    raw_keys = [
+        entry.get("selector_email"),
+        entry.get("account"),
+        entry.get("username"),
+        entry.get("from_address"),
+    ]
+    out: list[str] = []
+    for raw in raw_keys:
+        key = normalize_instance_key(raw)
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
 async def _build_mailbox_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
     if not tools:
         raise ValueError("No email tools provided for aggregation.")
@@ -1038,47 +1141,76 @@ async def _build_mailbox_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
                 "tool_id": tool_id,
                 "credential": credential,
                 "account": _mailbox_account(credential),
+                "selector_email": _select_mailbox_email(config, credential),
+                "username": (config.get("username") or "").strip(),
+                "from_address": (config.get("from_address") or "").strip(),
                 "can_send": bool(config.get("enable_sending", False)),
             }
+        )
+
+    for entry in entries:
+        entry["display_label"] = _build_mailbox_display_label(
+            entry.get("alias"),
+            str(entry.get("selector_email") or ""),
         )
 
     if not entries:
         raise ValueError("No configured email mailbox available for aggregation.")
 
-    aliases = [entry["alias"] for entry in entries]
-    lookup = {normalize_instance_key(entry["alias"]): entry for entry in entries}
+    selector_values: list[str] = []
+    for entry in entries:
+        selector = str(entry.get("selector_email") or "").strip()
+        if selector and selector not in selector_values:
+            selector_values.append(selector)
+
+    lookup: dict[str, list[dict]] = {}
+    for entry in entries:
+        for key in _mailbox_lookup_keys(entry):
+            lookup.setdefault(key, []).append(entry)
+
     mailbox_schema = build_selector_schema(
         selector_name="mailbox",
-        labels=aliases,
-        description=f"Mailbox alias to use. Available aliases: {', '.join(aliases)}.",
+        labels=selector_values,
+        description=f"Mailbox email address to use. Available addresses: {', '.join(selector_values)}.",
     )
-    return user, entries, lookup, mailbox_schema
+    return user, entries, lookup, mailbox_schema, selector_values
 
 
-def _resolve_mailbox(mailbox: str, lookup: dict, aliases: list[str]) -> tuple:
-    entry = lookup.get(normalize_instance_key(mailbox))
-    if entry:
-        return entry, None
+def _resolve_mailbox(mailbox: str, lookup: dict[str, list[dict]], selector_values: list[str]) -> tuple:
+    matches = lookup.get(normalize_instance_key(mailbox), [])
+    if len(matches) == 1:
+        return matches[0], None
+
+    if len(matches) > 1:
+        resolved_aliases: list[str] = []
+        for item in matches:
+            address = str(item.get("selector_email") or "").strip()
+            if address and address not in resolved_aliases:
+                resolved_aliases.append(address)
+        return None, (
+            f"Ambiguous mailbox '{str(mailbox or '').strip() or '<empty>'}'. "
+            f"Use one of these email addresses: {', '.join(resolved_aliases)}."
+        )
+
     return None, format_invalid_instance_message(
         selector_name="mailbox",
         value=mailbox,
-        available_labels=aliases,
+        available_labels=selector_values,
     )
 
 
 async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[StructuredTool]:
-    user, entries, lookup, mailbox_schema = await _build_mailbox_registry(tools, agent)
-    aliases = [entry["alias"] for entry in entries]
-    description_prefix = "[Multi-mailbox email, select a mailbox alias.]"
+    user, entries, lookup, mailbox_schema, selector_values = await _build_mailbox_registry(tools, agent)
+    description_prefix = "[Multi-mailbox email, select a mailbox email address.]"
 
     async def list_emails_wrapper(mailbox: str, folder: str = "INBOX", limit: int = 10) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await list_emails(user, entry["tool_id"], folder, limit)
 
     async def read_email_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await read_email(user, entry["tool_id"], message_id, folder)
@@ -1089,13 +1221,13 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         folder: str = "INBOX",
         limit: int = 10,
     ) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await search_emails(user, entry["tool_id"], query, folder, limit)
 
     async def list_mailboxes_wrapper(mailbox: str) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await list_mailboxes(user, entry["tool_id"])
@@ -1106,7 +1238,7 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         source_folder: str = "INBOX",
         target_folder: str = "Junk",
     ) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await move_email_to_folder(
@@ -1118,25 +1250,25 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         )
 
     async def mark_email_as_read_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await mark_email_as_read(user, entry["tool_id"], message_id, folder)
 
     async def mark_email_as_unread_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await mark_email_as_unread(user, entry["tool_id"], message_id, folder)
 
     async def delete_email_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await delete_email(user, entry["tool_id"], message_id, folder)
 
     async def get_server_capabilities_wrapper(mailbox: str) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await get_server_capabilities(user, entry["tool_id"])
@@ -1148,13 +1280,13 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         body: str,
         cc: Optional[str] = None,
     ) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         if not entry["can_send"]:
             return _(
                 "Sending is disabled for mailbox '{mailbox}'. Enable sending in this mailbox configuration."
-            ).format(mailbox=entry["alias"])
+            ).format(mailbox=entry["selector_email"] or entry["alias"])
         return await send_email(user, entry["tool_id"], to, subject, body, cc)
 
     async def save_draft_wrapper(
@@ -1165,7 +1297,7 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         cc: Optional[str] = None,
         draft_folder: str = "Drafts",
     ) -> str:
-        entry, err = _resolve_mailbox(mailbox, lookup, aliases)
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
         return await save_draft(user, entry["tool_id"], to, subject, body, cc, draft_folder)
@@ -1192,22 +1324,23 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
 
 async def get_aggregated_prompt_instructions(tools: list[Tool], agent: LLMAgent) -> List[str]:
     try:
-        _, entries, _, _ = await _build_mailbox_registry(tools, agent)
+        _, entries, _, _, _ = await _build_mailbox_registry(tools, agent)
     except Exception as e:
         logger.warning("Could not build aggregated email prompt instructions: %s", str(e))
         return []
 
     mailbox_parts = []
     for entry in entries:
-        account_part = f", account: {entry['account']}" if entry["account"] else ""
         send_part = "enabled" if entry["can_send"] else "disabled"
-        mailbox_parts.append(f"{entry['alias']} (sending: {send_part}{account_part})")
+        display_label = str(entry.get("display_label") or "").strip()
+        label_part = f", label: {display_label}" if display_label else ""
+        mailbox_parts.append(f"{entry['selector_email']} (sending: {send_part}{label_part})")
 
     return [
         f"Email mailbox map: {'; '.join(mailbox_parts)}.",
-        "When multiple mailboxes are plausible, ask which mailbox to use.",
+        "Use mailbox email addresses exactly as listed when calling mail tools.",
         "Do not send emails from a mailbox where sending is disabled.",
-        "Reuse the current mailbox in the same workflow unless the user asks to switch.",
+        "Reuse the same mailbox email address in a workflow unless the user asks to switch.",
     ]
 
 

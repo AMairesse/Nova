@@ -9,7 +9,7 @@ from asgiref.sync import async_to_sync
 from types import SimpleNamespace
 
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryTheme
-from nova.tools.builtins.memory import add, get, list_themes, search
+from nova.tools.builtins.memory import add, get, get_prompt_instructions, list_themes, search
 
 
 User = get_user_model()
@@ -85,3 +85,9 @@ class MemoryIntegrationTest(TestCase):
         tool_types = get_available_tool_types()
         self.assertIn('memory', tool_types)
         self.assertEqual(tool_types['memory']['name'], 'Memory')
+
+    def test_memory_prompt_instructions_do_not_reference_conversation_tools(self):
+        hints = get_prompt_instructions()
+        joined = " ".join(hints).lower()
+        self.assertNotIn("conversation_search", joined)
+        self.assertNotIn("conversation_get", joined)

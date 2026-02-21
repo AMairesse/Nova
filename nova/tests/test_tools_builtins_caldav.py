@@ -5,14 +5,14 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from nova.models.Tool import Tool
 from nova.tests.factories import create_tool, create_tool_credential, create_user
 from nova.tools.builtins import caldav as caldav_tools
 
 
-class CaldavBuiltinsTests(TestCase):
+class CaldavBuiltinsTests(TransactionTestCase):
     def setUp(self):
         self.user = create_user(username="caldav-user", email="caldav@example.com")
         self.tool = create_tool(
@@ -105,3 +105,129 @@ class CaldavBuiltinsTests(TestCase):
         self.assertIn("get_event_detail", names)
         self.assertIn("search_events", names)
 
+    def test_metadata_marks_caldav_as_skill(self):
+        loading = (caldav_tools.METADATA or {}).get("loading", {})
+
+        self.assertEqual(loading.get("mode"), "skill")
+        self.assertEqual(loading.get("skill_id"), "caldav")
+        self.assertEqual(loading.get("skill_label"), "CalDav")
+
+    def test_get_skill_instructions_returns_non_empty_list(self):
+        instructions = caldav_tools.get_skill_instructions()
+
+        self.assertIsInstance(instructions, list)
+        self.assertTrue(any(str(item).strip() for item in instructions))
+
+    @patch("nova.tools.builtins.caldav.list_calendars", new_callable=AsyncMock, return_value="ok")
+    def test_get_aggregated_functions_routes_calls_by_calendar_account(self, mocked_list_calendars):
+        second_tool = create_tool(
+            self.user,
+            name="Second CalDav",
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "caldav_url": "https://cal2.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(caldav_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_calendars")
+
+        first = asyncio.run(list_tool.coroutine(calendar_account="alice"))
+        second = asyncio.run(list_tool.coroutine(calendar_account="bob@example.com"))
+
+        self.assertEqual(first, "ok")
+        self.assertEqual(second, "ok")
+        self.assertEqual(mocked_list_calendars.await_count, 2)
+        self.assertEqual(mocked_list_calendars.await_args_list[0].args[1], self.tool.id)
+        self.assertEqual(mocked_list_calendars.await_args_list[1].args[1], second_tool.id)
+
+    def test_get_aggregated_functions_rejects_unknown_calendar_account(self):
+        second_tool = create_tool(
+            self.user,
+            name="Second CalDav",
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "caldav_url": "https://cal2.example.com",
+                "username": "bob@example.com",
+                "password": "secret",
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(caldav_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_calendars")
+
+        result = asyncio.run(list_tool.coroutine(calendar_account="unknown@example.com"))
+        self.assertIn("Unknown calendar_account", result)
+        self.assertIn("alice", result)
+        self.assertIn("bob@example.com", result)
+
+    @patch("nova.tools.builtins.caldav.list_calendars", new_callable=AsyncMock)
+    def test_get_aggregated_functions_rejects_ambiguous_calendar_account(self, mocked_list_calendars):
+        second_tool = create_tool(
+            self.user,
+            name="Shared CalDav",
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "caldav_url": "https://cal2.example.com",
+                "username": "alice",
+                "password": "secret",
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        tools = asyncio.run(caldav_tools.get_aggregated_functions([self.tool, second_tool], agent=agent))
+        list_tool = next(tool for tool in tools if tool.name == "list_calendars")
+
+        result = asyncio.run(list_tool.coroutine(calendar_account="alice"))
+        self.assertIn("Ambiguous calendar_account", result)
+        mocked_list_calendars.assert_not_awaited()
+
+    def test_get_aggregated_prompt_instructions_include_calendar_account_map(self):
+        second_tool = create_tool(
+            self.user,
+            name="Team Calendar",
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        create_tool_credential(
+            self.user,
+            second_tool,
+            config={
+                "caldav_url": "https://cal2.example.com",
+                "username": "team@example.com",
+                "password": "secret",
+            },
+        )
+
+        agent = SimpleNamespace(user=self.user, builtin_tools=[self.tool, second_tool])
+        hints = asyncio.run(
+            caldav_tools.get_aggregated_prompt_instructions([self.tool, second_tool], agent=agent)
+        )
+        joined = "\n".join(hints)
+
+        self.assertIn("CalDAV account map:", joined)
+        self.assertIn("alice", joined)
+        self.assertIn("team@example.com", joined)
+        self.assertIn("calendar_account", joined)
+
+    def test_aggregation_spec_requires_multi_instance(self):
+        self.assertEqual(caldav_tools.AGGREGATION_SPEC.get("min_instances"), 2)

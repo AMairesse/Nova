@@ -13,13 +13,13 @@ from django.db.models import Count, Q
 from nova.models.UserFile import UserFile
 from nova.models.Memory import MemoryTheme
 from nova.models.Tool import Tool
+from nova.llm.skill_tool_filter import resolve_active_skills
 from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
 
 
-@dynamic_prompt
-async def nova_system_prompt(request: ModelRequest) -> str:
+async def build_nova_system_prompt(request: ModelRequest) -> str:
     """
     Dynamic system prompt that adapts based on agent configuration and context.
 
@@ -59,6 +59,8 @@ async def nova_system_prompt(request: ModelRequest) -> str:
             "structured information, use markdown."
         )
 
+    sections: list[str] = [base_prompt]
+
     # Check if memory tool is enabled and inject user memory
     memory_tool_enabled = await _is_memory_tool_enabled(agent_config)
 
@@ -66,7 +68,7 @@ async def nova_system_prompt(request: ModelRequest) -> str:
         try:
             user_memory = await _get_user_memory(user)
             if user_memory:
-                base_prompt += user_memory
+                sections.append(user_memory)
         except Exception as e:
             logger.warning(f"Failed to load user memory for dynamic prompt: {e}")
 
@@ -74,19 +76,73 @@ async def nova_system_prompt(request: ModelRequest) -> str:
     if thread and user:
         file_context = await _get_file_context(thread, user)
         if file_context:
-            base_prompt += file_context
+            sections.append(file_context)
     elif not thread:
         # When no thread is associated (e.g. /api/ask/), skip DB access
-        base_prompt += "\nNo attached files available.\n"
+        sections.append("No attached files available.")
 
     # Add tool-owned usage hints collected during tool loading.
     tool_hints = _get_tool_prompt_hints(runtime_context)
     if tool_hints:
-        base_prompt += "\n\nTool usage policy:\n"
+        policy_lines = ["Tool usage policy:"]
         for hint in tool_hints:
-            base_prompt += f"- {hint}\n"
+            policy_lines.append(f"- {hint}")
+        sections.append("\n".join(policy_lines))
 
-    return base_prompt
+    skill_catalog = _get_skill_catalog(runtime_context)
+    if skill_catalog:
+        available = ", ".join(
+            [
+                f"{entry.get('label') or skill_id} ({skill_id})"
+                for skill_id, entry in sorted(skill_catalog.items())
+            ]
+        )
+        sections.append(
+            "On-demand skills available: "
+            f"{available}. Use load_skill with the skill id to activate one for the current turn."
+        )
+
+        state = request.state if isinstance(request.state, dict) else {}
+        control_tool_names = {
+            str(name or "").strip()
+            for name in list(getattr(runtime_context, "skill_control_tool_names", []) or [])
+            if str(name or "").strip()
+        }
+        load_skill_tool_names = {
+            name
+            for name in control_tool_names
+            if name == "load_skill" or name.startswith("load_skill__dup")
+        }
+        if not load_skill_tool_names:
+            load_skill_tool_names = {"load_skill"}
+
+        active_skills = resolve_active_skills(
+            state.get("messages", []),
+            set(skill_catalog.keys()),
+            load_skill_tool_names=load_skill_tool_names,
+        )
+        if active_skills:
+            if runtime_context is not None:
+                runtime_context.active_skill_ids = sorted(active_skills)
+            active_skill_lines = ["Active skills (current turn):"]
+            for skill_id in sorted(active_skills):
+                entry = skill_catalog.get(skill_id, {})
+                skill_label = str(entry.get("label") or skill_id)
+                active_skill_lines.append(f"- {skill_label} ({skill_id})")
+                for instruction in list(entry.get("instructions", []) or []):
+                    text = str(instruction or "").strip()
+                    if text:
+                        active_skill_lines.append(f"  {text}")
+            sections.append("\n".join(active_skill_lines))
+
+    normalized_sections = [str(section or "").strip() for section in sections]
+    normalized_sections = [section for section in normalized_sections if section]
+    return "\n\n".join(normalized_sections)
+
+
+@dynamic_prompt
+async def nova_system_prompt(request: ModelRequest) -> str:
+    return await build_nova_system_prompt(request)
 
 
 def _get_tool_prompt_hints(runtime_context) -> list[str]:
@@ -96,6 +152,19 @@ def _get_tool_prompt_hints(runtime_context) -> list[str]:
         s = str(h or "").strip()
         if s and s not in out:
             out.append(s)
+    return out
+
+
+def _get_skill_catalog(runtime_context) -> dict[str, dict]:
+    raw = getattr(runtime_context, "skill_catalog", {}) or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for skill_id, payload in raw.items():
+        sid = str(skill_id or "").strip()
+        if not sid:
+            continue
+        out[sid] = payload if isinstance(payload, dict) else {}
     return out
 
 
@@ -132,19 +201,19 @@ async def _get_user_memory(user) -> Optional[str]:
         theme_hints = await sync_to_async(_load_theme_hints, thread_sensitive=True)()
 
         # Keep this block intentionally short to avoid prompt bloat.
-        lines = ["\nLong-term memory themes available:\n"]
+        lines = ["Long-term memory themes available:"]
 
         if theme_hints:
             # Limit how many themes we list.
             shown = theme_hints[:10]
             suffix = "" if len(theme_hints) <= 10 else f" (+{len(theme_hints) - 10} more)"
             formatted = ", ".join([f"{slug} ({count})" for slug, count in shown])
-            lines.append(f"\nKnown memory themes (active items): {formatted}{suffix}\n")
+            lines.append(f"Known memory themes (active items): {formatted}{suffix}")
 
         return "\n".join(lines)
     except Exception as e:
         logger.warning(f"Failed to load memory themes: {e}")
-        return "\nLong-term memory is available.\n"
+        return "Long-term memory is available."
 
 
 async def _get_file_context(thread, user) -> Optional[str]:
@@ -156,9 +225,9 @@ async def _get_file_context(thread, user) -> Optional[str]:
         )()
 
         if file_count:
-            return f"\n{file_count} file(s) are attached to this thread. Use file tools if needed."
+            return f"{file_count} file(s) are attached to this thread. Use file tools if needed."
         else:
-            return "\nNo attached files available.\n"
+            return "No attached files available."
     except Exception as e:
         logger.warning(f"Failed to get file context: {e}")
-        return "\nNo attached files available.\n"
+        return "No attached files available."

@@ -18,6 +18,9 @@ class AgentContext:
     thread: Any  # Thread model
     progress_handler: Any = None  # TaskProgressHandler for real-time updates
     tool_prompt_hints: list[str] = field(default_factory=list)
+    skill_catalog: dict[str, dict] = field(default_factory=dict)
+    skill_control_tool_names: list[str] = field(default_factory=list)
+    active_skill_ids: list[str] = field(default_factory=list)
 
 
 class AgentMiddleware(ABC):

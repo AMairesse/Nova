@@ -9,6 +9,17 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
     def setUp(self):
         self.files_tools = importlib.import_module("nova.tools.files")
 
+    async def test_metadata_marks_files_as_skill(self):
+        loading = (self.files_tools.METADATA or {}).get("loading", {})
+        self.assertEqual(loading.get("mode"), "skill")
+        self.assertEqual(loading.get("skill_id"), "files")
+        self.assertEqual(loading.get("skill_label"), "Files")
+
+    async def test_get_skill_instructions_returns_non_empty_list(self):
+        instructions = self.files_tools.get_skill_instructions()
+        self.assertIsInstance(instructions, list)
+        self.assertTrue(any(str(i).strip() for i in instructions))
+
     async def test_list_files_returns_no_files_message(self):
         fake_thread = SimpleNamespace(id=1)
         with patch("nova.tools.files.async_get_object_or_404", new_callable=AsyncMock, return_value=fake_thread):

@@ -50,6 +50,18 @@ Nova is a **Django-based multi-tenant AI agent platform** with real-time capabil
 └───────────────────┘                    └────────────────────┘
 ```
 
+## Skill Middleware (Tool-Based Agents)
+
+Nova introduces a runtime skill layer for builtins:
+
+1. Builtin modules declare loading policy in `METADATA.loading`.
+2. Agent runtime exposes control tools (`list_skills`, `load_skill`).
+3. A model-call middleware filters tool visibility dynamically:
+- skill tools hidden by default
+- skill tools visible after `load_skill(...)` for current turn only
+4. Skill instructions are injected only after activation.
+5. Existing builtin aggregation (notably email multi-mailbox) remains unchanged.
+
 ## Core Components
 
 ### 1. Django Applications
