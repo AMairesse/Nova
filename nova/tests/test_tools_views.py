@@ -280,6 +280,30 @@ class ToolsViewsTests(TestCase):
         self.assertContains(response, "SMTP")
         self.assertContains(response, "Enable email sending")
 
+    def test_configure_webdav_tool_shows_secret_placeholder_for_existing_app_password(self):
+        tool = create_tool(
+            self.user,
+            name="WebDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webdav",
+            python_path="nova.tools.builtins.webdav",
+        )
+        create_tool_credential(
+            self.user,
+            tool,
+            config={
+                "server_url": "https://cloud.example.com",
+                "username": "alice",
+                "app_password": "secret",
+            },
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="app_password"', html=False)
+        self.assertContains(response, "Secret exists, leave blank to keep")
+
     def test_configure_non_builtin_creates_credential_if_missing(self):
         tool = create_tool(self.user, tool_type=Tool.ToolType.API, endpoint="https://api.example.com")
         response = self.client.post(

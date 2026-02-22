@@ -150,7 +150,14 @@ class ToolDeleteView(
 # ---------------------------------------------------------------------------#
 class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
     """Dynamic form for built-in tools exposing *config_fields* metadata."""
-    secret_fields = ("password", "token", "client_secret", "refresh_token", "access_token")
+    secret_fields = (
+        "password",
+        "app_password",
+        "token",
+        "client_secret",
+        "refresh_token",
+        "access_token",
+    )
 
     def __init__(self, *args, meta: dict, initial=None, **kw):
         # Store existing secrets
@@ -365,7 +372,14 @@ async def tool_test_connection(request, pk: int):
                 config_data = cred.config.copy()
 
                 # Secret fields (passwords, tokens) are not sent in POST if not modified
-                secret_fields = ("password", "token", "client_secret", "refresh_token", "access_token")
+                secret_fields = (
+                    "password",
+                    "app_password",
+                    "token",
+                    "client_secret",
+                    "refresh_token",
+                    "access_token",
+                )
 
                 # Update with form data if provided
                 for field in meta["config_fields"]:
