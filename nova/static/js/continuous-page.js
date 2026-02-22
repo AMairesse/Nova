@@ -506,6 +506,13 @@
         const mc = document.getElementById('message-container');
         if (mc) mc.innerHTML = html;
 
+        if (
+            window.NovaApp.messageManager
+            && typeof window.NovaApp.messageManager.applyTemplateSetupPrefillFromUrl === 'function'
+        ) {
+            window.NovaApp.messageManager.applyTemplateSetupPrefillFromUrl();
+        }
+
         applyPostingVisibility(day);
 
         if (summaryPanel) {

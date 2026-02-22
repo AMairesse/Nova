@@ -6,11 +6,29 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.AgentConfig import AgentConfig
+from nova.models.Memory import MemoryItem, MemoryItemStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool, ToolCredential
+from nova.models.UserObjects import UserProfile
 
 
 SPAM_FILTER_TEMPLATE_ID = "email_spam_filter_basic"
+THEMATIC_WATCH_TEMPLATE_ID = "thematic_watch_weekly"
+THEMATIC_WATCH_MEMORY_THEME_TOPICS = "thematic_watch_topics"
+THEMATIC_WATCH_MEMORY_THEME_LANGUAGE = "thematic_watch_language"
+THEMATIC_WATCH_MEMORY_TYPE = "preference"
+
+
+def _memory_has_thematic_item(user, theme_slug: str) -> bool:
+    """Return True when one strict thematic-watch memory item exists for theme+type."""
+    return MemoryItem.objects.filter(
+        user=user,
+        status=MemoryItemStatus.ACTIVE,
+        type=THEMATIC_WATCH_MEMORY_TYPE,
+        theme__slug=theme_slug,
+    ).exclude(
+        content__exact="",
+    ).exists()
 
 
 @dataclass(frozen=True)
@@ -27,6 +45,38 @@ class TemplateAvailability:
     agent_id: int | None = None
     email_tool_id: int | None = None
     mailbox_email: str = ""
+
+
+def _agent_has_tool_subtype(agent: AgentConfig, subtype: str) -> bool:
+    if any(tool.tool_subtype == subtype for tool in agent.tools.all()):
+        return True
+
+    for sub_agent in agent.agent_tools.all():
+        if any(tool.tool_subtype == subtype for tool in sub_agent.tools.all()):
+            return True
+
+    return False
+
+
+def _find_default_agent(user) -> AgentConfig | None:
+    profile = UserProfile.objects.filter(user=user).select_related("default_agent").first()
+    if not profile:
+        return None
+    return profile.default_agent
+
+
+def default_agent_has_memory_tool(user) -> bool:
+    default_agent = _find_default_agent(user)
+    if not default_agent:
+        return False
+    default_agent = (
+        AgentConfig.objects.filter(id=default_agent.id, user=user)
+        .prefetch_related("tools", "agent_tools__tools")
+        .first()
+    )
+    if not default_agent:
+        return False
+    return _agent_has_tool_subtype(default_agent, "memory")
 
 
 def _email_from_credential(credential: ToolCredential) -> str:
@@ -122,8 +172,86 @@ def evaluate_spam_filter_template(user) -> TemplateAvailability:
     )
 
 
+def evaluate_thematic_watch_template(user) -> TemplateAvailability:
+    agents = list(
+        AgentConfig.objects.filter(user=user)
+        .prefetch_related("tools", "agent_tools__tools")
+    )
+
+    has_selectable_agent = bool(agents)
+    matched_agent = next(
+        (
+            agent
+            for agent in agents
+            if _agent_has_tool_subtype(agent, "browser") and _agent_has_tool_subtype(agent, "memory")
+        ),
+        None,
+    )
+    has_browser_capable_agent = matched_agent is not None
+
+    has_topics_memory = _memory_has_thematic_item(user, THEMATIC_WATCH_MEMORY_THEME_TOPICS)
+    has_language_memory = _memory_has_thematic_item(user, THEMATIC_WATCH_MEMORY_THEME_LANGUAGE)
+
+    prerequisites = [
+        TemplatePrerequisite(
+            label=str(_("At least one selectable agent exists")),
+            met=has_selectable_agent,
+        ),
+        TemplatePrerequisite(
+            label=str(
+                _(
+                    "A selectable agent can use both browser and memory tools directly or through sub-agents"
+                )
+            ),
+            met=has_browser_capable_agent,
+        ),
+        TemplatePrerequisite(
+            label=str(
+                _(
+                    "Memory item present with theme='%(theme)s' and type='%(type)s'"
+                ) % {
+                    "theme": THEMATIC_WATCH_MEMORY_THEME_TOPICS,
+                    "type": THEMATIC_WATCH_MEMORY_TYPE,
+                }
+            ),
+            met=has_topics_memory,
+        ),
+        TemplatePrerequisite(
+            label=str(
+                _(
+                    "Memory item present with theme='%(theme)s' and type='%(type)s'"
+                ) % {
+                    "theme": THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
+                    "type": THEMATIC_WATCH_MEMORY_TYPE,
+                }
+            ),
+            met=has_language_memory,
+        ),
+    ]
+
+    if not has_selectable_agent:
+        reason = str(_("No selectable agent available."))
+        return TemplateAvailability(False, reason, prerequisites)
+    if not has_browser_capable_agent:
+        reason = str(
+            _(
+                "No selectable agent can both browse the web and access memory. "
+                "Add browser and memory tools directly or via sub-agents."
+            )
+        )
+        return TemplateAvailability(False, reason, prerequisites)
+
+    return TemplateAvailability(
+        True,
+        "",
+        prerequisites,
+        agent_id=matched_agent.id,
+    )
+
+
 def get_task_templates_for_user(user) -> list[dict]:
     spam_filter = evaluate_spam_filter_template(user)
+    thematic_watch = evaluate_thematic_watch_template(user)
     return [
         {
             "id": SPAM_FILTER_TEMPLATE_ID,
@@ -136,11 +264,51 @@ def get_task_templates_for_user(user) -> list[dict]:
             "prerequisites": [
                 {"label": req.label, "met": req.met} for req in spam_filter.prerequisites
             ],
-        }
+        },
+        {
+            "id": THEMATIC_WATCH_TEMPLATE_ID,
+            "title": str(_("Thematic watch - weekly")),
+            "description": str(
+                _(
+                    "Every Monday at 06:00, run a thematic web watch. "
+                    "Using memory for interests/language is recommended but optional."
+                )
+            ),
+            "available": thematic_watch.available,
+            "reason": thematic_watch.reason,
+            "prerequisites": [
+                {"label": req.label, "met": req.met}
+                for req in thematic_watch.prerequisites
+            ],
+        },
     ]
 
 
 def build_template_prefill_payload(user, template_id: str) -> dict | None:
+    if template_id == THEMATIC_WATCH_TEMPLATE_ID:
+        availability = evaluate_thematic_watch_template(user)
+        if not availability.available or not availability.agent_id:
+            return None
+
+        return {
+            "name": str(_("Thematic watch - weekly")),
+            "trigger_type": TaskDefinition.TriggerType.CRON,
+            "agent": availability.agent_id,
+            "prompt": (
+                "Run a thematic web watch for this user. "
+                "First, retrieve two strict memory items (type='preference'): "
+                f"theme='{THEMATIC_WATCH_MEMORY_THEME_TOPICS}' (topics) and "
+                f"theme='{THEMATIC_WATCH_MEMORY_THEME_LANGUAGE}' (language). "
+                "If memory is incomplete, continue with a generic watch and start your output with: "
+                "'profile incomplete'. Then provide a concise digest with key updates and links."
+            ),
+            "run_mode": TaskDefinition.RunMode.NEW_THREAD,
+            "cron_expression": "0 6 * * 1",
+            "timezone": "UTC",
+            "email_tool": "",
+            "poll_interval_minutes": 5,
+        }
+
     if template_id != SPAM_FILTER_TEMPLATE_ID:
         return None
 

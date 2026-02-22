@@ -49,6 +49,23 @@
                         {% endif %}
 
                         <div class="mt-auto">
+                            {% if template.setup_url %}
+                                {% if template.setup_enabled %}
+                                    <a href="{{ template.setup_url }}" class="btn btn-outline-secondary me-2">
+                                        {% trans "Guided setup" %}
+                                    </a>
+                                {% else %}
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary me-2"
+                                        disabled
+                                        title="{{ template.setup_disabled_reason }}"
+                                        aria-label="{{ template.setup_disabled_reason }}"
+                                    >
+                                        {% trans "Guided setup" %}
+                                    </button>
+                                {% endif %}
+                            {% endif %}
                             {% if template.available %}
                                 <a href="{% url 'user_settings:task_template_apply' template.id %}" class="btn btn-primary">
                                     {% trans "Use this template" %}
