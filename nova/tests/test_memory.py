@@ -56,7 +56,37 @@ class MemoryToolV2Tests(TestCase):
         MemoryTheme.objects.create(user=self.user, slug="personal", display_name="Personal")
         out = async_to_sync(list_themes)(self.agent)
         self.assertIn("themes", out)
-        self.assertTrue(any(t["slug"] == "personal" for t in out["themes"]))
+        self.assertFalse(any(t["slug"] == "personal" for t in out["themes"]))
+
+    def test_list_themes_defaults_to_active_items_only(self):
+        active_theme = MemoryTheme.objects.create(user=self.user, slug="active-theme", display_name="Active")
+        archived_theme = MemoryTheme.objects.create(user=self.user, slug="archived-theme", display_name="Archived")
+        MemoryItem.objects.create(user=self.user, theme=active_theme, type="fact", content="still relevant")
+        MemoryItem.objects.create(
+            user=self.user,
+            theme=archived_theme,
+            type="fact",
+            content="deprecated",
+            status="archived",
+        )
+
+        out = async_to_sync(list_themes)(self.agent)
+        slugs = {t["slug"] for t in out["themes"]}
+        self.assertIn("active-theme", slugs)
+        self.assertNotIn("archived-theme", slugs)
+
+    def test_list_themes_can_include_archived_items(self):
+        archived_theme = MemoryTheme.objects.create(user=self.user, slug="archived-theme", display_name="Archived")
+        MemoryItem.objects.create(
+            user=self.user,
+            theme=archived_theme,
+            type="fact",
+            content="deprecated",
+            status="archived",
+        )
+
+        out = async_to_sync(list_themes)(self.agent, status="any")
+        self.assertTrue(any(t["slug"] == "archived-theme" for t in out["themes"]))
 
     def test_search_finds_item(self):
         theme = MemoryTheme.objects.create(user=self.user, slug="personal", display_name="Personal")

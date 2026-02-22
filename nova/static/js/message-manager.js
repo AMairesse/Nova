@@ -23,6 +23,7 @@
             // Idempotence
             this._initialized = false;
             this._handlersBound = false;
+            this._setupPrefillApplied = false;
         }
 
         init() {
@@ -171,6 +172,7 @@
                 document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: this.currentThreadId || null } }));
 
                 this.initTextareaFocus();
+                this.applyTemplateSetupPrefillFromUrl();
                 // Update voice button visibility based on browser support
                 this.updateVoiceButtonState();
                 // Auto-scroll to bottom for new conversations
@@ -194,6 +196,48 @@
             } catch (error) {
                 console.error('Error loading messages:', error);
             }
+        }
+
+        applyTemplateSetupPrefillFromUrl() {
+            if (this._setupPrefillApplied) return;
+
+            const params = new URLSearchParams(window.location.search || '');
+            const prefillMessage = (params.get('prefill_message') || '').trim();
+            const agentId = (params.get('agent_id') || '').trim();
+
+            if (!prefillMessage && !agentId) return;
+
+            if (agentId) {
+                const selectedAgentInput = document.getElementById('selectedAgentInput');
+                const dropdownButton = document.getElementById('dropdownMenuButton');
+                const selectedItem = document.querySelector(
+                    `.agent-dropdown-item[data-value="${agentId}"]`
+                );
+                if (selectedAgentInput) selectedAgentInput.value = agentId;
+                if (dropdownButton && selectedItem) {
+                    dropdownButton.innerHTML = '<i class="bi bi-robot"></i>';
+                    dropdownButton.setAttribute('title', selectedItem.textContent.trim());
+                }
+            }
+
+            if (prefillMessage) {
+                const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+                if (textarea) {
+                    textarea.value = prefillMessage;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    textarea.focus();
+                }
+            }
+
+            // Prevent sticky guided-setup params from overriding future default-agent resolution
+            // during subsequent continuous message reloads.
+            params.delete('prefill_message');
+            params.delete('agent_id');
+            const qs = params.toString();
+            const nextUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+            window.history.replaceState({}, '', nextUrl);
+
+            this._setupPrefillApplied = true;
         }
 
 

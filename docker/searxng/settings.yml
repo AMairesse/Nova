@@ -95,7 +95,7 @@ server:
   # If your instance owns a /etc/searxng/settings.yml file, then set the following
   # values there.
 
-  secret_key: "ultrasecretkey"  # Is overwritten by ${SEARXNG_SECRET}
+  secret_key: "2OqIOGqCu1CaKFyGFC31zD4nwkqQ"  # Is overwritten by ${SEARXNG_SECRET}
   # Proxy image results through SearXNG. Is overwritten by ${SEARXNG_IMAGE_PROXY}
   image_proxy: false
   # 1.0 and 1.1 are supported
@@ -2446,6 +2446,11 @@ engines:
     shortcut: mp
     disabled: true
 
+  - name: national vulnerability database
+    engine: nvd
+    shortcut: nvd
+    disabled: true
+
   - name: naver
     categories: [general, web]
     engine: naver
@@ -2580,29 +2585,6 @@ engines:
       results: HTML
       language: de
 
-  - name: seekr news
-    engine: seekr
-    shortcut: senews
-    categories: news
-    seekr_category: news
-    disabled: true
-
-  - name: seekr images
-    engine: seekr
-    network: seekr news
-    shortcut: seimg
-    categories: images
-    seekr_category: images
-    disabled: true
-
-  - name: seekr videos
-    engine: seekr
-    network: seekr news
-    shortcut: sevid
-    categories: videos
-    seekr_category: videos
-    disabled: true
-
   - name: stract
     engine: stract
     shortcut: str
@@ -2667,6 +2649,12 @@ engines:
     categories: [general, web]
     brave_category: search
     # brave_spellcheck: true
+
+  - name: braveapi
+    engine: braveapi
+    # read https://docs.searxng.org/dev/engines/online/brave.html
+    api_key: ""
+    inactive: true
 
   - name: brave.images
     engine: brave

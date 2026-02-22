@@ -6,7 +6,9 @@ from django.db.models import Q
 from django.forms import ModelForm
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from urllib.parse import urlencode
 
 import croniter
 from cron_descriptor import get_description
@@ -15,6 +17,16 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.continuous.utils import ensure_continuous_nightly_summary_task_definition
+from nova.tasks.template_registry import (
+    THEMATIC_WATCH_TEMPLATE_ID,
+    THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
+    THEMATIC_WATCH_MEMORY_THEME_TOPICS,
+    THEMATIC_WATCH_MEMORY_TYPE,
+    build_template_prefill_payload,
+    default_agent_has_memory_tool,
+    evaluate_thematic_watch_template,
+    get_task_templates_for_user,
+)
 from nova.tasks.tasks import (
     poll_task_definition_email,
     run_task_definition_cron,
@@ -197,6 +209,84 @@ def tasks_list(request):
 
 
 @login_required
+def task_templates_list(request):
+    """List predefined task templates and their per-user availability."""
+    templates = get_task_templates_for_user(request.user)
+    thematic_watch = evaluate_thematic_watch_template(request.user)
+    setup_enabled = default_agent_has_memory_tool(request.user)
+    setup_disabled_reason = str(
+        _("Guided setup requires the default agent to have access to the memory tool.")
+    )
+    for item in templates:
+        if item.get("id") == THEMATIC_WATCH_TEMPLATE_ID and thematic_watch.available:
+            item["setup_url"] = reverse(
+                "user_settings:task_template_setup",
+                args=[THEMATIC_WATCH_TEMPLATE_ID],
+            )
+            item["setup_enabled"] = setup_enabled
+            item["setup_disabled_reason"] = "" if setup_enabled else setup_disabled_reason
+
+    context = {
+        "templates": templates,
+    }
+    return render(request, "user_settings/task_templates.html", context)
+
+
+@login_required
+def task_template_apply(request, template_id: str):
+    """Open task creation form with prefilled values from a template."""
+    initial = build_template_prefill_payload(request.user, template_id)
+    if not initial:
+        messages.error(
+            request,
+            _("This predefined task is unavailable for your current setup."),
+        )
+        return redirect("user_settings:task_templates")
+
+    request.session["task_template_initial"] = initial
+    return redirect("user_settings:task_create")
+
+
+@login_required
+def task_template_setup(request, template_id: str):
+    """Redirect to chat with a guided prompt to collect thematic-watch interests/language."""
+    if template_id != THEMATIC_WATCH_TEMPLATE_ID:
+        messages.error(request, _("This setup flow is unavailable for the selected template."))
+        return redirect("user_settings:task_templates")
+
+    if not default_agent_has_memory_tool(request.user):
+        messages.error(
+            request,
+            _("Guided setup requires the default agent to have access to the memory tool."),
+        )
+        return redirect("user_settings:task_templates")
+
+    availability = evaluate_thematic_watch_template(request.user)
+    if not availability.available:
+        messages.error(request, _("This predefined task is unavailable for your current setup."))
+        return redirect("user_settings:task_templates")
+
+    onboarding_prompt = _(
+        "[THEMATIC_WATCH_SETUP] Help me configure this specific recurring task. "
+        "Please ask me short questions, preferably in my own language, to capture only: "
+        "(1) my topics of interest and (2) my preferred summary language. "
+        "Then write exactly TWO memory items with memory_add and strict metadata: "
+    ) + (
+        f"item #1 => type='{THEMATIC_WATCH_MEMORY_TYPE}', theme='{THEMATIC_WATCH_MEMORY_THEME_TOPICS}', "
+        "content must contain only the user topics text. "
+        f"item #2 => type='{THEMATIC_WATCH_MEMORY_TYPE}', theme='{THEMATIC_WATCH_MEMORY_THEME_LANGUAGE}', "
+        "content must contain only the user preferred language text. "
+        "No key prefixes, no labels, no extra text, no other themes, no duplicates. Then stop."
+    )
+    query = urlencode(
+        {
+            "prefill_message": str(onboarding_prompt),
+        }
+    )
+    return redirect(f"{reverse('continuous_home')}?{query}")
+
+
+@login_required
 def task_create(request):
     """Create a new task definition."""
     if request.method == "POST":
@@ -210,7 +300,11 @@ def task_create(request):
             messages.success(request, _("Task created successfully."))
             return redirect("user_settings:tasks")
     else:
-        form = TaskDefinitionForm(user=request.user)
+        initial = request.session.pop("task_template_initial", None)
+        if isinstance(initial, dict):
+            form = TaskDefinitionForm(user=request.user, initial=initial)
+        else:
+            form = TaskDefinitionForm(user=request.user)
 
     context = {
         "form": form,

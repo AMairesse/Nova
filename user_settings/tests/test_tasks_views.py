@@ -7,7 +7,19 @@ from django.urls import reverse
 
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
-from nova.tests.factories import create_agent, create_provider, create_tool, create_user
+from nova.models.UserObjects import UserProfile
+from nova.tasks.template_registry import (
+    THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
+    THEMATIC_WATCH_MEMORY_THEME_TOPICS,
+    THEMATIC_WATCH_MEMORY_TYPE,
+)
+from nova.tests.factories import (
+    create_agent,
+    create_provider,
+    create_tool,
+    create_tool_credential,
+    create_user,
+)
 from user_settings.views.tasks import TaskDefinitionForm
 
 
@@ -190,7 +202,10 @@ class UserSettingsTasksViewsTests(TestCase):
 
         self.assertIsNone(form.get_email_tool_access_warning())
 
-    @patch("user_settings.views.tasks.ensure_continuous_nightly_summary_task_definition", side_effect=RuntimeError("boom"))
+    @patch(
+        "user_settings.views.tasks.ensure_continuous_nightly_summary_task_definition",
+        side_effect=RuntimeError("boom"),
+    )
     def test_tasks_list_tolerates_system_task_ensure_failure(self, mocked_ensure):
         response = self.client.get(reverse("user_settings:tasks"))
         self.assertEqual(response.status_code, 200)
@@ -300,3 +315,363 @@ class UserSettingsTasksViewsTests(TestCase):
         payload = valid.json()
         self.assertTrue(payload["valid"])
         self.assertIn("08:00", payload["description"])
+
+    def test_tasks_list_shows_predefined_tasks_button(self):
+        response = self.client.get(reverse("user_settings:tasks"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("user_settings:task_templates"))
+
+    def test_task_templates_list_marks_spam_template_unavailable_when_no_prerequisites(self):
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spam filtering")
+        self.assertContains(response, "Unavailable")
+
+    def test_task_templates_list_marks_spam_template_available_when_agent_has_configured_mail_tool(self):
+        email_tool = create_tool(
+            self.user,
+            name="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "alice@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(email_tool)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spam filtering")
+        self.assertContains(response, "Available")
+
+    def test_task_templates_list_marks_spam_template_available_with_subagent_mail_tool(self):
+        email_tool = create_tool(
+            self.user,
+            name="Delegated Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "delegated@example.com", "imap_server": "imap.example.com"},
+        )
+        sub_agent = create_agent(
+            self.user,
+            self.provider,
+            name="mail-sub-agent",
+            is_tool=True,
+            tool_description="mail helper",
+        )
+        sub_agent.tools.add(email_tool)
+        self.agent.agent_tools.add(sub_agent)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spam filtering")
+        self.assertContains(response, "Available")
+
+    def test_task_template_apply_prefills_spam_template_with_subagent_mail_tool(self):
+        email_tool = create_tool(
+            self.user,
+            name="Delegated Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "delegated@example.com", "imap_server": "imap.example.com"},
+        )
+        sub_agent = create_agent(
+            self.user,
+            self.provider,
+            name="mail-sub-agent",
+            is_tool=True,
+            tool_description="mail helper",
+        )
+        sub_agent.tools.add(email_tool)
+        self.agent.agent_tools.add(sub_agent)
+
+        apply_response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(apply_response.status_code, 302)
+        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+
+        create_response = self.client.get(reverse("user_settings:task_create"))
+        self.assertEqual(create_response.status_code, 200)
+        form = create_response.context["form"]
+        self.assertEqual(form.initial.get("agent"), self.agent.id)
+        self.assertEqual(form.initial.get("email_tool"), email_tool.id)
+        self.assertEqual(form.initial.get("name"), "Spam filtering - delegated@example.com")
+
+    def test_task_template_apply_prefills_create_form_with_ephemeral_mode_and_mailbox_name(self):
+        email_tool = create_tool(
+            self.user,
+            name="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "alice@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(email_tool)
+
+        apply_response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(apply_response.status_code, 302)
+        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+
+        create_response = self.client.get(reverse("user_settings:task_create"))
+        self.assertEqual(create_response.status_code, 200)
+
+        form = create_response.context["form"]
+        self.assertEqual(form.initial.get("run_mode"), TaskDefinition.RunMode.EPHEMERAL)
+        self.assertEqual(form.initial.get("trigger_type"), TaskDefinition.TriggerType.EMAIL_POLL)
+        self.assertEqual(form.initial.get("agent"), self.agent.id)
+        self.assertEqual(form.initial.get("email_tool"), email_tool.id)
+        self.assertEqual(form.initial.get("name"), "Spam filtering - alice@example.com")
+
+    def test_task_template_apply_redirects_back_when_template_unavailable(self):
+        response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:task_templates"))
+
+    def test_task_templates_list_marks_thematic_watch_unavailable_without_browser_capability(self):
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Thematic watch - weekly")
+        self.assertContains(
+            response,
+            "No selectable agent can both browse the web and access memory. "
+            "Add browser and memory tools directly or via sub-agents.",
+        )
+
+    def test_task_templates_list_marks_thematic_watch_available_with_direct_browser_tool(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Thematic watch - weekly")
+        self.assertNotContains(
+            response,
+            "No selectable agent can both browse the web and access memory. "
+            "Add browser and memory tools directly or via sub-agents.",
+        )
+
+    def test_task_templates_list_marks_thematic_watch_available_with_subagent_browser_tool(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        sub_agent = create_agent(
+            self.user,
+            self.provider,
+            name="internet-sub-agent",
+            is_tool=True,
+            tool_description="internet helper",
+        )
+        sub_agent.tools.add(browser_tool)
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+        self.agent.agent_tools.add(sub_agent)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Thematic watch - weekly")
+        self.assertNotContains(
+            response,
+            "No selectable agent can both browse the web and access memory. "
+            "Add browser and memory tools directly or via sub-agents.",
+        )
+
+    def test_task_template_apply_prefills_thematic_watch_weekly(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+
+        apply_response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["thematic_watch_weekly"])
+        )
+        self.assertEqual(apply_response.status_code, 302)
+        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+
+        create_response = self.client.get(reverse("user_settings:task_create"))
+        self.assertEqual(create_response.status_code, 200)
+
+        form = create_response.context["form"]
+        self.assertEqual(form.initial.get("trigger_type"), TaskDefinition.TriggerType.CRON)
+        self.assertEqual(form.initial.get("run_mode"), TaskDefinition.RunMode.NEW_THREAD)
+        self.assertEqual(form.initial.get("cron_expression"), "0 6 * * 1")
+        self.assertEqual(form.initial.get("agent"), self.agent.id)
+
+    def test_task_templates_list_displays_guided_setup_for_available_thematic_watch(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            reverse("user_settings:task_template_setup", args=["thematic_watch_weekly"]),
+        )
+
+    def test_task_template_setup_redirects_to_chat_with_prefill_and_selected_agent(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(browser_tool)
+        self.agent.tools.add(memory_tool)
+        UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
+
+        response = self.client.get(
+            reverse("user_settings:task_template_setup", args=["thematic_watch_weekly"])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("continuous_home"), response["Location"])
+        self.assertNotIn("agent_id=", response["Location"])
+        self.assertIn("prefill_message=", response["Location"])
+        self.assertIn("THEMATIC_WATCH_SETUP", response["Location"])
+        self.assertIn(THEMATIC_WATCH_MEMORY_THEME_TOPICS, response["Location"])
+        self.assertIn(THEMATIC_WATCH_MEMORY_THEME_LANGUAGE, response["Location"])
+        self.assertIn(THEMATIC_WATCH_MEMORY_TYPE, response["Location"])
+
+    def test_task_templates_list_disables_guided_setup_when_default_agent_has_no_memory_tool(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+
+        default_without_memory = create_agent(self.user, self.provider, name="default-no-memory")
+        default_without_memory.tools.add(browser_tool)
+        UserProfile.objects.update_or_create(
+            user=self.user,
+            defaults={"default_agent": default_without_memory},
+        )
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Guided setup")
+        self.assertContains(
+            response,
+            "Guided setup requires the default agent to have access to the memory tool.",
+        )
+
+    def test_task_template_setup_rejects_when_default_agent_has_no_memory_tool(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+
+        default_without_memory = create_agent(self.user, self.provider, name="default-no-memory")
+        default_without_memory.tools.add(browser_tool)
+        UserProfile.objects.update_or_create(
+            user=self.user,
+            defaults={"default_agent": default_without_memory},
+        )
+
+        response = self.client.get(
+            reverse("user_settings:task_template_setup", args=["thematic_watch_weekly"])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:task_templates"))
+
+    def test_task_template_setup_redirects_back_when_thematic_watch_unavailable(self):
+        response = self.client.get(
+            reverse("user_settings:task_template_setup", args=["thematic_watch_weekly"])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:task_templates"))
