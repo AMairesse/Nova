@@ -36,6 +36,10 @@ class WebDAVBuiltinsTests(TransactionTestCase):
             "https://cloud.example.com/webdav/A%20folder/report%201.txt",
         )
 
+    def test_build_webdav_url_accepts_already_encoded_segments(self):
+        url = webdav._build_webdav_url("https://cloud.example.com/webdav/", "/NEIGE%202026/")
+        self.assertEqual(url, "https://cloud.example.com/webdav/NEIGE%202026")
+
     def test_coerce_bool_supports_string_values(self):
         self.assertTrue(webdav._coerce_bool("true"))
         self.assertTrue(webdav._coerce_bool("1"))

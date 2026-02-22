@@ -1,6 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 import xml.etree.ElementTree as ET
 
 import aiohttp
@@ -71,7 +71,7 @@ def _join_paths(base: str, path: str) -> str:
 
 def _build_webdav_url(server_url: str, full_path: str) -> str:
     server = server_url.rstrip("/")
-    safe_segments = [quote(part, safe="") for part in full_path.split("/") if part]
+    safe_segments = [quote(unquote(part), safe="") for part in full_path.split("/") if part]
     rel = "/".join(safe_segments)
     if rel:
         return f"{server}/{rel}"
