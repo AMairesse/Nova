@@ -211,6 +211,27 @@ class WebDAVBuiltinsTests(TransactionTestCase):
             ],
         )
 
+    @patch("nova.tools.builtins.webdav.list_files", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.webdav._get_webdav_config", new_callable=AsyncMock)
+    def test_get_functions_exposes_async_coroutines(self, mocked_config, mocked_list_files):
+        mocked_config.return_value = {
+            "allow_create_files": False,
+            "allow_create_directories": False,
+            "allow_move": False,
+            "allow_copy": False,
+            "allow_batch_move": False,
+            "allow_delete": False,
+        }
+        mocked_list_files.return_value = {"items": [{"href": "/Documents", "type": "directory"}]}
+
+        tools = asyncio.run(webdav.get_functions(self.tool, agent=None))
+        list_tool = next(tool for tool in tools if tool.name == "webdav_list_files")
+
+        result = asyncio.run(list_tool.coroutine(path="/", depth=1))
+
+        self.assertEqual(result["items"][0]["type"], "directory")
+        mocked_list_files.assert_awaited_once_with(self.tool, path="/", depth=1)
+
     def test_metadata_declares_skill_loading_permissions_and_instructions_exist(self):
         loading = webdav.METADATA.get("loading", {})
         self.assertEqual(loading.get("mode"), "skill")

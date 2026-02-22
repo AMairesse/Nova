@@ -390,17 +390,17 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
 
     tools = [
         StructuredTool.from_function(
-            func=_list,
+            coroutine=_list,
             name="webdav_list_files",
             description="List files/folders in a WebDAV path.",
         ),
         StructuredTool.from_function(
-            func=_stat,
+            coroutine=_stat,
             name="webdav_stat_path",
             description="Get metadata/existence for a single path in WebDAV.",
         ),
         StructuredTool.from_function(
-            func=_read,
+            coroutine=_read,
             name="webdav_read_file",
             description="Read a text file from WebDAV.",
         ),
@@ -409,7 +409,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     if config.get("allow_create_files"):
         tools.append(
             StructuredTool.from_function(
-                func=_write,
+                coroutine=_write,
                 name="webdav_write_file",
                 description="Create/update text content in a WebDAV file.",
             )
@@ -418,7 +418,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     if config.get("allow_create_directories"):
         tools.append(
             StructuredTool.from_function(
-                func=_mkdir,
+                coroutine=_mkdir,
                 name="webdav_create_folder",
                 description="Create a folder in WebDAV (supports recursive mode).",
             )
@@ -427,7 +427,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     if config.get("allow_move"):
         tools.append(
             StructuredTool.from_function(
-                func=_move,
+                coroutine=_move,
                 name="webdav_move_path",
                 description="Move or rename a file/folder in WebDAV.",
             )
@@ -436,7 +436,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     if config.get("allow_copy"):
         tools.append(
             StructuredTool.from_function(
-                func=_copy,
+                coroutine=_copy,
                 name="webdav_copy_path",
                 description="Copy a file/folder in WebDAV.",
             )
@@ -445,7 +445,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     if config.get("allow_batch_move"):
         tools.append(
             StructuredTool.from_function(
-                func=_batch_move,
+                coroutine=_batch_move,
                 name="webdav_batch_move_paths",
                 description="Plan/execute multiple move operations in one call.",
             )
@@ -454,7 +454,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     if config.get("allow_delete"):
         tools.append(
             StructuredTool.from_function(
-                func=_delete,
+                coroutine=_delete,
                 name="webdav_delete_path",
                 description="Delete a file or folder in WebDAV.",
             )
