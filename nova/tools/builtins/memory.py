@@ -68,11 +68,29 @@ def _get_default_theme_slug() -> str:
     return "general"
 
 
-async def list_themes(agent: LLMAgent) -> Dict[str, Any]:
-    """List themes available in the structured memory store."""
+async def list_themes(agent: LLMAgent, status: Optional[str] = None) -> Dict[str, Any]:
+    """List themes available in the structured memory store.
+
+    Default behavior mirrors `search`: only themes with active items are returned,
+    unless explicitly overridden via `status`.
+    """
 
     def _impl():
-        themes = MemoryTheme.objects.filter(user=agent.user).order_by("slug")
+        status_value = (status or "").strip().lower() or MemoryItemStatus.ACTIVE
+        valid_statuses = set(MemoryItemStatus.values)
+
+        item_filter = Q(items__user=agent.user)
+        if status_value != "any":
+            if status_value not in valid_statuses:
+                status_value = MemoryItemStatus.ACTIVE
+            item_filter &= Q(items__status=status_value)
+
+        themes = (
+            MemoryTheme.objects.filter(user=agent.user)
+            .filter(item_filter)
+            .distinct()
+            .order_by("slug")
+        )
         return {
             "themes": [
                 {
@@ -541,12 +559,17 @@ async def get_functions(tool, agent: LLMAgent):
             }
         ),
         StructuredTool.from_function(
-            coroutine=lambda: list_themes(agent),
+            coroutine=lambda status=None: list_themes(agent=agent, status=status),
             name="memory_list_themes",
             description="List themes in long-term memory",
             args_schema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "Optional: filter by associated item status (active|archived|any)",
+                    },
+                },
                 "required": []
             }
         ),
