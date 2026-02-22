@@ -347,6 +347,70 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertContains(response, "Spam filtering")
         self.assertContains(response, "Available")
 
+    def test_task_templates_list_marks_spam_template_available_with_subagent_mail_tool(self):
+        email_tool = create_tool(
+            self.user,
+            name="Delegated Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "delegated@example.com", "imap_server": "imap.example.com"},
+        )
+        sub_agent = create_agent(
+            self.user,
+            self.provider,
+            name="mail-sub-agent",
+            is_tool=True,
+            tool_description="mail helper",
+        )
+        sub_agent.tools.add(email_tool)
+        self.agent.agent_tools.add(sub_agent)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spam filtering")
+        self.assertContains(response, "Available")
+
+    def test_task_template_apply_prefills_spam_template_with_subagent_mail_tool(self):
+        email_tool = create_tool(
+            self.user,
+            name="Delegated Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "delegated@example.com", "imap_server": "imap.example.com"},
+        )
+        sub_agent = create_agent(
+            self.user,
+            self.provider,
+            name="mail-sub-agent",
+            is_tool=True,
+            tool_description="mail helper",
+        )
+        sub_agent.tools.add(email_tool)
+        self.agent.agent_tools.add(sub_agent)
+
+        apply_response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(apply_response.status_code, 302)
+        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+
+        create_response = self.client.get(reverse("user_settings:task_create"))
+        self.assertEqual(create_response.status_code, 200)
+        form = create_response.context["form"]
+        self.assertEqual(form.initial.get("agent"), self.agent.id)
+        self.assertEqual(form.initial.get("email_tool"), email_tool.id)
+        self.assertEqual(form.initial.get("name"), "Spam filtering - delegated@example.com")
+
     def test_task_template_apply_prefills_create_form_with_ephemeral_mode_and_mailbox_name(self):
         email_tool = create_tool(
             self.user,

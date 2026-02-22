@@ -117,7 +117,9 @@ def _configured_email_tools_for_user(user) -> dict[int, ToolCredential]:
 
 def evaluate_spam_filter_template(user) -> TemplateAvailability:
     configured_email_tools = _configured_email_tools_for_user(user)
-    agents = list(AgentConfig.objects.filter(user=user).prefetch_related("tools"))
+    agents = list(
+        AgentConfig.objects.filter(user=user).prefetch_related("tools", "agent_tools__tools")
+    )
 
     has_configured_mailbox = bool(configured_email_tools)
     has_selectable_agent = bool(agents)
@@ -125,7 +127,9 @@ def evaluate_spam_filter_template(user) -> TemplateAvailability:
     matched_agent = None
     matched_tool_id = None
     for agent in agents:
-        for tool in agent.tools.all():
+        direct_tools = list(agent.tools.all())
+        delegated_tools = [tool for sub_agent in agent.agent_tools.all() for tool in sub_agent.tools.all()]
+        for tool in [*direct_tools, *delegated_tools]:
             if tool.id in configured_email_tools:
                 matched_agent = agent
                 matched_tool_id = tool.id
@@ -295,12 +299,13 @@ def build_template_prefill_payload(user, template_id: str) -> dict | None:
             "trigger_type": TaskDefinition.TriggerType.CRON,
             "agent": availability.agent_id,
             "prompt": (
-                "Run a thematic web watch for this user. "
+                "Run a weekly thematic web watch for this user. "
+                "Coverage window is the last 7 full days before execution time (not only today). "
                 "First, retrieve two strict memory items (type='preference'): "
                 f"theme='{THEMATIC_WATCH_MEMORY_THEME_TOPICS}' (topics) and "
                 f"theme='{THEMATIC_WATCH_MEMORY_THEME_LANGUAGE}' (language). "
                 "If memory is incomplete, continue with a generic watch and start your output with: "
-                "'profile incomplete'. Then provide a concise digest with key updates and links."
+                "'profile incomplete'. Then provide one concise weekly digest with key updates and links."
             ),
             "run_mode": TaskDefinition.RunMode.NEW_THREAD,
             "cron_expression": "0 6 * * 1",
