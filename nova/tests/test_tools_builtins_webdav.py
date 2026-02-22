@@ -30,10 +30,10 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         )
 
     def test_build_webdav_url_encodes_segments(self):
-        url = webdav._build_webdav_url("https://cloud.example.com/", "alice", "/A folder/report 1.txt")
+        url = webdav._build_webdav_url("https://cloud.example.com/webdav/", "/A folder/report 1.txt")
         self.assertEqual(
             url,
-            "https://cloud.example.com/remote.php/dav/files/alice/A%20folder/report%201.txt",
+            "https://cloud.example.com/webdav/A%20folder/report%201.txt",
         )
 
     def test_coerce_bool_supports_string_values(self):

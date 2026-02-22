@@ -28,7 +28,7 @@ METADATA = {
     "config_fields": [
         {"name": "server_url", "type": "string", "label": _("WebDAV Server URL"), "required": True},
         {"name": "username", "type": "string", "label": _("WebDAV Username"), "required": True},
-        {"name": "app_password", "type": "string", "label": _("WebDAV Password / App Password"), "required": True},
+        {"name": "app_password", "type": "password", "label": _("WebDAV Password / App Password"), "required": True},
         {"name": "root_path", "type": "string", "label": _("Root path (optional)"), "required": False},
         {"name": "timeout", "type": "integer", "label": _("HTTP Timeout (seconds)"), "required": False, "default": 20},
         {"name": "allow_move", "type": "boolean", "label": _("Allow moving/renaming files and directories"), "required": False, "default": False},
@@ -69,13 +69,13 @@ def _join_paths(base: str, path: str) -> str:
     return _normalize_path(f"{base}/{path.lstrip('/')}")
 
 
-def _build_webdav_url(server_url: str, username: str, full_path: str) -> str:
+def _build_webdav_url(server_url: str, full_path: str) -> str:
     server = server_url.rstrip("/")
     safe_segments = [quote(part, safe="") for part in full_path.split("/") if part]
     rel = "/".join(safe_segments)
     if rel:
-        return f"{server}/remote.php/dav/files/{quote(username, safe='')}/{rel}"
-    return f"{server}/remote.php/dav/files/{quote(username, safe='')}"
+        return f"{server}/{rel}"
+    return server
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -137,7 +137,7 @@ async def _webdav_request(
     expected_statuses: Optional[set[int]] = None,
 ) -> tuple[int, str]:
     full_path = _join_paths(config["root_path"], path)
-    url = _build_webdav_url(config["server_url"], config["username"], full_path)
+    url = _build_webdav_url(config["server_url"], full_path)
 
     req_headers = dict(headers or {})
     auth = aiohttp.BasicAuth(config["username"], config["password"])
@@ -283,7 +283,7 @@ async def delete_path(tool: Tool, path: str) -> Dict[str, Any]:
 async def move_path(tool: Tool, source_path: str, destination_path: str, overwrite: bool = False) -> Dict[str, Any]:
     config = await _get_webdav_config(tool)
     destination_full = _join_paths(config["root_path"], destination_path)
-    destination_url = _build_webdav_url(config["server_url"], config["username"], destination_full)
+    destination_url = _build_webdav_url(config["server_url"], destination_full)
 
     status, _ = await _webdav_request(
         config,
@@ -301,7 +301,7 @@ async def move_path(tool: Tool, source_path: str, destination_path: str, overwri
 async def copy_path(tool: Tool, source_path: str, destination_path: str, overwrite: bool = False) -> Dict[str, Any]:
     config = await _get_webdav_config(tool)
     destination_full = _join_paths(config["root_path"], destination_path)
-    destination_url = _build_webdav_url(config["server_url"], config["username"], destination_full)
+    destination_url = _build_webdav_url(config["server_url"], destination_full)
 
     status, _ = await _webdav_request(
         config,
