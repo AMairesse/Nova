@@ -34,6 +34,8 @@ from user_settings.views.tasks import (
     task_cron_preview,
     task_delete,
     task_edit,
+    task_template_apply,
+    task_templates_list,
     task_run_now,
     task_toggle_active,
     task_view,
@@ -90,6 +92,8 @@ urlpatterns += [
 urlpatterns += [
     # Tasks
     path("tasks/", tasks_list, name="tasks"),
+    path("tasks/templates/", task_templates_list, name="task_templates"),
+    path("tasks/templates/<str:template_id>/apply/", task_template_apply, name="task_template_apply"),
     path("tasks/add/", task_create, name="task_create"),
     path("tasks/<int:pk>/view/", task_view, name="task_view"),
     path("tasks/<int:pk>/edit/", task_edit, name="task_edit"),

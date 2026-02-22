@@ -15,6 +15,10 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.continuous.utils import ensure_continuous_nightly_summary_task_definition
+from nova.tasks.template_registry import (
+    build_template_prefill_payload,
+    get_task_templates_for_user,
+)
 from nova.tasks.tasks import (
     poll_task_definition_email,
     run_task_definition_cron,
@@ -197,6 +201,30 @@ def tasks_list(request):
 
 
 @login_required
+def task_templates_list(request):
+    """List predefined task templates and their per-user availability."""
+    context = {
+        "templates": get_task_templates_for_user(request.user),
+    }
+    return render(request, "user_settings/task_templates.html", context)
+
+
+@login_required
+def task_template_apply(request, template_id: str):
+    """Open task creation form with prefilled values from a template."""
+    initial = build_template_prefill_payload(request.user, template_id)
+    if not initial:
+        messages.error(
+            request,
+            _("This predefined task is unavailable for your current setup."),
+        )
+        return redirect("user_settings:task_templates")
+
+    request.session["task_template_initial"] = initial
+    return redirect("user_settings:task_create")
+
+
+@login_required
 def task_create(request):
     """Create a new task definition."""
     if request.method == "POST":
@@ -210,7 +238,11 @@ def task_create(request):
             messages.success(request, _("Task created successfully."))
             return redirect("user_settings:tasks")
     else:
-        form = TaskDefinitionForm(user=request.user)
+        initial = request.session.pop("task_template_initial", None)
+        if isinstance(initial, dict):
+            form = TaskDefinitionForm(user=request.user, initial=initial)
+        else:
+            form = TaskDefinitionForm(user=request.user)
 
     context = {
         "form": form,

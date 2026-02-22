@@ -7,7 +7,13 @@ from django.urls import reverse
 
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
-from nova.tests.factories import create_agent, create_provider, create_tool, create_user
+from nova.tests.factories import (
+    create_agent,
+    create_provider,
+    create_tool,
+    create_tool_credential,
+    create_user,
+)
 from user_settings.views.tasks import TaskDefinitionForm
 
 
@@ -190,7 +196,10 @@ class UserSettingsTasksViewsTests(TestCase):
 
         self.assertIsNone(form.get_email_tool_access_warning())
 
-    @patch("user_settings.views.tasks.ensure_continuous_nightly_summary_task_definition", side_effect=RuntimeError("boom"))
+    @patch(
+        "user_settings.views.tasks.ensure_continuous_nightly_summary_task_definition",
+        side_effect=RuntimeError("boom"),
+    )
     def test_tasks_list_tolerates_system_task_ensure_failure(self, mocked_ensure):
         response = self.client.get(reverse("user_settings:tasks"))
         self.assertEqual(response.status_code, 200)
@@ -300,3 +309,72 @@ class UserSettingsTasksViewsTests(TestCase):
         payload = valid.json()
         self.assertTrue(payload["valid"])
         self.assertIn("08:00", payload["description"])
+
+    def test_tasks_list_shows_predefined_tasks_button(self):
+        response = self.client.get(reverse("user_settings:tasks"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("user_settings:task_templates"))
+
+    def test_task_templates_list_marks_spam_template_unavailable_when_no_prerequisites(self):
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spam filtering")
+        self.assertContains(response, "Unavailable")
+
+    def test_task_templates_list_marks_spam_template_available_when_agent_has_configured_mail_tool(self):
+        email_tool = create_tool(
+            self.user,
+            name="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "alice@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(email_tool)
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spam filtering")
+        self.assertContains(response, "Available")
+
+    def test_task_template_apply_prefills_create_form_with_ephemeral_mode_and_mailbox_name(self):
+        email_tool = create_tool(
+            self.user,
+            name="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "alice@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(email_tool)
+
+        apply_response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(apply_response.status_code, 302)
+        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+
+        create_response = self.client.get(reverse("user_settings:task_create"))
+        self.assertEqual(create_response.status_code, 200)
+
+        form = create_response.context["form"]
+        self.assertEqual(form.initial.get("run_mode"), TaskDefinition.RunMode.EPHEMERAL)
+        self.assertEqual(form.initial.get("trigger_type"), TaskDefinition.TriggerType.EMAIL_POLL)
+        self.assertEqual(form.initial.get("agent"), self.agent.id)
+        self.assertEqual(form.initial.get("email_tool"), email_tool.id)
+        self.assertEqual(form.initial.get("name"), "Spam filtering - alice@example.com")
+
+    def test_task_template_apply_redirects_back_when_template_unavailable(self):
+        response = self.client.get(
+            reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:task_templates"))
