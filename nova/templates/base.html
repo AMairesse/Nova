@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="{% static 'vendor/bootstrap-icons/bootstrap-icons.min.css' %}">
     <link rel="stylesheet" href="{% static 'css/main.css' %}">
     <script src="{% static 'js/utils.js' %}"></script>
+    <script src="{% static 'js/notification-manager.js' %}"></script>
     <script src="{% static 'js/view-preferences.js' %}"></script>
     <script src="{% static 'vendor/bootstrap/js/bootstrap.bundle.min.js' %}"></script>
     <script src="{% static 'vendor/htmx/htmx.min.js' %}"></script>
@@ -39,7 +40,7 @@
     <link rel="apple-touch-icon" href="{% static 'images/icon-192x192.png' %}">
     {% block extra_head %}{% endblock %}
   </head>
-  <body class="d-flex flex-column" data-debug="{{ debug|yesno:'true,false' }}">
+  <body class="d-flex flex-column" data-debug="{{ debug|yesno:'true,false' }}" data-authenticated="{{ user.is_authenticated|yesno:'true,false' }}">
     <!-- Desktop Navigation (hidden on mobile) -->
     <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom d-none d-lg-flex">
       <div class="container-fluid">
@@ -148,7 +149,7 @@
 
     <!-- Service Worker Registration -->
     <script>
-      if ('serviceWorker' in navigator) {
+      if ('serviceWorker' in navigator && document.body?.dataset?.authenticated === 'true') {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
             .then(reg => {
@@ -159,6 +160,11 @@
                 debug: document.body?.dataset?.debug === 'true',
                 cacheMaxAge: 3 * 24 * 60 * 60 * 1000  // 3 days in ms
               });
+              if (window.NotificationManager?.init) {
+                window.NotificationManager.init(reg).catch(err => {
+                  console.warn('Notification manager init failed:', err);
+                });
+              }
             })
             .catch(err => console.error('SW registration failed:', err));
         });

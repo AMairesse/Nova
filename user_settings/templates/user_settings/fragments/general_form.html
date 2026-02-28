@@ -57,6 +57,25 @@
       </div>
     </div>
 
+    <!-- Task Notifications Section -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">{% trans "Task notifications" %}</h5>
+      </div>
+      <div class="card-body">
+        {% if push_server_state == "disabled" %}
+          <div class="alert alert-warning" role="alert">
+            {% trans "Disabled by the administrator. Web Push is not enabled on this server." %}
+          </div>
+        {% elif push_server_state == "misconfigured" %}
+          <div class="alert alert-warning" role="alert">
+            {% trans "Server configuration is incomplete. Add VAPID keys to enable notifications." %}
+          </div>
+        {% endif %}
+        {{ form.task_notifications_enabled|as_crispy_field }}
+      </div>
+    </div>
+
     <!-- API Token Management Section -->
     <div class="card mb-4">
       <div class="card-header">

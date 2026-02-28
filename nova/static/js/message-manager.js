@@ -667,8 +667,19 @@
             if (window.NovaApp?.isContinuousPage) {
                 return;
             }
-            // Default behavior: server decides which thread to show when none is selected.
-            this.loadMessages(null);
+            const threadIdFromUrl = this.getInitialThreadIdFromUrl();
+            // If a thread id is provided (e.g., from push notification deep-link),
+            // load it first. Otherwise server decides which thread to show.
+            this.loadMessages(threadIdFromUrl);
+        }
+
+        getInitialThreadIdFromUrl() {
+            const params = new URLSearchParams(window.location.search || '');
+            const threadId = (params.get('thread_id') || '').trim();
+            if (!/^\d+$/.test(threadId)) {
+                return null;
+            }
+            return threadId;
         }
 
         // Disable main input if there are pending interactions

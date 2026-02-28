@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v4';  // Updated version for view/preferences persistence changes
+const CACHE_NAME = 'nova-v5';  // Includes push notification handlers
 const urlsToCache = [
   '/',
   '/static/css/main.css',
@@ -110,4 +110,57 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
+});
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch (e) {
+      payload = { body: event.data.text() };
+    }
+  }
+
+  const title = payload.title || 'Nova';
+  const options = {
+    body: payload.body || 'Task status updated.',
+    tag: payload.tag || 'nova-task',
+    icon: '/static/images/icon-192x192.png',
+    badge: '/static/images/icon-192x192.png',
+    data: payload.data || { url: '/' },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const targetUrl = event.notification?.data?.url || '/';
+  event.waitUntil((async () => {
+    const target = new URL(targetUrl, self.location.origin);
+    const clientsList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+    for (const client of clientsList) {
+      try {
+        const clientUrl = new URL(client.url);
+        if (clientUrl.origin !== target.origin) continue;
+
+        if ('navigate' in client) {
+          await client.navigate(target.href);
+        }
+        if ('focus' in client) {
+          await client.focus();
+        }
+        return;
+      } catch (e) {
+        // Ignore malformed URLs and continue to next client.
+      }
+    }
+
+    if (clients.openWindow) {
+      await clients.openWindow(target.href);
+    }
+  })());
 });

@@ -9,3 +9,4 @@ from .ConversationEmbedding import (  # noqa: F401
 from .DaySegment import DaySegment  # noqa: F401
 from .TranscriptChunk import TranscriptChunk  # noqa: F401
 from .TaskDefinition import TaskDefinition  # noqa: F401
+from .PushSubscription import PushSubscription  # noqa: F401

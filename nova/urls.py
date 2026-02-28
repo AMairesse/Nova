@@ -23,6 +23,7 @@ from nova.views.interaction_views import (
     answer_interaction, cancel_interaction
 )
 from nova.views.pwa_views import service_worker
+from nova.views.push_views import push_config, push_subscriptions
 from nova.views.security_views import csrf_token
 from nova.views.health import healthz
 from nova.views.webapp_views import serve_webapp, webapps_list, preview_webapp
@@ -59,6 +60,8 @@ urlpatterns = [
     # i18n
     path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("api/csrf/", csrf_token, name="api-csrf"),
+    path("push/config/", push_config, name="push_config"),
+    path("push/subscriptions/", push_subscriptions, name="push_subscriptions"),
     ]
 
 # File management

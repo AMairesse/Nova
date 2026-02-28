@@ -3,6 +3,7 @@ import logging
 from uuid import UUID
 from typing import Any, Dict, List, Optional
 from asgiref.sync import sync_to_async
+from django.conf import settings
 
 from langchain_core.callbacks import AsyncCallbackHandler
 
@@ -13,9 +14,20 @@ logger = logging.getLogger(__name__)
 
 # Custom callback handler for synthesis and streaming
 class TaskProgressHandler(AsyncCallbackHandler):
-    def __init__(self, task_id, channel_layer):
+    def __init__(
+        self,
+        task_id,
+        channel_layer,
+        *,
+        user_id: int | None = None,
+        thread_id: int | None = None,
+        thread_mode: str | None = None,
+    ):
         self.task_id = task_id
         self.channel_layer = channel_layer
+        self.user_id = user_id
+        self.thread_id = thread_id
+        self.thread_mode = thread_mode
         self.final_chunks = []
         self.current_tool = None
         self.tool_depth = 0
@@ -50,12 +62,14 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         await self.publish_update('task_complete', {'result': result, 'thread_id': thread_id,
                                                     'thread_subject': thread_subject})
+        self._queue_push_notification(status="completed")
 
     async def on_error(self, error_msg, error_category):
         '''
         Send a message to the client when an error occurs
         '''
         await self.publish_update('task_error', {'message': error_msg, 'category': error_category})
+        self._queue_push_notification(status="failed")
 
     async def on_progress(self, message):
         '''
@@ -216,3 +230,23 @@ class TaskProgressHandler(AsyncCallbackHandler):
             )(current_response=html_content)
         except Exception as e:
             logger.error(f"Error persisting current response: {e}")
+
+    def _queue_push_notification(self, *, status: str) -> None:
+        if not self.user_id or not bool(getattr(settings, "WEBPUSH_ENABLED", False)):
+            return
+        try:
+            from nova.tasks.notification_tasks import send_task_webpush_notification
+
+            send_task_webpush_notification.delay(
+                user_id=self.user_id,
+                task_id=str(self.task_id),
+                thread_id=self.thread_id,
+                thread_mode=self.thread_mode,
+                status=status,
+            )
+        except Exception:
+            logger.exception(
+                "Unable to enqueue WebPush notification for task_id=%s status=%s",
+                self.task_id,
+                status,
+            )

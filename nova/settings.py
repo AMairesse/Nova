@@ -259,6 +259,12 @@ SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)
 # Get info about a judge0 server if configured
 JUDGE0_SERVER_URL = os.getenv('JUDGE0_SERVER_URL', None)
 
+# Web Push notifications (disabled by default)
+WEBPUSH_ENABLED = os.getenv('WEBPUSH_ENABLED', 'False').lower() == 'true'
+WEBPUSH_VAPID_PUBLIC_KEY = os.getenv('WEBPUSH_VAPID_PUBLIC_KEY', '').strip()
+WEBPUSH_VAPID_PRIVATE_KEY = os.getenv('WEBPUSH_VAPID_PRIVATE_KEY', '').strip()
+WEBPUSH_VAPID_SUBJECT = os.getenv('WEBPUSH_VAPID_SUBJECT', '').strip()
+
 # Celery config
 CELERY_BROKER_URL = "redis://redis:6379/0"
 CELERY_RESULT_BACKEND = None
