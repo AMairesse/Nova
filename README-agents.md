@@ -1,21 +1,22 @@
 # Nova - How to Set Up Your Own Agents
 
 This guide explains how to configure agents in Nova.
+
 Nova now uses a hybrid model:
 - a main agent (`Nova`) with direct tools and on-demand skills
 - a small set of specialized sub-agents for focused domains (internet, code)
 
-Mail and Calendar are no longer configured as dedicated sub-agents in the default setup.
+Mail and calendar are no longer configured as dedicated sub-agents in the default setup.
 
 ## Prerequisites
 
 Before starting, ensure you have:
-- Docker installed for running tools like SearXNG and Judge0 (via docker-compose files: `add-searxng` and `add-judge0`).
+- Docker installed for running optional services like SearXNG and Judge0 (enabled through `COMPOSE_FILE` in `docker/.env`).
 - Access to LLM providers: local (for example Ollama or LM Studio) or remote (for example OpenRouter.ai).
 - Basic knowledge of API keys and URLs for configuration.
 - Optional: a CalDAV server and one or more email accounts.
 
-If using Docker, run `docker-compose up` for required services after adding them to your workspace.
+If using Docker, select your stack in `docker/.env` (`COMPOSE_FILE`) and run `docker compose up -d`.
 
 ## 1. Create an LLM Provider
 
@@ -50,14 +51,14 @@ Add these default tools to your Nova workspace:
 - `Browser`
 - `Memory`
 - `WebApp`
-- `SearXNG` (requires `add-searxng`)
-- `Judge0` (requires `add-judge0`)
+- `SearXNG` (requires enabling `docker-compose.add-searxng.yml` in `COMPOSE_FILE`)
+- `Judge0` (requires enabling `docker-compose.add-judge0.yml` in `COMPOSE_FILE`)
 
 Configure private tools:
 - `CalDAV`: set URL, username, password.
 - `Email`: set IMAP settings (required), and SMTP settings if sending is enabled.
 
-You can configure multiple Email and CalDAV tools for the same user. Nova will aggregate them under skills at runtime.
+You can configure multiple email and CalDAV tools for the same user. Nova will aggregate them under skills at runtime.
 
 ## 3. Create Your Agents
 
