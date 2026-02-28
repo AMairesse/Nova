@@ -1,151 +1,76 @@
-# Skill Middleware Mail (Tool-Based) - Nova
+# Skill Middleware (Mail and Other Skill-Loaded Tools)
 
-Date: 2026-02-19  
-Status: Planned  
-Scope: Architecture + runtime contracts + test plan
+Last reviewed: 2026-02-28
+Status: implemented
 
-## 1. Objective
+## Scope
 
-Implement Mail as an on-demand skill for Nova tool-based agents, without loading Mail tools by default in model context.
+Nova supports on-demand tool loading via skills. Mail was the initial target, and the mechanism is now generic.
 
-## 2. Standards Alignment
+## How skills are declared
 
-This design aligns with Agent Skills for tool-based agents:
-- skills discovered as metadata
-- explicit skill activation
-- progressive disclosure of instructions/resources
+Skill loading policy comes from module `METADATA.loading`:
+- `mode: "skill"`
+- `skill_id`
+- `skill_label`
 
-References:
-- https://agentskills.io/integrate-skills
-- https://agentskills.io/specification
+If `loading` is absent or invalid, tools are treated as always available (`mode: "always"`).
 
-## 3. V1 Design Decisions
+## Runtime flow
 
-1. Skill classification source of truth:
-- Builtin module `METADATA`, not database fields.
+### 1. Tool loading
 
-2. Skill instructions source:
-- V1 keeps instructions in code (non-intrusive):
-  - `get_skill_instructions(...)` in the builtin module.
-- SKILL.md filesystem packaging is deferred to V2.
+`load_tools(...)`:
+- loads builtin modules
+- tags each loaded tool with skill metadata when module policy is `skill`
+- builds `agent.skill_catalog` (skill id, label, tool names, instructions)
+- appends runtime control tools:
+  - `list_skills`
+  - `load_skill`
 
-3. User configuration:
-- No UI change to edit skill internals.
-- User still only assigns tools to agents.
-- Skill internals are read-only from user perspective.
+### 2. Activation scope
 
-4. Activation model:
-- Explicit activation via `load_skill("mail")`.
+Skill activation is turn-scoped:
+- active skills are inferred from `load_skill` tool results after the latest `HumanMessage`
+- activation does not persist across user turns
 
-5. Activation lifetime:
-- Current turn only (ephemeral).
+### 3. Tool filtering
 
-6. Scope:
-- Builtin tools only in V1.
+`apply_skill_tool_filter` keeps:
+- always-on tools
+- skill control tools (`list_skills`, `load_skill`)
+- skill tools whose `skill_id` is active for current turn
 
-7. Email aggregation:
-- Keep existing multi-mailbox aggregation exactly as-is.
+Inactive skill tools are hidden from the model call.
 
-## 4. Runtime Contracts
+## Prompt behavior
 
-## 4.1 Builtin metadata extension
+Prompt builder adds:
+- list of available on-demand skills
+- active skills for current turn
+- skill-specific instructions only for active skills
 
-Example in `nova/tools/builtins/email.py`:
+Non-skill tool hints remain in the regular tool policy section.
 
-```python
-METADATA = {
-    ...,
-    "loading": {
-        "mode": "skill",        # "always" | "skill"
-        "skill_id": "mail",
-        "skill_label": "Mail",
-    },
-}
-```
+## Mail-specific guarantees
 
-Default behavior when `loading` absent:
-- `mode="always"`.
+Implemented guarantees for mail skill mode:
+- mail tool metadata is declared as a skill (`skill_id=mail`)
+- mailbox aggregation path remains in place (`get_aggregated_functions`)
+- multi-mailbox and single-mailbox behavior remain supported
+- skill instructions are provided by `get_skill_instructions(...)`
 
-## 4.2 Optional instructions provider (module-level)
+## Current skill-loaded modules
 
-```python
-def get_skill_instructions(agent=None, tools=None) -> str | list[str]:
-    ...
-```
+Skill-loaded modules currently include at least:
+- Mail
+- Files
+- CalDav
+- WebDav
+- WebApp
 
-Purpose:
-- Provide Mail-specific operating policy only when skill is activated.
+(Exact list depends on installed builtin modules and metadata.)
 
-## 4.3 Control tools exposed by runtime
+## Out of scope in this document
 
-- `list_skills()`
-- `load_skill(skill: str)`
-
-Behavior:
-- If no skills exist for an agent, control tools may be omitted.
-- If `load_skill("mail")` succeeds, Mail tools become visible only for the current turn.
-
-## 5. Agent Execution Flow (Mail request)
-
-1. User asks for an email task.
-2. First model call sees:
-- regular tools
-- `list_skills` / `load_skill`
-- Mail tools hidden
-3. Model calls `load_skill("mail")`.
-4. Next model call (same turn) sees Mail tools.
-5. Model performs iterative Mail tool calls (list/read/search/move/send/draft).
-6. Agent returns final answer.
-7. Next user turn starts with Mail tools hidden again.
-
-## 6. Compatibility Requirements
-
-1. Preserve existing email aggregation path:
-- `AGGREGATION_SPEC`
-- `get_aggregated_functions(...)`
-- `get_aggregated_prompt_instructions(...)`
-
-2. Do not regress single-mailbox legacy names.
-
-3. Do not change bootstrap behavior in V1.
-
-4. Do not add DB migrations in V1.
-
-## 7. Security and Safety
-
-- Skill activation is explicit.
-- Sending safeguards remain unchanged.
-- Keep existing tool error middleware behavior.
-- Log skill activation events for traceability.
-
-## 8. Implementation Outline
-
-1. Add skill policy parsing from builtin `METADATA`.
-2. Add runtime control tools `list_skills` and `load_skill`.
-3. Add model-call middleware filtering visible tools by active skills.
-4. Inject skill instructions only after activation.
-5. Keep existing aggregation untouched.
-
-## 9. Test Matrix
-
-1. Visibility:
-- Mail tools hidden before activation.
-- Mail tools visible after `load_skill("mail")` in same turn.
-- Mail tools hidden again next turn.
-
-2. Activation:
-- Unknown skill id returns explicit error.
-
-3. Aggregation:
-- Multi-mailbox selector works exactly as today post-activation.
-
-4. Safety:
-- Sending blocked when mailbox sending is disabled.
-
-5. Regression:
-- Non-skill builtins unaffected.
-
-## 10. V2 (Deferred)
-
-- Move inline instructions to filesystem `SKILL.md` per skill directory.
-- Add assets/references tooling (`get_skill_asset(...)`) if needed.
+This file intentionally omits speculative packaging formats and deferred skill asset systems.
