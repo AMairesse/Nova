@@ -4,3 +4,9 @@ search:
   formats:
     - html
     - json
+
+server:
+  limiter: false
+
+botdetection:
+  enabled: false
