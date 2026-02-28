@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 import logging
@@ -102,9 +101,9 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
         )
 
         # Avoid import cycle with nova.tasks.tasks
-        from nova.tasks.tasks import AgentTaskExecutor
+        from nova.tasks.tasks import execute_agent_task_with_executor
 
-        executor = AgentTaskExecutor(
+        execute_agent_task_with_executor(
             task,
             task_definition.user,
             thread,
@@ -112,7 +111,6 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
             prompt,
             source_message_id=message.id if message else None,
         )
-        asyncio.run(executor.execute_or_resume())
 
         task.refresh_from_db()
         if task.status == TaskStatus.FAILED:

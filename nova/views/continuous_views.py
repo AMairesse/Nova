@@ -7,7 +7,7 @@ import re
 
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import render
 from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_GET, require_POST
@@ -22,10 +22,10 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
-from nova.models.Task import Task, TaskStatus
 from nova.models.UserObjects import UserParameters
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
+from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
 from nova.utils import markdown_to_html
 
 _YEAR_RE = re.compile(r"^\d{4}$")
@@ -318,15 +318,14 @@ def continuous_add_message(request):
     thread, msg, seg, day_label, opened_new_day = append_continuous_user_message(request.user, new_message)
 
     # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
-    agent_config = None
-    if selected_agent:
-        agent_config = get_object_or_404(AgentConfig, id=selected_agent, user=request.user)
-    else:
-        agent_config = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
-
-    task = Task.objects.create(user=request.user, thread=thread, agent_config=agent_config, status=TaskStatus.PENDING)
-
-    run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, msg.id)
+    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+    task = enqueue_message_agent_task(
+        user=request.user,
+        thread=thread,
+        agent_config=agent_config,
+        source_message_id=msg.id,
+        dispatcher_task=run_ai_task_celery,
+    )
 
     enqueue_continuous_followups(
         user=request.user,

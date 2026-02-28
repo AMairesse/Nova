@@ -15,6 +15,7 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
+from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
 from nova.thread_titles import build_default_thread_subject
 from nova.utils import markdown_to_html
 import logging
@@ -306,22 +307,14 @@ def add_message(request):
     message.internal_data = {'file_ids': uploaded_file_ids}
     message.save()
 
-    agent_config = None
-    if selected_agent:
-        agent_config = get_object_or_404(AgentConfig, id=selected_agent,
-                                         user=request.user)
-    else:
-        try:
-            agent_config = request.user.userprofile.default_agent
-        except UserProfile.DoesNotExist:
-            pass
-
-    task = Task.objects.create(
-        user=request.user, thread=thread,
-        agent_config=agent_config, status=TaskStatus.PENDING
+    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+    task = enqueue_message_agent_task(
+        user=request.user,
+        thread=thread,
+        agent_config=agent_config,
+        source_message_id=message.id,
+        dispatcher_task=run_ai_task_celery,
     )
-
-    run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id)
 
     # Prepare message data for JSON response
     message_data = {

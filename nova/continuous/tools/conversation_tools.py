@@ -3,7 +3,7 @@
 """Nova builtin tool: Conversation recall (continuous discussion mode).
 
 This exposes two tools:
-- conversation.search: search day summaries + transcript chunks (FTS-only in V1)
+- conversation.search: search day summaries + transcript chunks (hybrid FTS + semantic when available)
 - conversation.get: fetch summary by day_segment_id OR messages window around a message_id
 
 Important:

@@ -33,7 +33,6 @@ Implemented trigger tasks:
 - `run_task_definition_cron`
 - `poll_task_definition_email`
 - `run_task_definition_maintenance`
-- legacy alias: `run_scheduled_agent_task` -> cron runner
 
 ## Agent execution path
 
