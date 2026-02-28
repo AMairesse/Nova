@@ -6,6 +6,7 @@ search:
     - json
 
 server:
+  public_instance: false
   limiter: false
 
 botdetection:
