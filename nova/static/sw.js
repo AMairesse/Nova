@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v5';  // Includes push notification handlers
+const CACHE_NAME = 'nova-v6';  // Includes push notification handlers
 const urlsToCache = [
   '/',
   '/static/css/main.css',
@@ -32,6 +32,7 @@ self.addEventListener('install', (event) => {
         console.log('Opened cache');
         return cache.addAll(urlsToCache);
       })
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -108,7 +109,7 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
 });
 
