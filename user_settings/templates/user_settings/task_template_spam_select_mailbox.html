@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">{{ title }}</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        {% trans "Choose the mailbox to use for this predefined spam-filtering task. The mailbox will then be locked in the creation form." %}
+                    </p>
+
+                    <form method="post">
+                        {% csrf_token %}
+
+                        <div class="list-group mb-3">
+                            {% for option in mailbox_options %}
+                            <label class="list-group-item list-group-item-action">
+                                <div class="form-check">
+                                    <input
+                                        class="form-check-input"
+                                        type="radio"
+                                        name="mailbox_choice"
+                                        value="{{ option.agent_id }}:{{ option.email_tool_id }}"
+                                        {% if forloop.first %}checked{% endif %}
+                                    >
+                                    <span class="form-check-label">
+                                        <strong>{{ option.mailbox_email }}</strong>
+                                        <span class="text-muted">— {% trans "Agent" %}: {{ option.agent_label }}, {% trans "Tool" %}: {{ option.email_tool_label }}</span>
+                                    </span>
+                                </div>
+                            </label>
+                            {% endfor %}
+                        </div>
+
+                        <div class="d-flex justify-content-between">
+                            <a href="{% url 'user_settings:task_templates' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
+                            <button type="submit" class="btn btn-primary">{% trans "Continue" %}</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

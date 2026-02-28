@@ -90,6 +90,16 @@
 
                         {{ form.timezone|as_crispy_field }}
                         {{ form.email_tool|as_crispy_field }}
+                        {% if locked_email_tool_id %}
+                            <div class="alert alert-info py-2 px-3" id="email_tool_locked_notice">
+                                <div class="small fw-semibold mb-1">
+                                    {% trans "Mailbox locked for this predefined task" %}
+                                </div>
+                                <div class="small mb-0">
+                                    {% blocktrans with mailbox_label=locked_email_tool_label %}The selected mailbox ({{ mailbox_label }}) is locked for this predefined task. To use another mailbox, go back to predefined tasks and restart from mailbox selection.{% endblocktrans %}
+                                </div>
+                            </div>
+                        {% endif %}
                         <div class="alert alert-warning py-2 px-3" id="email_tool_access_warning"
                              data-warning-template="{% trans 'The selected agent does not have access to the email tool {tool}. It can still use email trigger variables, but it will not be able to call this mail tool directly.' %}"
                              {% if not email_tool_access_warning %}hidden{% endif %}>

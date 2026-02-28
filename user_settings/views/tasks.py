@@ -18,12 +18,14 @@ from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.continuous.utils import ensure_continuous_nightly_summary_task_definition
 from nova.tasks.template_registry import (
+    SPAM_FILTER_TEMPLATE_ID,
     THEMATIC_WATCH_TEMPLATE_ID,
     THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
     THEMATIC_WATCH_MEMORY_THEME_TOPICS,
     THEMATIC_WATCH_MEMORY_TYPE,
     build_template_prefill_payload,
     default_agent_has_memory_tool,
+    evaluate_spam_filter_template,
     evaluate_thematic_watch_template,
     get_task_templates_for_user,
 )
@@ -61,6 +63,8 @@ class TaskDefinitionForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop("user", None)
+        locked_email_tool_id = kwargs.pop("locked_email_tool_id", None)
+        self.locked_email_tool_id = str(locked_email_tool_id) if locked_email_tool_id not in (None, "") else ""
         super().__init__(*args, **kwargs)
 
         if self.user:
@@ -95,6 +99,18 @@ class TaskDefinitionForm(ModelForm):
         self.fields["poll_interval_minutes"].help_text = _(
             "Email polling interval in minutes (1 to 15)."
         )
+
+        if self.locked_email_tool_id:
+            try:
+                self.fields["email_tool"].initial = int(self.locked_email_tool_id)
+            except ValueError:
+                self.fields["email_tool"].initial = self.locked_email_tool_id
+            self.fields["email_tool"].disabled = True
+
+    def get_locked_email_tool_label(self) -> str:
+        if not self.locked_email_tool_id:
+            return ""
+        return self._choice_label("email_tool", self.locked_email_tool_id)
 
     def _selected_value(self, field_name: str) -> str:
         if self.is_bound:
@@ -160,6 +176,13 @@ class TaskDefinitionForm(ModelForm):
             from django.core.exceptions import ValidationError
 
             raise ValidationError(_("Email tool must be a user or system tool."))
+
+        if self.locked_email_tool_id:
+            if not email_tool or str(email_tool.id) != self.locked_email_tool_id:
+                self.add_error(
+                    "email_tool",
+                    _("The mailbox for this predefined task cannot be changed from the creation form."),
+                )
         return cleaned_data
 
 
@@ -235,6 +258,16 @@ def task_templates_list(request):
 @login_required
 def task_template_apply(request, template_id: str):
     """Open task creation form with prefilled values from a template."""
+    if template_id == SPAM_FILTER_TEMPLATE_ID:
+        availability = evaluate_spam_filter_template(request.user)
+        if not availability.available or not availability.mailbox_options:
+            messages.error(
+                request,
+                _("This predefined task is unavailable for your current setup."),
+            )
+            return redirect("user_settings:task_templates")
+        return redirect("user_settings:task_template_select_mailbox", template_id=template_id)
+
     initial = build_template_prefill_payload(request.user, template_id)
     if not initial:
         messages.error(
@@ -245,6 +278,50 @@ def task_template_apply(request, template_id: str):
 
     request.session["task_template_initial"] = initial
     return redirect("user_settings:task_create")
+
+
+@login_required
+def task_template_select_mailbox(request, template_id: str):
+    """Require mailbox selection before creating a spam filter task."""
+    if template_id != SPAM_FILTER_TEMPLATE_ID:
+        messages.error(request, _("This setup flow is unavailable for the selected template."))
+        return redirect("user_settings:task_templates")
+
+    availability = evaluate_spam_filter_template(request.user)
+    if not availability.available or not availability.mailbox_options:
+        messages.error(request, _("This predefined task is unavailable for your current setup."))
+        return redirect("user_settings:task_templates")
+
+    if request.method == "POST":
+        mailbox_choice = str(request.POST.get("mailbox_choice") or "").strip()
+        try:
+            agent_raw, tool_raw = mailbox_choice.split(":", 1)
+            agent_id = int(agent_raw)
+            email_tool_id = int(tool_raw)
+        except (AttributeError, TypeError, ValueError):
+            messages.error(request, _("Please select a mailbox before continuing."))
+            return redirect("user_settings:task_template_select_mailbox", template_id=template_id)
+
+        initial = build_template_prefill_payload(
+            request.user,
+            template_id,
+            agent_id=agent_id,
+            email_tool_id=email_tool_id,
+        )
+        if not initial:
+            messages.error(request, _("Invalid mailbox selection for this predefined task."))
+            return redirect("user_settings:task_template_select_mailbox", template_id=template_id)
+
+        request.session["task_template_initial"] = initial
+        request.session["task_template_lock_email_tool_id"] = initial.get("email_tool")
+        return redirect("user_settings:task_create")
+
+    context = {
+        "title": _("Spam filtering: select mailbox"),
+        "template_id": template_id,
+        "mailbox_options": availability.mailbox_options,
+    }
+    return render(request, "user_settings/task_template_spam_select_mailbox.html", context)
 
 
 @login_required
@@ -289,27 +366,45 @@ def task_template_setup(request, template_id: str):
 @login_required
 def task_create(request):
     """Create a new task definition."""
+    locked_email_tool_id = request.session.get("task_template_lock_email_tool_id")
+
     if request.method == "POST":
-        form = TaskDefinitionForm(request.POST, user=request.user)
+        form = TaskDefinitionForm(
+            request.POST,
+            user=request.user,
+            locked_email_tool_id=locked_email_tool_id,
+        )
         if form.is_valid():
             task = form.save(commit=False)
             task.user = request.user
             # User-created tasks are always agent tasks.
             task.task_kind = TaskDefinition.TaskKind.AGENT
             task.save()
+            request.session.pop("task_template_lock_email_tool_id", None)
             messages.success(request, _("Task created successfully."))
             return redirect("user_settings:tasks")
     else:
         initial = request.session.pop("task_template_initial", None)
         if isinstance(initial, dict):
-            form = TaskDefinitionForm(user=request.user, initial=initial)
+            if initial.get("lock_email_tool"):
+                locked_email_tool_id = initial.get("email_tool")
+                request.session["task_template_lock_email_tool_id"] = locked_email_tool_id
+            form = TaskDefinitionForm(
+                user=request.user,
+                initial=initial,
+                locked_email_tool_id=locked_email_tool_id,
+            )
         else:
+            request.session.pop("task_template_lock_email_tool_id", None)
+            locked_email_tool_id = None
             form = TaskDefinitionForm(user=request.user)
 
     context = {
         "form": form,
         "title": _("Create Task"),
         "email_tool_access_warning": form.get_email_tool_access_warning(),
+        "locked_email_tool_id": locked_email_tool_id,
+        "locked_email_tool_label": form.get_locked_email_tool_label(),
     }
     return render(request, "user_settings/task_form.html", context)
 

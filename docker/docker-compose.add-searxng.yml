@@ -6,6 +6,7 @@ services:
     environment:
       - SEARNGX_SERVER_URL=http://searxng:8080
       - SEARNGX_NUM_RESULTS=5
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-ultrasecretkey}
 
   searxng:
     image: docker.io/searxng/searxng:latest

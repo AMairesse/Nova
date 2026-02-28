@@ -402,7 +402,23 @@ class UserSettingsTasksViewsTests(TestCase):
             reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
         )
         self.assertEqual(apply_response.status_code, 302)
-        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+        self.assertEqual(
+            apply_response["Location"],
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+        )
+
+        select_response = self.client.get(
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"])
+        )
+        self.assertEqual(select_response.status_code, 200)
+        self.assertContains(select_response, "delegated@example.com")
+
+        continue_response = self.client.post(
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+            data={"mailbox_choice": f"{self.agent.id}:{email_tool.id}"},
+        )
+        self.assertEqual(continue_response.status_code, 302)
+        self.assertEqual(continue_response["Location"], reverse("user_settings:task_create"))
 
         create_response = self.client.get(reverse("user_settings:task_create"))
         self.assertEqual(create_response.status_code, 200)
@@ -410,6 +426,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertEqual(form.initial.get("agent"), self.agent.id)
         self.assertEqual(form.initial.get("email_tool"), email_tool.id)
         self.assertEqual(form.initial.get("name"), "Spam filtering - delegated@example.com")
+        self.assertTrue(form.fields["email_tool"].disabled)
 
     def test_task_template_apply_prefills_create_form_with_ephemeral_mode_and_mailbox_name(self):
         email_tool = create_tool(
@@ -430,7 +447,17 @@ class UserSettingsTasksViewsTests(TestCase):
             reverse("user_settings:task_template_apply", args=["email_spam_filter_basic"])
         )
         self.assertEqual(apply_response.status_code, 302)
-        self.assertEqual(apply_response["Location"], reverse("user_settings:task_create"))
+        self.assertEqual(
+            apply_response["Location"],
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+        )
+
+        continue_response = self.client.post(
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+            data={"mailbox_choice": f"{self.agent.id}:{email_tool.id}"},
+        )
+        self.assertEqual(continue_response.status_code, 302)
+        self.assertEqual(continue_response["Location"], reverse("user_settings:task_create"))
 
         create_response = self.client.get(reverse("user_settings:task_create"))
         self.assertEqual(create_response.status_code, 200)
@@ -441,6 +468,86 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertEqual(form.initial.get("agent"), self.agent.id)
         self.assertEqual(form.initial.get("email_tool"), email_tool.id)
         self.assertEqual(form.initial.get("name"), "Spam filtering - alice@example.com")
+        self.assertTrue(form.fields["email_tool"].disabled)
+
+    def test_task_template_select_mailbox_rejects_invalid_selection(self):
+        email_tool = create_tool(
+            self.user,
+            name="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "alice@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(email_tool)
+
+        response = self.client.post(
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+            data={"mailbox_choice": "999:999"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response["Location"],
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+        )
+
+    def test_task_create_keeps_locked_email_tool_even_if_post_payload_is_tampered(self):
+        email_tool = create_tool(
+            self.user,
+            name="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={"email": "alice@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(email_tool)
+
+        other_mail_tool = create_tool(
+            self.user,
+            name="Backup Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            other_mail_tool,
+            config={"email": "backup@example.com", "imap_server": "imap.example.com"},
+        )
+        self.agent.tools.add(other_mail_tool)
+
+        self.client.post(
+            reverse("user_settings:task_template_select_mailbox", args=["email_spam_filter_basic"]),
+            data={"mailbox_choice": f"{self.agent.id}:{email_tool.id}"},
+        )
+
+        response = self.client.post(
+            reverse("user_settings:task_create"),
+            data={
+                "name": "Spam filtering - tampered",
+                "trigger_type": TaskDefinition.TriggerType.EMAIL_POLL,
+                "agent": str(self.agent.id),
+                "prompt": "Prompt",
+                "run_mode": TaskDefinition.RunMode.EPHEMERAL,
+                "cron_expression": "",
+                "timezone": "UTC",
+                "email_tool": str(other_mail_tool.id),
+                "poll_interval_minutes": "5",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:tasks"))
+
+        created = TaskDefinition.objects.get(user=self.user, name="Spam filtering - tampered")
+        self.assertEqual(created.email_tool_id, email_tool.id)
 
     def test_task_template_apply_redirects_back_when_template_unavailable(self):
         response = self.client.get(

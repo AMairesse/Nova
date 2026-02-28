@@ -38,6 +38,15 @@ class TemplatePrerequisite:
 
 
 @dataclass(frozen=True)
+class TemplateMailboxOption:
+    agent_id: int
+    email_tool_id: int
+    mailbox_email: str
+    agent_label: str
+    email_tool_label: str
+
+
+@dataclass(frozen=True)
 class TemplateAvailability:
     available: bool
     reason: str
@@ -45,6 +54,7 @@ class TemplateAvailability:
     agent_id: int | None = None
     email_tool_id: int | None = None
     mailbox_email: str = ""
+    mailbox_options: tuple[TemplateMailboxOption, ...] = ()
 
 
 def _agent_has_tool_subtype(agent: AgentConfig, subtype: str) -> bool:
@@ -124,20 +134,40 @@ def evaluate_spam_filter_template(user) -> TemplateAvailability:
     has_configured_mailbox = bool(configured_email_tools)
     has_selectable_agent = bool(agents)
 
-    matched_agent = None
-    matched_tool_id = None
+    mailbox_options: list[TemplateMailboxOption] = []
+    seen_pairs: set[tuple[int, int]] = set()
+
     for agent in agents:
         direct_tools = list(agent.tools.all())
         delegated_tools = [tool for sub_agent in agent.agent_tools.all() for tool in sub_agent.tools.all()]
         for tool in [*direct_tools, *delegated_tools]:
-            if tool.id in configured_email_tools:
-                matched_agent = agent
-                matched_tool_id = tool.id
-                break
-        if matched_agent:
-            break
+            if tool.id not in configured_email_tools:
+                continue
 
-    has_agent_with_mailbox = matched_agent is not None and matched_tool_id is not None
+            pair_key = (agent.id, tool.id)
+            if pair_key in seen_pairs:
+                continue
+
+            seen_pairs.add(pair_key)
+            credential = configured_email_tools[tool.id]
+            mailbox_options.append(
+                TemplateMailboxOption(
+                    agent_id=agent.id,
+                    email_tool_id=tool.id,
+                    mailbox_email=_email_from_credential(credential),
+                    agent_label=str(agent.name),
+                    email_tool_label=str(tool.name),
+                )
+            )
+
+    mailbox_options.sort(
+        key=lambda item: (
+            item.mailbox_email.lower(),
+            item.agent_label.lower(),
+            item.email_tool_label.lower(),
+        )
+    )
+    has_agent_with_mailbox = bool(mailbox_options)
 
     prerequisites = [
         TemplatePrerequisite(
@@ -164,15 +194,15 @@ def evaluate_spam_filter_template(user) -> TemplateAvailability:
         reason = str(_("No selectable agent has the configured mailbox tool attached."))
         return TemplateAvailability(False, reason, prerequisites)
 
-    credential = configured_email_tools[matched_tool_id]
-    mailbox_email = _email_from_credential(credential)
+    selected = mailbox_options[0]
     return TemplateAvailability(
         True,
         "",
         prerequisites,
-        agent_id=matched_agent.id,
-        email_tool_id=matched_tool_id,
-        mailbox_email=mailbox_email,
+        agent_id=selected.agent_id,
+        email_tool_id=selected.email_tool_id,
+        mailbox_email=selected.mailbox_email,
+        mailbox_options=tuple(mailbox_options),
     )
 
 
@@ -268,6 +298,16 @@ def get_task_templates_for_user(user) -> list[dict]:
             "prerequisites": [
                 {"label": req.label, "met": req.met} for req in spam_filter.prerequisites
             ],
+            "mailbox_options": [
+                {
+                    "agent_id": item.agent_id,
+                    "email_tool_id": item.email_tool_id,
+                    "mailbox_email": item.mailbox_email,
+                    "agent_label": item.agent_label,
+                    "email_tool_label": item.email_tool_label,
+                }
+                for item in spam_filter.mailbox_options
+            ],
         },
         {
             "id": THEMATIC_WATCH_TEMPLATE_ID,
@@ -288,7 +328,13 @@ def get_task_templates_for_user(user) -> list[dict]:
     ]
 
 
-def build_template_prefill_payload(user, template_id: str) -> dict | None:
+def build_template_prefill_payload(
+    user,
+    template_id: str,
+    *,
+    agent_id: int | None = None,
+    email_tool_id: int | None = None,
+) -> dict | None:
     if template_id == THEMATIC_WATCH_TEMPLATE_ID:
         availability = evaluate_thematic_watch_template(user)
         if not availability.available or not availability.agent_id:
@@ -318,14 +364,28 @@ def build_template_prefill_payload(user, template_id: str) -> dict | None:
         return None
 
     availability = evaluate_spam_filter_template(user)
-    if not availability.available or not availability.agent_id or not availability.email_tool_id:
+    if not availability.available:
         return None
 
-    mailbox_email = availability.mailbox_email or str(_("mailbox"))
+    selected_option = None
+    if agent_id is not None or email_tool_id is not None:
+        for option in availability.mailbox_options:
+            if option.agent_id == agent_id and option.email_tool_id == email_tool_id:
+                selected_option = option
+                break
+        if not selected_option:
+            return None
+    elif availability.mailbox_options:
+        selected_option = availability.mailbox_options[0]
+
+    if not selected_option:
+        return None
+
+    mailbox_email = selected_option.mailbox_email or str(_("mailbox"))
     return {
         "name": f"Spam filtering - {mailbox_email}",
         "trigger_type": TaskDefinition.TriggerType.EMAIL_POLL,
-        "agent": availability.agent_id,
+        "agent": selected_option.agent_id,
         "prompt": (
             "Since the last execution at {{ trigger_time_iso }}, new emails were detected:\n"
             "{{ new_emails_markdown }}\n\n"
@@ -337,6 +397,7 @@ def build_template_prefill_payload(user, template_id: str) -> dict | None:
         "run_mode": TaskDefinition.RunMode.EPHEMERAL,
         "cron_expression": "",
         "timezone": "UTC",
-        "email_tool": availability.email_tool_id,
+        "email_tool": selected_option.email_tool_id,
         "poll_interval_minutes": 5,
+        "lock_email_tool": True,
     }
