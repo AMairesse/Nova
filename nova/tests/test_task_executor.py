@@ -66,6 +66,25 @@ class TaskExecutorTests(TransactionTestCase):
         executor._finalize_task.assert_awaited_once()
         executor._cleanup.assert_awaited_once()
 
+    def test_execute_or_resume_dict_result_without_interrupt_is_processed(self):
+        executor = self._make_executor()
+        final_payload = {"text": "final answer"}
+        executor._initialize_task = AsyncMock()
+        executor._create_llm_agent = AsyncMock()
+        executor._create_prompt = AsyncMock(return_value="hello")
+        executor._run_agent = AsyncMock(return_value=final_payload)
+        executor._process_interuption = AsyncMock()
+        executor._process_result = AsyncMock()
+        executor._finalize_task = AsyncMock()
+        executor._cleanup = AsyncMock()
+
+        asyncio.run(executor.execute_or_resume())
+
+        executor._process_interuption.assert_not_awaited()
+        executor._process_result.assert_awaited_once_with(final_payload)
+        executor._finalize_task.assert_awaited_once()
+        executor._cleanup.assert_awaited_once()
+
     def test_execute_or_resume_interrupt_flow(self):
         executor = self._make_executor()
         interrupt_payload = {"__interrupt__": [object()]}

@@ -55,7 +55,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         Send a message to the client when an error occurs
         '''
-        await self.publish_update('task_error', {'error': error_msg, 'category': error_category})
+        await self.publish_update('task_error', {'message': error_msg, 'category': error_category})
 
     async def on_progress(self, message):
         '''

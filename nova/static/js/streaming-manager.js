@@ -436,7 +436,7 @@
             // Show error message
             const progressLogs = document.getElementById('progress-logs');
             if (progressLogs) {
-                progressLogs.textContent = error.message;
+                progressLogs.textContent = error.message || gettext('An error occurred.');
             }
             // Re-enable input area on error
             this.setInputAreaDisabled(false);

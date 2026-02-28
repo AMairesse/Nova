@@ -64,7 +64,7 @@ class TaskExecutor:
                 self.prompt = await self._create_prompt()
                 result = await self._run_agent()
 
-            if isinstance(result, dict) and result['__interrupt__']:
+            if isinstance(result, dict) and result.get('__interrupt__'):
                 await self._process_interuption(result)
             else:
                 await self._process_result(result)
