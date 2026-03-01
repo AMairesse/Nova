@@ -213,6 +213,16 @@
 
         const targetSelector = tabEl.getAttribute('data-bs-target') || tabEl.getAttribute('href') || '';
         const isWebapps = targetSelector === '#mobile-webapps-pane' || tabEl.id === 'mobile-tab-webapps';
+        const tabName = isWebapps ? 'webapps' : 'files';
+
+        if (window.SidebarManager?.saveSelectedTab) {
+          window.SidebarManager.saveSelectedTab(tabName);
+        } else if (window.StorageUtils?.setItem) {
+          const globalKey = window.StorageUtils.getSidebarTabKey
+            ? window.StorageUtils.getSidebarTabKey('global')
+            : 'sidebarTab:global';
+          window.StorageUtils.setItem(globalKey, tabName);
+        }
 
         // Toggle toolbar visibility (toolbar only makes sense for Files)
         if (isWebapps) {
@@ -229,14 +239,32 @@
         }
       };
 
-      // Initial state: enforce toolbar visibility based on currently active tab
-      const initialActiveTab = tabs.querySelector('.nav-link.active');
-      updateUIForActiveTab(initialActiveTab);
-
       // Bootstrap-native event fired after a tab is shown
       tabs.addEventListener('shown.bs.tab', (event) => {
         updateUIForActiveTab(event.target);
       });
+
+      const savedTab = window.SidebarManager?.getSavedTab
+        ? window.SidebarManager.getSavedTab()
+        : (
+            window.StorageUtils?.getItem
+              ? window.StorageUtils.getItem(
+                  window.StorageUtils.getSidebarTabKey
+                    ? window.StorageUtils.getSidebarTabKey('global')
+                    : 'sidebarTab:global',
+                  'files'
+                )
+              : 'files'
+          );
+      const targetId = savedTab === 'webapps' ? 'mobile-tab-webapps' : 'mobile-tab-files';
+      const targetTab = document.getElementById(targetId);
+      if (targetTab && window.bootstrap?.Tab) {
+        const tab = window.bootstrap.Tab.getOrCreateInstance(targetTab);
+        tab.show();
+      } else {
+        const initialActiveTab = tabs.querySelector('.nav-link.active');
+        updateUIForActiveTab(initialActiveTab);
+      }
     }
 
     syncThreadLists() {

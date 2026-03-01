@@ -10,6 +10,62 @@
         _pendingRefresh: { files: false, webapps: false },
         _refreshDebounceMs: 400,
 
+        _normalizeTabName(tabName) {
+            return tabName === 'webapps' ? 'webapps' : 'files';
+        },
+
+        _getSidebarTabGlobalKey() {
+            if (window.StorageUtils?.getSidebarTabKey) {
+                return window.StorageUtils.getSidebarTabKey('global');
+            }
+            return 'sidebarTab:global';
+        },
+
+        _getSidebarTabThreadKey(threadId = null) {
+            const tid = threadId ?? window.FileManager?.currentThreadId;
+            if (!tid) return null;
+            if (window.StorageUtils?.getSidebarTabKey) {
+                return window.StorageUtils.getSidebarTabKey(tid);
+            }
+            return `sidebarTab:${tid}`;
+        },
+
+        saveSelectedTab(tabName, { threadId = null } = {}) {
+            const normalized = this._normalizeTabName(tabName);
+            if (window.StorageUtils?.setItem) {
+                const threadKey = this._getSidebarTabThreadKey(threadId);
+                if (threadKey) {
+                    window.StorageUtils.setItem(threadKey, normalized);
+                }
+                window.StorageUtils.setItem(this._getSidebarTabGlobalKey(), normalized);
+            }
+        },
+
+        getSavedTab(threadId = null) {
+            const threadKey = this._getSidebarTabThreadKey(threadId);
+            const globalKey = this._getSidebarTabGlobalKey();
+            const keys = threadKey ? [threadKey, globalKey] : [globalKey];
+
+            for (const key of keys) {
+                const value = window.StorageUtils?.getItem
+                    ? window.StorageUtils.getItem(key, null)
+                    : null;
+                if (value === 'files' || value === 'webapps') {
+                    return value;
+                }
+            }
+            return 'files';
+        },
+
+        _showDesktopTab(tabName) {
+            const normalized = this._normalizeTabName(tabName);
+            const targetId = normalized === 'webapps' ? 'tab-webapps' : 'tab-files';
+            const targetTab = document.getElementById(targetId);
+            if (!targetTab || targetTab.classList.contains('active') || !window.bootstrap?.Tab) return;
+            const tab = window.bootstrap.Tab.getOrCreateInstance(targetTab);
+            tab.show();
+        },
+
         _isDesktopSidebarHidden() {
             const filesColumn = document.getElementById('files-sidebar');
             return !filesColumn || filesColumn.classList.contains('files-hidden');
@@ -91,7 +147,7 @@
                 const target = e.target.getAttribute('data-bs-target');
                 const tabName = target === '#pane-webapps' ? 'webapps' : 'files';
 
-                // No persistence of the selected tab.
+                this.saveSelectedTab(tabName);
 
                 // Lazy load webapps on first show
                 if (tabName === 'webapps' && typeof window.WebappIntegration?.loadWebappsList === 'function') {
@@ -102,7 +158,7 @@
 
         // Restore the saved tab using Bootstrap Tab API
         restoreSavedTab() {
-            // No persistence of the selected tab.
+            this._showDesktopTab(this.getSavedTab());
         },
 
         // Load file tree
@@ -243,4 +299,3 @@
     };
 
 })();
-
