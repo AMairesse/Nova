@@ -94,6 +94,26 @@ body {
     display: none;
 }
 
+/* Desktop workspace controls in navbar */
+#desktop-workspace-controls {
+    min-width: 0;
+}
+
+#desktop-workspace-controls .desktop-workspace-toggle-btn {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#desktop-mode-badge {
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    padding: 0.35rem 0.55rem;
+}
+
 /* Main content area height calculation - use flex instead of fixed vh */
 .main-content-row {
     flex: 1;
@@ -810,11 +830,6 @@ body {
     .preview-active #message-area {
         flex: 0 0 100% !important;
         max-width: 100% !important;
-    }
-
-    /* Hide "Messages" toolbar row inside message area to maximize space */
-    .preview-active #message-area>.d-lg-flex {
-        display: none !important;
     }
 }
 

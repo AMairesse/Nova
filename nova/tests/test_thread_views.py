@@ -61,6 +61,18 @@ class MainViewsTests(TestCase):
         threads = list(captured["context"]["threads"])
         self.assertEqual({t.id for t in threads}, {t1.id, t2.id})
 
+    def test_index_exposes_desktop_workspace_controls(self):
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("index"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="desktop-workspace-controls"')
+        self.assertContains(response, 'id="desktop-mode-badge"')
+        self.assertContains(response, 'id="files-toggle-btn"')
+        self.assertContains(response, 'id="files-toggle-icon"')
+        self.assertNotContains(response, 'id="continuous-days-toggle-btn"')
+
     # ------------ message_list ------------------------------------------
 
     def test_message_list_sanitizes_html_and_requires_ownership(self):

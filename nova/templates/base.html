@@ -50,6 +50,42 @@
         </a>
 
         {% if user.is_authenticated %}
+        {% if request.path == '/' or request.path|slice:':11' == '/continuous' %}
+        <div id="desktop-workspace-controls" class="d-flex align-items-center gap-2 me-3">
+          {% if request.path|slice:':11' == '/continuous' %}
+          <button
+            class="btn btn-sm btn-outline-secondary desktop-workspace-toggle-btn"
+            type="button"
+            id="continuous-days-toggle-btn"
+            aria-expanded="true"
+            aria-controls="threads-sidebar"
+            title="{% trans 'Toggle days panel' %}"
+            aria-label="{% trans 'Toggle days panel' %}"
+          >
+            <i class="bi bi-layout-sidebar-inset" id="continuous-days-toggle-icon"></i>
+          </button>
+          {% endif %}
+          <button
+            class="btn btn-sm btn-outline-secondary desktop-workspace-toggle-btn"
+            type="button"
+            id="files-toggle-btn"
+            aria-expanded="true"
+            aria-controls="files-sidebar"
+            title="{% trans 'Toggle files panel' %}"
+            aria-label="{% trans 'Toggle files panel' %}"
+          >
+            <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
+          </button>
+          <span id="desktop-mode-badge" class="badge rounded-pill text-bg-secondary">
+            {% if request.path|slice:':11' == '/continuous' %}
+              {% trans "Continuous" %}
+            {% else %}
+              {% trans "Threads" %}
+            {% endif %}
+          </span>
+        </div>
+        {% endif %}
+
         <div class="navbar-nav me-auto">
           <a
             class="nav-link{% if request.path|slice:':11' == '/continuous' %} active{% endif %}"
