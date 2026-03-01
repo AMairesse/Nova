@@ -92,7 +92,8 @@ class FilesViewsTests(TestCase):
         self.assertIn("File too large", payload["error"])
 
     @patch("nova.views.files_views.batch_upload_files", new_callable=AsyncMock)
-    def test_file_upload_success(self, mocked_batch_upload):
+    @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
+    def test_file_upload_success(self, mocked_publish_update, mocked_batch_upload):
         mocked_batch_upload.return_value = ([{"id": 1, "path": "/a.txt"}], [])
         uploaded = SimpleUploadedFile("a.txt", b"hello")
         response = self.client.post(
@@ -104,6 +105,7 @@ class FilesViewsTests(TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(payload["files"][0]["id"], 1)
         mocked_batch_upload.assert_awaited_once()
+        mocked_publish_update.assert_awaited_once()
 
     @patch("nova.views.files_views.batch_upload_files", new_callable=AsyncMock)
     def test_file_upload_returns_400_on_batch_errors(self, mocked_batch_upload):
@@ -124,9 +126,12 @@ class FilesViewsTests(TestCase):
         self.assertIn("error", response.json())
 
     @patch("nova.models.UserFile.boto3.client")
-    def test_file_delete_success(self, mocked_client):
+    @patch("nova.views.files_views.async_to_sync")
+    def test_file_delete_success(self, mocked_async_to_sync, mocked_client):
         mocked_s3 = MagicMock()
         mocked_client.return_value = mocked_s3
+        mocked_runner = MagicMock()
+        mocked_async_to_sync.return_value = mocked_runner
         user_file = self._create_user_file(name="delete-me.txt")
 
         response = self.client.delete(reverse("file_delete", args=[user_file.id]))
@@ -135,4 +140,4 @@ class FilesViewsTests(TestCase):
         self.assertEqual(response.json()["success"], True)
         self.assertFalse(UserFile.objects.filter(id=user_file.id).exists())
         mocked_s3.delete_object.assert_called_once()
-
+        mocked_runner.assert_called_once_with(self.thread.id, "file_delete")

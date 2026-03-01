@@ -4,6 +4,51 @@
     'use strict';
 
     window.SidebarManager = {
+        _refreshEventsBound: false,
+        _filesRefreshTimer: null,
+        _webappsRefreshTimer: null,
+        _pendingRefresh: { files: false, webapps: false },
+        _refreshDebounceMs: 400,
+
+        _isDesktopSidebarHidden() {
+            const filesColumn = document.getElementById('files-sidebar');
+            return !filesColumn || filesColumn.classList.contains('files-hidden');
+        },
+
+        _markPendingRefresh({ files = false, webapps = false } = {}) {
+            if (files) this._pendingRefresh.files = true;
+            if (webapps) this._pendingRefresh.webapps = true;
+        },
+
+        _flushPendingRefresh() {
+            const pending = { ...this._pendingRefresh };
+            this._pendingRefresh.files = false;
+            this._pendingRefresh.webapps = false;
+
+            if (pending.files) this.scheduleFilesRefresh();
+            if (pending.webapps) this.scheduleWebappsRefresh();
+        },
+
+        bindRefreshEvents() {
+            if (this._refreshEventsBound) return;
+            this._refreshEventsBound = true;
+
+            document.addEventListener('nova:sidebar-refresh-request', (e) => {
+                const detail = e.detail || {};
+                const wantsFiles = Boolean(detail.files);
+                const wantsWebapps = Boolean(detail.webapps);
+                if (!wantsFiles && !wantsWebapps) return;
+
+                if (this._isDesktopSidebarHidden()) {
+                    this._markPendingRefresh({ files: wantsFiles, webapps: wantsWebapps });
+                    return;
+                }
+
+                if (wantsFiles) this.scheduleFilesRefresh();
+                if (wantsWebapps) this.scheduleWebappsRefresh();
+            });
+        },
+
         // Load sidebar content dynamically
         async loadSidebarContent() {
             if (window.FileManager.sidebarContentLoaded) return;
@@ -23,6 +68,7 @@
                 // Bootstrap handles tabs natively via data-bs-toggle="tab"
                 // We just need to bind event listeners for persistence and lazy loading
                 this.bindTabEvents();
+                this.bindRefreshEvents();
                 window.FileManager.attachSidebarEventHandlers();
 
                 // Restore saved tab for current thread
@@ -87,8 +133,69 @@
             }
         },
 
+        scheduleFilesRefresh() {
+            clearTimeout(this._filesRefreshTimer);
+            this._filesRefreshTimer = setTimeout(async () => {
+                if (!window.FileManager.currentThreadId) return;
+
+                if (this._isDesktopSidebarHidden()) {
+                    this._markPendingRefresh({ files: true });
+                    return;
+                }
+
+                await this.loadSidebarContent();
+                await this.loadTree();
+
+                if (window.ResponsiveManager) {
+                    window.ResponsiveManager.syncFilesContent();
+                }
+            }, this._refreshDebounceMs);
+        },
+
+        _isDesktopWebappsTabActive() {
+            const webappsTabEl = document.getElementById('tab-webapps');
+            return Boolean(webappsTabEl && webappsTabEl.classList.contains('active'));
+        },
+
+        _isMobileWebappsTabActive() {
+            const mobileWebappsTab = document.getElementById('mobile-tab-webapps');
+            return Boolean(mobileWebappsTab && mobileWebappsTab.classList.contains('active'));
+        },
+
+        async _refreshActiveWebappsLists() {
+            let refreshed = false;
+
+            if (this._isDesktopWebappsTabActive() && typeof window.WebappIntegration?.loadWebappsList === 'function') {
+                await window.WebappIntegration.loadWebappsList();
+                refreshed = true;
+            }
+
+            if (this._isMobileWebappsTabActive() && typeof window.WebappIntegration?.loadMobileWebappsList === 'function') {
+                await window.WebappIntegration.loadMobileWebappsList();
+                refreshed = true;
+            }
+
+            return refreshed;
+        },
+
+        scheduleWebappsRefresh() {
+            clearTimeout(this._webappsRefreshTimer);
+            this._webappsRefreshTimer = setTimeout(async () => {
+                if (!window.FileManager.currentThreadId) return;
+
+                if (this._isDesktopSidebarHidden()) {
+                    this._markPendingRefresh({ webapps: true });
+                    return;
+                }
+
+                await this.loadSidebarContent();
+                await this._refreshActiveWebappsLists();
+            }, this._refreshDebounceMs);
+        },
+
         // Handle thread changes for sidebar
         async updateForThread(threadId) {
+            this.bindRefreshEvents();
             window.FileManager.currentThreadId = threadId;
 
             const filesColumn = document.getElementById('files-sidebar');
@@ -114,16 +221,12 @@
 
             // If the Webapps tab is currently visible, refresh its list for the new thread.
             // (shown.bs.tab won't fire if the tab is already active.)
-            const webappsTabEl = document.getElementById('tab-webapps');
-            const isWebappsActive = Boolean(webappsTabEl && webappsTabEl.classList.contains('active'));
-            if (isWebappsActive && typeof window.WebappIntegration?.loadWebappsList === 'function') {
+            if (this._isDesktopWebappsTabActive() && typeof window.WebappIntegration?.loadWebappsList === 'function') {
                 await window.WebappIntegration.loadWebappsList();
             }
 
             // Mobile: if user is currently on the Webapps view in the offcanvas, refresh it too.
-            const mobileWebappsTab = document.getElementById('mobile-tab-webapps');
-            const isMobileWebappsActive = Boolean(mobileWebappsTab && mobileWebappsTab.classList.contains('active'));
-            if (isMobileWebappsActive && typeof window.WebappIntegration?.loadMobileWebappsList === 'function') {
+            if (this._isMobileWebappsTabActive() && typeof window.WebappIntegration?.loadMobileWebappsList === 'function') {
                 await window.WebappIntegration.loadMobileWebappsList();
             }
 
@@ -134,7 +237,10 @@
             if (window.WebSocketManager) {
                 window.WebSocketManager.connectWebSocket();
             }
+
+            this._flushPendingRefresh();
         }
     };
 
 })();
+

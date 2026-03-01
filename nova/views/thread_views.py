@@ -24,6 +24,7 @@ from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
+from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,9 @@ def add_message(request):
                 {"status": "ERROR", "message": "; ".join(errors)},
                 status=400,
             )
+
+    if uploaded_file_ids:
+        async_to_sync(publish_file_update)(thread.id, "attachment_upload")
 
     message = thread.add_message(new_message, actor=Actor.USER)
     message.internal_data = {'file_ids': uploaded_file_ids}

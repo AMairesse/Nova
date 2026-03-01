@@ -131,3 +131,15 @@ To update vendorized assets manually:
 ./scripts/update_vendor_assets.sh --bootstrap 5.3.7 --bootstrap-icons 1.11.3 --htmx 2.0.6
 ```
 
+## Test settings note
+
+When running tests with `DJANGO_SETTINGS_MODULE=nova.settings_test`, some values from `.env` can still be loaded through `nova/settings.py` (because `settings_test.py` imports it first).
+
+To keep tests deterministic for WebPush, `nova/settings_test.py` explicitly forces:
+
+- `WEBPUSH_ENABLED = False`
+- `WEBPUSH_VAPID_PUBLIC_KEY = ''`
+- `WEBPUSH_VAPID_PRIVATE_KEY = ''`
+- `WEBPUSH_VAPID_SUBJECT = ''`
+
+This avoids local `.env` values unexpectedly enabling push features during test runs.

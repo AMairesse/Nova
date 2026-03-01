@@ -2,6 +2,7 @@
 from django.test import TestCase, RequestFactory
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpResponse
 from django.urls import reverse
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -217,6 +218,50 @@ class MainViewsTests(TestCase):
         self.assertEqual(task.thread_id, thread_id)
         self.assertEqual(task.agent_config_id, agent.id)
         self.assertEqual(task.status, TaskStatus.PENDING)
+
+    @patch("nova.views.thread_views.publish_file_update", new_callable=AsyncMock)
+    @patch("nova.views.thread_views.batch_upload_files", new_callable=AsyncMock)
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_with_attachment_emits_sidebar_update(
+        self,
+        mock_delay,
+        mocked_batch_upload,
+        mocked_publish_update,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-Attach",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Attach Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Attachment thread")
+        mocked_batch_upload.return_value = ([{"id": 101, "path": "/note.txt"}], [])
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Hello with file",
+                "selected_agent": str(agent.id),
+                "files": [SimpleUploadedFile("note.txt", b"hello")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "OK")
+        mocked_batch_upload.assert_awaited_once()
+        mocked_publish_update.assert_awaited_once_with(thread.id, "attachment_upload")
 
     # ------------ running_tasks -----------------------------------------
 

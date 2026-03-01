@@ -6,6 +6,7 @@ from langchain_core.tools import StructuredTool
 from typing import Dict, List, Optional
 
 from nova.llm.llm_agent import LLMAgent
+from nova.realtime.sidebar_updates import publish_webapps_update
 from nova.utils import compute_webapp_public_url
 
 
@@ -103,7 +104,13 @@ async def _upsert_files(webapp, files: Dict[str, str]):
     return None
 
 
-async def _publish_webapp_update(agent: LLMAgent, slug: str, public_url: Optional[str] = None):
+async def _publish_webapp_update(
+    agent: LLMAgent,
+    slug: str,
+    public_url: Optional[str] = None,
+    *,
+    reason: str = "webapp_update",
+):
     """
     Broadcast webapp events via the existing task WebSocket group using the
     standard envelope: {'type': 'task_update', 'message': {...}}.
@@ -113,23 +120,33 @@ async def _publish_webapp_update(agent: LLMAgent, slug: str, public_url: Optiona
     task_id = agent._resources.get("task_id") if hasattr(agent, "_resources") else None
     channel_layer = agent._resources.get("channel_layer") if hasattr(agent, "_resources") else None
     channel_layer = channel_layer or get_channel_layer()
+    thread_id = getattr(getattr(agent, "thread", None), "id", None)
 
-    if not task_id or not channel_layer:
-        # Non-fatal: tool can be used outside of an active task
+    if not channel_layer:
+        # Non-fatal: tool can be used outside of an active task and channel setup
         return
 
-    # Publish the public URL if provided (sets iframe src on the client)
-    if public_url:
+    if task_id:
+        # Publish the public URL if provided (sets iframe src on the client)
+        if public_url:
+            await channel_layer.group_send(
+                f"task_{task_id}",
+                {"type": "task_update", "message": {"type": "webapp_public_url", "slug": slug, "public_url": public_url}},
+            )
+
+        # Always publish an update event (refreshes iframe if already shown)
         await channel_layer.group_send(
             f"task_{task_id}",
-            {"type": "task_update", "message": {"type": "webapp_public_url", "slug": slug, "public_url": public_url}},
+            {"type": "task_update", "message": {"type": "webapp_update", "slug": slug}},
         )
 
-    # Always publish an update event (refreshes iframe if already shown)
-    await channel_layer.group_send(
-        f"task_{task_id}",
-        {"type": "task_update", "message": {"type": "webapp_update", "slug": slug}},
-    )
+    if thread_id:
+        await publish_webapps_update(
+            thread_id,
+            reason,
+            slug=slug,
+            channel_layer=channel_layer,
+        )
 
 
 # ------------- Tool functions ------------------------------------------------------------
@@ -149,6 +166,7 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         logger.error("Agent must be bound to a user and a thread to manage a webapp.")
         return ("Webapp operations require a bound user and conversation; retry in an active chat.")
 
+    is_new_webapp = False
     if slug:
         # Fetch existing app, enforce ownership by user
         webapp = await sync_to_async(_get_webapp_by_slug_sync, thread_sensitive=False)(user, slug)
@@ -167,6 +185,7 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
     else:
         webapp = await sync_to_async(_create_webapp_sync, thread_sensitive=False)(user, thread)
         slug = webapp.slug
+        is_new_webapp = True
 
     # Upsert files if provided
     if files:
@@ -178,7 +197,12 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
 
     # Emit URL and update for live preview setup and refresh
     try:
-        await _publish_webapp_update(agent, slug, public_url=public_url)
+        await _publish_webapp_update(
+            agent,
+            slug,
+            public_url=public_url,
+            reason="webapp_create" if is_new_webapp else "webapp_update",
+        )
     except Exception:
         # Do not fail the tool on WS publishing issues
         pass

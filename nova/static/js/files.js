@@ -25,6 +25,10 @@
       if (this._initialized) return;
       this._initialized = true;
 
+      if (window.SidebarManager?.bindRefreshEvents) {
+        window.SidebarManager.bindRefreshEvents();
+      }
+
       this.attachSidebarEventHandlers();
       this.initDelegatedHandlers();
 
@@ -206,6 +210,18 @@
 
     activateSplitPreview(slug, url) {
       return window.WebappIntegration.activateSplitPreview(slug, url);
+    },
+
+    requestSidebarRefresh({ files = false, webapps = false, reason = '', source = '' } = {}) {
+      const detail = {
+        files: Boolean(files),
+        webapps: Boolean(webapps),
+        reason: reason || '',
+        source: source || '',
+      };
+      if (!detail.files && !detail.webapps) return;
+
+      document.dispatchEvent(new CustomEvent('nova:sidebar-refresh-request', { detail }));
     }
   };
 
