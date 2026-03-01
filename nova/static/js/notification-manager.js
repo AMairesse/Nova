@@ -35,12 +35,57 @@
     window.NotificationManager = {
         registration: null,
         config: null,
+        _swMessageBound: false,
+
+        bindServiceWorkerMessages() {
+            if (this._swMessageBound || !('serviceWorker' in navigator)) {
+                return;
+            }
+            this._swMessageBound = true;
+
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                const data = event.data || {};
+                if (data.type !== 'nova:push-in-app') {
+                    return;
+                }
+                this.showInAppPushNotification(data.payload || {});
+            });
+        },
+
+        showInAppPushNotification(payload) {
+            const title = payload.title || 'Nova';
+            const body = payload.body || 'Task status updated.';
+            const targetUrl = payload?.data?.url || '/';
+
+            const toast = document.createElement('div');
+            toast.className = 'alert alert-info alert-dismissible fade show position-fixed shadow-sm';
+            toast.style.cssText = 'top: 20px; right: 20px; z-index: 1090; min-width: 320px; max-width: 420px; cursor: pointer;';
+            toast.setAttribute('role', 'status');
+            toast.innerHTML = `
+                <div class="fw-semibold mb-1">${window.DOMUtils?.escapeHTML ? window.DOMUtils.escapeHTML(title) : title}</div>
+                <div class="small">${window.DOMUtils?.escapeHTML ? window.DOMUtils.escapeHTML(body) : body}</div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+
+            toast.addEventListener('click', (e) => {
+                if (e.target.closest('.btn-close')) return;
+                window.location.href = targetUrl;
+            });
+
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 6000);
+        },
 
         async init(registration) {
             if (!isAuthenticated() || !isSupported()) {
                 return;
             }
             this.registration = registration;
+            this.bindServiceWorkerMessages();
 
             const config = await this.fetchConfig();
             this.config = config;

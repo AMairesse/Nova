@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v7';  // Includes push notification handlers
+const CACHE_NAME = 'nova-v8';  // Includes foreground push in-app handling
 const urlsToCache = [
   '/static/css/main.css',
   '/static/js/utils.js',
@@ -140,7 +140,26 @@ self.addEventListener('push', (event) => {
     data: payload.data || { url: '/' },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    const clientsList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const foregroundClients = clientsList.filter((client) => {
+      const isVisible = client.visibilityState === 'visible';
+      const isFocused = client.focused === true;
+      return isVisible || isFocused;
+    });
+
+    if (foregroundClients.length > 0) {
+      for (const client of foregroundClients) {
+        client.postMessage({
+          type: 'nova:push-in-app',
+          payload,
+        });
+      }
+      return;
+    }
+
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
