@@ -54,6 +54,7 @@ class TaskExecutor:
             user_id=getattr(self.user, "id", None),
             thread_id=getattr(self.thread, "id", None),
             thread_mode=getattr(self.thread, "mode", None),
+            initial_streamed_markdown=getattr(self.task, "streamed_markdown", "") or "",
         )
 
     async def execute_or_resume(self, interruption_response=None):

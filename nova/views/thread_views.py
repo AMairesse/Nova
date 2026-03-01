@@ -161,7 +161,10 @@ def message_list(request):
             show_compact = (getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD)
 
             for m in messages:
-                m.rendered_html = markdown_to_html(m.text)
+                display_text = m.text
+                if m.actor == Actor.AGENT and m.internal_data:
+                    display_text = m.internal_data.get('display_markdown') or m.text
+                m.rendered_html = markdown_to_html(display_text)
                 # Add info about files used
                 if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
                     m.file_count = len(m.internal_data['file_ids'])

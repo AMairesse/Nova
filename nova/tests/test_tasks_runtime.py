@@ -125,7 +125,14 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         )
 
     async def test_process_result_updates_message_and_context_info(self):
-        task = SimpleNamespace(id=1, progress_logs=[], save=Mock(), result=None)
+        task = SimpleNamespace(
+            id=1,
+            progress_logs=[],
+            save=Mock(),
+            result=None,
+            current_response="<p>Interim thought</p>",
+            streamed_markdown="Interim thought\n\nAgent answer",
+        )
         message = SimpleNamespace(internal_data={}, save=Mock())
         thread = SimpleNamespace(subject="thread n°1", add_message=Mock(return_value=message), save=Mock())
         executor = AgentTaskExecutor(
@@ -147,8 +154,45 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         self.assertEqual(task.result, "Agent answer")
         thread.add_message.assert_called_once_with("Agent answer", actor=Actor.AGENT)
         self.assertEqual(message.internal_data["real_tokens"], 50)
+        self.assertEqual(message.internal_data["final_answer"], "Agent answer")
+        self.assertEqual(message.internal_data["display_markdown"], "Interim thought\n\nAgent answer")
+        self.assertIsNone(task.current_response)
+        self.assertEqual(task.streamed_markdown, "")
         executor.handler.on_context_consumption.assert_awaited_once_with(50, None, 1000)
         mocked_enqueue_title.assert_awaited_once()
+
+    async def test_process_result_keeps_final_only_when_stream_equals_final_answer(self):
+        task = SimpleNamespace(
+            id=2,
+            progress_logs=[],
+            save=Mock(),
+            result=None,
+            current_response="<p>Agent answer</p>",
+            streamed_markdown="Agent answer",
+        )
+        message = SimpleNamespace(internal_data={}, save=Mock())
+        thread = SimpleNamespace(subject="thread n°2", add_message=Mock(return_value=message), save=Mock())
+        executor = AgentTaskExecutor(
+            task=task,
+            user=SimpleNamespace(id=1),
+            thread=thread,
+            agent_config=SimpleNamespace(llm_provider=SimpleNamespace(max_context_tokens=1000)),
+            prompt="prompt",
+        )
+        executor.handler = SimpleNamespace(
+            on_context_consumption=AsyncMock(),
+            get_streamed_markdown=Mock(return_value="Agent answer"),
+        )
+        executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
+
+        with (
+            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(12, None, 1000)),
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+        ):
+            await executor._process_result("Agent answer")
+
+        self.assertEqual(message.internal_data["final_answer"], "Agent answer")
+        self.assertNotIn("display_markdown", message.internal_data)
 
 
 class GenerateThreadTitleTaskTests(SimpleTestCase):

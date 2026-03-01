@@ -75,13 +75,31 @@ class AgentTaskExecutor (TaskExecutor):
     progress tracking, and state management.
     """
 
+    @staticmethod
+    def _normalize_text_for_compare(value: str) -> str:
+        return " ".join((value or "").split())
+
+    def _get_display_markdown(self, final_answer: str) -> str:
+        streamed_markdown = ""
+        if self.handler and hasattr(self.handler, "get_streamed_markdown"):
+            streamed_markdown = self.handler.get_streamed_markdown() or ""
+        if not streamed_markdown:
+            streamed_markdown = getattr(self.task, "streamed_markdown", "") or ""
+        if not streamed_markdown.strip():
+            return ""
+        if self._normalize_text_for_compare(streamed_markdown) == self._normalize_text_for_compare(final_answer):
+            return ""
+        return streamed_markdown
+
     async def _process_result(self, result):
         await super()._process_result(result)
+
+        final_answer = "" if result is None else str(result)
 
         # Add message to thread
         message = await sync_to_async(
             self.thread.add_message, thread_sensitive=False
-        )(result, actor=Actor.AGENT)
+        )(final_answer, actor=Actor.AGENT)
 
         # Calculate and store context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
@@ -107,9 +125,17 @@ class AgentTaskExecutor (TaskExecutor):
         message.internal_data.update({
             'real_tokens': real_tokens,
             'approx_tokens': approx_tokens,
-            'max_context': max_context
+            'max_context': max_context,
+            'final_answer': final_answer,
         })
+        display_markdown = self._get_display_markdown(final_answer)
+        if display_markdown:
+            message.internal_data['display_markdown'] = display_markdown
         await sync_to_async(message.save, thread_sensitive=False)()
+
+        # Clear transient stream state now that durable message persistence is complete.
+        self.task.current_response = None
+        self.task.streamed_markdown = ""
 
         # Trigger title generation asynchronously when the thread still has its default title.
         await self._enqueue_thread_title_generation()

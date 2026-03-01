@@ -141,6 +141,21 @@ class ContinuousViewsTests(TestCase):
         self.assertTrue(response.context["allow_posting"])
         self.assertTrue(response.context["is_continuous_default_mode"])
 
+    def test_continuous_messages_prefers_agent_display_markdown_when_available(self):
+        thread = ensure_continuous_thread(self.user)
+        agent_message = thread.add_message("Final response", actor=Actor.AGENT)
+        agent_message.internal_data = {
+            "display_markdown": "Draft explanation before tools.\n\nFinal response",
+        }
+        agent_message.save(update_fields=["internal_data"])
+
+        response = self.client.get(reverse("continuous_messages"))
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn("Draft explanation before tools.", html)
+        self.assertIn("Final response", html)
+
     def test_continuous_messages_default_view_respects_recent_limit_setting(self):
         thread = ensure_continuous_thread(self.user)
         self.user.userparameters.continuous_default_messages_limit = 2

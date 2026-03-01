@@ -136,7 +136,10 @@ def continuous_home(request):
             ).order_by("created_at", "id")
         )
         for m in timeline_messages:
-            m.rendered_html = markdown_to_html(m.text)
+            display_text = m.text
+            if m.actor == Actor.AGENT and m.internal_data:
+                display_text = m.internal_data.get("display_markdown") or m.text
+            m.rendered_html = markdown_to_html(display_text)
 
     return render(
         request,
@@ -276,7 +279,10 @@ def continuous_messages(request):
                 qs = qs.filter(created_at__lt=end_dt)
             messages = list(qs.order_by("created_at", "id"))
     for m in messages:
-        m.rendered_html = markdown_to_html(m.text)
+        display_text = m.text
+        if m.actor == Actor.AGENT and m.internal_data:
+            display_text = m.internal_data.get("display_markdown") or m.text
+        m.rendered_html = markdown_to_html(display_text)
 
     pending_interactions = (
         Interaction.objects.filter(

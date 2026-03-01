@@ -123,8 +123,7 @@
             // Using a delegation approach because the textarea is dynamically added
             document.addEventListener('input', (e) => {
                 if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
-                    e.target.style.height = 'auto'; // Reset to auto for accurate scrollHeight
-                    e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`; // Adjust to content, cap at 200px max
+                    this.resizeComposerTextarea(e.target);
                 }
             });
 
@@ -224,7 +223,7 @@
                 const textarea = document.querySelector('#message-container textarea[name="new_message"]');
                 if (textarea) {
                     textarea.value = prefillMessage;
-                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    this.resizeComposerTextarea(textarea);
                     textarea.focus();
                 }
             }
@@ -297,8 +296,10 @@
 
         async handleFormSubmit(form) {
             const textarea = form.querySelector('textarea[name="new_message"]');
-            const msg = textarea ? textarea.value.trim() : '';
+            const originalMessage = textarea ? textarea.value : '';
+            const msg = originalMessage.trim();
             if (!msg) return;
+            const formData = new FormData(form);
 
             // Disable send button
             const sendBtn = document.getElementById('send-btn');
@@ -307,11 +308,17 @@
                 sendBtn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
             }
 
+            // Collapse composer immediately to free vertical space during streaming.
+            if (textarea) {
+                textarea.value = '';
+                this.resizeComposerTextarea(textarea);
+            }
+
             try {
                 // Send the message to the server
                 const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
                     method: 'POST',
-                    body: new FormData(form)
+                    body: formData
                 });
 
                 const data = await response.json();
@@ -339,20 +346,26 @@
                 // Notify page-specific controllers (e.g. Continuous mode) so they
                 // can refresh side panels/day lists without coupling to this class.
                 document.dispatchEvent(new CustomEvent('nova:message-posted', { detail: data }));
-
-                // Clear textarea
-                if (textarea) {
-                    textarea.value = '';
-                    textarea.dispatchEvent(new Event('input')); // Force resize to min height
-                }
             } catch (error) {
                 console.error("Error sending message:", error);
+                // Restore unsent content if request failed.
+                if (textarea) {
+                    textarea.value = originalMessage;
+                    this.resizeComposerTextarea(textarea);
+                    textarea.focus();
+                }
                 // Re-enable send button on error
                 if (sendBtn) {
                     sendBtn.disabled = false;
                     sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
                 }
             }
+        }
+
+        resizeComposerTextarea(textarea) {
+            if (!textarea) return;
+            textarea.style.height = 'auto';
+            textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
         }
 
         appendMessage(messageElement) {

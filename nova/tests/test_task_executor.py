@@ -47,6 +47,24 @@ class TaskExecutorTests(TransactionTestCase):
         executor.handler = AsyncMock()
         return executor
 
+    def test_executor_initializes_handler_with_existing_streamed_markdown(self):
+        self.task.streamed_markdown = "Partial response before interruption"
+        self.task.save(update_fields=["streamed_markdown", "updated_at"])
+
+        executor = TaskExecutor(
+            task=self.task,
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="hello",
+            source_message_id=None,
+        )
+
+        self.assertEqual(
+            executor.handler.get_streamed_markdown(),
+            "Partial response before interruption",
+        )
+
     def test_execute_or_resume_regular_result_flow(self):
         executor = self._make_executor()
         executor._initialize_task = AsyncMock()

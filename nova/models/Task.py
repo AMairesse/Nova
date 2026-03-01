@@ -39,6 +39,8 @@ class Task(models.Model):
     progress_logs = models.JSONField(default=list, blank=True)
     # Current streaming content (HTML) - updated during streaming for reconnection
     current_response = models.TextField(blank=True, null=True)
+    # Canonical streamed markdown transcript, used to persist intermediate agent text.
+    streamed_markdown = models.TextField(blank=True, default="")
     # Final output or error message
     result = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -124,6 +124,22 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
 
+    def test_message_list_prefers_agent_display_markdown_when_available(self):
+        thread = Thread.objects.create(user=self.user, subject="Agent display")
+        agent_message = thread.add_message("Final answer only", actor=Actor.AGENT)
+        agent_message.internal_data = {
+            "display_markdown": "First explanation paragraph.\n\nFinal answer only",
+        }
+        agent_message.save(update_fields=["internal_data"])
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn("First explanation paragraph.", html)
+        self.assertIn("Final answer only", html)
+
     # ------------ create_thread -----------------------------------------
 
     def test_create_thread_returns_json_and_renders_item(self):
