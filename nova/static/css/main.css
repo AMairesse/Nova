@@ -224,11 +224,10 @@ body {
 /* Desktop Layout Responsive Columns */
 @media (min-width: 992px) {
 
-    /* Default state: threads (2 cols) + messages (8 cols) + files (2 cols) */
+    /* Default state: threads (2 cols) + messages (~7.6 cols) + files (~2.4 cols) */
     #message-area[data-files-visible="true"] {
-        flex: 0 0 66.666667%;
-        /* col-lg-8 equivalent */
-        max-width: 66.666667%;
+        flex: 0 0 63.333333%;
+        max-width: 63.333333%;
     }
 
     /* Files hidden state: threads (2 cols) + messages (10 cols) */
@@ -244,6 +243,8 @@ body {
     }
 
     #files-sidebar {
+        flex: 0 0 20%;
+        max-width: 20%;
         transition: opacity 0.3s ease, transform 0.3s ease;
     }
 
@@ -268,9 +269,8 @@ body {
 
     /* Continuous layout matrix */
     #continuous-page-root #message-area[data-days-visible="true"][data-files-visible="true"] {
-        flex: 0 0 58.333333%;
-        /* col-lg-7 equivalent */
-        max-width: 58.333333%;
+        flex: 0 0 55%;
+        max-width: 55%;
     }
 
     #continuous-page-root #message-area[data-days-visible="true"][data-files-visible="false"] {
@@ -280,9 +280,8 @@ body {
     }
 
     #continuous-page-root #message-area[data-days-visible="false"][data-files-visible="true"] {
-        flex: 0 0 83.333333%;
-        /* col-lg-10 equivalent */
-        max-width: 83.333333%;
+        flex: 0 0 80%;
+        max-width: 80%;
     }
 
     #continuous-page-root #message-area[data-days-visible="false"][data-files-visible="false"] {
@@ -326,8 +325,8 @@ body {
     }
 
     html.pref-continuous-days-hidden #continuous-page-root #message-area[data-files-visible="true"] {
-        flex: 0 0 83.333333%;
-        max-width: 83.333333%;
+        flex: 0 0 80%;
+        max-width: 80%;
     }
 
     html.pref-continuous-days-hidden #continuous-page-root #message-area[data-files-visible="false"] {
@@ -568,35 +567,48 @@ body {
     list-style: none;
     margin: 0;
     padding: 0;
-    min-width: max-content;
+    min-width: 0;
 }
 
 /* Ensure file tree root container handles overflow properly */
 .file-tree-list.root {
-    overflow-x: auto;
+    overflow-x: hidden;
     overflow-y: visible;
+}
+
+.file-tree-item {
+    min-width: 0;
+}
+
+.file-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+    width: 100%;
 }
 
 /* Ensure file names don't break on long paths */
 .file-item-name,
 .file-download-link {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 200px;
+    max-width: 100%;
 }
 
-/* On hover, show full name */
+/* Keep truncation stable; use title attribute for full filename tooltip */
 .file-item-name:hover,
 .file-download-link:hover {
-    overflow: visible;
-    max-width: none;
-    background-color: var(--bs-dark);
-    color: white;
-    padding: 2px 4px;
-    border-radius: 3px;
-    position: relative;
-    z-index: 10;
+    text-decoration: underline;
+}
+
+.file-delete-btn {
+    flex: 0 0 auto;
+    margin-left: 0.25rem;
 }
 
 .file-tree-item.selected .file-item-content {

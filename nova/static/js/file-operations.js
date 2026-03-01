@@ -327,14 +327,16 @@
                 data-type="dir"
                 data-path="${window.DOMUtils.escapeAttr(nodePath)}"
                 data-file-name="${window.DOMUtils.escapeAttr(nodeName)}">
-              <i class="bi ${icon} me-1"></i>
-              <span class="file-item-name">${window.DOMUtils.escapeHTML(nodeName)}</span>
-              <button type="button"
-                      class="file-delete-btn btn btn-link btn-sm p-0 ms-2 text-danger"
-                      data-action="delete"
-                      aria-label="Delete">
-                <i class="bi bi-trash"></i>
-              </button>
+              <div class="file-tree-row">
+                <i class="bi ${icon} me-1"></i>
+                <span class="file-item-name" title="${window.DOMUtils.escapeAttr(nodeName)}">${window.DOMUtils.escapeHTML(nodeName)}</span>
+                <button type="button"
+                        class="file-delete-btn btn btn-link btn-sm p-0 ms-2 text-danger"
+                        data-action="delete"
+                        aria-label="Delete">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
               ${node.children ? this.renderTree(node.children, nodePath, level + 1) : ''}
             </li>
           `;
@@ -345,14 +347,16 @@
                 data-file-name="${window.DOMUtils.escapeAttr(nodeName)}"
                 data-type="file"
                 data-path="${window.DOMUtils.escapeAttr(nodePath)}">
-              <i class="bi ${icon} me-1"></i>
-              <a href="#" class="file-download-link" data-action="download">${window.DOMUtils.escapeHTML(nodeName)}</a>
-              <button type="button"
-                      class="file-delete-btn btn btn-link btn-sm p-0 ms-2 text-danger"
-                      data-action="delete"
-                      aria-label="Delete">
-                <i class="bi bi-trash"></i>
-              </button>
+              <div class="file-tree-row">
+                <i class="bi ${icon} me-1"></i>
+                <a href="#" class="file-download-link" data-action="download" title="${window.DOMUtils.escapeAttr(nodeName)}">${window.DOMUtils.escapeHTML(nodeName)}</a>
+                <button type="button"
+                        class="file-delete-btn btn btn-link btn-sm p-0 ms-2 text-danger"
+                        data-action="delete"
+                        aria-label="Delete">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
             </li>
           `;
                 }
