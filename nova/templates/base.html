@@ -151,8 +151,9 @@
     <script>
       if ('serviceWorker' in navigator && document.body?.dataset?.authenticated === 'true') {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
+          navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
             .then(reg => {
+              reg.update().catch(() => null);
               console.log('SW registered:', reg.scope);
               // Send debug status to service worker
               reg.active?.postMessage({

@@ -62,7 +62,7 @@
       <div class="card-header">
         <h5 class="mb-0">{% trans "Task notifications" %}</h5>
       </div>
-      <div class="card-body">
+      <div class="card-body" id="task-notifications-controls" data-server-state="{{ push_server_state }}">
         {% if push_server_state == "disabled" %}
           <div class="alert alert-warning" role="alert">
             {% trans "Disabled by the administrator. Web Push is not enabled on this server." %}
@@ -73,6 +73,23 @@
           </div>
         {% endif %}
         {{ form.task_notifications_enabled|as_crispy_field }}
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+          <button
+            type="button"
+            id="task-notifications-enable-device-btn"
+            class="btn btn-outline-primary btn-sm"
+            {% if push_server_state != "ready" %}disabled{% endif %}
+          >
+            {% trans "Enable on this device/browser" %}
+          </button>
+          <span
+            id="task-notifications-device-status"
+            class="badge rounded-pill text-bg-secondary"
+          >
+            {% trans "Checking..." %}
+          </span>
+        </div>
+        <div id="task-notifications-device-message" class="small text-muted mt-2"></div>
       </div>
     </div>
 

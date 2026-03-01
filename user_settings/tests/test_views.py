@@ -65,6 +65,7 @@ class GeneralSettingsViewTest(TestCase):
         self.assertContains(response, "Task notifications")
         self.assertContains(response, "API Token Management")
 
+    @override_settings(WEBPUSH_ENABLED=False)
     def test_update_general_settings_form_htmx_refreshes_fragment(self):
         payload = {
             "allow_langfuse": "on",
@@ -92,14 +93,20 @@ class GeneralSettingsViewTest(TestCase):
         # Server-side push is disabled by default in tests, so opt-in must stay false.
         self.assertFalse(self.user_parameters.task_notifications_enabled)
 
+    @override_settings(WEBPUSH_ENABLED=False)
     def test_notifications_option_is_disabled_when_server_is_off(self):
         response = self.client.get(self.partial_url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Disabled by the administrator")
         self.assertContains(response, 'name="task_notifications_enabled"', html=False)
+        self.assertContains(response, 'id="task-notifications-enable-device-btn"', html=False)
         self.assertRegex(
             response.content.decode(),
             r'name="task_notifications_enabled"[^>]*disabled',
+        )
+        self.assertRegex(
+            response.content.decode(),
+            r'id="task-notifications-enable-device-btn"[^>]*disabled',
         )
 
     @override_settings(
@@ -113,6 +120,11 @@ class GeneralSettingsViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Disabled by the administrator")
         self.assertNotContains(response, "Server configuration is incomplete")
+        self.assertContains(response, "Enable on this device/browser")
+        self.assertNotRegex(
+            response.content.decode(),
+            r'id="task-notifications-enable-device-btn"[^>]*disabled',
+        )
 
     def test_update_general_settings_form_invalid_host_returns_errors(self):
         payload = {

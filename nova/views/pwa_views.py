@@ -14,6 +14,10 @@ def service_worker(request):
     with open(path, 'rb') as f:
         content = f.read()
     resp = HttpResponse(content, content_type='application/javascript')
+    # Keep sw.js itself always revalidated so browsers pick updates quickly.
+    resp['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp['Pragma'] = 'no-cache'
+    resp['Expires'] = '0'
     # Not strictly required when served at /sw.js, but harmless:
     resp['Service-Worker-Allowed'] = '/'
     return resp
