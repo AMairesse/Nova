@@ -134,6 +134,43 @@ body {
     line-height: 1.45;
 }
 
+.assistant-markdown :is(h1, h2, h3, h4, h5, h6),
+.streaming-content :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0.75rem 0 0.45rem;
+    line-height: 1.3;
+    font-weight: 600;
+}
+
+.assistant-markdown h1,
+.streaming-content h1 {
+    font-size: 1.35rem;
+}
+
+.assistant-markdown h2,
+.streaming-content h2 {
+    font-size: 1.2rem;
+}
+
+.assistant-markdown h3,
+.streaming-content h3 {
+    font-size: 1.1rem;
+}
+
+.assistant-markdown h4,
+.streaming-content h4 {
+    font-size: 1rem;
+}
+
+.assistant-markdown h5,
+.streaming-content h5 {
+    font-size: 0.95rem;
+}
+
+.assistant-markdown h6,
+.streaming-content h6 {
+    font-size: 0.9rem;
+}
+
 .assistant-markdown p,
 .streaming-content p {
     margin-bottom: 0.6rem;
