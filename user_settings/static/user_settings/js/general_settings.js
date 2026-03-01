@@ -113,6 +113,13 @@
     target.textContent = value || "";
   }
 
+  function t(container, key, fallback) {
+    if (!container) {
+      return fallback;
+    }
+    return container.dataset?.[key] || fallback;
+  }
+
   function setMessage(target, value, level = "muted") {
     if (!target) return;
     target.classList.remove("text-muted", "text-success", "text-warning", "text-danger");
@@ -120,7 +127,7 @@
     target.textContent = value || "";
   }
 
-  async function readNotificationRuntimeState(manager, serverState) {
+  async function readNotificationRuntimeState(manager, serverState, container) {
     const supported = (
       "Notification" in window &&
       "serviceWorker" in navigator &&
@@ -138,17 +145,33 @@
       }
     }
 
-    let statusText = "Browser permission not requested.";
+    let statusText = t(
+      container,
+      "msgBrowserPermissionNotRequested",
+      "Browser permission not requested."
+    );
     if (!supported) {
-      statusText = "Push notifications are not supported in this browser.";
+      statusText = t(
+        container,
+        "msgPushNotSupported",
+        "Push notifications are not supported in this browser."
+      );
     } else if (serverState !== "ready") {
-      statusText = "Server-side Web Push is not available.";
+      statusText = t(
+        container,
+        "msgServerNotAvailable",
+        "Server-side Web Push is not available."
+      );
     } else if (permission === "denied") {
-      statusText = "Browser permission denied.";
+      statusText = t(container, "msgBrowserPermissionDenied", "Browser permission denied.");
     } else if (permission === "granted" && hasSubscription) {
-      statusText = "This device/browser is subscribed.";
+      statusText = t(container, "msgDeviceSubscribed", "This device/browser is subscribed.");
     } else if (permission === "granted") {
-      statusText = "Browser permission granted (not yet subscribed).";
+      statusText = t(
+        container,
+        "msgPermissionGrantedNotSubscribed",
+        "Browser permission granted (not yet subscribed)."
+      );
     }
 
     return {
@@ -170,7 +193,7 @@
 
     const serverState = container.dataset.serverState || "disabled";
     const manager = await ensureNotificationManagerReady();
-    const runtimeState = await readNotificationRuntimeState(manager, serverState);
+    const runtimeState = await readNotificationRuntimeState(manager, serverState, container);
 
     button.disabled = checkbox.disabled || serverState !== "ready" || !runtimeState.supported;
     let badgeTone = "secondary";
@@ -195,25 +218,45 @@
     const { manager, runtimeState, serverState, checkbox } = state;
     if (serverState !== "ready") {
       if (fromToggle) checkbox.checked = false;
-      setMessage(message, "Server-side Web Push is disabled or incomplete.", "warning");
+      setMessage(
+        message,
+        t(
+          container,
+          "msgServerDisabledOrIncomplete",
+          "Server-side Web Push is disabled or incomplete."
+        ),
+        "warning"
+      );
       return;
     }
 
     if (!runtimeState.supported || !manager) {
       if (fromToggle) checkbox.checked = false;
-      setMessage(message, "Push notifications are not supported in this browser.", "warning");
+      setMessage(
+        message,
+        t(container, "msgPushNotSupported", "Push notifications are not supported in this browser."),
+        "warning"
+      );
       return;
     }
 
     if (!manager.config || manager.config.server_state !== "ready") {
       if (fromToggle) checkbox.checked = false;
-      setMessage(message, "Server push configuration is not ready.", "warning");
+      setMessage(
+        message,
+        t(container, "msgServerNotReady", "Server push configuration is not ready."),
+        "warning"
+      );
       return;
     }
 
     if (runtimeState.permission === "denied") {
       if (fromToggle) checkbox.checked = false;
-      setMessage(message, "Notifications are blocked in browser settings.", "danger");
+      setMessage(
+        message,
+        t(container, "msgNotificationsBlocked", "Notifications are blocked in browser settings."),
+        "danger"
+      );
       return;
     }
 
@@ -230,8 +273,8 @@
       setMessage(
         message,
         denied
-          ? "Notifications are blocked in browser settings."
-          : "Notification permission was not granted.",
+          ? t(container, "msgNotificationsBlocked", "Notifications are blocked in browser settings.")
+          : t(container, "msgPermissionNotGranted", "Notification permission was not granted."),
         denied ? "danger" : "warning"
       );
       await refreshNotificationsControls(container);
@@ -241,7 +284,11 @@
     checkbox.checked = true;
     setMessage(
       message,
-      "Device/browser notifications enabled. Click Save Settings to persist.",
+      t(
+        container,
+        "msgDeviceEnabledSave",
+        "Device/browser notifications enabled. Click Save Settings to persist."
+      ),
       "success"
     );
     await refreshNotificationsControls(container);
@@ -258,7 +305,11 @@
     }
     setMessage(
       message,
-      "Device/browser notifications disabled. Click Save Settings to persist.",
+      t(
+        container,
+        "msgDeviceDisabledSave",
+        "Device/browser notifications disabled. Click Save Settings to persist."
+      ),
       "muted"
     );
     await refreshNotificationsControls(container);

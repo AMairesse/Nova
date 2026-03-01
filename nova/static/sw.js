@@ -1,14 +1,15 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v6';  // Includes push notification handlers
+const CACHE_NAME = 'nova-v7';  // Includes push notification handlers
 const urlsToCache = [
-  '/',
   '/static/css/main.css',
   '/static/js/utils.js',
+  '/static/js/notification-manager.js',
   '/static/js/view-preferences.js',
-  'https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css',
-  'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css',
-  'https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.bundle.min.js',
-  'https://cdn.jsdelivr.net/npm/htmx.org@2.0.6/dist/htmx.min.js'
+  '/static/vendor/bootstrap/css/bootstrap.min.css',
+  '/static/vendor/bootstrap-icons/bootstrap-icons.min.css',
+  '/static/vendor/bootstrap/js/bootstrap.bundle.min.js',
+  '/static/vendor/htmx/htmx.min.js',
+  '/static/images/icon-192x192.png'
 ];
 
 let config = {
@@ -27,12 +28,20 @@ self.addEventListener('message', (event) => {
 // Install Service Worker
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
-      .then(() => self.skipWaiting())
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      console.log('Opened cache');
+      await Promise.allSettled(
+        urlsToCache.map(async (url) => {
+          try {
+            await cache.add(url);
+          } catch (error) {
+            console.warn('SW precache failed for', url, error);
+          }
+        })
+      );
+      await self.skipWaiting();
+    })()
   );
 });
 
@@ -42,8 +51,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return; // never intercept non-GET
 
   const url = new URL(req.url);
-  const isStatic = url.pathname.startsWith('/static/')
-    || url.origin.startsWith('https://cdn.jsdelivr.net');
+  const isStatic = url.origin === self.location.origin && url.pathname.startsWith('/static/');
 
   if (!isStatic) return; // let network handle
 

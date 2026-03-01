@@ -89,8 +89,7 @@
                 if (permission !== 'granted') {
                     return false;
                 }
-                await this.syncSubscription();
-                return true;
+                return await this.syncSubscription();
             } catch (error) {
                 console.warn('Push permission request failed:', error);
                 return false;
