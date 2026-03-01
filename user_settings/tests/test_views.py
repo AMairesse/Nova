@@ -109,6 +109,28 @@ class GeneralSettingsViewTest(TestCase):
             r'id="task-notifications-enable-device-btn"[^>]*disabled',
         )
 
+    @override_settings(WEBPUSH_ENABLED=False)
+    def test_notifications_opt_in_is_preserved_when_server_is_off(self):
+        self.user_parameters.task_notifications_enabled = True
+        self.user_parameters.save(update_fields=["task_notifications_enabled"])
+
+        payload = {
+            "allow_langfuse": "",
+            "langfuse_public_key": "",
+            "langfuse_secret_key": "",
+            "langfuse_host": "",
+            "continuous_default_messages_limit": "60",
+            "task_notifications_enabled": "",
+            "api_token_status": "",
+        }
+        response = self.client.post(
+            self.partial_url, payload, HTTP_HX_REQUEST="true"
+        )
+        self.assertEqual(response.status_code, 204)
+
+        self.user_parameters.refresh_from_db()
+        self.assertTrue(self.user_parameters.task_notifications_enabled)
+
     @override_settings(
         WEBPUSH_ENABLED=True,
         WEBPUSH_VAPID_PUBLIC_KEY="pub",

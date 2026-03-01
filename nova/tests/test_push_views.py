@@ -101,6 +101,40 @@ class PushViewsTests(TestCase):
 
     @override_settings(
         WEBPUSH_ENABLED=True,
+        WEBPUSH_VAPID_PUBLIC_KEY="pub",
+        WEBPUSH_VAPID_PRIVATE_KEY="priv",
+        WEBPUSH_VAPID_SUBJECT="mailto:test@example.com",
+    )
+    def test_push_subscription_upsert_is_tenant_isolated(self):
+        endpoint = "https://example.invalid/push/reassign"
+        PushSubscription.objects.create(
+            user=self.other,
+            endpoint=endpoint,
+            p256dh="other_p",
+            auth="other_a",
+            is_active=True,
+        )
+
+        payload = {
+            "endpoint": endpoint,
+            "expirationTime": None,
+            "keys": {"p256dh": "mine_p", "auth": "mine_a"},
+        }
+        response = self.client.post(
+            reverse("push_subscriptions"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["error"], "not_found")
+
+        sub = PushSubscription.objects.get(endpoint=endpoint)
+        self.assertEqual(sub.user_id, self.other.id)
+        self.assertEqual(sub.p256dh, "other_p")
+        self.assertEqual(sub.auth, "other_a")
+
+    @override_settings(
+        WEBPUSH_ENABLED=True,
         WEBPUSH_VAPID_PUBLIC_KEY="",
         WEBPUSH_VAPID_PRIVATE_KEY="",
         WEBPUSH_VAPID_SUBJECT="",

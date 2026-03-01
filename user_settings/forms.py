@@ -578,6 +578,10 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
 
     def clean_task_notifications_enabled(self) -> bool:
         if self.server_state != "ready":
+            # Preserve existing preference while push is unavailable so unrelated
+            # settings updates do not silently opt users out.
+            if self.instance and self.instance.pk:
+                return bool(self.instance.task_notifications_enabled)
             return False
         return bool(self.cleaned_data.get("task_notifications_enabled"))
 

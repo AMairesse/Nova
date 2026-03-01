@@ -2,6 +2,7 @@ import datetime as dt
 import json
 
 from django.contrib.auth.decorators import login_required
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_protect
@@ -91,16 +92,21 @@ def push_subscriptions(request):
         return JsonResponse({"error": "invalid_expiration_time"}, status=400)
 
     user_agent = (request.META.get("HTTP_USER_AGENT", "") or "")[:512]
-    PushSubscription.objects.update_or_create(
-        endpoint=endpoint,
-        defaults={
-            "user": request.user,
-            "p256dh": p256dh,
-            "auth": auth,
-            "expiration_time": expiration_time,
-            "user_agent": user_agent,
-            "is_active": True,
-            "last_error": "",
-        },
-    )
+    try:
+        with transaction.atomic():
+            PushSubscription.objects.update_or_create(
+                user=request.user,
+                endpoint=endpoint,
+                defaults={
+                    "p256dh": p256dh,
+                    "auth": auth,
+                    "expiration_time": expiration_time,
+                    "user_agent": user_agent,
+                    "is_active": True,
+                    "last_error": "",
+                },
+            )
+    except IntegrityError:
+        # Endpoint exists but is not owned by current user (global unique endpoint).
+        return JsonResponse({"error": "not_found"}, status=404)
     return JsonResponse({"status": "ok"})
