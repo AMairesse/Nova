@@ -28,16 +28,24 @@ def _guess_mime(path: str) -> str:
 @login_required
 def serve_webapp(request, slug: str, path: str | None = None):
     """Serve a static file belonging to a user-owned WebApp."""
-    if not path:
-        path = 'index.html'
-
     # Strict multi-tenancy: only owner's apps are visible
     webapp = get_object_or_404(
         WebApp.objects.select_related('user', 'thread'),
         slug=slug,
         user=request.user,
     )
-    file_obj = get_object_or_404(webapp.files, path=path)
+
+    if path:
+        file_obj = get_object_or_404(webapp.files, path=path)
+    else:
+        # Prefer index.html for the root URL, but keep legacy compatibility:
+        # fallback to the first html file when index.html is missing.
+        file_obj = webapp.files.filter(path='index.html').first()
+        if file_obj is None:
+            file_obj = webapp.files.filter(path__iendswith='.html').order_by('path').first()
+        if file_obj is None:
+            file_obj = get_object_or_404(webapp.files, path='index.html')
+        path = file_obj.path
 
     mime = _guess_mime(path)
     response = HttpResponse(file_obj.content, content_type=f"{mime}; charset=utf-8")

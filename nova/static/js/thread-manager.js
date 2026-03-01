@@ -360,7 +360,7 @@
          */
         _initPreviewPageUI({ debug }) {
             const previewCloseFloating = document.getElementById('preview-close-floating');
-            const isPreviewPage = Boolean(previewCloseFloating || document.getElementById('preview-pane'));
+            const isPreviewPage = Boolean(previewCloseFloating);
             if (!isPreviewPage) return;
 
             if (ThreadManager.state.previewPageBound) return;

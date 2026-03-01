@@ -36,6 +36,15 @@ class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, "Webapp name is required.")
 
+    async def test_upsert_create_requires_index_file(self):
+        result = await webapp_tools.upsert_webapp(
+            None,
+            {"main.html": "<h1>Hello</h1>"},
+            self.agent,
+            name="Dashboard",
+        )
+        self.assertEqual(result, "webapp_create requires an 'index.html' entry file.")
+
     async def test_upsert_create_returns_name_and_public_url(self):
         fake_webapp = SimpleNamespace(slug="demo", name="Dashboard", thread_id=self.thread.id)
         with patch("nova.tools.builtins.webapp._create_webapp_sync", return_value=fake_webapp) as mocked_create:
@@ -61,20 +70,34 @@ class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
             "nova.tools.builtins.webapp._get_webapp_by_slug_sync",
             side_effect=[fake_webapp, fake_webapp],
         ):
-            with patch("nova.tools.builtins.webapp._save_webapp_sync", return_value=fake_webapp):
-                with patch("nova.tools.builtins.webapp._upsert_files", new_callable=AsyncMock, return_value=None):
-                    with patch("nova.tools.builtins.webapp._touch_webapp_sync", return_value=None):
-                        with patch("nova.tools.builtins.webapp._publish_webapp_update", new_callable=AsyncMock):
-                            result = await webapp_tools.upsert_webapp(
-                                "demo",
-                                {"index.html": "<h1>Updated</h1>"},
-                                self.agent,
-                                name="Renamed",
-                            )
+            with patch("nova.tools.builtins.webapp._has_webapp_file_sync", return_value=True):
+                with patch("nova.tools.builtins.webapp._save_webapp_sync", return_value=fake_webapp):
+                    with patch("nova.tools.builtins.webapp._upsert_files", new_callable=AsyncMock, return_value=None):
+                        with patch("nova.tools.builtins.webapp._touch_webapp_sync", return_value=None):
+                            with patch("nova.tools.builtins.webapp._publish_webapp_update", new_callable=AsyncMock):
+                                result = await webapp_tools.upsert_webapp(
+                                    "demo",
+                                    {"index.html": "<h1>Updated</h1>"},
+                                    self.agent,
+                                    name="Renamed",
+                                )
 
         self.assertEqual(fake_webapp.name, "Renamed")
         self.assertEqual(result["slug"], "demo")
         self.assertEqual(result["name"], "Renamed")
+
+    async def test_upsert_update_requires_index_for_legacy_webapp(self):
+        fake_webapp = SimpleNamespace(slug="legacy", name="Old", thread_id=self.thread.id)
+        with patch("nova.tools.builtins.webapp._get_webapp_by_slug_sync", return_value=fake_webapp):
+            with patch("nova.tools.builtins.webapp._has_webapp_file_sync", return_value=False):
+                result = await webapp_tools.upsert_webapp(
+                    "legacy",
+                    {"app.js": "console.log('x')"},
+                    self.agent,
+                    name="Legacy",
+                )
+
+        self.assertIn("no index.html entry file", result)
 
     async def test_list_webapps_returns_items(self):
         rows = [

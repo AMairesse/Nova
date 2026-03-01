@@ -67,8 +67,10 @@
         },
 
         // Announce split preview activation (desktop layout handled by thread UI)
-        activateSplitPreview: function (slug, url) {
-            document.dispatchEvent(new CustomEvent('webapp_preview_activate', { detail: { slug, url } }));
+        activateSplitPreview: function (slug, url, threadId = null) {
+            document.dispatchEvent(new CustomEvent('webapp_preview_activate', {
+                detail: { slug, url, threadId }
+            }));
         }
     };
 

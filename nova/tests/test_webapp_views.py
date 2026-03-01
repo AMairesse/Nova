@@ -82,3 +82,16 @@ class WebAppViewsTests(TestCase):
 
         self.assertEqual(self.client.get(reverse("serve_webapp_root", args=[app.slug])).status_code, 404)
 
+    def test_serve_webapp_root_falls_back_to_first_html_when_index_missing(self):
+        app = WebApp.objects.create(
+            user=self.user,
+            thread=self.thread,
+            name="No index app",
+            slug=WebApp._meta.get_field("slug").default(),
+        )
+        WebAppFile.objects.create(webapp=app, path="main.html", content="<h1>Main</h1>")
+        WebAppFile.objects.create(webapp=app, path="styles.css", content="body{}")
+
+        response = self.client.get(reverse("serve_webapp_root", args=[app.slug]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<h1>Main</h1>", response.content.decode("utf-8"))

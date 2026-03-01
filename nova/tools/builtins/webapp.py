@@ -72,6 +72,10 @@ def _list_thread_webapps_sync(user, thread) -> List[Dict[str, Any]]:
     )
 
 
+def _has_webapp_file_sync(webapp, path: str) -> bool:
+    return webapp.files.filter(path=path).exists()
+
+
 def _save_webapp_sync(webapp):
     webapp.full_clean()
     webapp.save()
@@ -209,6 +213,12 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         logger.error("Agent must be bound to a user and a thread to manage a webapp.")
         return ("Webapp operations require a bound user and conversation; retry in an active chat.")
 
+    if slug is None:
+        if not isinstance(files, dict) or not files:
+            return "webapp_create requires at least one file and must include 'index.html'."
+        if "index.html" not in files:
+            return "webapp_create requires an 'index.html' entry file."
+
     is_new_webapp = False
     if slug:
         cleaned_name, name_error = _normalize_webapp_name(name, required=False)
@@ -228,6 +238,12 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
             return (
                 "The specified webapp belongs to a different conversation. "
                 "Use a webapp slug created in this conversation."
+            )
+        has_index = await sync_to_async(_has_webapp_file_sync, thread_sensitive=False)(webapp, "index.html")
+        if not has_index and (not isinstance(files, dict) or "index.html" not in files):
+            return (
+                "This webapp has no index.html entry file. "
+                "Provide an 'index.html' file in this update."
             )
         if cleaned_name is not None:
             webapp.name = cleaned_name
@@ -360,7 +376,7 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
             name="webapp_create",
             description=(
                 "Create a static web-app for the current conversation. "
-                "Always include at least 'index.html'. "
+                "You must include 'index.html' as the entry file. "
                 "Provide a user-facing name for the webapp. "
                 "Paths must be single filenames like 'index.html' or 'styles.css' (no slashes). "
                 "Only .html, .css, .js are allowed. "
@@ -378,7 +394,7 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
                         "description": (
                             "Object mapping filename -> content. "
                             "Filenames MUST NOT contain '/', must end with .html, .css or .js, "
-                            "and should typically include 'index.html' as entrypoint. "
+                            "and MUST include 'index.html' as entrypoint. "
                             "Values are the exact file contents as strings."
                         ),
                         "additionalProperties": {"type": "string"},

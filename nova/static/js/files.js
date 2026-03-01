@@ -167,17 +167,22 @@
 
       e.preventDefault();
       const slug = previewEl.dataset.slug || '';
+      const url = previewEl.dataset.url || '';
       const threadId = this.currentThreadId;
       if (!slug || !threadId) return true;
 
-      // Mobile: open dedicated full-page preview
       const isMobile = window.innerWidth < 992;
-      if (isMobile) {
-        window.location.href = `/apps/preview/${threadId}/${slug}/`;
+      const hasInlinePreview = Boolean(
+        document.getElementById('preview-pane') && document.getElementById('webapp-iframe')
+      );
+
+      // Desktop: open inline split preview when available (thread + continuous pages)
+      if (!isMobile && hasInlinePreview && typeof window.WebappIntegration?.activateSplitPreview === 'function') {
+        window.WebappIntegration.activateSplitPreview(slug, url || `/apps/${slug}/`, threadId);
         return true;
       }
 
-      // Desktop: keep existing behavior (split preview handled by preview page/layout)
+      // Fallback: open dedicated preview page route
       window.location.href = `/apps/preview/${threadId}/${slug}/`;
       return true;
     },
