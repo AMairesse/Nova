@@ -103,5 +103,31 @@ Then the requirements.txt file can be generated with :
 
 Install with ```pip install pip-tools deptry```
 
+## Vendorized frontend assets
 
+To manually check whether vendorized frontend assets are up to date (Bootstrap, Bootstrap Icons, htmx):
+
+```bash
+./scripts/check_vendor_assets.sh
+```
+
+Useful options:
+
+```bash
+# Exit non-zero if an update is available or if a check fails
+./scripts/check_vendor_assets.sh --strict
+
+# Only read local embedded versions (no npm registry query)
+./scripts/check_vendor_assets.sh --local-only
+```
+
+To update vendorized assets manually:
+
+```bash
+# Update all to latest versions from npm
+./scripts/update_vendor_assets.sh
+
+# Update with explicit versions
+./scripts/update_vendor_assets.sh --bootstrap 5.3.7 --bootstrap-icons 1.11.3 --htmx 2.0.6
+```
 
