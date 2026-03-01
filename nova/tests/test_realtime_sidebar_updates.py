@@ -29,6 +29,16 @@ class SidebarRealtimePublishTests(IsolatedAsyncioTestCase):
             {"type": "webapps_update", "reason": "webapp_update", "slug": "demo"},
         )
 
+    async def test_publish_webapps_update_supports_delete_reason(self):
+        fake_layer = AsyncMock()
+
+        await publish_webapps_update(24, "webapp_delete", slug="demo", channel_layer=fake_layer)
+
+        fake_layer.group_send.assert_awaited_once_with(
+            "thread_24_files",
+            {"type": "webapps_update", "reason": "webapp_delete", "slug": "demo"},
+        )
+
     async def test_publish_ignores_missing_thread_id(self):
         fake_layer = AsyncMock()
 
@@ -71,4 +81,3 @@ class FileProgressConsumerRealtimeTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["type"], "webapps_update")
         self.assertEqual(payload["reason"], "webapp_create")
         self.assertEqual(payload["slug"], "app-1")
-

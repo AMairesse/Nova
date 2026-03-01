@@ -28,6 +28,7 @@ class WebApp(models.Model):
         related_name='webapps',
         verbose_name=_("Thread"),
     )
+    name = models.CharField(max_length=120, blank=True, default="")
     slug = models.SlugField(default=uuid_hex, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -47,4 +48,5 @@ class WebApp(models.Model):
             raise ValidationError(_("WebApp user must match Thread owner."))
 
     def __str__(self) -> str:
-        return self.slug
+        display_name = (self.name or "").strip()
+        return display_name or self.slug

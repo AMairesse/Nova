@@ -288,5 +288,6 @@ class WebAppFilesInline(admin.TabularInline):
 
 @admin.register(WebApp)
 class WebAppAdmin(admin.ModelAdmin):
-    list_display = ('user', 'thread', 'slug', 'created_at', 'updated_at')
+    list_display = ('user', 'thread', 'name', 'slug', 'created_at', 'updated_at')
+    search_fields = ('user__username', 'thread__subject', 'name', 'slug')
     inlines = [WebAppFilesInline]

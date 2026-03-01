@@ -2,11 +2,15 @@
 import mimetypes
 
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.http import require_http_methods
+from asgiref.sync import async_to_sync
 
 from nova.models.WebApp import WebApp
 from nova.models.Thread import Thread
+from nova.realtime.sidebar_updates import publish_webapps_update
 from nova.utils import compute_webapp_public_url
 
 
@@ -78,7 +82,7 @@ def webapps_list(request, thread_id: int):
     apps = (
         WebApp.objects.filter(user=request.user, thread=thread)
         .order_by("-updated_at")
-        .only("slug", "updated_at")
+        .only("slug", "name", "updated_at")
     )
 
     # Build public URLs using shared helper to avoid drift with tool behavior
@@ -89,6 +93,7 @@ def webapps_list(request, thread_id: int):
         items.append(
             {
                 "slug": slug,
+                "name": (app.name or "").strip(),
                 "updated_at": app.updated_at,
                 "public_url": public_url,
             }
@@ -119,7 +124,26 @@ def preview_webapp(request, thread_id: int, slug: str):
         "webapp": {
             "slug": slug,
             "public_url": public_url,
-            "name": getattr(webapp, "name", None),
+            "name": (webapp.name or "").strip(),
         },
     }
     return render(request, "nova/preview.html", context)
+
+
+@csrf_protect
+@require_http_methods(["DELETE"])
+@login_required
+def delete_webapp(request, thread_id: int, slug: str):
+    """
+    Delete a user-owned webapp from a specific thread.
+    Returns 404 for unauthorized/missing resources to preserve tenant isolation.
+    """
+    webapp = get_object_or_404(
+        WebApp,
+        user=request.user,
+        thread_id=thread_id,
+        slug=slug,
+    )
+    webapp.delete()
+    async_to_sync(publish_webapps_update)(thread_id, "webapp_delete", slug=slug)
+    return JsonResponse({"status": "ok"})

@@ -108,6 +108,7 @@
       document.addEventListener('click', (e) => {
         if (this._handleDownloadClick(e)) return;
         if (this._handleDeleteClick(e)) return;
+        if (this._handleWebappDeleteClick(e)) return;
         if (this._handleWebappPreviewClick(e)) return;
       });
     },
@@ -178,6 +179,36 @@
 
       // Desktop: keep existing behavior (split preview handled by preview page/layout)
       window.location.href = `/apps/preview/${threadId}/${slug}/`;
+      return true;
+    },
+
+    _handleWebappDeleteClick(e) {
+      const deleteEl = e.target.closest('.webapp-delete-btn');
+      if (!deleteEl) return false;
+
+      e.preventDefault();
+      const slug = deleteEl.dataset.slug || '';
+      const threadId = deleteEl.dataset.threadId || this.currentThreadId;
+      const name = deleteEl.dataset.name || slug;
+      if (!slug || !threadId) return true;
+
+      const warning = `Are you sure you want to delete webapp "${name}"? This action cannot be undone.`;
+      if (!confirm(warning)) {
+        return true;
+      }
+
+      window.WebappIntegration.deleteWebapp(threadId, slug)
+        .then(() => {
+          this.requestSidebarRefresh({
+            webapps: true,
+            reason: 'webapp_delete',
+            source: 'ui',
+          });
+        })
+        .catch((err) => {
+          console.error('Webapp deletion failed', err);
+          alert('Failed to delete webapp.');
+        });
       return true;
     },
 

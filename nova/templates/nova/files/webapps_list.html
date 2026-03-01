@@ -8,6 +8,9 @@
             <div class="fw-semibold text-truncate">
               {{ app.name|default:app.slug }}
             </div>
+            <div class="text-muted small text-truncate">
+              {{ app.slug }}
+            </div>
             <div class="text-muted small d-none d-xl-block">
               {% trans "Updated" %} {{ app.updated_at|date:"Y-m-d H:i" }}
             </div>
@@ -25,6 +28,15 @@
             <a href="{{ app.public_url }}" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer" title="{% trans 'Open in new tab' %}" aria-label="{% trans 'Open in new tab' %}">
               <i class="bi bi-box-arrow-up-right"></i>
             </a>
+            <button type="button"
+                    class="btn btn-outline-danger webapp-delete-btn"
+                    data-thread-id="{{ thread.id }}"
+                    data-slug="{{ app.slug }}"
+                    data-name="{{ app.name|default:app.slug }}"
+                    title="{% trans 'Delete webapp' %}"
+                    aria-label="{% trans 'Delete webapp' %}">
+              <i class="bi bi-trash"></i>
+            </button>
           </div>
         </li>
       {% endfor %}
