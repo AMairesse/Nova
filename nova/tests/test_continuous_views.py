@@ -289,11 +289,12 @@ class ContinuousViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="desktop-workspace-controls"')
-        self.assertContains(response, 'id="desktop-mode-badge"')
         self.assertContains(response, 'id="continuous-days-toggle-btn"')
         self.assertContains(response, 'id="continuous-days-toggle-icon"')
         self.assertContains(response, 'id="files-toggle-btn"')
         self.assertContains(response, 'id="files-toggle-icon"')
+        self.assertContains(response, 'desktop-view-mode-link-active')
+        self.assertNotContains(response, 'id="desktop-mode-badge"')
 
     def test_continuous_messages_includes_pending_interactions(self):
         thread = ensure_continuous_thread(self.user)

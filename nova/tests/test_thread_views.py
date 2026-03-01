@@ -68,9 +68,10 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="desktop-workspace-controls"')
-        self.assertContains(response, 'id="desktop-mode-badge"')
         self.assertContains(response, 'id="files-toggle-btn"')
         self.assertContains(response, 'id="files-toggle-icon"')
+        self.assertContains(response, 'desktop-view-mode-link-active')
+        self.assertNotContains(response, 'id="desktop-mode-badge"')
         self.assertNotContains(response, 'id="continuous-days-toggle-btn"')
 
     # ------------ message_list ------------------------------------------

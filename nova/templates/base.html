@@ -76,19 +76,12 @@
           >
             <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
           </button>
-          <span id="desktop-mode-badge" class="badge rounded-pill text-bg-secondary">
-            {% if request.path|slice:':11' == '/continuous' %}
-              {% trans "Continuous" %}
-            {% else %}
-              {% trans "Threads" %}
-            {% endif %}
-          </span>
         </div>
         {% endif %}
 
         <div class="navbar-nav me-auto">
           <a
-            class="nav-link{% if request.path|slice:':11' == '/continuous' %} active{% endif %}"
+            class="nav-link desktop-view-mode-link{% if request.path|slice:':11' == '/continuous' %} active desktop-view-mode-link-active{% endif %}"
             href="{% url 'continuous_home' %}"
             data-view-mode="continuous"
             {% if request.path|slice:':11' == '/continuous' %}aria-current="page"{% endif %}
@@ -96,7 +89,7 @@
             <i class="bi bi-infinity me-1"></i>{% trans "Continuous" %}
           </a>
           <a
-            class="nav-link{% if request.path == '/' %} active{% endif %}"
+            class="nav-link desktop-view-mode-link{% if request.path == '/' %} active desktop-view-mode-link-active{% endif %}"
             href="{% url 'index' %}"
             data-view-mode="threads"
             {% if request.path == '/' %}aria-current="page"{% endif %}

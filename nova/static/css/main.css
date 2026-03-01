@@ -108,10 +108,16 @@ body {
     justify-content: center;
 }
 
-#desktop-mode-badge {
-    font-size: 0.72rem;
-    letter-spacing: 0.02em;
-    padding: 0.35rem 0.55rem;
+.desktop-view-mode-link {
+    border-radius: 999px;
+    padding: 0.3rem 0.65rem !important;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.desktop-view-mode-link-active {
+    color: var(--bs-primary) !important;
+    background-color: rgba(var(--bs-primary-rgb), 0.12);
+    font-weight: 600;
 }
 
 /* Main content area height calculation - use flex instead of fixed vh */
