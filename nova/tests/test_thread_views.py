@@ -101,6 +101,16 @@ class MainViewsTests(TestCase):
                                    {"thread_id": str(foreign.id)})
         request.user = self.user
 
+    def test_message_list_preserves_user_line_breaks(self):
+        thread = Thread.objects.create(user=self.user, subject="Multiline")
+        thread.add_message("Line 1\nLine 2", actor=Actor.USER)
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
+
     # ------------ create_thread -----------------------------------------
 
     def test_create_thread_returns_json_and_renders_item(self):

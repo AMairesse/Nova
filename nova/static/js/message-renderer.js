@@ -6,6 +6,10 @@
     // MESSAGE RENDERER
     // ============================================================================
     window.MessageRenderer = class MessageRenderer {
+        static renderUserText(text) {
+            return window.DOMUtils.escapeHTML(text || '').replace(/\r\n|\r|\n/g, '<br>');
+        }
+
         static createMessageElement(messageData, thread_id) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message mb-3';
@@ -19,7 +23,7 @@
                 messageDiv.innerHTML = `
           <div class="card border-primary">
             <div class="card-body py-2">
-              <strong class="text-primary">${window.DOMUtils.escapeHTML(messageData.text)}</strong>
+              <div class="user-message-text text-primary">${this.renderUserText(messageData.text)}</div>
               ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
             </div>
           </div>
@@ -34,7 +38,7 @@
                 messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
-              <div class="streaming-content">${window.DOMUtils.escapeHTML(messageData.text)}</div>
+              <div class="streaming-content assistant-markdown">${window.DOMUtils.escapeHTML(messageData.text)}</div>
             </div>
             <div class="card-footer py-1 text-muted small d-flex justify-content-end align-items-center d-none">
               ${compactLinkHtml}

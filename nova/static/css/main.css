@@ -119,6 +119,92 @@ body {
 }
 
 /* ============================================
+   Chat Message Typography
+   ============================================ */
+
+.user-message-text {
+    font-weight: 600;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.assistant-markdown,
+.streaming-content {
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+}
+
+.assistant-markdown p,
+.streaming-content p {
+    margin-bottom: 0.6rem;
+}
+
+.assistant-markdown p:last-child,
+.streaming-content p:last-child {
+    margin-bottom: 0;
+}
+
+.assistant-markdown :is(ul, ol),
+.streaming-content :is(ul, ol) {
+    margin: 0.5rem 0 0.65rem;
+    padding-left: 1.45rem;
+}
+
+.assistant-markdown :is(ul, ol) :is(ul, ol),
+.streaming-content :is(ul, ol) :is(ul, ol) {
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+    padding-left: 1.25rem;
+}
+
+.assistant-markdown li,
+.streaming-content li {
+    margin-bottom: 0.2rem;
+}
+
+.assistant-markdown pre,
+.streaming-content pre {
+    margin: 0.5rem 0 0.7rem;
+    padding: 0.75rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.5rem;
+    background-color: var(--bs-light-bg-subtle);
+    overflow-x: auto;
+}
+
+.assistant-markdown :not(pre)>code,
+.streaming-content :not(pre)>code {
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.3rem;
+    background-color: var(--bs-light-bg-subtle);
+}
+
+.assistant-markdown blockquote,
+.streaming-content blockquote {
+    margin: 0.55rem 0;
+    padding: 0.1rem 0 0.1rem 0.75rem;
+    border-left: 0.22rem solid var(--bs-border-color);
+    color: var(--bs-secondary-color);
+}
+
+.assistant-markdown table,
+.streaming-content table {
+    display: block;
+    max-width: 100%;
+    margin: 0.5rem 0 0.75rem;
+    overflow-x: auto;
+    border-collapse: collapse;
+}
+
+.assistant-markdown th,
+.assistant-markdown td,
+.streaming-content th,
+.streaming-content td {
+    border: 1px solid var(--bs-border-color);
+    padding: 0.35rem 0.55rem;
+}
+
+/* ============================================
    TOUCH-FRIENDLY IMPROVEMENTS
    ============================================ */
 
@@ -190,7 +276,7 @@ body {
         color: white;
     }
 
-    .message .card.border-primary .card-body strong.text-primary {
+    .message .card.border-primary .card-body .user-message-text {
         color: white !important;
     }
 

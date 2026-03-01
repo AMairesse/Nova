@@ -1,6 +1,7 @@
 # nova/tasks/TaskProgressHandler.py
 import logging
 from uuid import UUID
+from time import monotonic
 from typing import Any, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -34,6 +35,10 @@ class TaskProgressHandler(AsyncCallbackHandler):
         self.token_count = 0
         self._last_persist_count = 0
         self._persist_interval = 50  # Persist every 50 tokens
+        self._stream_flush_interval_seconds = 0.25
+        self._last_stream_flush_at = monotonic()
+        self._last_stream_html = None
+        self._stream_has_pending_changes = False
 
     async def publish_update(self, message_type, data):
         await self.channel_layer.group_send(
@@ -68,6 +73,8 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         Send a message to the client when an error occurs
         '''
+        if self.tool_depth == 0:
+            await self._flush_stream_chunk()
         await self.publish_update('task_error', {'message': error_msg, 'category': error_category})
         self._queue_push_notification(status="failed")
 
@@ -146,14 +153,26 @@ class TaskProgressHandler(AsyncCallbackHandler):
             # Send only chunks from the root run
             if self.tool_depth == 0:
                 self.final_chunks.append(token)
-                full_response = ''.join(self.final_chunks)
-                clean_html = markdown_to_html(full_response)
-                await self.on_chunk(clean_html)
+                self._stream_has_pending_changes = True
+                current_html = None
+                now = monotonic()
+                sentence_boundary = token.endswith((".", "!", "?", ";", ":"))
+                line_boundary = "\n" in token
+                should_flush = (
+                    line_boundary
+                    or sentence_boundary
+                    or (now - self._last_stream_flush_at) >= self._stream_flush_interval_seconds
+                )
+
+                if should_flush:
+                    current_html = await self._flush_stream_chunk()
 
                 # Persist periodically for recovery
                 self.token_count += 1
                 if self.token_count - self._last_persist_count >= self._persist_interval:
-                    await self._persist_current_response(clean_html)
+                    if current_html is None:
+                        current_html = self._render_current_response()
+                    await self._persist_current_response(current_html)
                     self._last_persist_count = self.token_count
             else:
                 # If a sub agent is generating a response,
@@ -171,11 +190,28 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         try:
             if self.tool_depth == 0:
+                await self._flush_stream_chunk()
                 await self.on_progress("Agent finished")
             else:
                 await self.on_progress("Sub-agent finished")
         except Exception as e:
             logger.error(f"Error in on_llm_end: {e}")
+
+    def _render_current_response(self):
+        return markdown_to_html(''.join(self.final_chunks))
+
+    async def _flush_stream_chunk(self):
+        if not self.final_chunks or not self._stream_has_pending_changes:
+            return self._last_stream_html
+
+        clean_html = self._render_current_response()
+        if clean_html != self._last_stream_html:
+            await self.on_chunk(clean_html)
+            self._last_stream_html = clean_html
+
+        self._last_stream_flush_at = monotonic()
+        self._stream_has_pending_changes = False
+        return clean_html
 
     async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID,
                             parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None,

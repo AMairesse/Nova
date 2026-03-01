@@ -80,7 +80,7 @@
         {% elif message.actor == Actor.USER %}
         <div class="card border-primary">
           <div class="card-body py-2">
-            <strong class="text-primary">{{ message.rendered_html }}</strong>
+            <div class="user-message-text text-primary">{{ message.text|linebreaksbr }}</div>
             {% if message.file_count %}
               <div class="mt-2 small text-muted">
                 {% blocktrans count file_count=message.file_count %}
@@ -95,7 +95,7 @@
         {% elif message.actor == Actor.AGENT %}
         <div class="card border-secondary">
           <div class="card-body py-2">
-            {{ message.rendered_html }}
+            <div class="assistant-markdown">{{ message.rendered_html }}</div>
           </div>
           <!-- Context indication -->
           {% if message.internal_data.max_context %}

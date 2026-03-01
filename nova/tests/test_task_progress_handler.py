@@ -1,3 +1,4 @@
+from uuid import UUID
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
@@ -43,3 +44,25 @@ class TaskProgressHandlerTests(IsolatedAsyncioTestCase):
             thread_mode="thread",
             status="completed",
         )
+
+    async def test_streaming_flushes_on_sentence_boundary_and_llm_end(self):
+        channel_layer = AsyncMock()
+        handler = TaskProgressHandler(task_id=789, channel_layer=channel_layer)
+        handler._stream_flush_interval_seconds = 60
+        handler.on_chunk = AsyncMock()
+
+        with patch("nova.tasks.TaskProgressHandler.markdown_to_html", side_effect=lambda text: f"<p>{text}</p>"):
+            await handler.on_llm_new_token("Hello", run_id=UUID(int=1))
+            await handler.on_llm_new_token(" world", run_id=UUID(int=1))
+            handler.on_chunk.assert_not_awaited()
+
+            await handler.on_llm_new_token(".", run_id=UUID(int=1))
+            self.assertEqual(handler.on_chunk.await_count, 1)
+            self.assertIn("Hello world.", handler.on_chunk.await_args_list[0].args[0])
+
+            await handler.on_llm_new_token(" Next", run_id=UUID(int=1))
+            self.assertEqual(handler.on_chunk.await_count, 1)
+
+            await handler.on_llm_end(response={}, run_id=UUID(int=1))
+            self.assertEqual(handler.on_chunk.await_count, 2)
+            self.assertIn("Hello world. Next", handler.on_chunk.await_args_list[1].args[0])
