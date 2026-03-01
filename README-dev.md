@@ -143,3 +143,11 @@ To keep tests deterministic for WebPush, `nova/settings_test.py` explicitly forc
 - `WEBPUSH_VAPID_SUBJECT = ''`
 
 This avoids local `.env` values unexpectedly enabling push features during test runs.
+
+## WebApp Skill Authoring Pattern
+
+For the `WebApp` skill, code generation is agent-authored by default:
+
+- The agent should generate `files` content from the user's request and call `webapp_create(name, files)`.
+- User-provided snippets are optional inputs; when present, they should be integrated/adapted by the agent.
+- `webapp_create` requires a non-empty `files` object including `index.html`.

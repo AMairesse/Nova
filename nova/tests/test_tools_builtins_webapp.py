@@ -20,6 +20,12 @@ class WebAppBuiltinsTests(TestCase):
         self.assertIsInstance(instructions, list)
         self.assertTrue(any(str(i).strip() for i in instructions))
 
+    def test_get_skill_instructions_promote_agent_authored_code(self):
+        instructions = webapp_tools.get_skill_instructions()
+        rendered = "\n".join(str(i) for i in instructions)
+        self.assertIn("generate the initial code yourself", rendered)
+        self.assertIn("do not call it with empty files", rendered)
+
 
 class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
     def setUp(self):
@@ -36,6 +42,16 @@ class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, "Webapp name is required.")
 
+    async def test_upsert_create_empty_files_returns_actionable_error(self):
+        result = await webapp_tools.upsert_webapp(
+            None,
+            {},
+            self.agent,
+            name="Dashboard",
+        )
+        self.assertIn("generated source files", result)
+        self.assertIn("call webapp_create again", result)
+
     async def test_upsert_create_requires_index_file(self):
         result = await webapp_tools.upsert_webapp(
             None,
@@ -43,7 +59,8 @@ class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
             self.agent,
             name="Dashboard",
         )
-        self.assertEqual(result, "webapp_create requires an 'index.html' entry file.")
+        self.assertIn("requires an 'index.html' entry file", result)
+        self.assertIn("include it in files", result)
 
     async def test_upsert_create_returns_name_and_public_url(self):
         fake_webapp = SimpleNamespace(slug="demo", name="Dashboard", thread_id=self.thread.id)
@@ -97,7 +114,8 @@ class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
                     name="Legacy",
                 )
 
-        self.assertIn("no index.html entry file", result)
+        self.assertIn("has no 'index.html' entry file", result)
+        self.assertIn("include it in this webapp_update call", result)
 
     async def test_list_webapps_returns_items(self):
         rows = [
@@ -154,6 +172,11 @@ class WebAppBuiltinsBehaviorTests(IsolatedAsyncioTestCase):
             names,
             {"webapp_create", "webapp_update", "webapp_list", "webapp_read", "webapp_delete"},
         )
+
+        create_tool = next(tool for tool in tools if tool.name == "webapp_create")
+        create_schema = create_tool.args_schema
+        self.assertIn("files", create_schema["required"])
+        self.assertEqual(create_schema["properties"]["files"]["minProperties"], 1)
 
 
 class WebAppBuiltinsRealtimeTests(IsolatedAsyncioTestCase):

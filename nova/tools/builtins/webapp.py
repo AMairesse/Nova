@@ -215,9 +215,15 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
 
     if slug is None:
         if not isinstance(files, dict) or not files:
-            return "webapp_create requires at least one file and must include 'index.html'."
+            return (
+                "webapp_create needs generated source files. Build a non-empty files object from the user request "
+                "(at minimum 'index.html', optionally 'styles.css' and 'app.js') and call webapp_create again."
+            )
         if "index.html" not in files:
-            return "webapp_create requires an 'index.html' entry file."
+            return (
+                "webapp_create requires an 'index.html' entry file. Generate 'index.html' from the user's requested UI "
+                "and include it in files before retrying."
+            )
 
     is_new_webapp = False
     if slug:
@@ -242,8 +248,8 @@ async def upsert_webapp(slug: Optional[str], files: Dict[str, str], agent: LLMAg
         has_index = await sync_to_async(_has_webapp_file_sync, thread_sensitive=False)(webapp, "index.html")
         if not has_index and (not isinstance(files, dict) or "index.html" not in files):
             return (
-                "This webapp has no index.html entry file. "
-                "Provide an 'index.html' file in this update."
+                "This webapp currently has no 'index.html' entry file. Generate 'index.html' based on the user's request "
+                "and include it in this webapp_update call."
             )
         if cleaned_name is not None:
             webapp.name = cleaned_name
@@ -376,6 +382,8 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
             name="webapp_create",
             description=(
                 "Create a static web-app for the current conversation. "
+                "Generate and provide the initial files yourself from the user's request. "
+                "Do not call this tool with empty files. "
                 "You must include 'index.html' as the entry file. "
                 "Provide a user-facing name for the webapp. "
                 "Paths must be single filenames like 'index.html' or 'styles.css' (no slashes). "
@@ -392,11 +400,12 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
                     "files": {
                         "type": "object",
                         "description": (
-                            "Object mapping filename -> content. "
+                            "Object mapping filename -> content generated from the user's request. "
                             "Filenames MUST NOT contain '/', must end with .html, .css or .js, "
                             "and MUST include 'index.html' as entrypoint. "
                             "Values are the exact file contents as strings."
                         ),
+                        "minProperties": 1,
                         "additionalProperties": {"type": "string"},
                     },
                 },
@@ -409,6 +418,7 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
             description=(
                 "Update an existing static web-app for the current conversation (partial upsert). "
                 "Use this when you already know the webapp slug for this conversation. "
+                "Generate or edit the file contents yourself from the user's requested changes. "
                 "Only .html, .css, .js files are allowed; other files are rejected. "
                 "Optionally provide a new name to rename the webapp."
             ),
@@ -485,9 +495,12 @@ async def get_functions(tool, agent: LLMAgent) -> List[StructuredTool]:
 
 def get_skill_instructions(agent=None, tools=None) -> list[str]:
     return [
+        "When the user asks for a new webapp, generate the initial code yourself and call webapp_create with name + files.",
+        "webapp_create must receive a non-empty files object with at least index.html; do not call it with empty files.",
+        "If the user provides code snippets, integrate or adapt them into the files map instead of waiting for full project code.",
         "Start with webapp_list to discover available webapps before read, update or delete operations.",
         "Use slug as canonical identifier for tool calls; treat name as a user-facing label.",
-        "Provide a clear name when creating webapps to improve sidebar readability.",
+        "Provide a clear name that matches the requested feature to improve sidebar readability.",
         "Start with webapp_read before updates when a slug already exists to avoid overwriting the wrong files.",
         "Keep updates scoped: provide only the files that must change and preserve untouched files.",
         "After create or update, share the returned public_url and name so the user can preview immediately.",
