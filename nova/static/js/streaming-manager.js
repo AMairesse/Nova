@@ -140,6 +140,14 @@
 
             socket.onopen = () => startHeartbeat();
 
+            const requestSidebarRefresh = (payload) => {
+                if (window.FileManager?.requestSidebarRefresh) {
+                    window.FileManager.requestSidebarRefresh(payload);
+                    return;
+                }
+                document.dispatchEvent(new CustomEvent('nova:sidebar-refresh-request', { detail: payload }));
+            };
+
             // Mapping des handlers pour les types de messages
             const messageHandlers = {
                 'pong': (data) => {
@@ -190,6 +198,12 @@
                         this.updateThreadSubject(data.thread_id, data.thread_subject);
                     }
                     this.onStreamComplete(taskId);
+                    requestSidebarRefresh({
+                        files: true,
+                        webapps: true,
+                        reason: 'task_end_fallback',
+                        source: 'task-ws',
+                    });
                 },
                 'thread_subject_updated': (data) => {
                     this.updateThreadSubject(data.thread_id, data.thread_subject);
@@ -215,6 +229,12 @@
 
                 'task_error': (data) => {
                     this.onTaskError(taskId, data);
+                    requestSidebarRefresh({
+                        files: true,
+                        webapps: true,
+                        reason: 'task_end_fallback',
+                        source: 'task-ws',
+                    });
                 },
                 'summarization_complete': (data) => {
                     this.onSummarizationComplete(data);
@@ -436,7 +456,7 @@
             // Show error message
             const progressLogs = document.getElementById('progress-logs');
             if (progressLogs) {
-                progressLogs.textContent = error.message;
+                progressLogs.textContent = error.message || gettext('An error occurred.');
             }
             // Re-enable input area on error
             this.setInputAreaDisabled(false);

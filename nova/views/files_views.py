@@ -7,7 +7,7 @@ from django.shortcuts import render, get_object_or_404
 from django.views import View
 from django.views.decorators.http import require_POST, require_GET
 from django.views.decorators.csrf import csrf_protect
-from asgiref.sync import sync_to_async
+from asgiref.sync import sync_to_async, async_to_sync
 import logging
 
 from nova.models.Thread import Thread
@@ -17,6 +17,7 @@ from nova.file_utils import (
     batch_upload_files,
     MAX_FILE_SIZE
 )
+from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,9 @@ async def file_upload(request, thread_id):
             {"type": "file_progress", "progress": 100}
         )
 
+        if created:
+            await publish_file_update(thread_id, "upload", channel_layer=channel_layer)
+
         if errors:
             return JsonResponse({'success': False, 'errors': errors},
                                 status=400)
@@ -136,5 +140,7 @@ class FileDeleteView(LoginRequiredMixin, View):
             return JsonResponse({'error': 'File not found or unauthorized'},
                                 status=403)
 
+        thread_id = file.thread_id
         file.delete()  # Uses model's delete for MinIO/DB
+        async_to_sync(publish_file_update)(thread_id, "file_delete")
         return JsonResponse({'success': True})

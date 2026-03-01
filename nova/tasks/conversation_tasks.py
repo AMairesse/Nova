@@ -11,6 +11,7 @@ from asgiref.sync import sync_to_async
 from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 
@@ -20,6 +21,7 @@ from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
 from nova.models.UserObjects import UserProfile
 from nova.tasks.conversation_embedding_tasks import compute_day_segment_embedding_task
+from nova.tasks.notification_tasks import send_task_webpush_notification
 from nova.utils import strip_thinking_blocks
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,28 @@ async def _publish_task_update(task_id: str | None, message_type: str, data: dic
         )
     except Exception:
         logger.exception("[summarize_day_segment] websocket publish failed task_id=%s", task_id)
+
+
+def _enqueue_push_notification(
+    *,
+    user_id: int | None,
+    task_id: str | None,
+    thread_id: int | None,
+    thread_mode: str | None,
+    status: str,
+) -> None:
+    if not user_id or not bool(getattr(settings, "WEBPUSH_ENABLED", False)):
+        return
+    try:
+        send_task_webpush_notification.delay(
+            user_id=user_id,
+            task_id=task_id,
+            thread_id=thread_id,
+            thread_mode=thread_mode,
+            status=status,
+        )
+    except Exception:
+        logger.exception("[summarize_day_segment] failed to enqueue push task_id=%s", task_id)
 
 
 def _format_messages_for_summary(messages: List[Message]) -> str:
@@ -213,6 +237,13 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
             "task_error",
             {"message": "No default agent configured for summary generation", "category": "summary"},
         )
+        _enqueue_push_notification(
+            user_id=getattr(user, "id", None),
+            task_id=task_id,
+            thread_id=getattr(segment, "thread_id", None),
+            thread_mode=getattr(getattr(segment, "thread", None), "mode", None),
+            status="failed",
+        )
         return {"status": "error", "error": "no_default_agent", "day_segment_id": day_segment_id}
 
     transcript = _format_messages_for_summary(messages)
@@ -234,6 +265,13 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                 "thread_id": segment.thread_id,
                 "thread_subject": segment.thread.subject,
             },
+        )
+        _enqueue_push_notification(
+            user_id=getattr(user, "id", None),
+            task_id=task_id,
+            thread_id=getattr(segment, "thread_id", None),
+            thread_mode=getattr(getattr(segment, "thread", None), "mode", None),
+            status="completed",
         )
         return {"status": "ok", "day_segment_id": day_segment_id, "summary": ""}
 
@@ -305,6 +343,13 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                 "thread_subject": segment.thread.subject,
             },
         )
+        _enqueue_push_notification(
+            user_id=getattr(user, "id", None),
+            task_id=task_id,
+            thread_id=thread_id,
+            thread_mode=getattr(getattr(segment, "thread", None), "mode", None),
+            status="completed",
+        )
 
         logger.info(
             "[summarize_day_segment] ok day_segment_id=%s mode=%s chars=%s",
@@ -362,6 +407,14 @@ def summarize_day_segment_task(self, day_segment_id: int, mode: str = "heuristic
                     "task_error",
                     {"message": str(e), "category": "summary"},
                 )
+            )
+            segment = DaySegment.objects.select_related("thread").filter(id=day_segment_id).first()
+            _enqueue_push_notification(
+                user_id=getattr(segment, "user_id", None),
+                task_id=task_id,
+                thread_id=getattr(segment, "thread_id", None),
+                thread_mode=getattr(getattr(segment, "thread", None), "mode", None),
+                status="failed",
             )
             raise
 

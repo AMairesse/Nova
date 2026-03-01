@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 class FilesToolsTests(IsolatedAsyncioTestCase):
     def setUp(self):
@@ -35,8 +35,10 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
                 new_callable=AsyncMock,
                 return_value=([{"id": 99}], []),
             ):
-                result = await self.files_tools.create_file(2, SimpleNamespace(id=1), "test.txt", "hello")
+                with patch("nova.tools.files.publish_file_update", new_callable=AsyncMock) as mocked_publish:
+                    result = await self.files_tools.create_file(2, SimpleNamespace(id=1), "test.txt", "hello")
         self.assertEqual(result, "File created: ID 99")
+        mocked_publish.assert_awaited_once_with(2, "file_create")
 
     async def test_create_file_returns_pipeline_errors(self):
         fake_thread = SimpleNamespace(id=2)
@@ -60,6 +62,16 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
             ):
                 result = await self.files_tools.create_file(2, SimpleNamespace(id=1), "bad.bin", "x")
         self.assertIn("Error creating file: upload failed", result)
+
+    async def test_async_delete_file_publishes_refresh_event(self):
+        fake_file = SimpleNamespace(thread_id=51, delete=MagicMock())
+        with patch("nova.tools.files.async_get_object_or_404", new_callable=AsyncMock, return_value=fake_file):
+            with patch("nova.tools.files.publish_file_update", new_callable=AsyncMock) as mocked_publish:
+                result = await self.files_tools.async_delete_file(13)
+
+        self.assertEqual(result, "File deleted.")
+        fake_file.delete.assert_called_once()
+        mocked_publish.assert_awaited_once_with(51, "file_delete")
 
     async def test_read_file_chunk_denies_cross_thread_access(self):
         fake_user = SimpleNamespace(id=1)

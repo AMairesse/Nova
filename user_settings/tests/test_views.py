@@ -1,6 +1,6 @@
 # user_settings/tests/test_views.py
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from nova.models.UserObjects import UserParameters
@@ -62,8 +62,10 @@ class GeneralSettingsViewTest(TestCase):
         self.assertTemplateUsed(response, "user_settings/general_form.html")
         self.assertContains(response, "Langfuse Configuration")
         self.assertContains(response, "Continuous mode")
+        self.assertContains(response, "Task notifications")
         self.assertContains(response, "API Token Management")
 
+    @override_settings(WEBPUSH_ENABLED=False)
     def test_update_general_settings_form_htmx_refreshes_fragment(self):
         payload = {
             "allow_langfuse": "on",
@@ -71,6 +73,7 @@ class GeneralSettingsViewTest(TestCase):
             "langfuse_secret_key": "sk_test",
             "langfuse_host": "https://langfuse.example.com",
             "continuous_default_messages_limit": "75",
+            "task_notifications_enabled": "on",
             "api_token_status": "",
         }
         response = self.client.post(
@@ -87,6 +90,63 @@ class GeneralSettingsViewTest(TestCase):
             self.user_parameters.langfuse_host, "https://langfuse.example.com"
         )
         self.assertEqual(self.user_parameters.continuous_default_messages_limit, 75)
+        # Server-side push is disabled by default in tests, so opt-in must stay false.
+        self.assertFalse(self.user_parameters.task_notifications_enabled)
+
+    @override_settings(WEBPUSH_ENABLED=False)
+    def test_notifications_option_is_disabled_when_server_is_off(self):
+        response = self.client.get(self.partial_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Disabled by the administrator")
+        self.assertContains(response, 'name="task_notifications_enabled"', html=False)
+        self.assertContains(response, 'id="task-notifications-enable-device-btn"', html=False)
+        self.assertRegex(
+            response.content.decode(),
+            r'name="task_notifications_enabled"[^>]*disabled',
+        )
+        self.assertRegex(
+            response.content.decode(),
+            r'id="task-notifications-enable-device-btn"[^>]*disabled',
+        )
+
+    @override_settings(WEBPUSH_ENABLED=False)
+    def test_notifications_opt_in_is_preserved_when_server_is_off(self):
+        self.user_parameters.task_notifications_enabled = True
+        self.user_parameters.save(update_fields=["task_notifications_enabled"])
+
+        payload = {
+            "allow_langfuse": "",
+            "langfuse_public_key": "",
+            "langfuse_secret_key": "",
+            "langfuse_host": "",
+            "continuous_default_messages_limit": "60",
+            "task_notifications_enabled": "",
+            "api_token_status": "",
+        }
+        response = self.client.post(
+            self.partial_url, payload, HTTP_HX_REQUEST="true"
+        )
+        self.assertEqual(response.status_code, 204)
+
+        self.user_parameters.refresh_from_db()
+        self.assertTrue(self.user_parameters.task_notifications_enabled)
+
+    @override_settings(
+        WEBPUSH_ENABLED=True,
+        WEBPUSH_VAPID_PUBLIC_KEY="pub",
+        WEBPUSH_VAPID_PRIVATE_KEY="priv",
+        WEBPUSH_VAPID_SUBJECT="mailto:test@example.com",
+    )
+    def test_notifications_option_is_enabled_when_server_is_ready(self):
+        response = self.client.get(self.partial_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Disabled by the administrator")
+        self.assertNotContains(response, "Server configuration is incomplete")
+        self.assertContains(response, "Enable on this device/browser")
+        self.assertNotRegex(
+            response.content.decode(),
+            r'id="task-notifications-enable-device-btn"[^>]*disabled',
+        )
 
     def test_update_general_settings_form_invalid_host_returns_errors(self):
         payload = {

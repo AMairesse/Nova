@@ -606,6 +606,14 @@
         setRegenerateBusy(true);
         setSummaryEvent(t('Summary regeneration in progress…'), 'muted');
 
+        const requestSidebarRefresh = (payload) => {
+            if (window.FileManager?.requestSidebarRefresh) {
+                window.FileManager.requestSidebarRefresh(payload);
+                return;
+            }
+            document.dispatchEvent(new CustomEvent('nova:sidebar-refresh-request', { detail: payload }));
+        };
+
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         const wsUrl = `${protocol}://${window.location.host}/ws/task/${taskId}/`;
         const socket = new WebSocket(wsUrl);
@@ -637,12 +645,24 @@
                 if (state.selectedDay === day) {
                     await loadSummary(day);
                 }
+                requestSidebarRefresh({
+                    files: true,
+                    webapps: true,
+                    reason: 'task_end_fallback',
+                    source: 'continuous-summary-ws',
+                });
                 setRegenerateBusy(false);
                 closeSummarySocket();
                 return;
             }
             if (data.type === 'task_error') {
                 setSummaryEvent(data.message || t('Failed to regenerate summary.'), 'danger');
+                requestSidebarRefresh({
+                    files: true,
+                    webapps: true,
+                    reason: 'task_end_fallback',
+                    source: 'continuous-summary-ws',
+                });
                 setRegenerateBusy(false);
                 closeSummarySocket();
             }

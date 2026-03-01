@@ -2,6 +2,7 @@
 from django.test import TestCase, RequestFactory
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpResponse
 from django.urls import reverse
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -60,6 +61,19 @@ class MainViewsTests(TestCase):
         threads = list(captured["context"]["threads"])
         self.assertEqual({t.id for t in threads}, {t1.id, t2.id})
 
+    def test_index_exposes_desktop_workspace_controls(self):
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("index"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="desktop-workspace-controls"')
+        self.assertContains(response, 'id="files-toggle-btn"')
+        self.assertContains(response, 'id="files-toggle-icon"')
+        self.assertContains(response, 'desktop-view-mode-link-active')
+        self.assertNotContains(response, 'id="desktop-mode-badge"')
+        self.assertNotContains(response, 'id="continuous-days-toggle-btn"')
+
     # ------------ message_list ------------------------------------------
 
     def test_message_list_sanitizes_html_and_requires_ownership(self):
@@ -99,6 +113,32 @@ class MainViewsTests(TestCase):
         request = self.factory.get("/app/messages/",
                                    {"thread_id": str(foreign.id)})
         request.user = self.user
+
+    def test_message_list_preserves_user_line_breaks(self):
+        thread = Thread.objects.create(user=self.user, subject="Multiline")
+        thread.add_message("Line 1\nLine 2", actor=Actor.USER)
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
+
+    def test_message_list_prefers_agent_display_markdown_when_available(self):
+        thread = Thread.objects.create(user=self.user, subject="Agent display")
+        agent_message = thread.add_message("Final answer only", actor=Actor.AGENT)
+        agent_message.internal_data = {
+            "display_markdown": "First explanation paragraph.\n\nFinal answer only",
+        }
+        agent_message.save(update_fields=["internal_data"])
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn("First explanation paragraph.", html)
+        self.assertIn("Final answer only", html)
 
     # ------------ create_thread -----------------------------------------
 
@@ -217,6 +257,50 @@ class MainViewsTests(TestCase):
         self.assertEqual(task.thread_id, thread_id)
         self.assertEqual(task.agent_config_id, agent.id)
         self.assertEqual(task.status, TaskStatus.PENDING)
+
+    @patch("nova.views.thread_views.publish_file_update", new_callable=AsyncMock)
+    @patch("nova.views.thread_views.batch_upload_files", new_callable=AsyncMock)
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_with_attachment_emits_sidebar_update(
+        self,
+        mock_delay,
+        mocked_batch_upload,
+        mocked_publish_update,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-Attach",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Attach Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Attachment thread")
+        mocked_batch_upload.return_value = ([{"id": 101, "path": "/note.txt"}], [])
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Hello with file",
+                "selected_agent": str(agent.id),
+                "files": [SimpleUploadedFile("note.txt", b"hello")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "OK")
+        mocked_batch_upload.assert_awaited_once()
+        mocked_publish_update.assert_awaited_once_with(thread.id, "attachment_upload")
 
     # ------------ running_tasks -----------------------------------------
 

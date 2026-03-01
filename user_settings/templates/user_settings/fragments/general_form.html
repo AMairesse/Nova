@@ -57,6 +57,70 @@
       </div>
     </div>
 
+    <!-- Task Notifications Section -->
+    {% translate "Browser permission not requested." as msg_browser_permission_not_requested %}
+    {% translate "Push notifications are not supported in this browser." as msg_push_not_supported %}
+    {% translate "Server-side Web Push is not available." as msg_server_not_available %}
+    {% translate "Browser permission denied." as msg_browser_permission_denied %}
+    {% translate "This device/browser is subscribed." as msg_device_subscribed %}
+    {% translate "Browser permission granted (not yet subscribed)." as msg_permission_granted_not_subscribed %}
+    {% translate "Server-side Web Push is disabled or incomplete." as msg_server_disabled_or_incomplete %}
+    {% translate "Server push configuration is not ready." as msg_server_not_ready %}
+    {% translate "Notifications are blocked in browser settings." as msg_notifications_blocked %}
+    {% translate "Notification permission was not granted." as msg_permission_not_granted %}
+    {% translate "Device/browser notifications enabled. Click Save Settings to persist." as msg_device_enabled_save %}
+    {% translate "Device/browser notifications disabled. Click Save Settings to persist." as msg_device_disabled_save %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">{% trans "Task notifications" %}</h5>
+      </div>
+      <div
+        class="card-body"
+        id="task-notifications-controls"
+        data-server-state="{{ push_server_state }}"
+        data-msg-browser-permission-not-requested="{{ msg_browser_permission_not_requested }}"
+        data-msg-push-not-supported="{{ msg_push_not_supported }}"
+        data-msg-server-not-available="{{ msg_server_not_available }}"
+        data-msg-browser-permission-denied="{{ msg_browser_permission_denied }}"
+        data-msg-device-subscribed="{{ msg_device_subscribed }}"
+        data-msg-permission-granted-not-subscribed="{{ msg_permission_granted_not_subscribed }}"
+        data-msg-server-disabled-or-incomplete="{{ msg_server_disabled_or_incomplete }}"
+        data-msg-server-not-ready="{{ msg_server_not_ready }}"
+        data-msg-notifications-blocked="{{ msg_notifications_blocked }}"
+        data-msg-permission-not-granted="{{ msg_permission_not_granted }}"
+        data-msg-device-enabled-save="{{ msg_device_enabled_save }}"
+        data-msg-device-disabled-save="{{ msg_device_disabled_save }}"
+      >
+        {% if push_server_state == "disabled" %}
+          <div class="alert alert-warning" role="alert">
+            {% trans "Disabled by the administrator. Web Push is not enabled on this server." %}
+          </div>
+        {% elif push_server_state == "misconfigured" %}
+          <div class="alert alert-warning" role="alert">
+            {% trans "Server configuration is incomplete. Add VAPID keys to enable notifications." %}
+          </div>
+        {% endif %}
+        {{ form.task_notifications_enabled|as_crispy_field }}
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+          <button
+            type="button"
+            id="task-notifications-enable-device-btn"
+            class="btn btn-outline-primary btn-sm"
+            {% if push_server_state != "ready" %}disabled{% endif %}
+          >
+            {% trans "Enable on this device/browser" %}
+          </button>
+          <span
+            id="task-notifications-device-status"
+            class="badge rounded-pill text-bg-secondary"
+          >
+            {% trans "Checking..." %}
+          </span>
+        </div>
+        <div id="task-notifications-device-message" class="small text-muted mt-2"></div>
+      </div>
+    </div>
+
     <!-- API Token Management Section -->
     <div class="card mb-4">
       <div class="card-header">

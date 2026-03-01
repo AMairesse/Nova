@@ -1,14 +1,10 @@
 """Embeddings utilities for Nova.
 
-Initial scope:
-- Provide a single function to compute an embedding vector (1024 dims) from text.
-- Provider selection:
-  1) System llama.cpp if configured (settings.LLAMA_CPP_SERVER_URL present)
-  2) Custom HTTP endpoint if configured (settings.MEMORY_EMBEDDINGS_URL)
-  3) Disabled (return None)
-
-The actual HTTP contract is intentionally minimal for now; the caller is expected
-to handle the disabled case and store `state=error` or keep `pending`.
+Provider selection is shared between sync/async paths:
+1) System llama.cpp (`LLAMA_CPP_SERVER_URL` + `LLAMA_CPP_MODEL`)
+2) Per-user custom HTTP endpoint (`UserParameters`)
+3) Deployment-level custom HTTP endpoint (`MEMORY_EMBEDDINGS_URL`)
+4) Disabled (return ``None``)
 """
 
 from __future__ import annotations
@@ -57,6 +53,22 @@ def get_custom_http_provider(
     )
 
 
+def _get_system_llamacpp_provider() -> Optional[EmbeddingsProvider]:
+    llama_url = getattr(settings, "LLAMA_CPP_SERVER_URL", None)
+    llama_model = getattr(settings, "LLAMA_CPP_MODEL", None)
+    if llama_url and llama_model:
+        return EmbeddingsProvider(provider_type="llama.cpp", base_url=llama_url, model=llama_model)
+    return None
+
+
+def _get_env_custom_http_provider() -> Optional[EmbeddingsProvider]:
+    return get_custom_http_provider(
+        base_url=getattr(settings, "MEMORY_EMBEDDINGS_URL", None),
+        model=getattr(settings, "MEMORY_EMBEDDINGS_MODEL", None),
+        api_key=getattr(settings, "MEMORY_EMBEDDINGS_API_KEY", None),
+    )
+
+
 def get_embeddings_provider(*, user_id: int | None = None) -> Optional[EmbeddingsProvider]:
     """Return the active embeddings provider.
 
@@ -70,16 +82,10 @@ def get_embeddings_provider(*, user_id: int | None = None) -> Optional[Embedding
     (as requested) so changes take effect immediately.
     """
 
-    # 1) llama.cpp embeddings model (system provider-like)
-    llama_url = getattr(settings, "MEMORY_EMBEDDINGS_URL", None)
-    llama_model = getattr(settings, "MEMORY_EMBEDDINGS_MODEL", None) or ""
-    if llama_url:
-        return EmbeddingsProvider(
-            provider_type="custom_http",
-            base_url=llama_url,
-            model=llama_model,
-            api_key=None,
-        )
+    # 1) llama.cpp (system provider)
+    system_provider = _get_system_llamacpp_provider()
+    if system_provider:
+        return system_provider
 
     # 2) Per-user custom endpoint (DB)
     if user_id is not None:
@@ -93,7 +99,8 @@ def get_embeddings_provider(*, user_id: int | None = None) -> Optional[Embedding
                 api_key=(params.memory_embeddings_api_key or None),
             )
 
-    return None
+    # 3) Deployment-level env custom endpoint
+    return _get_env_custom_http_provider()
 
 
 async def aget_embeddings_provider(*, user_id: int | None = None) -> Optional[EmbeddingsProvider]:
@@ -103,11 +110,10 @@ async def aget_embeddings_provider(*, user_id: int | None = None) -> Optional[Em
     you want to read per-user configuration from the DB.
     """
 
-    # 1) llama.cpp (system provider-like)
-    llama_url = getattr(settings, "LLAMA_CPP_SERVER_URL", None)
-    llama_model = getattr(settings, "LLAMA_CPP_MODEL", None)
-    if llama_url and llama_model:
-        return EmbeddingsProvider(provider_type="llama.cpp", base_url=llama_url, model=llama_model)
+    # 1) llama.cpp (system provider)
+    system_provider = _get_system_llamacpp_provider()
+    if system_provider:
+        return system_provider
 
     # 2) Per-user custom endpoint (DB)
     if user_id is not None:
@@ -122,8 +128,8 @@ async def aget_embeddings_provider(*, user_id: int | None = None) -> Optional[Em
                 api_key=(params.memory_embeddings_api_key or None),
             )
 
-    # 3) Legacy env-based custom endpoint
-    return get_embeddings_provider(user_id=None)
+    # 3) Deployment-level env custom endpoint
+    return _get_env_custom_http_provider()
 
 
 async def compute_embedding(

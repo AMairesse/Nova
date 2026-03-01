@@ -15,6 +15,7 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
+from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
 from nova.thread_titles import build_default_thread_subject
 from nova.utils import markdown_to_html
 import logging
@@ -23,6 +24,7 @@ from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
+from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +161,10 @@ def message_list(request):
             show_compact = (getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD)
 
             for m in messages:
-                m.rendered_html = markdown_to_html(m.text)
+                display_text = m.text
+                if m.actor == Actor.AGENT and m.internal_data:
+                    display_text = m.internal_data.get('display_markdown') or m.text
+                m.rendered_html = markdown_to_html(display_text)
                 # Add info about files used
                 if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
                     m.file_count = len(m.internal_data['file_ids'])
@@ -302,26 +307,21 @@ def add_message(request):
                 status=400,
             )
 
+    if uploaded_file_ids:
+        async_to_sync(publish_file_update)(thread.id, "attachment_upload")
+
     message = thread.add_message(new_message, actor=Actor.USER)
     message.internal_data = {'file_ids': uploaded_file_ids}
     message.save()
 
-    agent_config = None
-    if selected_agent:
-        agent_config = get_object_or_404(AgentConfig, id=selected_agent,
-                                         user=request.user)
-    else:
-        try:
-            agent_config = request.user.userprofile.default_agent
-        except UserProfile.DoesNotExist:
-            pass
-
-    task = Task.objects.create(
-        user=request.user, thread=thread,
-        agent_config=agent_config, status=TaskStatus.PENDING
+    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+    task = enqueue_message_agent_task(
+        user=request.user,
+        thread=thread,
+        agent_config=agent_config,
+        source_message_id=message.id,
+        dispatcher_task=run_ai_task_celery,
     )
-
-    run_ai_task_celery.delay(task.id, request.user.id, thread.id, agent_config.id if agent_config else None, message.id)
 
     # Prepare message data for JSON response
     message_data = {

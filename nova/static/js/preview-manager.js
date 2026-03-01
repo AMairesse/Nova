@@ -9,13 +9,20 @@
     window.PreviewManager = (function () {
         let debounceTimer = null;
         let initialized = false;
+        let activeThreadId = null;
+        let isDedicatedPreviewPage = false;
 
         function el(id) { return document.getElementById(id); }
         function getThreadId() { return window.FileManager?.currentThreadId || null; }
         function isMobile() { return window.UIUtils.isMobile(); }
 
-        function applyDefaultWidth() {
-            document.documentElement.style.setProperty('--chat-pane-width', `30%`);
+        function ensureInitialWidth() {
+            const current = getComputedStyle(document.documentElement)
+                .getPropertyValue('--chat-pane-width')
+                .trim();
+            if (!current) {
+                document.documentElement.style.setProperty('--chat-pane-width', '100%');
+            }
         }
 
         function attachIframeLoadHandler() {
@@ -65,8 +72,8 @@
             }
         }
 
-        function openPreview(slug, url) {
-            const threadId = getThreadId();
+        function openPreview(slug, url, threadId = null) {
+            const resolvedThreadId = threadId || getThreadId();
             const previewPane = el('preview-pane');
             const iframe = el('webapp-iframe');
             const openBtn = el('webapp-open-btn');
@@ -77,7 +84,7 @@
             // No persistence of last preview per thread.
 
             // Apply width and show panels
-            applyDefaultWidth();
+            document.documentElement.style.setProperty('--chat-pane-width', '30%');
             document.body.classList.add('preview-active');
             previewPane.classList.remove('d-none');
             setDesktopLayoutActive(!isMobile());
@@ -86,6 +93,9 @@
             // Set URL and labels
             const targetUrl = url || `/apps/${slug}/`;
             iframe.dataset.webappSlug = slug || '';
+            if (resolvedThreadId) {
+                activeThreadId = resolvedThreadId;
+            }
             window.UIUtils.setSpinnerVisible('webapp-spinner', true);
             iframe.setAttribute('src', targetUrl);
             if (openBtn) openBtn.setAttribute('href', targetUrl);
@@ -179,28 +189,42 @@
         }
 
         function handleThreadChanged(threadId) {
+            if (isDedicatedPreviewPage) {
+                return;
+            }
+
+            if (activeThreadId && threadId && String(activeThreadId) === String(threadId)) {
+                return;
+            }
+
             // No persistence; just close the preview when switching threads.
             if (!threadId) {
                 closePreview();
+                activeThreadId = null;
                 return;
             }
-            closePreview();
+            const previewPane = el('preview-pane');
+            if (previewPane && !previewPane.classList.contains('d-none')) {
+                closePreview();
+            }
+            activeThreadId = threadId;
         }
 
         function init() {
             if (initialized) return;
             initialized = true;
+            isDedicatedPreviewPage = Boolean(el('preview-close-floating'));
 
             attachIframeLoadHandler();
             handleResizeDrag();
             bindControls();
-            applyDefaultWidth();
+            ensureInitialWidth();
 
             // Event: open split preview
             document.addEventListener('webapp_preview_activate', (e) => {
-                const { slug, url } = (e.detail || {});
+                const { slug, url, threadId } = (e.detail || {});
                 if (!slug) return;
-                openPreview(slug, url);
+                openPreview(slug, url, threadId || null);
             });
 
             // Event: webapp update debounced
@@ -217,13 +241,15 @@
             // Initial open is handled by explicit `previewConfig` only.
             const cfg = window.NovaApp && window.NovaApp.previewConfig;
             if (cfg && cfg.threadId && cfg.slug) {
-                openPreview(cfg.slug, cfg.url || `/apps/${cfg.slug}/`);
+                openPreview(cfg.slug, cfg.url || `/apps/${cfg.slug}/`, cfg.threadId);
             }
 
             // Listen to thread changes
-            document.addEventListener('threadChanged', (e) => {
-                handleThreadChanged(e.detail?.threadId || null);
-            });
+            if (!isDedicatedPreviewPage) {
+                document.addEventListener('threadChanged', (e) => {
+                    handleThreadChanged(e.detail?.threadId || null);
+                });
+            }
         }
 
         return { init, openPreview, closePreview };

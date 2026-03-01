@@ -46,6 +46,7 @@ dependencies = [
     "psycopg_pool",
     "python-dotenv",
     "python_magic",
+    "pywebpush",
     "whitenoise",
 ]
 license = {text = "MIT"}

@@ -22,7 +22,23 @@
                     console.log('WS received:', data);
 
                     if (data.type === 'file_update') {
-                        window.SidebarManager.loadTree();
+                        if (window.FileManager?.requestSidebarRefresh) {
+                            window.FileManager.requestSidebarRefresh({
+                                files: true,
+                                reason: data.reason || 'file_update',
+                                source: 'files-ws',
+                            });
+                        } else {
+                            window.SidebarManager.loadTree();
+                        }
+                    } else if (data.type === 'webapps_update') {
+                        if (window.FileManager?.requestSidebarRefresh) {
+                            window.FileManager.requestSidebarRefresh({
+                                webapps: true,
+                                reason: data.reason || 'webapps_update',
+                                source: 'files-ws',
+                            });
+                        }
                     } else if (data.type === 'progress') {
                         console.log(`Progress update: ${data.progress}%`);
                         const progressBar = document.querySelector('#upload-progress .progress-bar');

@@ -61,25 +61,6 @@
 
     <!-- Message Area (Center) -->
     <div class="col-12 d-flex flex-column h-100" id="message-area" data-files-visible="true" data-days-visible="true">
-      <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-light d-none d-lg-flex">
-        <h5 class="mb-0">{% trans "Continuous" %}</h5>
-        <div class="d-flex gap-2">
-          <button
-            class="btn btn-sm btn-outline-secondary"
-            type="button"
-            id="continuous-days-toggle-btn"
-            aria-expanded="true"
-            aria-controls="threads-sidebar"
-            title="{% trans 'Toggle days panel' %}"
-          >
-            <i class="bi bi-layout-sidebar-inset" id="continuous-days-toggle-icon"></i>
-          </button>
-          <button class="btn btn-sm btn-outline-secondary" type="button" id="files-toggle-btn" aria-expanded="true" aria-controls="files-sidebar">
-            <i class="bi bi-layout-sidebar-inset-reverse" id="files-toggle-icon"></i>
-          </button>
-        </div>
-      </div>
-
       <!-- Day summary (client-rendered from /continuous/day/<day>/, no SYSTEM message injection).
            The JS moves this node inside the message scroll container (#conversation-container)
            after messages are loaded, so it scrolls with the timeline. -->
@@ -97,9 +78,7 @@
         </div>
       </div>
 
-      <div id="message-container" class="d-flex flex-column flex-grow-1" style="min-height: 0;">
-        <div class="p-3 text-muted">{% trans "Loading messages…" %}</div>
-      </div>
+      {% include 'nova/files/preview_split_shell.html' %}
     </div>
 
     <!-- Files Sidebar (Desktop) -->

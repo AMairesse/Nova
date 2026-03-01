@@ -11,6 +11,7 @@ from django.urls import reverse_lazy
 from django.shortcuts import render
 
 from nova.models.UserObjects import UserParameters
+from nova.notifications.webpush import build_server_state
 from user_settings.forms import UserParametersForm
 from user_settings.mixins import DashboardRedirectMixin
 
@@ -36,15 +37,25 @@ class GeneralSettingsView(
         obj, _ = UserParameters.objects.get_or_create(user=self.request.user)
         return obj
 
+    def _get_push_state(self):
+        if not hasattr(self, "_push_state"):
+            self._push_state = build_server_state()
+        return self._push_state
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["user"] = self.request.user
+        kwargs["server_state"] = self._get_push_state()["server_state"]
         return kwargs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         if 'password_form' not in context:
             context['password_form'] = PasswordChangeForm(user=self.request.user)
+        push_state = self._get_push_state()
+        context["push_server_enabled"] = push_state["server_enabled"]
+        context["push_server_configured"] = push_state["server_configured"]
+        context["push_server_state"] = push_state["server_state"]
         return context
 
     # HTMX: if ?partial=1, return only the fragment

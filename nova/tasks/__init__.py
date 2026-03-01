@@ -4,3 +4,4 @@ from . import memory_rebuild_tasks  # noqa: F401
 from . import conversation_tasks  # noqa: F401
 from . import conversation_embedding_tasks  # noqa: F401
 from . import transcript_index_tasks  # noqa: F401
+from . import notification_tasks  # noqa: F401

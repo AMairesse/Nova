@@ -3,7 +3,7 @@
 [![Docker Image CI](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml)
 [![Django CI](https://github.com/AMairesse/Nova/actions/workflows/django.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/django.yml)
 
-**Nova is a personal‑AI workspace that puts privacy first.**
+**Nova is a privacy-first, multi-tenant AI agent workspace.**
 
 ![Get the news](./screenshots/Webbrowsing%20by%20agent.png)
 
@@ -15,89 +15,122 @@
 
 ## Quickstart
 
-Quickstart on your computer (with Docker):
+Quickstart on your computer (Docker):
 
-```
+```bash
 git clone https://github.com/AMairesse/Nova.git
 cd Nova/docker
 cp .env.example .env
 docker compose up -d
 ```
 
-Open [http://localhost:8080](http://localhost:8080)
+Open [http://localhost:8080](http://localhost:8080).
 
-The default username is `admin` and the default password is `changeme`.
+Default credentials:
+- Username: `admin`
+- Password: `changeme`
 
-Then you can create your first agent and start playing with it : [How to configure agents](README-agents.md).
+Configure optional modules in `docker/.env` using `COMPOSE_FILE`.
 
-<details>
-  <summary>Optionally you can use Nova with llama.cpp included</summary>
-  If you also want to use llama.cpp for a default system provider available to all users, you can use the `docker-compose.add-llamacpp.yml` file:
-
-```
-docker compose -f docker-compose.yml -f docker-compose.add-llamacpp.yml up -d
-```
-
-See [docker/README.md](docker/README.md#add-llamacpp-to-your-default-setup) for more details.
-</details>
-
-## Description
-
-Instead of sending every prompt to a remote model, Nova lets you decide – transparently and at run‑time – whether an agent should reason with a local LLM running on your own machine or delegate to a cloud model only when extra horsepower is really needed. The result is a flexible “best of both worlds” setup that keeps sensitive data on‑prem while still giving you access to state‑of‑the‑art capabilities when you want them.
-
-- **Agent‑centric workflow** – Create smart assistants (agents) and equip them with “tools” that can be simple Python helpers, calendar utilities, HTTP/APIs or even other agents. Agents can chain or delegate work to one another, allowing complex reasoning paths.
-- **Bring‑your‑own models** – Connect to OpenAI (or compatible providers like openrouter.ai) or Mistral if the task is public, but switch to local back‑ends such as Ollama, llama.cpp or LM Studio for anything confidential. Each provider is configured once and can be reused by multiple agents.
-- **Privacy by design** – API keys and tokens are stored encrypted; only the minimal data required for a given call ever leaves your machine.
-- **Built‑in tools** – Nova comes with a bunch of “built‑in” tools for common tasks, like CalDav calendar queries, web surfing, date management and more to come!
-- **Pluggable tools** – Besides built‑in utilities, Nova can talk to external micro‑services through the open MCP protocol or any REST endpoint, so your agents keep growing with your needs.
-- **Human‑in‑the‑loop UI** – A lightweight web interface lets you chat with agents, watch their progress in real time, and manage providers / agents / tools without touching code.
-- **Asynchronous calls** – You can safely invoke agents from the UI, and they will run in the background so you can do other things at the same time.
-- **API available** – You can easily ask a question to your default agent using the API.
-
-In short, Nova aims to make “agents with autonomy, privacy and extensibility” a reality for everyday users – giving you powerful automation while keeping your data yours.
-
-## Key Features
-
-- ✅ Tool‑aware agents: Agents can invoke built‑in tools, remote REST/MCP services **or even other agents**.
-- ✅ Local‑first LLM routing: Decide per‑agent which provider to use: OpenAI, Mistral, Ollama, LM Studio or any future backend. Local models are preferred for sensitive data; the switch is transparent for you.
-- ✅ Live streaming: you will see tool calls and sub‑agent calls in real time so you can follow what happens under the hood. Then the agent's response will be streamed.
-- ✅ Plug‑and‑play MCP client: Connect to any Model Context Protocol server, cache its tool catalogue and call remote tools with automatic input validation.
-- ✅ Multilingual & i18n‑ready: All UI strings use Django translations; English only currently.
-- ✅ Extensible by design: Drop a Python module exposing a `get_functions()` map and it instantly becomes a multi‑function “built‑in” tool.
+Then configure your agents: [How to configure agents](README-agents.md).
 
 ## Table of Contents
 
-- [Key Features](#key-features)
-- [Production Deployment (Docker)](#production-deployment-docker)
-- [Development Setup (Docker)](#development-setup-docker)
+- [What Nova Is](#what-nova-is)
+- [Key Capabilities](#key-capabilities)
+- [Docker Setup](#docker-setup)
 - [API](#api)
 - [Project Layout](#project-layout)
+- [Documentation Map](#documentation-map)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
 - [Troubleshooting](#troubleshooting)
 
-## Production Deployment (Docker)
+## What Nova Is
 
-This is the recommended way to run Nova.
-See the [Docker README.md](docker/) for details.
+Nova is a web platform to build and run user-scoped AI agents with strong privacy and extensibility guarantees.
 
-## Development Setup (Docker)
+- Agent-centric orchestration: each user can create specialized agents and compose them as tools.
+- Local or remote model routing: choose per-provider and per-agent what model backend to use.
+- Real-time execution flow: tool calls and agent progress are streamed live in the UI.
+- Multi-tenancy by design: data access is scoped to the authenticated user.
+- Background runtime: long operations run asynchronously through Celery.
 
-Development setup also uses Docker given the number of components involved.
+## Key Capabilities
 
-See the [Docker README.md](docker/) for details.
+### Conversation Modes
+
+Nova supports two conversation experiences:
+
+- `Threads` mode for classic conversation threads.
+- `Continuous` mode for day-segmented ongoing discussion with summaries and recall.
+
+Both modes coexist in the UI and can be used side by side.
+
+### Skills and Tools
+
+Agents can use:
+
+- Built-in tools (browser, memory, date/time, webapp, email, caldav, webdav, code execution, etc.).
+- API and MCP tools.
+- Other agents as tools.
+
+Nova also supports on-demand skills in the runtime (`list_skills`, `load_skill`) so some tool families can be activated only when needed for the current turn.
+
+### Automation and Scheduled Tasks
+
+Nova includes user-managed scheduled tasks in Settings:
+
+- Trigger types: cron and email polling.
+- Run modes: new thread, continuous message, ephemeral.
+- Predefined task templates (including guided setup flows for selected templates).
+- Maintenance tasks (for example continuous nightly day summaries).
+
+### Structured Memory
+
+Long-term memory is structured and queryable:
+
+- Memory items and themes are user-scoped.
+- Builtin memory tool supports search/add/get/archive/list themes.
+- Optional semantic retrieval with embeddings is available through per-user settings.
+
+### Files and Web Apps
+
+- User files are scoped per user/thread and stored in MinIO.
+- Agents can generate static mini web apps and expose them under `/apps/<slug>/`.
+- Web app serving enforces user ownership checks.
+
+## Docker Setup
+
+Docker is the recommended setup for production-like and development usage.
+
+See [docker/README.md](docker/README.md) for:
+
+- Stack selection via `COMPOSE_FILE`
+- Optional modules
+- Development and source builds
+- Environment variables
 
 ## API
 
-A simple API is available to ask a question to your default agent.
+Nova exposes a minimal authenticated API.
 
-### How to use:
-1. **Get your token** from the configuration screen.
-2. **Send a POST request** to the API endpoint with your question.
+### Endpoints
 
-#### Example using `curl`:
+- `GET /api/` -> API root (discovery)
+- `GET /api/ask/` -> usage information
+- `POST /api/ask/` -> ask a question to your default agent
+
+### Authentication
+
+Use token authentication:
+
+1. Generate an API token in **Settings > General**.
+2. Send `Authorization: Token <YOUR_TOKEN>`.
+
+### Example
 
 ```bash
 curl -H "Authorization: Token YOUR_TOKEN_HERE" \
@@ -106,72 +139,81 @@ curl -H "Authorization: Token YOUR_TOKEN_HERE" \
      http://localhost:8080/api/ask/
 ```
 
-### API Details
-- **Method:** POST
-- **Endpoint:** `http://localhost:8080/api/ask/`
-- **Headers:**
-  - `Authorization: Token YOUR_TOKEN_HERE`
-  - `Content-Type: application/json`
-- **Request body:**
-  ```json
-  {
-    "question": "Your question here"
-  }
-  ```
-- **Response:** The API returns a JSON object containing the agent's answer.
+### Notes
 
-#### Example response:
-```json
-{
-  "question": "Who are you?",
-  "answer": "I am your default agent. I can answer your questions and assist you with various tasks."
-}
-```
-
-**Notes:**
-- Replace `YOUR_TOKEN_HERE` with your actual token.
-- If your token is invalid or missing, the API will return a 401 Unauthorized error.
+- A default agent must be configured for the authenticated user.
+- Invalid or missing token returns `401 Unauthorized`.
+- Missing default agent returns `400`.
 
 ## Project Layout
 
-```
+```text
 Nova
-├─ docker/ # Docker compose configuration for the project
+├─ docker/                # Docker stacks and runtime configuration
 ├─ nova/
-|  ├─ api/ # Minimal REST facade
-|  ├─ mcp/ # Thin wrapper around FastMCP
-|  ├─ migrations/ # Django model migration scripts
-|  ├─ static/ # JS helpers (streaming, tool modal manager…)
-|  ├─ templates/ # Django + Bootstrap 5 UI
-|  ├─ tools/ # Built‑in tool modules (CalDav, agent wrapper…)
-|  └─ views/ # Django views
-├─ user_settings/ # Dedicated Django app for the user settings
+│  ├─ api/                # REST API endpoints
+│  ├─ continuous/         # Continuous-mode context and conversation tools
+│  ├─ llm/                # Agent runtime, prompts, middleware, skill policy
+│  ├─ models/             # One model per file
+│  ├─ tasks/              # Celery tasks and task templates
+│  ├─ tools/              # Built-in tools, tool loading, agent-tool wrappers
+│  ├─ views/              # App views (threads, continuous, files, tasks...)
+│  ├─ templates/          # Django templates
+│  └─ static/             # Frontend assets
+├─ user_settings/         # User configuration app (providers, agents, tools, memory, tasks)
+├─ plans/                 # Design and architecture plans
+├─ README-agents.md       # Agent configuration guide
+└─ README-dev.md          # Development-oriented repository guide
 ```
+
+## Documentation Map
+
+- [docker/README.md](docker/README.md): Docker stacks and environment configuration
+- [README-agents.md](README-agents.md): Recommended agent/tool setup
+- [README-dev.md](README-dev.md): Development structure and internals
+- [plans/continuous_discussion.md](plans/continuous_discussion.md): Continuous mode decisions
+- [plans/memory.md](plans/memory.md): Memory system decisions
 
 ## Roadmap
-1. Continuous discussion mode (default, day segments + summarization + `conversation.search/get`) – spec in [`plans/continuous_discussion.md`](plans/continuous_discussion.md:1)
-2. Add ability to interact using messages' apps (Signal, Discord, ...)
-3. Add a tool for the agent to set sheduled task itself
+
+### Recently shipped
+
+1. Continuous mode with day segments, summaries, and conversation recall tools.
+2. Structured long-term memory with optional embeddings.
+3. On-demand skill loading in the runtime.
+4. Scheduled tasks with templates and maintenance flows.
+
+### Planned
+
+1. Messaging app integrations (Signal, Discord, ...).
+2. Agent self-scheduling capabilities.
 
 ## Contributing
-Pull requests are welcome!
+
+Pull requests are welcome.
 
 ## License
-Nova is released under the MIT License – see [LICENSE](LICENSE) for details.
+
+Nova is released under the MIT License. See [LICENSE](LICENSE).
 
 ## Acknowledgements
-- [Django](https://www.djangoproject.com/) – the rock‑solid web framework
-- [LangChain](https://python.langchain.com/) – agent & tool abstractions
-- [FastMCP](https://github.com/modelcontext/fastmcp) – open protocol for tool servers
-- [Bootstrap 5](https://getbootstrap.com/) – sleek, responsive UI components
 
-Made with ❤️ and a healthy concern for data privacy.
+- [Django](https://www.djangoproject.com/)
+- [Django REST Framework](https://www.django-rest-framework.org/)
+- [Django Channels](https://channels.readthedocs.io/)
+- [Celery](https://docs.celeryq.dev/)
+- [LangChain](https://python.langchain.com/)
+- [LangGraph](https://www.langchain.com/langgraph)
+- [FastMCP](https://github.com/modelcontext/fastmcp)
+- [Bootstrap 5](https://getbootstrap.com/)
 
 ## Troubleshooting
-- **Port conflicts:** Ensure ports 80 (Nginx), 8000 (Daphne), and 5432 (PostgreSQL) are free. Stop conflicting services or edit `docker-compose.yml`.
-- **DB not ready:** If web container fails with DB errors, check PostgreSQL logs (`docker compose logs db`). Increase healthcheck timeouts if needed.
-- **No superuser:** Set `DJANGO_SUPERUSER_*` in `.env` and restart. Or run `docker compose exec web python manage.py createsuperuser`.
-- **Ollama unreachable:** Use `host.docker.internal` (Docker Desktop) or your machine's IP for Base URL. Ensure Ollama runs on the host.
-- **Volumes lost data?** Back up volumes with `docker volume ls` and tools like `docker-volume-backup`.
+
+- **Port conflicts:** Ensure your configured `HOST_PORT` (default `8080`) is free.
+- **Stack mismatch:** If you changed `COMPOSE_FILE`, run `docker compose up -d --remove-orphans`.
+- **DB startup issues:** Check database container health/logs and wait for healthchecks.
+- **No superuser:** Ensure `DJANGO_SUPERUSER_*` is set in `docker/.env`.
+- **Optional module not visible in Nova:** Verify the related compose add-on is included in `COMPOSE_FILE` and required env vars are set.
+- **Ollama connectivity issues:** Use `host.docker.internal` (Docker Desktop) or host IP when targeting host-side Ollama.
 
 For more help, open an issue on GitHub.

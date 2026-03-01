@@ -1,395 +1,184 @@
 # Nova - Docker reference
 
-Using docker compose is the recommended way to run Nova, even for development.
+Using Docker Compose is the recommended way to run Nova (including development).
 
 ## Project layout
 
 ```
 Nova
-├─ docker/                                         # Docker compose configuration for the project
+├─ docker/
 |  ├─ judge0/
-|  |  └─  judge0.conf                              # Default configuration file for the judge0 container
 |  ├─ nginx/
-|  |  ├─ templates
-|  |  |  └─  default.conf.template                 # Template for nginx's config (needed because MINIO_BUCKET_NAME can be set in config)
-|  |  └─ nginx.conf                                # Nginx's config
 |  ├─ ollama/
-|  |  ├─ templates
-|  |  |  └─  Modelfile.template                    # Template file for Ollama (needed to configure default model to load and context size)
-|  |  └─ ollama_entrypoint.sh                      # Ollama's container's entrypoint which will serve the configured model
 |  ├─ searxng/
-|  |  ├─  limiter.toml                             # Required config file for searxng
-|  |  └─  settings.yml                             # Settings' file for SearXNG (warning: running the container will change owner's file)
-|  ├─ .env                                         # This file should be created from .env.example
-|  ├─ .env.example                                 # Example file with environment's variable for the project
-|  ├─ docker-compose.add-judge0.yml                # Add judge0 to your default setup
-|  ├─ docker-compose.add-langfuse.yml              # Add llama.cpp for embeddings to your default setup
-|  ├─ docker-compose.add-llamacpp-embeddings.yml   # Add llama.cpp to your default setup
-|  ├─ docker-compose.add-llamacpp.yml              # Add llama.cpp to your default setup
-|  ├─ docker-compose.add-ollama.yml                # Add Ollama to your default setup
-|  ├─ docker-compose.add-pgadmin.yml               # Add pgAdmin to your default setup
-|  ├─ docker-compose.add-searxng.yml               # Add SearXNG to your default setup
-|  ├─ docker-compose.base.yml                      # Base configuration for the project
-|  ├─ docker-compose.dev.yml                       # Dev configuration for the project
-|  ├─ docker-compose.from-source.yml               # Base configuration for the project but using the source code
-|  ├─ docker-compose.yml                           # Default configuration for the project
-|  ├─ Dockerfile                                   # Nova's container's Dockerfile
-|  ├─ entrypoint.sh                                # Nova's container's entrypoint
-|  └─ README.md                                    # This file
-├─ locale/
-├─ ...
-└─ requirements.txt
+|  ├─ .env
+|  ├─ .env.example
+|  ├─ docker-compose.base.yml
+|  ├─ docker-compose.yml
+|  ├─ docker-compose.dev.yml
+|  ├─ docker-compose.from-source.yml
+|  ├─ docker-compose.add-*.yml
+|  └─ README.md
+└─ ...
 ```
 
-## Default setup
+## One-time stack selection with `COMPOSE_FILE`
+
+All optional modules are selected in `docker/.env` through `COMPOSE_FILE`.
+Once selected, use only standard commands:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose down
+```
+
+Default in `.env.example`:
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml
+```
+
+### Preset examples
+
+Use one of these values in `docker/.env`:
+
+- Base stack:
+  - `COMPOSE_FILE=docker-compose.yml`
+- Base + SearXNG:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml`
+- Base + Judge0:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-judge0.yml`
+- Base + SearXNG + Judge0:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml:docker-compose.add-judge0.yml`
+- Base + Ollama:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-ollama.yml`
+- Base + llama.cpp:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-llamacpp.yml`
+- Base + llama.cpp embeddings:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-llamacpp-embeddings.yml`
+- Development:
+  - `COMPOSE_FILE=docker-compose.dev.yml`
+- Development + Langfuse:
+  - `COMPOSE_FILE=docker-compose.dev.yml:docker-compose.add-langfuse.yml`
+- Build from source:
+  - `COMPOSE_FILE=docker-compose.from-source.yml`
 
-This setup include :
-   - A PostgreSQL database
-   - A Redis server
-   - A web server (nginx)
-   - A Minio S3 server
-   - The Nova web app
+Note:
+- On macOS/Linux, separate compose files with `:`.
+- On Windows, separate compose files with `;`.
 
-1. Download the "minimal" setup:
+## Quickstart
 
-   You will need:
-   - the `docker-compose.yml` file
-   - the `docker-compose.base.yml` file
-   - the `nginx.conf` file
-   - the `templates/default.conf.template` file
-   - a `.env` file.
+1. Clone and enter the Docker directory:
 
-   ```bash
-   mkdir nova
-   cd nova
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.yml
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.base.yml
-   mkdir -p nginx
-   cd nginx
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx/nginx.conf
-   mkdir -p templates
-   cd templates
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/nginx/templates/default.conf.template
-   cd ../..
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/.env.example
-   mv .env.example .env
-   ```
+```bash
+git clone https://github.com/AMairesse/Nova.git
+cd Nova/docker
+cp .env.example .env
+```
 
-   Edit the `.env` file to match your environment (see [Environment Variables](#environment-variables)).
+2. Set `COMPOSE_FILE` in `.env` to the stack you want.
 
-2. Start containers:
+3. Start containers:
 
-   ```bash
-   docker compose up -d
-   ```
+```bash
+docker compose up -d
+```
 
-3. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
+4. Open Nova at `http://localhost:${HOST_PORT}` (default: `http://localhost:8080`).
 
-4. (optional) View logs:
+5. Useful commands:
 
-   ```bash
-   docker compose logs -f
-   ```
+```bash
+docker compose pull
+docker compose up -d
+docker compose down
+```
 
-5. (optional) Stop/restart:
+If you changed `COMPOSE_FILE`, recreate services with:
 
-   ```bash
-   docker compose down
-   docker compose up -d
-   ```
+```bash
+docker compose up -d --remove-orphans
+```
 
-7. Updates:
+## Available optional modules
 
-   ```bash
-   docker compose pull
-   docker compose up -d
-   ```
+- `docker-compose.add-searxng.yml`
+  - Enables SearXNG system search tool for all users.
+  - Requires `SEARXNG_SECRET` in `.env`.
+- `docker-compose.add-judge0.yml`
+  - Enables Judge0 code execution system tool for all users.
+  - Requires host cgroups configuration (see Judge0 upstream docs for v1.13+).
+- `docker-compose.add-ollama.yml`
+  - Starts Ollama and exposes a system provider in Nova.
+- `docker-compose.add-llamacpp.yml`
+  - Starts llama.cpp server and exposes a system provider in Nova.
+- `docker-compose.add-llamacpp-embeddings.yml`
+  - Starts llama.cpp embeddings server for memory embeddings.
+- `docker-compose.add-pgadmin.yml`
+  - Adds pgAdmin on port `5050`.
+- `docker-compose.add-langfuse.yml`
+  - Adds Langfuse stack (typically combined with dev stack).
 
-## Add llama.cpp to your default setup
+## Development stack
 
-1. Download the `docker-compose.add-llamacpp.yml` file:
+Set this in `docker/.env`:
 
-   ```bash
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-llamacpp.yml
-   ```
+```dotenv
+COMPOSE_FILE=docker-compose.dev.yml
+```
 
-2. Edit the `.env` file if you want to change the context window size, the model and/or the thinking mode
+Then run:
 
-4. Start containers:
+```bash
+docker compose up -d --build
+```
 
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.add-llamacpp.yml up -d
-   ```
+Access:
 
-5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
+- Nova via Nginx: `http://localhost:${HOST_PORT}` (default `8080`)
+- Direct ASGI app (dev helper): `http://localhost:8000`
+- Debugpy web: `localhost:5678`
+- Debugpy celery worker: `localhost:5679`
+- Debugpy celery beat: `localhost:5680`
 
+## Build from Source Stack
 
-## Add llama.cpp for embeddings to your default setup
+Set this in `docker/.env`:
 
-1. Download the `docker-compose.add-llamacpp-embeddings.yml` file:
+```dotenv
+COMPOSE_FILE=docker-compose.from-source.yml
+```
 
-   ```bash
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-llamacpp-embeddings.yml
-   ```
+Then run:
 
-2. Edit the `.env` file if you want to change the model
+```bash
+docker compose up -d --build
+```
 
-4. Start containers:
+## Environment variables
 
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.add-llamacpp-embeddings.yml up -d
-   ```
+Nova uses `docker/.env` for runtime configuration.
 
-5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider for embeddings will be available for all users on the memory config panel.
+Core settings:
 
+- `COMPOSE_FILE`: compose stack selection
+- `DB_USER`, `DB_PASSWORD`
+- `DJANGO_SUPERUSER_*`
+- `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`
+- `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`
+- `FIELD_ENCRYPTION_KEY`, `DJANGO_SECRET_KEY`
+- `HOST_PORT`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`
 
-## Add Ollama to your default setup
+Optional module settings:
 
-1. Download the `docker-compose.add-ollama.yml` file and the `ollama` directory:
+- SearXNG: `SEARXNG_SECRET`
+- Ollama: `OLLAMA_MODEL_NAME`, `OLLAMA_CONTEXT_LENGTH`
+- llama.cpp: `LLAMA_CPP_MODEL`, `LLAMA_CPP_CHAT_TEMPLATE`, `LLAMA_CPP_CTX_SIZE`, `LLAMA_CPP_THINKING_BUDGET`
+- llama.cpp embeddings: `MEMORY_EMBEDDINGS_MODEL`
 
-   ```bash
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-ollama.yml
-   mkdir -p ollama
-   cd ollama
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/ollama_entrypoint.sh
-   chmod +x ollama_entrypoint.sh
-   mkdir -p templates
-   cd templates
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/ollama/templates/Modelfile.template
-   cd ../..
-   ```
+Optional global settings:
 
-2. Edit the `ollama/templates/default.conf.template` if you want to use a different model
-
-3. Edit the `.env` file if you want to change the context window size
-
-4. Start containers:
-
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.add-ollama.yml up -d
-   ```
-
-5. Access the app at `http://localhost:80` (or your configured port). Log in and a system provider will be available for all users.
-
-
-## Add SearXNG to your default setup
-
-1. Download the `docker-compose.add-searxng.yml` file and the `searxng` directory:
-
-   ```bash
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-searxng.yml
-   mkdir -p searxng
-   cd searxng
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/searxng/limiter.toml
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/searxng/settings.yml
-   cd ..
-   ```
-
-2. Start containers:
-
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.add-searxng.yml up -d
-   ```
-
-3. Access the app at `http://localhost:80` (or your configured port). Log in and a system tool will be available for all users.
-
-
-## Add judge0 to your default setup
-
-### Requirements
-Judge0 need to access cgroups and use cgroups v1 and v2 simultaneously. See https://github.com/judge0/judge0/blob/master/CHANGELOG.md, deployment procedure for v1.13.1:
-
-    Use sudo to open file /etc/default/grub
-    Add systemd.unified_cgroup_hierarchy=0 in the value of GRUB_CMDLINE_LINUX variable.
-    Apply the changes: sudo update-grub
-    Restart your server: sudo reboot
-
-### Installation
-
-1. Download the `docker-compose.add-judge0.yml` file and the `judge0` directory:
-
-   ```bash
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/docker-compose.add-judge0.yml
-   mkdir -p judge0
-   cd judge0
-   wget https://raw.githubusercontent.com/amairesse/nova/main/docker/judge0/judge0.conf
-   cd ..
-   ```
-
-2. Start containers:
-
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.add-judge0.yml up -d
-   ```
-
-3. Access the app at `http://localhost:80` (or your configured port). Log in and a system tool will be available for all users.
-
-
-## Build from source
-
-This setup include :
-   - A PostgreSQL database
-   - A Redis server
-   - A web server (nginx)
-   - A Minio S3 server
-   - The Nova web app built from source
-
-1. Download the build from source setup:
-
-   ```bash
-   git clone https://github.com/amairesse/nova.git
-   cd nova
-   cp docker/.env.example docker/.env
-   ```
-
-   Edit the `docker/.env` file to match your environment (see [Environment Variables](#environment-variables)).
-
-2. Build containers:
-
-   The following commands are meant to be run from the `nova` directory.
-
-   ```bash
-   docker compose -f docker/docker-compose.from-source.yml up -d --build
-   ```
-   Warning : first start may take a while because of the chromium install, you can check progress with `docker compose -f docker/docker-compose.from-source.yml logs web -f`.
-
-3. Access the app at `http://localhost:80` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
-
-4. (optional) View logs:
-
-   ```bash
-   docker compose -f docker/docker-compose.from-source.yml logs -f
-   ```
-
-5. (optional) Stop/restart:
-
-   ```bash
-   docker compose -f docker/docker-compose.from-source.yml down
-   docker compose -f docker/docker-compose.from-source.yml up -d
-   ```
-
-7. (optional) Updates:
-
-   ```bash
-   git pull
-   docker compose -f docker/docker-compose.from-source.yml up -d
-   ```
-
-## Development setup
-
-### Start the development setup
-
-1. Download the development setup:
-
-   ```bash
-   git clone https://github.com/amairesse/nova.git
-   cd nova
-   cp docker/.env.example docker/.env
-   ```
-
-   Edit the `docker/.env` file to match your environment (see [Environment Variables](#environment-variables)).
-
-2. First build of the containers:
-
-   The following commands are meant to be run from the `nova` directory.
-
-   ```bash
-   docker compose -f docker/docker-compose.dev.yml up -d --build
-   ```
-
-   Warning : first start may take a while because of the chromium install, you can check progress with the logs (see below).
-
-3. Access the app at `http://localhost:8080` (or your configured port). Log in and configure LLM providers/agents/tools via the UI.
-
-   Note : the app can also be accessed at `http://localhost:8000` without nginx.
-
-### Manage containers
-
-#### View logs
-
-   ```bash
-   docker compose -f docker/docker-compose.dev.yml logs -f
-   ```
-
-#### Stop/restart the containers
-
-   ```bash
-   docker compose -f docker/docker-compose.dev.yml down
-   docker compose -f docker/docker-compose.dev.yml up -d
-   ```
-
-#### Update the application
-
-   ```bash
-   git pull
-   docker compose -f docker/docker-compose.dev.yml up -d
-   ```
-
-### Launch a debug session
-
-   Add a debug config in VSCode (or your IDE of choice) and run the debug session.
-   ```Python
-   {
-   "version": "0.2.0",
-   "configurations": [
-      {
-         "name": "Python: Remote Attach",
-         "type": "debugpy",
-         "request": "attach",
-         "connect": { "host": "localhost", "port": 5678 },
-         "pathMappings": [{ "localRoot": "${workspaceFolder}", "remoteRoot": "/app" }]
-      }
-   ]
-   }
-   ```
-
-### Run tests
-
-You can run the tests locally with no external dependancies, using:
-- SQLite in-memory database
-- In-memory channel layer instead of Redis
-- Mocks for MinIO
-
-   ```bash
-   python manage.py test --settings=nova.settings_test
-   ```
-
-### Add Langfuse
-
-You can add Langfuse to the setup so that you can see the agents messages in detail.
-
-1. Add Langfuse to the setup:
-
-   Remplace the lauch command by:
-   ```bash
-   docker compose -f docker/docker-compose.dev.yml -f docker/docker-compose.add-langfuse.yml up -d
-   ```
-
-2. Access Langfuse at `http://localhost:3000`
-
-   - Create a user and log in
-   - Create an org and a project
-   - Create API keys for the project
-
-3. Add Langfuse to the app:
-
-   Access Nova and configure Langfuse via the UI.
-
-4. Interact with and Agent and see the messages in Langfuse (refresh the page to see the messages in "Traces").
-
-
-## Environment Variables
-
-Nova uses a `.env` file for configuration. Copy `.env.example` to `.env` and edit as needed.
-
-Edit the `.env` file to match your environment :
-   - Set `DB_USER` and `DB_PASSWORD` vars for database user.
-   - Set `DJANGO_SUPERUSER_*` vars for auto-admin creation.
-   - Set `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` vars for minio admin access.
-   - Change `FIELD_ENCRYPTION_KEY` and `DJANGO_SECRET_KEY` for security.
-   - Set `HOST_PORT` to your desired port (e.g., `HOST_PORT=80`).
-      - Note: `ALLOWED_HOSTS` should be kept to localhost.
-   - Set `CSRF_TRUSTED_ORIGINS` to your domain and internet port if the app is exposed on the internet
-      - For example: `CSRF_TRUSTED_ORIGINS=https://my-domain.com`
-      - The port should be the one exposed on internet (e.g. if you use a proxy like HAProxy for SSL).  
-   - Change `MINIO_SECRET_KEY` for security (`MINIO_BUCKET_NAME` and `MINIO_ACCESS_KEY` can be left unchanged).
+- `USERFILE_EXPIRATION_DAYS`
+- `DEBUG`

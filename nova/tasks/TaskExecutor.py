@@ -48,7 +48,14 @@ class TaskExecutor:
         self.source_message_id = source_message_id
         self.llm = None
         self.channel_layer = get_channel_layer()
-        self.handler = TaskProgressHandler(self.task.id, self.channel_layer)
+        self.handler = TaskProgressHandler(
+            self.task.id,
+            self.channel_layer,
+            user_id=getattr(self.user, "id", None),
+            thread_id=getattr(self.thread, "id", None),
+            thread_mode=getattr(self.thread, "mode", None),
+            initial_streamed_markdown=getattr(self.task, "streamed_markdown", "") or "",
+        )
 
     async def execute_or_resume(self, interruption_response=None):
         """Main execution method with comprehensive error handling."""
@@ -64,7 +71,7 @@ class TaskExecutor:
                 self.prompt = await self._create_prompt()
                 result = await self._run_agent()
 
-            if isinstance(result, dict) and result['__interrupt__']:
+            if isinstance(result, dict) and result.get('__interrupt__'):
                 await self._process_interuption(result)
             else:
                 await self._process_result(result)

@@ -71,6 +71,10 @@ class UserParameters(models.Model):
         ],
         help_text=_("Number of recent messages shown in Continuous mode when no day is selected."),
     )
+    task_notifications_enabled = models.BooleanField(
+        default=False,
+        help_text=_("Enable browser push notifications when background tasks complete or fail."),
+    )
 
     def __str__(self):
         return f'Parameters for {self.user.username}'

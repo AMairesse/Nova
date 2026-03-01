@@ -11,7 +11,6 @@ from nova.models.Tool import Tool
 from nova.tasks.tasks import (
     TRIGGER_TASK_MAX_RETRIES,
     compute_trigger_retry_countdown,
-    run_scheduled_agent_task,
     poll_task_definition_email,
     run_task_definition_cron,
     run_task_definition_maintenance,
@@ -366,9 +365,3 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         with self.assertRaisesMessage(ValueError, "Unknown maintenance task"):
             run_task_definition_maintenance.run(task_def.id)
         mocked_get_task.assert_called_once_with("unknown.task")
-
-    @patch("nova.tasks.tasks.run_task_definition_cron", return_value={"status": "ok"})
-    def test_run_scheduled_agent_task_is_alias_of_cron(self, mocked_cron):
-        result = run_scheduled_agent_task.run(42)
-        mocked_cron.assert_called_once_with(42)
-        self.assertEqual(result["status"], "ok")

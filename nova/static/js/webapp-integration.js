@@ -41,9 +41,36 @@
             }
         },
 
+        deleteWebapp: async function (threadId, slug) {
+            if (!threadId || !slug) {
+                throw new Error('Missing thread or slug');
+            }
+            if (!window.DOMUtils?.csrfFetch) {
+                throw new Error('CSRF helper is unavailable');
+            }
+
+            const response = await window.DOMUtils.csrfFetch(`/apps/delete/${threadId}/${slug}/`, {
+                method: 'DELETE',
+            });
+
+            if (!response.ok) {
+                let message = 'Failed to delete webapp';
+                try {
+                    const payload = await response.json();
+                    if (payload?.error) message = payload.error;
+                } catch (_) {
+                    // Keep default message when body is not JSON.
+                }
+                throw new Error(message);
+            }
+            return response.json().catch(() => ({ status: 'ok' }));
+        },
+
         // Announce split preview activation (desktop layout handled by thread UI)
-        activateSplitPreview: function (slug, url) {
-            document.dispatchEvent(new CustomEvent('webapp_preview_activate', { detail: { slug, url } }));
+        activateSplitPreview: function (slug, url, threadId = null) {
+            document.dispatchEvent(new CustomEvent('webapp_preview_activate', {
+                detail: { slug, url, threadId }
+            }));
         }
     };
 

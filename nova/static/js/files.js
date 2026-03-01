@@ -25,6 +25,10 @@
       if (this._initialized) return;
       this._initialized = true;
 
+      if (window.SidebarManager?.bindRefreshEvents) {
+        window.SidebarManager.bindRefreshEvents();
+      }
+
       this.attachSidebarEventHandlers();
       this.initDelegatedHandlers();
 
@@ -104,6 +108,7 @@
       document.addEventListener('click', (e) => {
         if (this._handleDownloadClick(e)) return;
         if (this._handleDeleteClick(e)) return;
+        if (this._handleWebappDeleteClick(e)) return;
         if (this._handleWebappPreviewClick(e)) return;
       });
     },
@@ -162,18 +167,53 @@
 
       e.preventDefault();
       const slug = previewEl.dataset.slug || '';
+      const url = previewEl.dataset.url || '';
       const threadId = this.currentThreadId;
       if (!slug || !threadId) return true;
 
-      // Mobile: open dedicated full-page preview
       const isMobile = window.innerWidth < 992;
-      if (isMobile) {
-        window.location.href = `/apps/preview/${threadId}/${slug}/`;
+      const hasInlinePreview = Boolean(
+        document.getElementById('preview-pane') && document.getElementById('webapp-iframe')
+      );
+
+      // Desktop: open inline split preview when available (thread + continuous pages)
+      if (!isMobile && hasInlinePreview && typeof window.WebappIntegration?.activateSplitPreview === 'function') {
+        window.WebappIntegration.activateSplitPreview(slug, url || `/apps/${slug}/`, threadId);
         return true;
       }
 
-      // Desktop: keep existing behavior (split preview handled by preview page/layout)
+      // Fallback: open dedicated preview page route
       window.location.href = `/apps/preview/${threadId}/${slug}/`;
+      return true;
+    },
+
+    _handleWebappDeleteClick(e) {
+      const deleteEl = e.target.closest('.webapp-delete-btn');
+      if (!deleteEl) return false;
+
+      e.preventDefault();
+      const slug = deleteEl.dataset.slug || '';
+      const threadId = deleteEl.dataset.threadId || this.currentThreadId;
+      const name = deleteEl.dataset.name || slug;
+      if (!slug || !threadId) return true;
+
+      const warning = `Are you sure you want to delete webapp "${name}"? This action cannot be undone.`;
+      if (!confirm(warning)) {
+        return true;
+      }
+
+      window.WebappIntegration.deleteWebapp(threadId, slug)
+        .then(() => {
+          this.requestSidebarRefresh({
+            webapps: true,
+            reason: 'webapp_delete',
+            source: 'ui',
+          });
+        })
+        .catch((err) => {
+          console.error('Webapp deletion failed', err);
+          alert('Failed to delete webapp.');
+        });
       return true;
     },
 
@@ -206,6 +246,18 @@
 
     activateSplitPreview(slug, url) {
       return window.WebappIntegration.activateSplitPreview(slug, url);
+    },
+
+    requestSidebarRefresh({ files = false, webapps = false, reason = '', source = '' } = {}) {
+      const detail = {
+        files: Boolean(files),
+        webapps: Boolean(webapps),
+        reason: reason || '',
+        source: source || '',
+      };
+      if (!detail.files && !detail.webapps) return;
+
+      document.dispatchEvent(new CustomEvent('nova:sidebar-refresh-request', { detail }));
     }
   };
 

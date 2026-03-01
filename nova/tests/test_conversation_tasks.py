@@ -5,7 +5,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, patch
 
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from nova.models.ConversationEmbedding import DaySegmentEmbedding
@@ -127,6 +127,36 @@ class ConversationTasksDbTests(TransactionTestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["error"], "no_default_agent")
         self.assertTrue(any(call.args[1] == "task_error" for call in mocked_publish.await_args_list))
+
+    @override_settings(WEBPUSH_ENABLED=True)
+    @patch("nova.tasks.conversation_tasks.send_task_webpush_notification.delay")
+    @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)
+    def test_summarize_day_segment_async_enqueues_failed_notification_when_no_default_agent(
+        self,
+        mocked_publish,
+        mocked_delay,
+    ):
+        seg, _ = self._create_segment(summary="")
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = None
+        profile.save(update_fields=["default_agent"])
+
+        result = asyncio.run(
+            conversation_tasks._summarize_day_segment_async(
+                day_segment_id=seg.id,
+                mode="manual",
+                task_id="task-2-notif",
+            )
+        )
+
+        self.assertEqual(result["status"], "error")
+        mocked_delay.assert_called_once_with(
+            user_id=self.user.id,
+            task_id="task-2-notif",
+            thread_id=self.thread.id,
+            thread_mode="continuous",
+            status="failed",
+        )
 
     @patch("nova.tasks.conversation_tasks.LLMAgent.create", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)

@@ -47,6 +47,24 @@ class TaskExecutorTests(TransactionTestCase):
         executor.handler = AsyncMock()
         return executor
 
+    def test_executor_initializes_handler_with_existing_streamed_markdown(self):
+        self.task.streamed_markdown = "Partial response before interruption"
+        self.task.save(update_fields=["streamed_markdown", "updated_at"])
+
+        executor = TaskExecutor(
+            task=self.task,
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="hello",
+            source_message_id=None,
+        )
+
+        self.assertEqual(
+            executor.handler.get_streamed_markdown(),
+            "Partial response before interruption",
+        )
+
     def test_execute_or_resume_regular_result_flow(self):
         executor = self._make_executor()
         executor._initialize_task = AsyncMock()
@@ -63,6 +81,25 @@ class TaskExecutorTests(TransactionTestCase):
         executor._create_llm_agent.assert_awaited_once()
         executor._run_agent.assert_awaited_once()
         executor._process_result.assert_awaited_once_with("final answer")
+        executor._finalize_task.assert_awaited_once()
+        executor._cleanup.assert_awaited_once()
+
+    def test_execute_or_resume_dict_result_without_interrupt_is_processed(self):
+        executor = self._make_executor()
+        final_payload = {"text": "final answer"}
+        executor._initialize_task = AsyncMock()
+        executor._create_llm_agent = AsyncMock()
+        executor._create_prompt = AsyncMock(return_value="hello")
+        executor._run_agent = AsyncMock(return_value=final_payload)
+        executor._process_interuption = AsyncMock()
+        executor._process_result = AsyncMock()
+        executor._finalize_task = AsyncMock()
+        executor._cleanup = AsyncMock()
+
+        asyncio.run(executor.execute_or_resume())
+
+        executor._process_interuption.assert_not_awaited()
+        executor._process_result.assert_awaited_once_with(final_payload)
         executor._finalize_task.assert_awaited_once()
         executor._cleanup.assert_awaited_once()
 

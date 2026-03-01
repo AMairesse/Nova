@@ -14,6 +14,7 @@ from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.llm.llm_agent import LLMAgent
 from nova.file_utils import batch_upload_files
+from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,9 @@ async def async_create_userfile(user, thread, key, filename, mime_type, size):
 async def async_delete_file(file_id: int):
     """Async wrapper for delete."""
     file = await async_get_object_or_404(UserFile, id=file_id)
+    thread_id = await sync_to_async(lambda: file.thread_id, thread_sensitive=False)()
     await sync_to_async(file.delete, thread_sensitive=False)()
+    await publish_file_update(thread_id, "file_delete")
     return "File deleted."
 
 
@@ -175,6 +178,8 @@ async def create_file(thread_id, user, filename: str, content: str) -> str:
     file_id = created[0].get("id")
     if not file_id:
         return "Error creating file: invalid response from upload pipeline"
+
+    await publish_file_update(thread.id, "file_create")
 
     return f"File created: ID {file_id}"
 

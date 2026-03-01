@@ -75,3 +75,16 @@ class FileProgressConsumer(AsyncWebsocketConsumer):
     async def file_progress(self, event):
         progress = event['progress']
         await self.send(text_data=json.dumps({'type': 'progress', 'progress': progress}))
+
+    async def file_update(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'file_update',
+            'reason': event.get('reason', ''),
+        }))
+
+    async def webapps_update(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'webapps_update',
+            'reason': event.get('reason', ''),
+            'slug': event.get('slug'),
+        }))

@@ -47,6 +47,12 @@ DEBUG = False
 # Override ALLOWED_HOSTS for testing
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 
+# WebPush defaults for tests must be deterministic and not depend on local .env.
+WEBPUSH_ENABLED = False
+WEBPUSH_VAPID_PUBLIC_KEY = ''
+WEBPUSH_VAPID_PRIVATE_KEY = ''
+WEBPUSH_VAPID_SUBJECT = ''
+
 # Disable any external service integrations that might cause issues
 # Add any other service-specific overrides here as needed
 

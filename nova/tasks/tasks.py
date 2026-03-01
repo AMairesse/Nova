@@ -75,13 +75,31 @@ class AgentTaskExecutor (TaskExecutor):
     progress tracking, and state management.
     """
 
+    @staticmethod
+    def _normalize_text_for_compare(value: str) -> str:
+        return " ".join((value or "").split())
+
+    def _get_display_markdown(self, final_answer: str) -> str:
+        streamed_markdown = ""
+        if self.handler and hasattr(self.handler, "get_streamed_markdown"):
+            streamed_markdown = self.handler.get_streamed_markdown() or ""
+        if not streamed_markdown:
+            streamed_markdown = getattr(self.task, "streamed_markdown", "") or ""
+        if not streamed_markdown.strip():
+            return ""
+        if self._normalize_text_for_compare(streamed_markdown) == self._normalize_text_for_compare(final_answer):
+            return ""
+        return streamed_markdown
+
     async def _process_result(self, result):
         await super()._process_result(result)
+
+        final_answer = "" if result is None else str(result)
 
         # Add message to thread
         message = await sync_to_async(
             self.thread.add_message, thread_sensitive=False
-        )(result, actor=Actor.AGENT)
+        )(final_answer, actor=Actor.AGENT)
 
         # Calculate and store context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
@@ -107,9 +125,17 @@ class AgentTaskExecutor (TaskExecutor):
         message.internal_data.update({
             'real_tokens': real_tokens,
             'approx_tokens': approx_tokens,
-            'max_context': max_context
+            'max_context': max_context,
+            'final_answer': final_answer,
         })
+        display_markdown = self._get_display_markdown(final_answer)
+        if display_markdown:
+            message.internal_data['display_markdown'] = display_markdown
         await sync_to_async(message.save, thread_sensitive=False)()
+
+        # Clear transient stream state now that durable message persistence is complete.
+        self.task.current_response = None
+        self.task.streamed_markdown = ""
 
         # Trigger title generation asynchronously when the thread still has its default title.
         await self._enqueue_thread_title_generation()
@@ -291,6 +317,46 @@ def _publish_thread_subject_update(source_task_id: int | None, thread_id: int, t
     )
 
 
+def execute_agent_task_with_executor(
+    task: Task,
+    user: User,
+    thread: Thread,
+    agent_config: AgentConfig | None,
+    prompt_text: str,
+    *,
+    source_message_id: int | None = None,
+) -> None:
+    """Run a task execution with `AgentTaskExecutor` in a synchronous context."""
+    executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text, source_message_id=source_message_id)
+    asyncio.run(executor.execute_or_resume())
+
+
+def create_and_dispatch_agent_task(
+    *,
+    user: User,
+    thread: Thread,
+    agent_config: AgentConfig | None,
+    source_message_id: int,
+    dispatcher_task,
+) -> Task:
+    """Create a pending task and enqueue async execution for an existing user message."""
+    task = Task.objects.create(
+        user=user,
+        thread=thread,
+        agent_config=agent_config,
+        status=TaskStatus.PENDING,
+    )
+
+    dispatcher_task.delay(
+        task.id,
+        user.id,
+        thread.id,
+        agent_config.id if agent_config else None,
+        source_message_id,
+    )
+    return task
+
+
 @shared_task(bind=True, name="generate_thread_title")
 def generate_thread_title_task(
     self,
@@ -374,9 +440,14 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
         message = Message.objects.select_related('thread', 'user').get(pk=message_pk)
         prompt_text = message.text or ""
 
-        # Use the AgentTaskExecutor for cleaner execution
-        executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text, source_message_id=message.id)
-        asyncio.run(executor.execute_or_resume())
+        execute_agent_task_with_executor(
+            task,
+            user,
+            thread,
+            agent_config,
+            prompt_text,
+            source_message_id=message.id,
+        )
 
     except Exception as e:
         logger.error(f"Celery task {task_pk} failed: {e}")
@@ -644,9 +715,3 @@ def run_task_definition_maintenance(self, task_definition_id: int):
         logger.error("Error executing maintenance task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
         raise
-
-
-@shared_task(bind=True, name="run_scheduled_agent_task")
-def run_scheduled_agent_task(self, task_definition_id):
-    """Legacy alias kept for backward compatibility with old beat entries."""
-    return run_task_definition_cron(task_definition_id)

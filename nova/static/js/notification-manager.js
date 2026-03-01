@@ -1,0 +1,198 @@
+// static/nova/js/notification-manager.js
+(function () {
+    'use strict';
+
+    function isAuthenticated() {
+        return document.body?.dataset?.authenticated === 'true';
+    }
+
+    function isSupported() {
+        return (
+            'Notification' in window &&
+            'serviceWorker' in navigator &&
+            'PushManager' in window
+        );
+    }
+
+    function shouldPromptFromCurrentPage() {
+        return Boolean(
+            document.getElementById('message-container') ||
+            document.getElementById('continuous-page-root')
+        );
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+    }
+
+    window.NotificationManager = {
+        registration: null,
+        config: null,
+        _swMessageBound: false,
+
+        bindServiceWorkerMessages() {
+            if (this._swMessageBound || !('serviceWorker' in navigator)) {
+                return;
+            }
+            this._swMessageBound = true;
+
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                const data = event.data || {};
+                if (data.type !== 'nova:push-in-app') {
+                    return;
+                }
+                this.showInAppPushNotification(data.payload || {});
+            });
+        },
+
+        showInAppPushNotification(payload) {
+            const title = payload.title || 'Nova';
+            const body = payload.body || 'Task status updated.';
+            const targetUrl = payload?.data?.url || '/';
+
+            const toast = document.createElement('div');
+            toast.className = 'alert alert-info alert-dismissible fade show position-fixed shadow-sm';
+            toast.style.cssText = 'top: 20px; right: 20px; z-index: 1090; min-width: 320px; max-width: 420px; cursor: pointer;';
+            toast.setAttribute('role', 'status');
+            toast.innerHTML = `
+                <div class="fw-semibold mb-1">${window.DOMUtils?.escapeHTML ? window.DOMUtils.escapeHTML(title) : title}</div>
+                <div class="small">${window.DOMUtils?.escapeHTML ? window.DOMUtils.escapeHTML(body) : body}</div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+
+            toast.addEventListener('click', (e) => {
+                if (e.target.closest('.btn-close')) return;
+                window.location.href = targetUrl;
+            });
+
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 6000);
+        },
+
+        async init(registration) {
+            if (!isAuthenticated() || !isSupported()) {
+                return;
+            }
+            this.registration = registration;
+            this.bindServiceWorkerMessages();
+
+            const config = await this.fetchConfig();
+            this.config = config;
+            if (!config) return;
+
+            document.dispatchEvent(new CustomEvent('nova:push-config', { detail: config }));
+
+            if (config.server_state !== 'ready') {
+                return;
+            }
+
+            if (!config.user_opt_in) {
+                await this.unsubscribe();
+                return;
+            }
+
+            if (Notification.permission === 'granted') {
+                await this.syncSubscription();
+                return;
+            }
+
+            if (Notification.permission === 'default' && shouldPromptFromCurrentPage()) {
+                await this.requestPermissionAndSubscribe();
+            }
+        },
+
+        async fetchConfig() {
+            try {
+                const response = await fetch('/push/config/', {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+                if (!response.ok) return null;
+                return await response.json();
+            } catch (error) {
+                console.warn('Failed to fetch push config:', error);
+                return null;
+            }
+        },
+
+        async requestPermissionAndSubscribe() {
+            if (!this.config || this.config.server_state !== 'ready') {
+                return false;
+            }
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    return false;
+                }
+                return await this.syncSubscription();
+            } catch (error) {
+                console.warn('Push permission request failed:', error);
+                return false;
+            }
+        },
+
+        async syncSubscription() {
+            if (!this.registration || !this.config || !this.config.vapid_public_key) {
+                return false;
+            }
+
+            try {
+                let subscription = await this.registration.pushManager.getSubscription();
+                if (!subscription) {
+                    subscription = await this.registration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: urlBase64ToUint8Array(this.config.vapid_public_key),
+                    });
+                }
+
+                if (!window.DOMUtils?.csrfFetch) {
+                    return false;
+                }
+                const response = await window.DOMUtils.csrfFetch('/push/subscriptions/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(subscription.toJSON()),
+                });
+                return response.ok;
+            } catch (error) {
+                console.warn('Failed to sync push subscription:', error);
+                return false;
+            }
+        },
+
+        async unsubscribe() {
+            if (!this.registration) {
+                return false;
+            }
+
+            try {
+                const subscription = await this.registration.pushManager.getSubscription();
+                if (!subscription) return true;
+                const endpoint = subscription.endpoint;
+                await subscription.unsubscribe();
+
+                if (endpoint && window.DOMUtils?.csrfFetch) {
+                    await window.DOMUtils.csrfFetch('/push/subscriptions/', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ endpoint }),
+                    });
+                }
+                return true;
+            } catch (error) {
+                console.warn('Failed to unsubscribe push subscription:', error);
+                return false;
+            }
+        },
+    };
+})();

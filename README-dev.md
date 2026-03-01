@@ -103,5 +103,51 @@ Then the requirements.txt file can be generated with :
 
 Install with ```pip install pip-tools deptry```
 
+## Vendorized frontend assets
 
+To manually check whether vendorized frontend assets are up to date (Bootstrap, Bootstrap Icons, htmx):
 
+```bash
+./scripts/check_vendor_assets.sh
+```
+
+Useful options:
+
+```bash
+# Exit non-zero if an update is available or if a check fails
+./scripts/check_vendor_assets.sh --strict
+
+# Only read local embedded versions (no npm registry query)
+./scripts/check_vendor_assets.sh --local-only
+```
+
+To update vendorized assets manually:
+
+```bash
+# Update all to latest versions from npm
+./scripts/update_vendor_assets.sh
+
+# Update with explicit versions
+./scripts/update_vendor_assets.sh --bootstrap 5.3.7 --bootstrap-icons 1.11.3 --htmx 2.0.6
+```
+
+## Test settings note
+
+When running tests with `DJANGO_SETTINGS_MODULE=nova.settings_test`, some values from `.env` can still be loaded through `nova/settings.py` (because `settings_test.py` imports it first).
+
+To keep tests deterministic for WebPush, `nova/settings_test.py` explicitly forces:
+
+- `WEBPUSH_ENABLED = False`
+- `WEBPUSH_VAPID_PUBLIC_KEY = ''`
+- `WEBPUSH_VAPID_PRIVATE_KEY = ''`
+- `WEBPUSH_VAPID_SUBJECT = ''`
+
+This avoids local `.env` values unexpectedly enabling push features during test runs.
+
+## WebApp Skill Authoring Pattern
+
+For the `WebApp` skill, code generation is agent-authored by default:
+
+- The agent should generate `files` content from the user's request and call `webapp_create(name, files)`.
+- User-provided snippets are optional inputs; when present, they should be integrated/adapted by the agent.
+- `webapp_create` requires a non-empty `files` object including `index.html`.

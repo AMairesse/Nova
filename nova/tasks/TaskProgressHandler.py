@@ -1,8 +1,10 @@
 # nova/tasks/TaskProgressHandler.py
 import logging
 from uuid import UUID
+from time import monotonic
 from typing import Any, Dict, List, Optional
 from asgiref.sync import sync_to_async
+from django.conf import settings
 
 from langchain_core.callbacks import AsyncCallbackHandler
 
@@ -13,15 +15,35 @@ logger = logging.getLogger(__name__)
 
 # Custom callback handler for synthesis and streaming
 class TaskProgressHandler(AsyncCallbackHandler):
-    def __init__(self, task_id, channel_layer):
+    def __init__(
+        self,
+        task_id,
+        channel_layer,
+        *,
+        user_id: int | None = None,
+        thread_id: int | None = None,
+        thread_mode: str | None = None,
+        initial_streamed_markdown: str | None = None,
+    ):
         self.task_id = task_id
         self.channel_layer = channel_layer
-        self.final_chunks = []
+        self.user_id = user_id
+        self.thread_id = thread_id
+        self.thread_mode = thread_mode
+        initial_stream = (initial_streamed_markdown or "")
+        self.final_chunks = [initial_stream] if initial_stream else []
         self.current_tool = None
         self.tool_depth = 0
         self.token_count = 0
         self._last_persist_count = 0
         self._persist_interval = 50  # Persist every 50 tokens
+        self._stream_flush_interval_seconds = 0.25
+        self._last_stream_flush_at = monotonic()
+        self._last_stream_html = None
+        self._stream_has_pending_changes = False
+        # Insert a markdown paragraph break when a new agent segment starts
+        # after an explicit boundary (tool call, interruption/resume).
+        self._needs_segment_break = False
 
     async def publish_update(self, message_type, data):
         await self.channel_layer.group_send(
@@ -33,6 +55,10 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         Send a message to the client when the task is interrupted
         '''
+        flushed_html = await self._flush_stream_chunk()
+        await self._persist_stream_state(flushed_html)
+        if self.final_chunks:
+            self._needs_segment_break = True
         await self.publish_update('user_prompt', {'interaction_id': interaction_id, 'question': question,
                                                   'schema': schema, 'origin_name': agent_name})
 
@@ -50,12 +76,18 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         await self.publish_update('task_complete', {'result': result, 'thread_id': thread_id,
                                                     'thread_subject': thread_subject})
+        self._queue_push_notification(status="completed")
 
     async def on_error(self, error_msg, error_category):
         '''
         Send a message to the client when an error occurs
         '''
-        await self.publish_update('task_error', {'error': error_msg, 'category': error_category})
+        flushed_html = None
+        if self.tool_depth == 0:
+            flushed_html = await self._flush_stream_chunk()
+        await self._persist_stream_state(flushed_html)
+        await self.publish_update('task_error', {'message': error_msg, 'category': error_category})
+        self._queue_push_notification(status="failed")
 
     async def on_progress(self, message):
         '''
@@ -131,15 +163,30 @@ class TaskProgressHandler(AsyncCallbackHandler):
         try:
             # Send only chunks from the root run
             if self.tool_depth == 0:
+                if self._needs_segment_break:
+                    self._append_segment_break_before_token(token)
+                    self._needs_segment_break = False
                 self.final_chunks.append(token)
-                full_response = ''.join(self.final_chunks)
-                clean_html = markdown_to_html(full_response)
-                await self.on_chunk(clean_html)
+                self._stream_has_pending_changes = True
+                current_html = None
+                now = monotonic()
+                sentence_boundary = token.endswith((".", "!", "?", ";", ":"))
+                line_boundary = "\n" in token
+                should_flush = (
+                    line_boundary
+                    or sentence_boundary
+                    or (now - self._last_stream_flush_at) >= self._stream_flush_interval_seconds
+                )
+
+                if should_flush:
+                    current_html = await self._flush_stream_chunk()
 
                 # Persist periodically for recovery
                 self.token_count += 1
                 if self.token_count - self._last_persist_count >= self._persist_interval:
-                    await self._persist_current_response(clean_html)
+                    if current_html is None:
+                        current_html = self._render_current_response()
+                    await self._persist_stream_state(current_html)
                     self._last_persist_count = self.token_count
             else:
                 # If a sub agent is generating a response,
@@ -157,11 +204,32 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         try:
             if self.tool_depth == 0:
+                current_html = await self._flush_stream_chunk()
+                await self._persist_stream_state(current_html)
                 await self.on_progress("Agent finished")
             else:
                 await self.on_progress("Sub-agent finished")
         except Exception as e:
             logger.error(f"Error in on_llm_end: {e}")
+
+    def _render_current_response(self):
+        return markdown_to_html(''.join(self.final_chunks))
+
+    async def _flush_stream_chunk(self):
+        if not self.final_chunks or not self._stream_has_pending_changes:
+            return self._last_stream_html
+
+        clean_html = self._render_current_response()
+        if clean_html != self._last_stream_html:
+            await self.on_chunk(clean_html)
+            self._last_stream_html = clean_html
+
+        self._last_stream_flush_at = monotonic()
+        self._stream_has_pending_changes = False
+        return clean_html
+
+    def get_streamed_markdown(self) -> str:
+        return ''.join(self.final_chunks)
 
     async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID,
                             parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None,
@@ -173,6 +241,8 @@ class TaskProgressHandler(AsyncCallbackHandler):
             # If a tool is starting,
             # store it to avoid sending response chunks back to the user
             tool_name = serialized.get('name', 'Unknown')
+            if self.tool_depth == 0 and self.final_chunks:
+                self._needs_segment_break = True
             self.current_tool = tool_name
             self.tool_depth += 1
             await self.on_progress(f"Tool '{tool_name}' started")
@@ -206,13 +276,60 @@ class TaskProgressHandler(AsyncCallbackHandler):
         except Exception as e:
             logger.error(f"Error in on_chat_model_start: {e}")
 
-    async def _persist_current_response(self, html_content):
-        """Persist current response to database for recovery."""
+    async def _persist_stream_state(self, html_content=None):
+        """Persist stream state to database for recovery and resume continuity."""
         from nova.models.Task import Task
         try:
+            if html_content is None:
+                if self._last_stream_html is not None:
+                    html_content = self._last_stream_html
+                elif self.final_chunks:
+                    html_content = self._render_current_response()
+            streamed_markdown = self.get_streamed_markdown()
             await sync_to_async(
                 Task.objects.filter(id=self.task_id).update,
                 thread_sensitive=False
-            )(current_response=html_content)
+            )(
+                current_response=html_content,
+                streamed_markdown=streamed_markdown,
+            )
         except Exception as e:
-            logger.error(f"Error persisting current response: {e}")
+            logger.error(f"Error persisting stream state: {e}")
+
+    def _append_segment_break_before_token(self, token: str) -> None:
+        """Add a markdown paragraph break when the next segment starts."""
+        if not self.final_chunks:
+            return
+        # If next token already starts with a newline, keep model formatting.
+        if token.startswith("\n"):
+            return
+        current = ''.join(self.final_chunks)
+        if not current:
+            return
+        if current.endswith("\n\n"):
+            return
+        if current.endswith("\n"):
+            self.final_chunks.append("\n")
+        else:
+            self.final_chunks.append("\n\n")
+        self._stream_has_pending_changes = True
+
+    def _queue_push_notification(self, *, status: str) -> None:
+        if not self.user_id or not bool(getattr(settings, "WEBPUSH_ENABLED", False)):
+            return
+        try:
+            from nova.tasks.notification_tasks import send_task_webpush_notification
+
+            send_task_webpush_notification.delay(
+                user_id=self.user_id,
+                task_id=str(self.task_id),
+                thread_id=self.thread_id,
+                thread_mode=self.thread_mode,
+                status=status,
+            )
+        except Exception:
+            logger.exception(
+                "Unable to enqueue WebPush notification for task_id=%s status=%s",
+                self.task_id,
+                status,
+            )

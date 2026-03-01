@@ -1,32 +1,40 @@
-# Spam filtering template: mailbox selection and locking
+# Spam Filter Template: Mailbox Selection and Locking (Implemented)
 
-## Decision
+Last reviewed: 2026-02-28
+Status: implemented
 
-For the predefined spam-filtering task, mailbox selection is done **before** opening the task creation form.
+## Scope
 
-In the creation form, the selected mailbox tool is **locked** (read-only) to avoid drift between:
+This document covers the predefined spam-filter task (`email_spam_filter_basic`) onboarding flow.
 
-- task title
-- prefilled prompt content
-- selected email tool
+## Implemented flow
 
-## UX flow
+1. User clicks `Use this template`.
+2. Nova redirects to mailbox selection (`task_template_select_mailbox`).
+3. User chooses one valid `agent_id:email_tool_id` pair.
+4. Nova pre-fills task creation form and stores a lock for the selected mailbox.
+5. In the create form, `email_tool` is disabled and cannot be changed.
 
-1. User clicks `Use this template` for spam filtering.
-2. User is redirected to a mailbox selection step.
-3. User picks one mailbox+agent combination.
-4. User lands on create-task form with:
-   - prefilled title/prompt matching that mailbox
-   - mailbox field locked
-5. If user wants a different mailbox, they must restart from template selection.
+The prefill includes mailbox-aware values (notably task name and prompt) and `run_mode=ephemeral`.
 
-## Guardrails
+## Mailbox option resolution
 
-- UI: disabled mailbox field + info message.
-- Server: form validation enforces the locked mailbox, so tampered POST payloads cannot switch tool.
+Availability is computed from real user setup:
+- configured mailbox credentials must exist
+- selectable agent must exist
+- agent must have access to mailbox tool (directly or via sub-agent)
 
-## Why this approach
+If prerequisites are not met, template flow is blocked with a user-facing error.
 
-- Keeps prompt/title/tool coherent.
-- Avoids hidden side effects in-form.
-- Makes intent explicit and predictable for users.
+## Server-side guardrails
+
+Locking is enforced server-side, not only in UI:
+- selected mailbox id is stored in session (`task_template_lock_email_tool_id`)
+- `TaskDefinitionForm.clean()` validates posted `email_tool` against lock
+- tampered payloads are rejected and cannot switch mailbox silently
+
+## Why this remains the chosen behavior
+
+- Keeps task name/prompt/tool coherent.
+- Avoids accidental mailbox drift after template prefill.
+- Preserves explicit user intent and predictable execution.

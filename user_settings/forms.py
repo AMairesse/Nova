@@ -491,6 +491,7 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
             "langfuse_secret_key",
             "langfuse_host",
             "continuous_default_messages_limit",
+            "task_notifications_enabled",
             "api_token_status",
         ]
         widgets = {
@@ -499,8 +500,9 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
         }
 
     # Swallow the extra ``user`` kwarg injected by OwnerFormKwargsMixin
-    def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, user=None, server_state: str = "disabled", **kwargs: Any) -> None:
         self.user = user
+        self.server_state = server_state
         super().__init__(*args, **kwargs)
 
         # Set API token status
@@ -538,6 +540,16 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
             }
         )
 
+        notifications_field = self.fields["task_notifications_enabled"]
+        notifications_field.label = _("Task notifications")
+        notifications_field.help_text = _("Send push notifications when tasks complete or fail.")
+        if self.server_state != "ready":
+            notifications_field.disabled = True
+            if self.server_state == "misconfigured":
+                notifications_field.help_text = _("Server Web Push configuration is incomplete.")
+            else:
+                notifications_field.help_text = _("Disabled by the server administrator.")
+
         # Crispy forms helper for better layout
         self.helper = FormHelper()
         self.helper.form_tag = False
@@ -555,10 +567,23 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
                 css_class="mb-4",
             ),
             Div(
+                Field("task_notifications_enabled"),
+                css_class="mb-4",
+            ),
+            Div(
                 Field("api_token_status"),
                 css_class="mb-3"
             )
         )
+
+    def clean_task_notifications_enabled(self) -> bool:
+        if self.server_state != "ready":
+            # Preserve existing preference while push is unavailable so unrelated
+            # settings updates do not silently opt users out.
+            if self.instance and self.instance.pk:
+                return bool(self.instance.task_notifications_enabled)
+            return False
+        return bool(self.cleaned_data.get("task_notifications_enabled"))
 
 
 # ────────────────────────────────────────────────────────────────────────────

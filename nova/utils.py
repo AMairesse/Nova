@@ -12,28 +12,28 @@ from django.utils.translation import gettext_lazy as _
 from langchain_core.messages import BaseMessage
 
 
-# Markdown configuration for better list handling
+# Chat-oriented markdown profile: robust list/code/table rendering without TOC noise.
 MARKDOWN_EXTENSIONS = [
-    "extra",           # Basic extensions (tables, fenced code, etc.)
-    "toc",             # Table of contents (includes better list processing)
-    "sane_lists",      # Improved list handling
-    "md_in_html",      # Allow markdown inside HTML
+    "extra",
+    "sane_lists",
+    "md_in_html",
+    "nl2br",
 ]
 
-MARKDOWN_EXTENSION_CONFIGS = {
-    'toc': {
-        'marker': ''  # Disable TOC markers to avoid conflicts
-    }
-}
+MARKDOWN_EXTENSION_CONFIGS = {}
 
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
     "br", "hr", "a",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "del", "kbd", "sup", "sub",
     # Table support
     "table", "thead", "tbody", "tfoot", "tr", "th", "td",
 ]
 ALLOWED_ATTRS = {
     "a": ["href", "title", "rel"],
+    "code": ["class"],
+    "pre": ["class"],
 }
 
 logger = logging.getLogger(__name__)
@@ -157,9 +157,12 @@ def estimate_tokens(text: str = None, input_size: int = None) -> int:
 
 
 def markdown_to_html(markdown_text: str) -> str:
-    raw_html = markdown(markdown_text,
-                        extensions=MARKDOWN_EXTENSIONS,
-                        extension_configs=MARKDOWN_EXTENSION_CONFIGS)
+    raw_html = markdown(
+        markdown_text,
+        extensions=MARKDOWN_EXTENSIONS,
+        extension_configs=MARKDOWN_EXTENSION_CONFIGS,
+        tab_length=2,
+    )
     clean_html = bleach.clean(raw_html,
                               tags=ALLOWED_TAGS,
                               attributes=ALLOWED_ATTRS,

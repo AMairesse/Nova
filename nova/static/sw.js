@@ -1,14 +1,15 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v4';  // Updated version for view/preferences persistence changes
+const CACHE_NAME = 'nova-v8';  // Includes foreground push in-app handling
 const urlsToCache = [
-  '/',
   '/static/css/main.css',
   '/static/js/utils.js',
+  '/static/js/notification-manager.js',
   '/static/js/view-preferences.js',
-  'https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css',
-  'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css',
-  'https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/js/bootstrap.bundle.min.js',
-  'https://cdn.jsdelivr.net/npm/htmx.org@2.0.6/dist/htmx.min.js'
+  '/static/vendor/bootstrap/css/bootstrap.min.css',
+  '/static/vendor/bootstrap-icons/bootstrap-icons.min.css',
+  '/static/vendor/bootstrap/js/bootstrap.bundle.min.js',
+  '/static/vendor/htmx/htmx.min.js',
+  '/static/images/icon-192x192.png'
 ];
 
 let config = {
@@ -27,11 +28,20 @@ self.addEventListener('message', (event) => {
 // Install Service Worker
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      console.log('Opened cache');
+      await Promise.allSettled(
+        urlsToCache.map(async (url) => {
+          try {
+            await cache.add(url);
+          } catch (error) {
+            console.warn('SW precache failed for', url, error);
+          }
+        })
+      );
+      await self.skipWaiting();
+    })()
   );
 });
 
@@ -41,8 +51,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return; // never intercept non-GET
 
   const url = new URL(req.url);
-  const isStatic = url.pathname.startsWith('/static/')
-    || url.origin.startsWith('https://cdn.jsdelivr.net');
+  const isStatic = url.origin === self.location.origin && url.pathname.startsWith('/static/');
 
   if (!isStatic) return; // let network handle
 
@@ -108,6 +117,78 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
+});
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch (e) {
+      payload = { body: event.data.text() };
+    }
+  }
+
+  const title = payload.title || 'Nova';
+  const options = {
+    body: payload.body || 'Task status updated.',
+    tag: payload.tag || 'nova-task',
+    icon: '/static/images/icon-192x192.png',
+    badge: '/static/images/icon-192x192.png',
+    data: payload.data || { url: '/' },
+  };
+
+  event.waitUntil((async () => {
+    const clientsList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const foregroundClients = clientsList.filter((client) => {
+      const isVisible = client.visibilityState === 'visible';
+      const isFocused = client.focused === true;
+      return isVisible || isFocused;
+    });
+
+    if (foregroundClients.length > 0) {
+      for (const client of foregroundClients) {
+        client.postMessage({
+          type: 'nova:push-in-app',
+          payload,
+        });
+      }
+      return;
+    }
+
+    await self.registration.showNotification(title, options);
+  })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const targetUrl = event.notification?.data?.url || '/';
+  event.waitUntil((async () => {
+    const target = new URL(targetUrl, self.location.origin);
+    const clientsList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+    for (const client of clientsList) {
+      try {
+        const clientUrl = new URL(client.url);
+        if (clientUrl.origin !== target.origin) continue;
+
+        if ('navigate' in client) {
+          await client.navigate(target.href);
+        }
+        if ('focus' in client) {
+          await client.focus();
+        }
+        return;
+      } catch (e) {
+        // Ignore malformed URLs and continue to next client.
+      }
+    }
+
+    if (clients.openWindow) {
+      await clients.openWindow(target.href);
+    }
+  })());
 });
