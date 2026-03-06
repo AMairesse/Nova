@@ -114,8 +114,21 @@ class TaskDefinition(models.Model):
         except Exception:
             return _("Invalid cron expression")
 
+    @classmethod
+    def periodic_task_name_for_id(cls, task_definition_id: int) -> str:
+        return f"task_definition_{task_definition_id}"
+
     def _periodic_task_name(self) -> str:
-        return f"task_definition_{self.id}"
+        return self.periodic_task_name_for_id(self.id)
+
+    @classmethod
+    def cleanup_periodic_task_for_id(cls, task_definition_id: int) -> int:
+        if task_definition_id is None:
+            return 0
+        deleted, _ = PeriodicTask.objects.filter(
+            name=cls.periodic_task_name_for_id(task_definition_id)
+        ).delete()
+        return deleted
 
     def _celery_task_name(self) -> str:
         if self.task_kind == self.TaskKind.MAINTENANCE:
@@ -258,11 +271,3 @@ class TaskDefinition(models.Model):
                 periodic_task.save()
             except PeriodicTask.DoesNotExist:
                 pass
-
-    def delete(self, *args, **kwargs):
-        try:
-            periodic_task = PeriodicTask.objects.get(name=self._periodic_task_name())
-            periodic_task.delete()
-        except PeriodicTask.DoesNotExist:
-            pass
-        super().delete(*args, **kwargs)

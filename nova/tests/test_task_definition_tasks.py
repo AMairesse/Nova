@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django_celery_beat.models import PeriodicTask
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider, ProviderType
@@ -327,6 +328,33 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["reason"], "wrong_trigger")
         mocked_poll.assert_not_called()
+
+    @patch("nova.tasks.tasks.schedule_trigger_task_retry")
+    def test_poll_task_definition_email_skips_missing_task_definition_without_retry(self, mocked_retry_policy):
+        task_def = self._create_agent_email_task(name="email-missing")
+        periodic = PeriodicTask.objects.get(name=f"task_definition_{task_def.id}")
+        interval = periodic.interval
+        task_definition_id = task_def.id
+
+        task_def.delete()
+        PeriodicTask.objects.create(
+            name=f"task_definition_{task_definition_id}",
+            task="poll_task_definition_email",
+            args=f"[{task_definition_id}]",
+            kwargs="{}",
+            enabled=True,
+            one_off=False,
+            interval=interval,
+        )
+
+        with self.assertLogs("nova.tasks.tasks", level="WARNING") as logs:
+            result = poll_task_definition_email.run(task_definition_id)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "missing_task_definition")
+        mocked_retry_policy.assert_not_called()
+        self.assertFalse(PeriodicTask.objects.filter(name=f"task_definition_{task_definition_id}").exists())
+        self.assertTrue(any("Deleted 1 stale periodic task" in line for line in logs.output))
 
     @patch("nova.tasks.tasks.current_app.tasks.get")
     def test_run_task_definition_maintenance_skips_inactive(self, mocked_get_task):

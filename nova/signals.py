@@ -2,11 +2,12 @@
 import logging
 
 from django.conf import settings
-from django.db.models.signals import post_save, pre_delete
+from django.db.models.signals import post_delete, post_save, pre_delete
 from django.dispatch import receiver
 from asgiref.sync import async_to_sync
 
 from nova.llm.checkpoints import get_checkpointer
+from nova.models.TaskDefinition import TaskDefinition
 from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.Thread import Thread
 
@@ -23,6 +24,18 @@ def create_user_profile_and_params(sender, instance, created, **kwargs):
     if created:
         UserProfile.objects.create(user=instance)
         UserParameters.objects.create(user=instance)
+
+
+# --------------------------------------------------------------------------
+@receiver(post_delete, sender=TaskDefinition)
+def cleanup_task_definition_periodic_task(sender, instance: TaskDefinition, **kwargs):
+    """
+    Remove the matching django-celery-beat schedule even when TaskDefinition is
+    deleted via queryset/bulk/cascade paths that bypass model.delete().
+    """
+    deleted = TaskDefinition.cleanup_periodic_task_for_id(instance.id)
+    if deleted:
+        logger.info("Deleted %s periodic task(s) for task definition %s", deleted, instance.id)
 
 
 # --------------------------------------------------------------------------

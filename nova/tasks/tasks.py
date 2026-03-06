@@ -604,6 +604,24 @@ def _mark_task_definition_error(task_definition_id: int, error: Exception):
         logger.error("Failed to update task definition %s with error: %s", task_definition_id, inner_e)
 
 
+def _handle_missing_task_definition(task_definition_id: int, *, runner_name: str):
+    deleted = TaskDefinition.cleanup_periodic_task_for_id(task_definition_id)
+    if deleted:
+        logger.warning(
+            "Task definition %s is missing during %s. Deleted %s stale periodic task(s).",
+            task_definition_id,
+            runner_name,
+            deleted,
+        )
+    else:
+        logger.warning(
+            "Task definition %s is missing during %s. No stale periodic task was found.",
+            task_definition_id,
+            runner_name,
+        )
+    return {"status": "skipped", "reason": "missing_task_definition"}
+
+
 @shared_task(bind=True, name="run_task_definition_cron")
 def run_task_definition_cron(self, task_definition_id: int):
     """Run an agent task definition configured with a cron trigger."""
@@ -624,6 +642,8 @@ def run_task_definition_cron(self, task_definition_id: int):
         _mark_task_definition_success(task_definition)
         logger.info("Task definition %s executed successfully.", task_definition.name)
         return {"status": "ok", **result}
+    except TaskDefinition.DoesNotExist:
+        return _handle_missing_task_definition(task_definition_id, runner_name="cron")
     except Exception as e:
         logger.error("Error executing task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
@@ -675,6 +695,8 @@ def poll_task_definition_email(self, task_definition_id: int):
             len(headers),
         )
         return {"status": "ok", "new_email_count": len(headers), **result}
+    except TaskDefinition.DoesNotExist:
+        return _handle_missing_task_definition(task_definition_id, runner_name="email_poll")
     except Exception as e:
         logger.error("Error polling task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
@@ -711,6 +733,8 @@ def run_task_definition_maintenance(self, task_definition_id: int):
         _mark_task_definition_success(task_definition)
         logger.info("Maintenance task definition %s dispatched successfully.", task_definition.name)
         return {"status": "ok", "maintenance_task": task_definition.maintenance_task}
+    except TaskDefinition.DoesNotExist:
+        return _handle_missing_task_definition(task_definition_id, runner_name="maintenance")
     except Exception as e:
         logger.error("Error executing maintenance task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
