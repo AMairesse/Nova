@@ -90,7 +90,10 @@ async def async_delete_file(file_id: int):
     """Async wrapper for delete."""
     file = await async_get_object_or_404(UserFile, id=file_id)
     thread_id = await sync_to_async(lambda: file.thread_id, thread_sensitive=False)()
-    file_scope = await sync_to_async(lambda: file.scope, thread_sensitive=False)()
+    file_scope = await sync_to_async(
+        lambda: getattr(file, "scope", UserFile.Scope.THREAD_SHARED),
+        thread_sensitive=False,
+    )()
     await sync_to_async(file.delete, thread_sensitive=False)()
     if file_scope == UserFile.Scope.THREAD_SHARED:
         await publish_file_update(thread_id, "file_delete")

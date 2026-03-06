@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -29,7 +30,9 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
-if DEBUG:
+USING_TEST_SETTINGS = os.getenv('DJANGO_SETTINGS_MODULE', '') == 'nova.settings_test'
+ENABLE_DEBUGPY = os.getenv('ENABLE_DEBUGPY', 'True').lower() == 'true'
+if DEBUG and ENABLE_DEBUGPY and not USING_TEST_SETTINGS and 'test' not in sys.argv:
     import debugpy
     debugpy.listen(('0.0.0.0', 5678))
     # debugpy.wait_for_client()  # Uncomment to attach debugger
