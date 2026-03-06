@@ -209,6 +209,23 @@ class TaskDefinitionBeatSyncTests(TaskDefinitionModelBase):
         periodic = PeriodicTask.objects.get(name=f"task_definition_{task_def.id}")
         self.assertFalse(periodic.enabled)
 
+    def test_delete_task_removes_periodic_task(self):
+        task_def = self._create_agent_email_task(name="delete-email-task")
+        periodic_name = f"task_definition_{task_def.id}"
+
+        task_def.delete()
+
+        self.assertFalse(PeriodicTask.objects.filter(name=periodic_name).exists())
+
+    def test_cascade_delete_from_agent_removes_periodic_task(self):
+        task_def = self._create_agent_cron_task(name="cascade-delete")
+        periodic_name = f"task_definition_{task_def.id}"
+
+        self.agent.delete()
+
+        self.assertFalse(TaskDefinition.objects.filter(id=task_def.id).exists())
+        self.assertFalse(PeriodicTask.objects.filter(name=periodic_name).exists())
+
     def test_runtime_only_save_does_not_resync_periodic_schedule(self):
         task_def = self._create_agent_cron_task(name="runtime-save")
         periodic = PeriodicTask.objects.get(name=f"task_definition_{task_def.id}")
@@ -222,4 +239,3 @@ class TaskDefinitionBeatSyncTests(TaskDefinitionModelBase):
         self.assertEqual(periodic.id, before_periodic_id)
         self.assertEqual(periodic.crontab_id, before_crontab_id)
         self.assertTrue(periodic.enabled)
-
