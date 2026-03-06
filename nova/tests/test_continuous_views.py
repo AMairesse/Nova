@@ -4,6 +4,7 @@ import datetime as dt
 import re
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
@@ -12,6 +13,7 @@ from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Task import Task, TaskStatus
+from nova.models.UserFile import UserFile
 from nova.tests.factories import create_agent, create_provider
 
 
@@ -93,6 +95,49 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(payload_2["status"], "OK")
         self.assertFalse(payload_2["opened_new_day"])
         self.assertEqual(payload_2["day_label"], get_day_label_for_user(self.user).isoformat())
+
+    @patch("nova.views.continuous_views.upload_message_attachments")
+    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.views.continuous_views.run_ai_task_celery.delay")
+    def test_continuous_add_message_accepts_image_only_payload(
+        self,
+        _mocked_run_ai_task,
+        mocked_enqueue_followups,
+        mocked_upload_message_attachments,
+    ):
+        mocked_enqueue_followups.return_value = None
+        mocked_upload_message_attachments.return_value = (
+            [{
+                "id": 301,
+                "filename": "camera.jpg",
+                "mime_type": "image/jpeg",
+                "size": 2048,
+                "scope": UserFile.Scope.MESSAGE_ATTACHMENT,
+            }],
+            [],
+        )
+
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={
+                "new_message": "",
+                "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "OK")
+        self.assertEqual(payload["message"]["message_attachments"][0]["filename"], "camera.jpg")
+
+    def test_continuous_add_message_rejects_empty_payload(self):
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={"new_message": "   "},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
 
     def test_continuous_regenerate_summary_returns_404_when_segment_missing(self):
         response = self.client.post(reverse("continuous_regenerate_summary"), data={"day": "2026-01-01"})

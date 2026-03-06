@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Model for user-uploaded files stored in MinIO
 class UserFile(models.Model):
+    class Scope(models.TextChoices):
+        THREAD_SHARED = "thread_shared", "Thread shared"
+        MESSAGE_ATTACHMENT = "message_attachment", "Message attachment"
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='files')
@@ -27,6 +31,12 @@ class UserFile(models.Model):
     mime_type = models.CharField(max_length=100)
     # File size in bytes
     size = models.PositiveIntegerField()
+    scope = models.CharField(
+        max_length=32,
+        choices=Scope.choices,
+        default=Scope.THREAD_SHARED,
+        db_index=True,
+    )
     # Auto-delete after this date
     expiration_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

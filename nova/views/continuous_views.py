@@ -27,6 +27,8 @@ from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
 from nova.utils import markdown_to_html
+from nova.message_attachments import MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY
+from nova.message_utils import annotate_user_message, upload_message_attachments
 
 _YEAR_RE = re.compile(r"^\d{4}$")
 _YEAR_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
@@ -283,6 +285,8 @@ def continuous_messages(request):
         if m.actor == Actor.AGENT and m.internal_data:
             display_text = m.internal_data.get("display_markdown") or m.text
         m.rendered_html = markdown_to_html(display_text)
+        if m.actor == Actor.USER:
+            annotate_user_message(m)
 
     pending_interactions = (
         Interaction.objects.filter(
@@ -319,9 +323,40 @@ def continuous_add_message(request):
     """Append a user message to the continuous thread and start agent execution."""
 
     new_message = request.POST.get("new_message", "")
+    new_message = new_message if new_message.strip() else ""
     selected_agent = request.POST.get("selected_agent")
+    message_attachments = request.FILES.getlist("message_attachments", [])
+
+    if not new_message.strip() and not message_attachments:
+        return JsonResponse(
+            {"status": "ERROR", "message": "Message or image attachment required"},
+            status=400,
+        )
 
     thread, msg, seg, day_label, opened_new_day = append_continuous_user_message(request.user, new_message)
+
+    message_attachment_meta = []
+    if message_attachments:
+        attachment_meta, attachment_errors = upload_message_attachments(
+            thread,
+            request.user,
+            msg.id,
+            message_attachments,
+        )
+        message_attachment_meta = attachment_meta
+        if attachment_errors and not message_attachment_meta:
+            if seg and getattr(seg, "starts_at_message_id", None) == msg.id:
+                seg.delete()
+            msg.delete()
+            return JsonResponse(
+                {"status": "ERROR", "message": "; ".join(attachment_errors)},
+                status=400,
+            )
+
+    msg.internal_data = {
+        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
+    }
+    msg.save(update_fields=["internal_data"])
 
     # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
     agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
@@ -350,6 +385,7 @@ def continuous_add_message(request):
         "actor": msg.actor,
         "file_count": 0,
         "internal_data": msg.internal_data or {},
+        "message_attachments": message_attachment_meta,
     }
 
     return JsonResponse(

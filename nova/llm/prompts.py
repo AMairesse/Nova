@@ -221,7 +221,11 @@ async def _get_file_context(thread, user) -> Optional[str]:
     try:
         # Single DB round-trip to count files
         file_count = await sync_to_async(
-            UserFile.objects.filter(thread=thread, user=user).count
+            UserFile.objects.filter(
+                thread=thread,
+                user=user,
+                scope=UserFile.Scope.THREAD_SHARED,
+            ).count
         )()
 
         if file_count:

@@ -24,6 +24,8 @@ from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
+from nova.message_attachments import MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY
+from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -166,8 +168,8 @@ def message_list(request):
                     display_text = m.internal_data.get('display_markdown') or m.text
                 m.rendered_html = markdown_to_html(display_text)
                 # Add info about files used
-                if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
-                    m.file_count = len(m.internal_data['file_ids'])
+                if m.actor == Actor.USER:
+                    annotate_user_message(m)
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
@@ -251,8 +253,16 @@ def delete_thread(request, thread_id):
 def add_message(request):
     thread_id = request.POST.get('thread_id')
     new_message = request.POST.get('new_message', '')
+    new_message = new_message if new_message.strip() else ''
     selected_agent = request.POST.get('selected_agent')
     uploaded_files = request.FILES.getlist('files', [])
+    message_attachments = request.FILES.getlist('message_attachments', [])
+
+    if not new_message.strip() and not uploaded_files and not message_attachments:
+        return JsonResponse(
+            {"status": "ERROR", "message": "Message or image attachment required"},
+            status=400,
+        )
 
     if not thread_id or thread_id == 'None':
         thread, thread_html = new_thread(request)
@@ -261,6 +271,7 @@ def add_message(request):
         thread_html = None
 
     uploaded_file_ids = []
+    message_attachment_meta = []
 
     if uploaded_files:
         # Prepare data for unified async upload pipeline.
@@ -311,7 +322,25 @@ def add_message(request):
         async_to_sync(publish_file_update)(thread.id, "attachment_upload")
 
     message = thread.add_message(new_message, actor=Actor.USER)
-    message.internal_data = {'file_ids': uploaded_file_ids}
+    if message_attachments:
+        attachment_meta, attachment_errors = upload_message_attachments(
+            thread,
+            request.user,
+            message.id,
+            message_attachments,
+        )
+        message_attachment_meta = attachment_meta
+        if attachment_errors and not message_attachment_meta:
+            message.delete()
+            return JsonResponse(
+                {"status": "ERROR", "message": "; ".join(attachment_errors)},
+                status=400,
+            )
+
+    message.internal_data = {
+        'file_ids': uploaded_file_ids,
+        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
+    }
     message.save()
 
     agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
@@ -329,7 +358,8 @@ def add_message(request):
         "text": new_message,  # Return raw text for client-side rendering
         "actor": message.actor,
         "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
-        "internal_data": message.internal_data or {}
+        "internal_data": message.internal_data or {},
+        "message_attachments": message_attachment_meta,
     }
 
     return JsonResponse({

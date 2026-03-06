@@ -24,6 +24,9 @@
             this._initialized = false;
             this._handlersBound = false;
             this._setupPrefillApplied = false;
+            this.composerAttachments = [];
+            this.maxComposerAttachments = 4;
+            this.maxComposerAttachmentBytes = 4 * 1024 * 1024;
         }
 
         init() {
@@ -103,6 +106,19 @@
                     e.preventDefault();
                     this.handleVoiceButtonClick();
                 },
+                '#attach-image-btn': (e) => {
+                    e.preventDefault();
+                    this.openComposerAttachmentPicker('message-attachment-input');
+                },
+                '#camera-capture-btn': (e) => {
+                    e.preventDefault();
+                    this.openComposerAttachmentPicker('message-camera-input');
+                },
+                '.composer-attachment-remove': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.composer-attachment-remove');
+                    this.removeComposerAttachment(button?.dataset.attachmentId || '');
+                },
                 '.compact-thread-link': (e, target) => {
                     e.preventDefault();
                     this.summarizeCurrentThread();
@@ -135,6 +151,12 @@
                 }
             });
 
+            document.addEventListener('change', (e) => {
+                if (e.target.id === 'message-attachment-input' || e.target.id === 'message-camera-input') {
+                    this.handleComposerAttachmentInputChange(e.target);
+                }
+            });
+
             // Textarea handling
             document.addEventListener('keydown', (e) => {
                 if (e.target.matches('#message-container textarea[name="new_message"]') && e.key === "Enter" && !e.shiftKey) {
@@ -156,6 +178,7 @@
 
                 const html = await response.text();
                 document.getElementById('message-container').innerHTML = html;
+                this.resetComposerAttachments();
                 // Thread id can be implicit (when threadId param omitted).
                 // Always re-sync from the hidden input rendered by the server.
                 const renderedThreadId = document.querySelector('#message-container input[name="thread_id"]')?.value;
@@ -298,8 +321,13 @@
             const textarea = form.querySelector('textarea[name="new_message"]');
             const originalMessage = textarea ? textarea.value : '';
             const msg = originalMessage.trim();
-            if (!msg) return;
             const formData = new FormData(form);
+            const hasAttachments = this.composerAttachments.length > 0;
+            if (!msg && !hasAttachments) return;
+
+            for (const attachment of this.composerAttachments) {
+                formData.append('message_attachments', attachment.file, attachment.file.name);
+            }
 
             // Disable send button
             const sendBtn = document.getElementById('send-btn');
@@ -328,6 +356,7 @@
                 const threadIdInput = document.querySelector('input[name="thread_id"]');
                 if (threadIdInput) threadIdInput.value = data.thread_id;
                 this.currentThreadId = data.thread_id;
+                this.resetComposerAttachments();
 
                 // Add user message dynamically on the page
                 const userMessageEl = window.MessageRenderer.createMessageElement(data.message, '');
@@ -366,6 +395,108 @@
             if (!textarea) return;
             textarea.style.height = 'auto';
             textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+        }
+
+        openComposerAttachmentPicker(inputId) {
+            const input = document.getElementById(inputId);
+            if (input) input.click();
+        }
+
+        handleComposerAttachmentInputChange(input) {
+            const files = Array.from(input?.files || []);
+            if (!files.length) return;
+            this.addComposerAttachments(files);
+            input.value = '';
+        }
+
+        addComposerAttachments(files) {
+            const accepted = [];
+            const availableSlots = this.maxComposerAttachments - this.composerAttachments.length;
+            if (availableSlots <= 0) {
+                this.showToast(gettext('You can attach up to 4 images per message.'), 'warning');
+                return;
+            }
+
+            for (const file of files) {
+                if (accepted.length >= availableSlots) {
+                    this.showToast(gettext('You can attach up to 4 images per message.'), 'warning');
+                    break;
+                }
+                if (!(file.type || '').startsWith('image/')) {
+                    this.showToast(gettext('Only image attachments are supported here.'), 'warning');
+                    continue;
+                }
+                if (file.size > this.maxComposerAttachmentBytes) {
+                    this.showToast(gettext('Each image must be 4 MB or less.'), 'warning');
+                    continue;
+                }
+                accepted.push({
+                    id: (window.crypto && typeof window.crypto.randomUUID === 'function')
+                        ? window.crypto.randomUUID()
+                        : `${Date.now()}-${Math.random()}`,
+                    file,
+                    previewUrl: URL.createObjectURL(file),
+                });
+            }
+
+            if (!accepted.length) return;
+            this.composerAttachments.push(...accepted);
+            this.renderComposerAttachments();
+        }
+
+        removeComposerAttachment(attachmentId) {
+            const nextAttachments = [];
+            for (const attachment of this.composerAttachments) {
+                if (attachment.id === attachmentId) {
+                    if (attachment.previewUrl) {
+                        URL.revokeObjectURL(attachment.previewUrl);
+                    }
+                    continue;
+                }
+                nextAttachments.push(attachment);
+            }
+            this.composerAttachments = nextAttachments;
+            this.renderComposerAttachments();
+        }
+
+        resetComposerAttachments() {
+            for (const attachment of this.composerAttachments) {
+                if (attachment.previewUrl) {
+                    URL.revokeObjectURL(attachment.previewUrl);
+                }
+            }
+            this.composerAttachments = [];
+
+            const galleryInput = document.getElementById('message-attachment-input');
+            const cameraInput = document.getElementById('message-camera-input');
+            if (galleryInput) galleryInput.value = '';
+            if (cameraInput) cameraInput.value = '';
+
+            this.renderComposerAttachments();
+        }
+
+        renderComposerAttachments() {
+            const container = document.getElementById('composer-attachments');
+            if (!container) return;
+            if (!this.composerAttachments.length) {
+                container.innerHTML = '';
+                container.classList.add('d-none');
+                return;
+            }
+
+            container.classList.remove('d-none');
+            container.innerHTML = this.composerAttachments.map((attachment) => `
+                <div class="composer-attachment-chip">
+                    <img src="${attachment.previewUrl}" alt="${window.DOMUtils.escapeHTML(attachment.file.name)}" class="composer-attachment-thumb">
+                    <div class="composer-attachment-meta">
+                        <div class="composer-attachment-name">${window.DOMUtils.escapeHTML(attachment.file.name)}</div>
+                        <div class="composer-attachment-size">${Math.max(1, Math.round(attachment.file.size / 1024))} KB</div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary composer-attachment-remove" data-attachment-id="${attachment.id}" aria-label="${gettext('Remove attachment')}">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            `).join('');
         }
 
         appendMessage(messageElement) {

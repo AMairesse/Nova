@@ -132,6 +132,32 @@ class LLMAgentExecutionTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                 # Verify the middleware was called (through the agent's context)
                 # The actual prompt building is tested in test_llm_agent_prompts.py
 
+    async def test_ainvoke_accepts_multimodal_user_content(self):
+        mock_agent = self.create_mock_langchain_agent()
+        with patch.object(llm_agent_mod, "extract_final_answer", return_value="OK"):
+            with patch("nova.llm.prompts.UserFile.objects.filter") as mock_filter:
+                mock_filter.return_value.count.return_value = 0
+
+                agent = llm_agent_mod.LLMAgent(
+                    user=self.create_mock_user(),
+                    thread=self.create_mock_thread(),
+                    langgraph_thread_id="fake_id",
+                    agent_config=None,
+                    system_prompt=None,
+                    llm_provider=self.create_mock_provider(),
+                )
+                agent.langchain_agent = mock_agent
+
+                multimodal_content = [
+                    {"type": "text", "text": "Please analyze the attached image."},
+                    {"type": "image", "source_type": "base64", "data": "ZmFrZQ==", "mime_type": "image/jpeg"},
+                ]
+
+                await agent.ainvoke(multimodal_content, silent_mode=False)
+
+                payload, _config = mock_agent.invocations[0]
+                self.assertEqual(payload["messages"].content, multimodal_content)
+
 
 class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
     """Test cases for agent creation and initialization."""

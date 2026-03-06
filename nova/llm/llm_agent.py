@@ -398,7 +398,7 @@ class LLMAgent:
             runtime.update({"recursion_limit": self.recursion_limit})
         return runtime
 
-    async def ainvoke(self, question: str, silent_mode=False, thread_id_override: str | None = None):
+    async def ainvoke(self, question, silent_mode=False, thread_id_override: str | None = None):
         config = self._build_runtime_config(
             silent_mode=silent_mode,
             thread_id_override=thread_id_override,
@@ -422,8 +422,10 @@ class LLMAgent:
             skill_control_tool_names=list(getattr(self, "skill_control_tool_names", []) or []),
         )
 
-        full_question = f"{question}"
-        message = HumanMessage(content=full_question)
+        if isinstance(question, list):
+            message = HumanMessage(content=question)
+        else:
+            message = HumanMessage(content=f"{question}")
 
         while True:
             result = await self.langchain_agent.ainvoke(

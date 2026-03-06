@@ -535,6 +535,7 @@ class UserFileModelsTest(BaseTestCase):
         self.assertEqual(user_file.user, self.user)
         self.assertEqual(user_file.thread, self.thread)
         self.assertEqual(user_file.original_filename, "test.txt")
+        self.assertEqual(user_file.scope, UserFile.Scope.THREAD_SHARED)
         self.assertIsNotNone(user_file.expiration_date)
 
     def test_user_file_str(self):

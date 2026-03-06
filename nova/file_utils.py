@@ -21,6 +21,9 @@ ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html',
                       'application/msword']
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5MB threshold for multipart
+MESSAGE_ATTACHMENT_MAX_FILES = 4
+MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE = 4 * 1024 * 1024  # 4MB
+MESSAGE_ATTACHMENT_STORAGE_PREFIX = "/.message_attachments"
 
 
 def detect_mime(content: bytes) -> str:
@@ -85,7 +88,33 @@ async def upload_file_to_minio(content: bytes, path: str, mime: str,
             raise
 
 
-async def auto_rename_path(thread: Thread, proposed_path: str) -> str:
+async def download_file_content(user_file: UserFile) -> bytes:
+    """Download file bytes from MinIO."""
+    session = aioboto3.Session()
+    async with session.client(
+        's3',
+        endpoint_url=settings.MINIO_ENDPOINT_URL,
+        aws_access_key_id=settings.MINIO_ACCESS_KEY,
+        aws_secret_access_key=settings.MINIO_SECRET_KEY
+    ) as s3_client:
+        response = await s3_client.get_object(
+            Bucket=settings.MINIO_BUCKET_NAME,
+            Key=user_file.key,
+        )
+        return await response['Body'].read()
+
+
+def build_message_attachment_path(message_id: int, filename: str) -> str:
+    safe_name = posixpath.basename(sanitize_user_path(filename or "image").rstrip("/")) or "image"
+    return f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_{int(message_id)}/{safe_name}"
+
+
+async def auto_rename_path(
+    thread: Thread,
+    proposed_path: str,
+    *,
+    scope: str = UserFile.Scope.THREAD_SHARED,
+) -> str:
     norm = sanitize_user_path(proposed_path)
     parent = posixpath.dirname(norm)
     base = posixpath.basename(norm)
@@ -94,7 +123,11 @@ async def auto_rename_path(thread: Thread, proposed_path: str) -> str:
     # Count existing exact matches and “ (n)” siblings
     @sync_to_async
     def existing_names():
-        qs = UserFile.objects.filter(thread=thread, original_filename__startswith=parent)
+        qs = UserFile.objects.filter(
+            thread=thread,
+            scope=scope,
+            original_filename__startswith=parent,
+        )
         return set(f.original_filename for f in qs)
 
     names = await existing_names()
@@ -143,11 +176,17 @@ async def check_thread_access(thread: Thread, user) -> bool:
 
 
 async def batch_upload_files(thread: Thread, user,
-                             file_data: List[Dict[str, bytes or str]]) -> Tuple[List[Dict], List[str]]:
+                             file_data: List[Dict[str, bytes or str]], *,
+                             scope: str = UserFile.Scope.THREAD_SHARED,
+                             max_file_size: int = MAX_FILE_SIZE,
+                             allowed_mime_types: List[str] | None = None,
+                             allowed_mime_prefixes: Tuple[str, ...] = ()) -> Tuple[List[Dict], List[str]]:
     """Async process batch of files with paths, upload, and
        return created files + errors."""
     created_files = []
     errors = []
+    allowed_types = ALLOWED_MIME_TYPES if allowed_mime_types is None else list(allowed_mime_types)
+
     for item in file_data:
         try:
             if not await check_thread_access(thread, user):
@@ -160,16 +199,16 @@ async def batch_upload_files(thread: Thread, user,
                 errors.append(f"Empty content for {proposed_path}")
                 continue
 
-            if len(content) > MAX_FILE_SIZE:
+            if len(content) > max_file_size:
                 errors.append(f"File too large: {proposed_path}")
                 continue
 
             mime = detect_mime(content)
-            if mime not in ALLOWED_MIME_TYPES:
+            if mime not in allowed_types and not any(mime.startswith(prefix) for prefix in allowed_mime_prefixes):
                 errors.append(f"Unsupported MIME {mime} for {proposed_path}")
                 continue
 
-            renamed_path = await auto_rename_path(thread, proposed_path)
+            renamed_path = await auto_rename_path(thread, proposed_path, scope=scope)
             if renamed_path != proposed_path:
                 logger.info(f"Auto-renamed {proposed_path} to {renamed_path}")
 
@@ -181,10 +220,17 @@ async def batch_upload_files(thread: Thread, user,
             def create_user_file():
                 return UserFile.objects.create(
                     user=user, thread=thread, original_filename=renamed_path,
-                    mime_type=mime, size=len(content), key=key
+                    mime_type=mime, size=len(content), key=key, scope=scope
                 )
             user_file = await create_user_file()
-            created_files.append({'id': user_file.id, 'path': renamed_path})
+            created_files.append({
+                'id': user_file.id,
+                'path': renamed_path,
+                'filename': posixpath.basename(renamed_path),
+                'mime_type': mime,
+                'size': len(content),
+                'scope': scope,
+            })
         except Exception as e:
             err_msg = f"Error uploading {item.get('path', 'unknown')}: {str(e)}"
             logger.error(err_msg)

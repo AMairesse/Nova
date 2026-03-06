@@ -36,7 +36,10 @@ def file_list(request, thread_id):
         return JsonResponse({'error': 'Thread not found or unauthorized'},
                             status=403)
 
-    files = UserFile.objects.filter(thread=thread).order_by('original_filename')
+    files = UserFile.objects.filter(
+        thread=thread,
+        scope=UserFile.Scope.THREAD_SHARED,
+    ).order_by('original_filename')
     tree = build_virtual_tree(files)
     return JsonResponse({'files': tree}, status=200)
 
@@ -142,5 +145,6 @@ class FileDeleteView(LoginRequiredMixin, View):
 
         thread_id = file.thread_id
         file.delete()  # Uses model's delete for MinIO/DB
-        async_to_sync(publish_file_update)(thread_id, "file_delete")
+        if file.scope == UserFile.Scope.THREAD_SHARED:
+            async_to_sync(publish_file_update)(thread_id, "file_delete")
         return JsonResponse({'success': True})

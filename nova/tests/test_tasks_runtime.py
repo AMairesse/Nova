@@ -13,6 +13,7 @@ from nova.tasks.tasks import (
     AgentTaskExecutor,
     ContextConsumptionTracker,
     SummarizationTaskExecutor,
+    build_source_message_prompt,
     delete_checkpoints,
     generate_thread_title_task,
     resume_ai_task_celery,
@@ -75,6 +76,45 @@ class ContextConsumptionTrackerTests(IsolatedAsyncioTestCase):
 
 
 class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
+    async def test_build_source_message_prompt_returns_multimodal_content(self):
+        source_message = SimpleNamespace(
+            id=55,
+            text="What do you see?",
+            internal_data={
+                "message_attachments": [
+                    {
+                        "id": 9,
+                        "filename": "photo.jpg",
+                        "mime_type": "image/jpeg",
+                        "size": 1200,
+                        "scope": "message_attachment",
+                    }
+                ]
+            },
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=2),
+        )
+
+        def immediate_sync_to_async(func, thread_sensitive=False):
+            async def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+
+        with (
+            patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
+            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=[
+                SimpleNamespace(id=9, mime_type="image/jpeg", original_filename="/.message_attachments/message_55/photo.jpg"),
+            ]),
+            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"image-bytes"),
+        ):
+            prompt = await build_source_message_prompt(source_message)
+
+        self.assertIsInstance(prompt, list)
+        self.assertEqual(prompt[0]["type"], "text")
+        self.assertIn("photo.jpg", prompt[0]["text"])
+        self.assertEqual(prompt[1]["type"], "image")
+        self.assertEqual(prompt[1]["filename"], "photo.jpg")
+
     async def test_enqueue_thread_title_generation_only_for_default_titles(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
         thread = SimpleNamespace(id=42, subject="New thread 42")

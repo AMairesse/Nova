@@ -44,6 +44,25 @@ class FilesViewsTests(TestCase):
         self.assertEqual(response.json()["files"], [{"name": "note.txt"}])
         mocked_tree.assert_called_once()
 
+    @patch("nova.views.files_views.build_virtual_tree", return_value=[])
+    def test_file_list_excludes_message_attachments(self, mocked_tree):
+        self._create_user_file(name="visible.txt")
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/hidden.png",
+            original_filename="/.message_attachments/message_1/hidden.png",
+            mime_type="image/png",
+            size=12,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        response = self.client.get(reverse("file_list", args=[self.thread.id]))
+
+        self.assertEqual(response.status_code, 200)
+        files_arg = mocked_tree.call_args.args[0]
+        self.assertEqual(list(files_arg.values_list("scope", flat=True)), [UserFile.Scope.THREAD_SHARED])
+
     @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/file")
     def test_file_download_url_success(self, mocked_get_url):
         user_file = self._create_user_file()
