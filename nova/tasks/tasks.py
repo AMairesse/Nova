@@ -129,7 +129,7 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
         )
 
     if len(content_parts) == 1:
-        return source_message.text or fallback_prompt or ""
+        return content_parts[0]["text"]
     return content_parts
 
 
