@@ -348,6 +348,7 @@
 
             try {
                 const formData = new FormData(form);
+                formData.set('new_message', originalMessage);
                 for (const attachment of this.composerAttachments) {
                     formData.append('message_attachments', attachment.file, attachment.file.name);
                 }
