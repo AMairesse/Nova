@@ -27,6 +27,7 @@
             this.composerAttachments = [];
             this.maxComposerAttachments = 4;
             this.maxComposerAttachmentBytes = 4 * 1024 * 1024;
+            this.isComposerSubmitting = false;
         }
 
         init() {
@@ -114,6 +115,11 @@
                     e.preventDefault();
                     this.openComposerAttachmentPicker('message-camera-input');
                 },
+                '#send-btn': (e, target) => {
+                    e.preventDefault();
+                    const form = target.closest('form');
+                    if (form) this.triggerComposerSubmit(form);
+                },
                 '.composer-attachment-remove': (e, target) => {
                     e.preventDefault();
                     const button = target.closest('.composer-attachment-remove');
@@ -147,13 +153,13 @@
             document.addEventListener('submit', async (e) => {
                 if (e.target.id === 'message-form') {
                     e.preventDefault();
-                    await this.handleFormSubmit(e.target);
+                    await this.triggerComposerSubmit(e.target);
                 }
             });
 
             document.addEventListener('change', (e) => {
                 if (e.target.id === 'message-attachment-input' || e.target.id === 'message-camera-input') {
-                    this.handleComposerAttachmentInputChange(e.target);
+                    void this.handleComposerAttachmentInputChange(e.target);
                 }
             });
 
@@ -161,8 +167,8 @@
             document.addEventListener('keydown', (e) => {
                 if (e.target.matches('#message-container textarea[name="new_message"]') && e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    const form = document.getElementById('message-form');
-                    if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                    const form = e.target.closest('form') || document.getElementById('message-form');
+                    if (form) this.triggerComposerSubmit(form);
                 }
             });
         }
@@ -321,13 +327,11 @@
             const textarea = form.querySelector('textarea[name="new_message"]');
             const originalMessage = textarea ? textarea.value : '';
             const msg = originalMessage.trim();
-            const formData = new FormData(form);
             const hasAttachments = this.composerAttachments.length > 0;
             if (!msg && !hasAttachments) return;
+            if (this.isComposerSubmitting) return;
 
-            for (const attachment of this.composerAttachments) {
-                formData.append('message_attachments', attachment.file, attachment.file.name);
-            }
+            this.isComposerSubmitting = true;
 
             // Disable send button
             const sendBtn = document.getElementById('send-btn');
@@ -343,14 +347,23 @@
             }
 
             try {
+                const formData = new FormData(form);
+                for (const attachment of this.composerAttachments) {
+                    formData.append('message_attachments', attachment.file, attachment.file.name);
+                }
+
                 // Send the message to the server
                 const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
                     method: 'POST',
                     body: formData
                 });
 
-                const data = await response.json();
-                if (data.status !== "OK") throw new Error(data.message || "Failed to send message");
+                const isJsonResponse = (response.headers.get('content-type') || '').includes('application/json');
+                const data = isJsonResponse ? await response.json() : null;
+                const errorMessage = data?.message || data?.error || `Request failed (${response.status})`;
+                if (!response.ok || !data || data.status !== "OK") {
+                    throw new Error(errorMessage);
+                }
 
                 // Update thread ID if new thread was created
                 const threadIdInput = document.querySelector('input[name="thread_id"]');
@@ -388,7 +401,15 @@
                     sendBtn.disabled = false;
                     sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
                 }
+                this.showToast(error?.message || gettext('Failed to send message.'), 'danger');
+            } finally {
+                this.isComposerSubmitting = false;
             }
+        }
+
+        triggerComposerSubmit(form) {
+            if (!form || this.isComposerSubmitting) return;
+            return this.handleFormSubmit(form);
         }
 
         resizeComposerTextarea(textarea) {
@@ -402,14 +423,20 @@
             if (input) input.click();
         }
 
-        handleComposerAttachmentInputChange(input) {
+        async handleComposerAttachmentInputChange(input) {
             const files = Array.from(input?.files || []);
             if (!files.length) return;
-            this.addComposerAttachments(files);
-            input.value = '';
+            try {
+                await this.addComposerAttachments(files);
+            } catch (error) {
+                console.error('Error preparing attachments:', error);
+                this.showToast(gettext('Failed to prepare the selected image.'), 'danger');
+            } finally {
+                input.value = '';
+            }
         }
 
-        addComposerAttachments(files) {
+        async addComposerAttachments(files) {
             const accepted = [];
             const availableSlots = this.maxComposerAttachments - this.composerAttachments.length;
             if (availableSlots <= 0) {
@@ -430,18 +457,36 @@
                     this.showToast(gettext('Each image must be 4 MB or less.'), 'warning');
                     continue;
                 }
+                const stableFile = await this.cloneComposerFile(file);
                 accepted.push({
                     id: (window.crypto && typeof window.crypto.randomUUID === 'function')
                         ? window.crypto.randomUUID()
                         : `${Date.now()}-${Math.random()}`,
-                    file,
-                    previewUrl: URL.createObjectURL(file),
+                    file: stableFile,
+                    previewUrl: URL.createObjectURL(stableFile),
                 });
             }
 
             if (!accepted.length) return;
             this.composerAttachments.push(...accepted);
             this.renderComposerAttachments();
+        }
+
+        async cloneComposerFile(file) {
+            if (!file || typeof file.arrayBuffer !== 'function' || typeof File === 'undefined') {
+                return file;
+            }
+
+            try {
+                const buffer = await file.arrayBuffer();
+                return new File([buffer], file.name || 'image', {
+                    type: file.type || 'application/octet-stream',
+                    lastModified: file.lastModified || Date.now(),
+                });
+            } catch (error) {
+                console.warn('Falling back to original File object for attachment:', error);
+                return file;
+            }
         }
 
         removeComposerAttachment(attachmentId) {
@@ -943,7 +988,7 @@
                     if (transcript.trim()) {
                         const form = document.getElementById('message-form');
                         if (form) {
-                            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                            this.triggerComposerSubmit(form);
                         }
                     }
                 }
