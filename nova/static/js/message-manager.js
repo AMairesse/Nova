@@ -88,6 +88,7 @@
                         dropdownButton.innerHTML = '<i class="bi bi-robot"></i>';
                         dropdownButton.setAttribute('title', label);
                     }
+                    this.syncComposerCapabilityNotice();
                 },
                 '.interaction-answer-btn': (e, target) => {
                     e.preventDefault();
@@ -205,6 +206,7 @@
                 this.applyTemplateSetupPrefillFromUrl();
                 // Update voice button visibility based on browser support
                 this.updateVoiceButtonState();
+                this.syncComposerCapabilityNotice();
                 // Auto-scroll to bottom for new conversations
                 this.scrollToBottom();
 
@@ -268,6 +270,7 @@
             window.history.replaceState({}, '', nextUrl);
 
             this._setupPrefillApplied = true;
+            this.syncComposerCapabilityNotice();
         }
 
 
@@ -572,6 +575,7 @@
             if (cameraInput) cameraInput.value = '';
 
             this.renderComposerAttachments();
+            this.syncComposerCapabilityNotice();
         }
 
         renderComposerAttachments() {
@@ -580,6 +584,7 @@
             if (!this.composerAttachments.length) {
                 container.innerHTML = '';
                 container.classList.add('d-none');
+                this.syncComposerCapabilityNotice();
                 return;
             }
 
@@ -596,6 +601,62 @@
                     </button>
                 </div>
             `).join('');
+            this.syncComposerCapabilityNotice();
+        }
+
+        getSelectedAgentCapabilityState() {
+            const selectedAgentInput = document.getElementById('selectedAgentInput');
+            const selectedAgentId = selectedAgentInput?.value;
+            if (!selectedAgentId) return null;
+
+            const selectedItem = document.querySelector(`.agent-dropdown-item[data-value="${selectedAgentId}"]`);
+            if (!selectedItem) return null;
+
+            return {
+                validationStatus: `${selectedItem.dataset.providerValidationStatus || ''}`.trim(),
+                visionStatus: `${selectedItem.dataset.providerVisionStatus || ''}`.trim(),
+            };
+        }
+
+        syncComposerCapabilityNotice() {
+            const note = document.getElementById('composer-provider-capability-note');
+            if (!note) return;
+
+            const hasAttachments = this.composerAttachments.length > 0;
+            if (!hasAttachments) {
+                note.className = 'alert py-2 px-3 small mt-2 d-none';
+                note.textContent = '';
+                return;
+            }
+
+            const state = this.getSelectedAgentCapabilityState();
+            if (!state) {
+                note.className = 'alert py-2 px-3 small mt-2 d-none';
+                note.textContent = '';
+                return;
+            }
+
+            const { validationStatus, visionStatus } = state;
+            if (validationStatus === 'valid' && (visionStatus === 'fail' || visionStatus === 'unsupported')) {
+                note.className = 'alert alert-danger py-2 px-3 small mt-2';
+                note.textContent = gettext('The selected agent provider was validated without image input support. Sending this message will be rejected.');
+                return;
+            }
+
+            if (validationStatus === 'untested') {
+                note.className = 'alert alert-warning py-2 px-3 small mt-2';
+                note.textContent = gettext('The selected agent provider has not been actively validated for image input yet.');
+                return;
+            }
+
+            if (validationStatus === 'stale') {
+                note.className = 'alert alert-warning py-2 px-3 small mt-2';
+                note.textContent = gettext('The selected agent provider changed since its last capability test. Image input is allowed, but compatibility is no longer confirmed.');
+                return;
+            }
+
+            note.className = 'alert py-2 px-3 small mt-2 d-none';
+            note.textContent = '';
         }
 
         appendMessage(messageElement) {

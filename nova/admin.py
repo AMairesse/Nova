@@ -84,10 +84,19 @@ class ThreadAdmin(admin.ModelAdmin):
 
 @admin.register(LLMProvider)
 class LLMProviderAdmin(admin.ModelAdmin):
-    list_display = ('name', 'provider_type', 'model',
-                    'user', 'max_context_tokens')
+    list_display = (
+        'name',
+        'provider_type',
+        'model',
+        'validation_status',
+        'validated_at',
+        'user',
+        'max_context_tokens',
+    )
     fields = ('name', 'provider_type', 'model', 'api_key', 'base_url',
-              'additional_config', 'max_context_tokens', 'user')
+              'additional_config', 'max_context_tokens', 'validation_status',
+              'validated_at', 'validation_summary', 'validation_capabilities',
+              'validated_fingerprint', 'user')
 
 
 @admin.register(AgentConfig)

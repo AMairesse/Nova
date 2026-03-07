@@ -113,6 +113,39 @@ def create_provider_llm(provider: LLMProvider):
     return factory(provider)
 
 
+def normalize_multimodal_content_for_provider(provider, content):
+    """Translate internal multimodal blocks to the provider-specific wire format."""
+    if not isinstance(content, list):
+        return content
+
+    provider_type = getattr(provider, "provider_type", None)
+    # ChatOllama accepts the internal LangChain image block format already used by Nova.
+    if provider_type == ProviderType.OLLAMA:
+        return content
+
+    normalized = []
+    for part in content:
+        if not isinstance(part, dict):
+            normalized.append(part)
+            continue
+
+        if part.get("type") != "image" or part.get("source_type") != "base64":
+            normalized.append(part)
+            continue
+
+        mime_type = part.get("mime_type") or "application/octet-stream"
+        data = part.get("data") or ""
+        normalized.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{data}",
+                },
+            }
+        )
+    return normalized
+
+
 class LLMAgent:
     @classmethod
     def fetch_user_params_sync(cls, user):
@@ -423,7 +456,9 @@ class LLMAgent:
         )
 
         if isinstance(question, list):
-            message = HumanMessage(content=question)
+            message = HumanMessage(
+                content=normalize_multimodal_content_for_provider(self._llm_provider, question)
+            )
         else:
             message = HumanMessage(content=f"{question}")
 
@@ -487,7 +522,12 @@ class LLMAgent:
                         })
 
                     # Generate a new multimodal message with all images
-                    message = HumanMessage(content=content_parts)
+                    message = HumanMessage(
+                        content=normalize_multimodal_content_for_provider(
+                            self._llm_provider,
+                            content_parts,
+                        )
+                    )
                 else:
                     # No valid image artifacts found, continue with normal flow
                     final_msg = extract_final_answer(result)

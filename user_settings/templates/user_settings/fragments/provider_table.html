@@ -10,7 +10,7 @@
 <div class="table-responsive">
   <table class="table table-hover align-middle">
     <thead class="table-light">
-      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Model" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
+      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Model" %}</th><th>{% trans "Validation" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
     </thead>
     <tbody>
       {% for provider in providers %}
@@ -18,6 +18,14 @@
           <td>{{ provider.name }}</td>
           <td>{{ provider.get_provider_type_display }}</td>
           <td>{{ provider.model }}</td>
+          <td>
+            <span class="badge {{ provider.validation_status_badge_class }}">
+              {{ provider.get_validation_status_display }}
+            </span>
+            {% if provider.validated_at %}
+              <div class="small text-muted mt-1">{{ provider.validated_at|date:"SHORT_DATETIME_FORMAT" }}</div>
+            {% endif %}
+          </td>
           <td class="text-end">
             {% if provider.user == request.user %}
             <a href="{% url 'user_settings:provider-edit' provider.pk %}?from=providers"

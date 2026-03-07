@@ -12,6 +12,7 @@ from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_us
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
+from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
 from nova.models.UserFile import UserFile
 from nova.tests.factories import create_agent, create_provider
@@ -138,6 +139,49 @@ class ContinuousViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["status"], "ERROR")
+
+    @patch("nova.views.continuous_views.upload_message_attachments")
+    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.views.continuous_views.run_ai_task_celery.delay")
+    def test_continuous_add_message_rejects_image_when_provider_validation_disallows_vision(
+        self,
+        mocked_run_ai_task,
+        mocked_enqueue_followups,
+        mocked_upload_message_attachments,
+    ):
+        mocked_enqueue_followups.return_value = None
+
+        provider = create_provider(self.user, provider_type=ProviderType.OPENAI, name="No Vision", model="gpt-4o-mini")
+        provider.api_key = "dummy"
+        provider.save(update_fields=["api_key"])
+        provider.apply_validation_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "validation_summary": "Validated with partial capabilities (vision: unsupported).",
+                "validation_capabilities": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "Vision inputs are not supported", "latency_ms": 13},
+                },
+            }
+        )
+        agent = create_agent(self.user, provider, name="Vision agent")
+
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={
+                "new_message": "Analyse cette image",
+                "selected_agent": str(agent.id),
+                "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        mocked_upload_message_attachments.assert_not_called()
+        mocked_enqueue_followups.assert_not_called()
+        mocked_run_ai_task.assert_not_called()
 
     def test_continuous_regenerate_summary_returns_404_when_segment_missing(self):
         response = self.client.post(reverse("continuous_regenerate_summary"), data={"day": "2026-01-01"})

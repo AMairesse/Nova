@@ -156,7 +156,11 @@ class LLMAgentExecutionTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                 await agent.ainvoke(multimodal_content, silent_mode=False)
 
                 payload, _config = mock_agent.invocations[0]
-                self.assertEqual(payload["messages"].content, multimodal_content)
+                self.assertEqual(payload["messages"].content[0], multimodal_content[0])
+                self.assertEqual(payload["messages"].content[1]["type"], "image_url")
+                self.assertTrue(
+                    payload["messages"].content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+                )
 
 
 class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):

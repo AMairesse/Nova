@@ -25,7 +25,11 @@ from nova.models.Message import Actor, Message
 from nova.models.UserObjects import UserParameters
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
-from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
+from nova.views.agent_dispatch import (
+    enqueue_message_agent_task,
+    get_message_attachment_capability_error,
+    resolve_selected_or_default_agent,
+)
 from nova.utils import markdown_to_html
 from nova.message_attachments import (
     MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
@@ -253,11 +257,14 @@ def continuous_messages(request):
     # If the user is browsing a past day, the UI should be read-only.
     allow_posting = day_label is None or day_label == today_label
 
-    user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
+    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
     agent_id = request.GET.get("agent_id")
     default_agent = None
     if agent_id:
-        default_agent = AgentConfig.objects.filter(id=agent_id, user=request.user).first()
+        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
+            id=agent_id,
+            user=request.user,
+        ).first()
     if not default_agent:
         default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
 
@@ -337,6 +344,15 @@ def continuous_add_message(request):
             status=400,
         )
 
+    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+    if message_attachments:
+        attachment_error = get_message_attachment_capability_error(agent_config)
+        if attachment_error:
+            return JsonResponse(
+                {"status": "ERROR", "message": attachment_error},
+                status=400,
+            )
+
     thread, msg, seg, day_label, opened_new_day = append_continuous_user_message(request.user, new_message)
 
     message_attachment_meta = []
@@ -363,7 +379,6 @@ def continuous_add_message(request):
     msg.save(update_fields=["internal_data"])
 
     # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
     task = enqueue_message_agent_task(
         user=request.user,
         thread=thread,

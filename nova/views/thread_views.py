@@ -15,7 +15,11 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
-from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
+from nova.views.agent_dispatch import (
+    enqueue_message_agent_task,
+    get_message_attachment_capability_error,
+    resolve_selected_or_default_agent,
+)
 from nova.thread_titles import build_default_thread_subject
 from nova.utils import markdown_to_html
 import logging
@@ -116,12 +120,14 @@ def load_more_threads(request):
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
-    user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
+    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
     agent_id = request.GET.get('agent_id')
     default_agent = None
     if agent_id:
-        default_agent = AgentConfig.objects.filter(id=agent_id,
-                                                   user=request.user).first()
+        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
+            id=agent_id,
+            user=request.user,
+        ).first()
     if not default_agent:
         default_agent = getattr(request.user.userprofile,
                                 "default_agent", None)
@@ -278,6 +284,15 @@ def add_message(request):
 
     uploaded_file_ids = []
     message_attachment_meta = []
+    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+
+    if message_attachments:
+        attachment_error = get_message_attachment_capability_error(agent_config)
+        if attachment_error:
+            return JsonResponse(
+                {"status": "ERROR", "message": attachment_error},
+                status=400,
+            )
 
     if uploaded_files:
         # Prepare data for unified async upload pipeline.
@@ -349,7 +364,6 @@ def add_message(request):
     }
     message.save()
 
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
     task = enqueue_message_agent_task(
         user=request.user,
         thread=thread,

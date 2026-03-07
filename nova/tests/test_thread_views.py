@@ -389,6 +389,59 @@ class MainViewsTests(TestCase):
         message = thread.get_messages().latest("id")
         self.assertEqual(message.internal_data["message_attachments"][0]["scope"], UserFile.Scope.MESSAGE_ATTACHMENT)
 
+    @patch("nova.views.thread_views.upload_message_attachments")
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_rejects_image_when_provider_validation_disallows_vision(
+        self,
+        mocked_run_ai_task,
+        mocked_upload_message_attachments,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-No-Vision",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        provider.apply_validation_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "validation_summary": "Validated with partial capabilities (vision: unsupported).",
+                "validation_capabilities": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "Vision inputs are not supported", "latency_ms": 13},
+                },
+            }
+        )
+
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Rejected image thread")
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Analyse cette image",
+                "selected_agent": str(agent.id),
+                "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(thread.get_messages().count(), 0)
+        mocked_upload_message_attachments.assert_not_called()
+        mocked_run_ai_task.assert_not_called()
+
     def test_add_message_rejects_empty_payload_without_attachments(self):
         self.client.login(username="alice", password="pass")
         thread = Thread.objects.create(user=self.user, subject="Empty payload")
