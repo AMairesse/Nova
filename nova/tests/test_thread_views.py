@@ -1,5 +1,5 @@
 # nova/tests/test_main_views.py
-from django.test import TestCase, RequestFactory
+from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -124,6 +124,35 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
+
+    @override_settings(
+        MESSAGE_ATTACHMENT_MAX_FILES=2,
+        MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES=2 * 1024 * 1024,
+    )
+    def test_message_list_exposes_attachment_limits_from_settings(self):
+        thread = Thread.objects.create(user=self.user, subject="Composer limits")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        AgentConfig.objects.create(
+            user=self.user,
+            name="Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-message-attachment-max-files="2"')
+        self.assertContains(response, 'data-message-attachment-max-bytes="2097152"')
+        self.assertContains(response, 'Attach image (up to 2 images, 2 MB each)')
 
     def test_message_list_prefers_agent_display_markdown_when_available(self):
         thread = Thread.objects.create(user=self.user, subject="Agent display")

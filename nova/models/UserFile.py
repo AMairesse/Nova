@@ -25,6 +25,13 @@ class UserFile(models.Model):
                              related_name='files')
     thread = models.ForeignKey('Thread', on_delete=models.SET_NULL, null=True,
                                blank=True, related_name='files')
+    source_message = models.ForeignKey(
+        'Message',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='attached_files',
+    )
     # S3 object key (e.g., users/user_id/threads/thread_id/dir/subdir/file.txt)
     key = models.CharField(max_length=255, unique=True)
     original_filename = models.CharField(max_length=255)
@@ -49,6 +56,11 @@ class UserFile(models.Model):
         return f"{self.original_filename} ({self.key})"
 
     def save(self, *args, **kwargs):
+        if not self.thread and self.source_message_id:
+            self.thread = self.source_message.thread
+        if not self.user_id and self.source_message_id:
+            self.user = self.source_message.user
+
         # Generate key only if not set (allow overrides if needed)
         if not self.key and self.user and self.thread:
             self.key = f"users/{self.user.id}/threads/{self.thread.id}{self.original_filename}"
@@ -103,8 +115,10 @@ class UserFile(models.Model):
             logger.error(f"Error generating presigned URL: {e}")
             return None
 
-    def delete(self, *args, **kwargs):
-        """Delete from DB and MinIO."""
+    def delete_storage_object(self):
+        if getattr(self, "_storage_deleted", False):
+            return
+
         s3_client = boto3.client(
             's3',
             endpoint_url=settings.MINIO_ENDPOINT_URL,
@@ -116,4 +130,9 @@ class UserFile(models.Model):
                                     Key=self.key)
         except ClientError as e:
             logger.error(f"Error deleting from MinIO: {e}")
+        self._storage_deleted = True
+
+    def delete(self, *args, **kwargs):
+        """Delete from DB and MinIO."""
+        self.delete_storage_object()
         super().delete(*args, **kwargs)

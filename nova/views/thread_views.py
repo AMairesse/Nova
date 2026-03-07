@@ -24,7 +24,10 @@ from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
-from nova.message_attachments import MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY
+from nova.message_attachments import (
+    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
+    get_message_attachment_template_context,
+)
 from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.realtime.sidebar_updates import publish_file_update
 
@@ -190,6 +193,7 @@ def message_list(request):
                 'default_agent': default_agent,
                 'pending_interactions': pending_interactions,
             }
+            context.update(get_message_attachment_template_context())
             return render(request, 'nova/message_container.html', context)
 
         except Http404:
@@ -200,12 +204,14 @@ def message_list(request):
             logger.exception("Unexpected error while rendering message list for thread %s", selected_thread_id)
             selected_thread_id = None
             messages = None
-    return render(request, 'nova/message_container.html', {
+    context = {
         'messages': messages,
         'thread_id': selected_thread_id or '',
         'user_agents': user_agents,
         'default_agent': default_agent
-    })
+    }
+    context.update(get_message_attachment_template_context())
+    return render(request, 'nova/message_container.html', context)
 
 
 def new_thread(request):
@@ -326,7 +332,7 @@ def add_message(request):
         attachment_meta, attachment_errors = upload_message_attachments(
             thread,
             request.user,
-            message.id,
+            message,
             message_attachments,
         )
         message_attachment_meta = attachment_meta

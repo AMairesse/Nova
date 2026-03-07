@@ -256,8 +256,8 @@ admin.site.register(User, UserAdmin)
 
 @admin.register(UserFile)
 class UserFileAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "thread", "original_filename", "size", "expiration_date")
-    list_filter = ("mime_type", "expiration_date")
+    list_display = ("id", "user", "thread", "source_message", "scope", "original_filename", "size", "expiration_date")
+    list_filter = ("scope", "mime_type", "expiration_date")
     search_fields = ("user__username", "original_filename", "key")
 
 

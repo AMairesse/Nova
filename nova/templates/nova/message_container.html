@@ -200,7 +200,14 @@
   </div>
   {% else %}
   <div class="message-input-area p-2 p-sm-3">
-    <form id="message-form" method="post" enctype="multipart/form-data">
+    <form
+      id="message-form"
+      method="post"
+      enctype="multipart/form-data"
+      data-message-attachment-max-files="{{ message_attachment_max_files }}"
+      data-message-attachment-max-bytes="{{ message_attachment_max_image_size_bytes }}"
+      data-message-attachment-max-size-label="{{ message_attachment_max_image_size_label }}"
+    >
       {% csrf_token %}
       <input
         type="hidden"
@@ -261,8 +268,8 @@
           type="button"
           id="attach-image-btn"
           class="btn btn-outline-secondary"
-          title="{% trans 'Attach image (up to 4 images, 4 MB each)' %}"
-          aria-label="{% trans 'Attach image (up to 4 images, 4 MB each)' %}"
+          title="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each){% endblocktrans %}"
+          aria-label="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each){% endblocktrans %}"
         >
           <i class="bi bi-paperclip"></i>
           <span class="visually-hidden">{% trans "Attach image" %}</span>

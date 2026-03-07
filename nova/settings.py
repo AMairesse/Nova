@@ -225,6 +225,31 @@ else:
                 "USERFILE_EXPIRATION_DAYS must be an integer number of days, or 0/none to disable"
             ) from e
 
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a positive integer") from e
+
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+MESSAGE_ATTACHMENT_MAX_FILES = _get_positive_int_env(
+    "MESSAGE_ATTACHMENT_MAX_FILES",
+    4,
+)
+MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES = _get_positive_int_env(
+    "MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES",
+    4 * 1024 * 1024,
+)
+
 # Validate (fail-fast)
 if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):
     raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set in .env")

@@ -3,31 +3,35 @@ from __future__ import annotations
 from asgiref.sync import async_to_sync
 
 from nova.file_utils import (
-    MESSAGE_ATTACHMENT_MAX_FILES,
-    MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE,
     batch_upload_files,
     build_message_attachment_path,
 )
 from nova.message_attachments import (
     MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
     build_message_attachment_metadata,
+    format_message_attachment_size_label,
+    get_message_attachment_max_files,
+    get_message_attachment_max_image_size_bytes,
     normalize_message_attachments,
 )
 from nova.models.UserFile import UserFile
 
 
-def upload_message_attachments(thread, user, message_id: int, uploaded_files) -> tuple[list[dict], list[str]]:
+def upload_message_attachments(thread, user, message, uploaded_files) -> tuple[list[dict], list[str]]:
     uploaded_files = list(uploaded_files or [])
     if not uploaded_files:
         return [], []
 
-    if len(uploaded_files) > MESSAGE_ATTACHMENT_MAX_FILES:
-        return [], [f"You can attach up to {MESSAGE_ATTACHMENT_MAX_FILES} images per message."]
+    max_files = get_message_attachment_max_files()
+    max_image_size = get_message_attachment_max_image_size_bytes()
+    if len(uploaded_files) > max_files:
+        return [], [f"You can attach up to {max_files} images per message."]
 
     file_data = []
     for uploaded_file in uploaded_files:
-        if uploaded_file.size > MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE:
-            return [], [f"Image too large: {uploaded_file.name}"]
+        if uploaded_file.size > max_image_size:
+            max_size_label = format_message_attachment_size_label(max_image_size)
+            return [], [f"Image too large: {uploaded_file.name} ({max_size_label} max)"]
         try:
             content = uploaded_file.read()
         except Exception as exc:
@@ -35,7 +39,7 @@ def upload_message_attachments(thread, user, message_id: int, uploaded_files) ->
 
         file_data.append(
             {
-                "path": build_message_attachment_path(message_id, uploaded_file.name),
+                "path": build_message_attachment_path(message.id, uploaded_file.name),
                 "content": content,
             }
         )
@@ -45,7 +49,8 @@ def upload_message_attachments(thread, user, message_id: int, uploaded_files) ->
         user,
         file_data,
         scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-        max_file_size=MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE,
+        source_message=message,
+        max_file_size=max_image_size,
         allowed_mime_types=[],
         allowed_mime_prefixes=("image/",),
     )

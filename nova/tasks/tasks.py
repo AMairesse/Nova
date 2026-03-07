@@ -3,6 +3,7 @@ import asyncio
 import base64
 import datetime as dt
 import logging
+import posixpath
 from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
 from celery import shared_task
@@ -70,20 +71,41 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
     attachments = normalize_message_attachments(
         internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
     )
-    if not attachments:
-        return source_message.text or fallback_prompt or ""
 
     def _load_attachment_files():
-        files = UserFile.objects.filter(
-            id__in=[attachment["id"] for attachment in attachments],
-            user=source_message.user,
-            thread=source_message.thread,
-            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        files = list(
+            UserFile.objects.filter(
+                user=source_message.user,
+                thread=source_message.thread,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                source_message=source_message,
+            ).order_by("created_at", "id")
         )
+        if not attachments:
+            return [
+                (
+                    {
+                        "id": user_file.id,
+                        "filename": posixpath.basename(user_file.original_filename),
+                        "mime_type": user_file.mime_type,
+                        "size": user_file.size,
+                        "scope": user_file.scope,
+                    },
+                    user_file,
+                )
+                for user_file in files
+            ]
+
         by_id = {user_file.id: user_file for user_file in files}
         return [(attachment, by_id.get(attachment["id"])) for attachment in attachments]
 
     ordered_files = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
+    if not ordered_files:
+        return source_message.text or fallback_prompt or ""
+
+    if not attachments:
+        attachments = [attachment for attachment, _user_file in ordered_files]
+
     content_parts = [
         {
             "type": "text",

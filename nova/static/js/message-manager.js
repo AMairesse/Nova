@@ -27,6 +27,7 @@
             this.composerAttachments = [];
             this.maxComposerAttachments = 4;
             this.maxComposerAttachmentBytes = 4 * 1024 * 1024;
+            this.composerAttachmentSizeLabel = '4 MB';
             this.isComposerSubmitting = false;
         }
 
@@ -184,6 +185,7 @@
 
                 const html = await response.text();
                 document.getElementById('message-container').innerHTML = html;
+                this.syncComposerAttachmentConfig();
                 this.resetComposerAttachments();
                 // Thread id can be implicit (when threadId param omitted).
                 // Always re-sync from the hidden input rendered by the server.
@@ -419,6 +421,57 @@
             textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
         }
 
+        syncComposerAttachmentConfig() {
+            const form = document.getElementById('message-form');
+            const dataset = form?.dataset || {};
+            const maxFiles = Number.parseInt(dataset.messageAttachmentMaxFiles || '', 10);
+            const maxBytes = Number.parseInt(dataset.messageAttachmentMaxBytes || '', 10);
+            const sizeLabel = `${dataset.messageAttachmentMaxSizeLabel || ''}`.trim();
+
+            if (Number.isFinite(maxFiles) && maxFiles > 0) {
+                this.maxComposerAttachments = maxFiles;
+            }
+            if (Number.isFinite(maxBytes) && maxBytes > 0) {
+                this.maxComposerAttachmentBytes = maxBytes;
+            }
+            this.composerAttachmentSizeLabel = sizeLabel || this.formatAttachmentSizeLabel(this.maxComposerAttachmentBytes);
+        }
+
+        formatAttachmentSizeLabel(sizeBytes) {
+            const mib = 1024 * 1024;
+            const kib = 1024;
+
+            if (sizeBytes >= mib) {
+                const sizeMb = sizeBytes / mib;
+                return Number.isInteger(sizeMb) ? `${sizeMb} MB` : `${sizeMb.toFixed(1)} MB`;
+            }
+            if (sizeBytes >= kib) {
+                const sizeKb = sizeBytes / kib;
+                return Number.isInteger(sizeKb) ? `${sizeKb} KB` : `${sizeKb.toFixed(1)} KB`;
+            }
+            return `${sizeBytes} bytes`;
+        }
+
+        interpolateMessage(template, params) {
+            return Object.entries(params || {}).reduce((result, [key, value]) => {
+                return result.replace(`%(${key})s`, String(value));
+            }, template);
+        }
+
+        buildAttachmentCountLimitMessage() {
+            return this.interpolateMessage(
+                gettext('You can attach up to %(count)s images per message.'),
+                { count: this.maxComposerAttachments }
+            );
+        }
+
+        buildAttachmentSizeLimitMessage() {
+            return this.interpolateMessage(
+                gettext('Each image must be %(size)s or less.'),
+                { size: this.composerAttachmentSizeLabel || this.formatAttachmentSizeLabel(this.maxComposerAttachmentBytes) }
+            );
+        }
+
         openComposerAttachmentPicker(inputId) {
             const input = document.getElementById(inputId);
             if (input) input.click();
@@ -441,13 +494,13 @@
             const accepted = [];
             const availableSlots = this.maxComposerAttachments - this.composerAttachments.length;
             if (availableSlots <= 0) {
-                this.showToast(gettext('You can attach up to 4 images per message.'), 'warning');
+                this.showToast(this.buildAttachmentCountLimitMessage(), 'warning');
                 return;
             }
 
             for (const file of files) {
                 if (accepted.length >= availableSlots) {
-                    this.showToast(gettext('You can attach up to 4 images per message.'), 'warning');
+                    this.showToast(this.buildAttachmentCountLimitMessage(), 'warning');
                     break;
                 }
                 if (!(file.type || '').startsWith('image/')) {
@@ -455,7 +508,7 @@
                     continue;
                 }
                 if (file.size > this.maxComposerAttachmentBytes) {
-                    this.showToast(gettext('Each image must be 4 MB or less.'), 'warning');
+                    this.showToast(this.buildAttachmentSizeLimitMessage(), 'warning');
                     continue;
                 }
                 const stableFile = await this.cloneComposerFile(file);

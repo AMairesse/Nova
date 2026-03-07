@@ -27,7 +27,10 @@ from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
 from nova.utils import markdown_to_html
-from nova.message_attachments import MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY
+from nova.message_attachments import (
+    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
+    get_message_attachment_template_context,
+)
 from nova.message_utils import annotate_user_message, upload_message_attachments
 
 _YEAR_RE = re.compile(r"^\d{4}$")
@@ -312,6 +315,7 @@ def continuous_messages(request):
             "is_continuous_default_mode": day_label is None,
             "show_day_separators": day_label is None,
             "recent_messages_limit": recent_messages_limit,
+            **get_message_attachment_template_context(),
         },
     )
 
@@ -340,7 +344,7 @@ def continuous_add_message(request):
         attachment_meta, attachment_errors = upload_message_attachments(
             thread,
             request.user,
-            msg.id,
+            msg,
             message_attachments,
         )
         message_attachment_meta = attachment_meta

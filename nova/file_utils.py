@@ -21,8 +21,6 @@ ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html',
                       'application/msword']
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5MB threshold for multipart
-MESSAGE_ATTACHMENT_MAX_FILES = 4
-MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE = 4 * 1024 * 1024  # 4MB
 MESSAGE_ATTACHMENT_STORAGE_PREFIX = "/.message_attachments"
 
 
@@ -178,6 +176,7 @@ async def check_thread_access(thread: Thread, user) -> bool:
 async def batch_upload_files(thread: Thread, user,
                              file_data: List[Dict[str, bytes or str]], *,
                              scope: str = UserFile.Scope.THREAD_SHARED,
+                             source_message=None,
                              max_file_size: int = MAX_FILE_SIZE,
                              allowed_mime_types: List[str] | None = None,
                              allowed_mime_prefixes: Tuple[str, ...] = ()) -> Tuple[List[Dict], List[str]]:
@@ -220,7 +219,8 @@ async def batch_upload_files(thread: Thread, user,
             def create_user_file():
                 return UserFile.objects.create(
                     user=user, thread=thread, original_filename=renamed_path,
-                    mime_type=mime, size=len(content), key=key, scope=scope
+                    mime_type=mime, size=len(content), key=key, scope=scope,
+                    source_message=source_message,
                 )
             user_file = await create_user_file()
             created_files.append({
