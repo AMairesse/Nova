@@ -15,7 +15,11 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
-from nova.views.agent_dispatch import enqueue_message_agent_task, resolve_selected_or_default_agent
+from nova.views.agent_dispatch import (
+    enqueue_message_agent_task,
+    get_message_attachment_capability_error,
+    resolve_selected_or_default_agent,
+)
 from nova.thread_titles import build_default_thread_subject
 from nova.utils import markdown_to_html
 import logging
@@ -24,6 +28,11 @@ from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
+from nova.message_attachments import (
+    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
+    get_message_attachment_template_context,
+)
+from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -111,12 +120,14 @@ def load_more_threads(request):
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
-    user_agents = AgentConfig.objects.filter(user=request.user, is_tool=False)
+    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
     agent_id = request.GET.get('agent_id')
     default_agent = None
     if agent_id:
-        default_agent = AgentConfig.objects.filter(id=agent_id,
-                                                   user=request.user).first()
+        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
+            id=agent_id,
+            user=request.user,
+        ).first()
     if not default_agent:
         default_agent = getattr(request.user.userprofile,
                                 "default_agent", None)
@@ -166,8 +177,8 @@ def message_list(request):
                     display_text = m.internal_data.get('display_markdown') or m.text
                 m.rendered_html = markdown_to_html(display_text)
                 # Add info about files used
-                if m.actor == Actor.USER and m.internal_data and 'file_ids' in m.internal_data:
-                    m.file_count = len(m.internal_data['file_ids'])
+                if m.actor == Actor.USER:
+                    annotate_user_message(m)
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
@@ -188,6 +199,7 @@ def message_list(request):
                 'default_agent': default_agent,
                 'pending_interactions': pending_interactions,
             }
+            context.update(get_message_attachment_template_context())
             return render(request, 'nova/message_container.html', context)
 
         except Http404:
@@ -198,12 +210,14 @@ def message_list(request):
             logger.exception("Unexpected error while rendering message list for thread %s", selected_thread_id)
             selected_thread_id = None
             messages = None
-    return render(request, 'nova/message_container.html', {
+    context = {
         'messages': messages,
         'thread_id': selected_thread_id or '',
         'user_agents': user_agents,
         'default_agent': default_agent
-    })
+    }
+    context.update(get_message_attachment_template_context())
+    return render(request, 'nova/message_container.html', context)
 
 
 def new_thread(request):
@@ -251,8 +265,16 @@ def delete_thread(request, thread_id):
 def add_message(request):
     thread_id = request.POST.get('thread_id')
     new_message = request.POST.get('new_message', '')
+    new_message = new_message if new_message.strip() else ''
     selected_agent = request.POST.get('selected_agent')
     uploaded_files = request.FILES.getlist('files', [])
+    message_attachments = request.FILES.getlist('message_attachments', [])
+
+    if not new_message.strip() and not uploaded_files and not message_attachments:
+        return JsonResponse(
+            {"status": "ERROR", "message": "Message or image attachment required"},
+            status=400,
+        )
 
     if not thread_id or thread_id == 'None':
         thread, thread_html = new_thread(request)
@@ -261,6 +283,16 @@ def add_message(request):
         thread_html = None
 
     uploaded_file_ids = []
+    message_attachment_meta = []
+    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+
+    if message_attachments:
+        attachment_error = get_message_attachment_capability_error(agent_config)
+        if attachment_error:
+            return JsonResponse(
+                {"status": "ERROR", "message": attachment_error},
+                status=400,
+            )
 
     if uploaded_files:
         # Prepare data for unified async upload pipeline.
@@ -311,10 +343,27 @@ def add_message(request):
         async_to_sync(publish_file_update)(thread.id, "attachment_upload")
 
     message = thread.add_message(new_message, actor=Actor.USER)
-    message.internal_data = {'file_ids': uploaded_file_ids}
+    if message_attachments:
+        attachment_meta, attachment_errors = upload_message_attachments(
+            thread,
+            request.user,
+            message,
+            message_attachments,
+        )
+        message_attachment_meta = attachment_meta
+        if attachment_errors and not message_attachment_meta:
+            message.delete()
+            return JsonResponse(
+                {"status": "ERROR", "message": "; ".join(attachment_errors)},
+                status=400,
+            )
+
+    message.internal_data = {
+        'file_ids': uploaded_file_ids,
+        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
+    }
     message.save()
 
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
     task = enqueue_message_agent_task(
         user=request.user,
         thread=thread,
@@ -329,7 +378,8 @@ def add_message(request):
         "text": new_message,  # Return raw text for client-side rendering
         "actor": message.actor,
         "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
-        "internal_data": message.internal_data or {}
+        "internal_data": message.internal_data or {},
+        "message_attachments": message_attachment_meta,
     }
 
     return JsonResponse({

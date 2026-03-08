@@ -389,6 +389,24 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Unsupported MIME", errors[0])
 
+    @patch('nova.file_utils.detect_mime')
+    async def test_batch_upload_files_rejects_non_image_for_message_scope(self, mock_detect_mime):
+        """Message attachments should reject non-image MIME types."""
+        mock_detect_mime.return_value = 'application/pdf'
+
+        created, errors = await batch_upload_files(
+            self.thread,
+            self.user,
+            [{'path': '/doc.pdf', 'content': b'pdf-content'}],
+            allowed_mime_types=[],
+            allowed_mime_prefixes=('image/',),
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        self.assertEqual(created, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Unsupported MIME", errors[0])
+
     @patch('nova.file_utils.upload_file_to_minio')
     @patch('nova.file_utils.auto_rename_path')
     @patch('nova.file_utils.detect_mime')

@@ -19,14 +19,10 @@ from crispy_forms.layout import Layout, Div, Field
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import ProviderType, LLMProvider
+from nova.providers import get_provider_defaults
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserParameters
 from user_settings.mixins import SecretPreserveMixin
-
-# ────────────────────────────────────────────────────────────────────────────
-#  Helpers / constants
-# ────────────────────────────────────────────────────────────────────────────
-PROVIDER_NO_KEY = {"ollama", "lmstudio"}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -66,18 +62,23 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
                 self.data.get("provider_type")
                 or self.initial.get("provider_type")
             )
-            if ptype in {ProviderType.OPENAI, ProviderType.MISTRAL}:
-                self.initial.setdefault("max_context_tokens", 100_000)
-            else:
-                self.initial.setdefault("max_context_tokens", 4_096)
+            if ptype:
+                defaults = get_provider_defaults(ptype)
+                self.initial.setdefault("max_context_tokens", defaults.default_max_context_tokens)
+                if defaults.default_base_url:
+                    self.initial.setdefault("base_url", defaults.default_base_url)
 
         # Make api_key optional for local providers
         ptype_current = (
-            self.initial.get("provider_type")
+            self.data.get("provider_type")
+            or self.initial.get("provider_type")
             or getattr(self.instance, "provider_type", None)
         )
-        if ptype_current in PROVIDER_NO_KEY:
-            self.fields["api_key"].required = False
+        if ptype_current:
+            existing_api_key = getattr(self, "_existing_secrets", {}).get("api_key")
+            self.fields["api_key"].required = (
+                get_provider_defaults(ptype_current).api_key_required and not bool(existing_api_key)
+            )
 
     # ------------------------------------------------------------------ #
     #  Validation helpers                                                 #

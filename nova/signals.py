@@ -8,6 +8,7 @@ from asgiref.sync import async_to_sync
 
 from nova.llm.checkpoints import get_checkpointer
 from nova.models.TaskDefinition import TaskDefinition
+from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.Thread import Thread
 
@@ -95,6 +96,15 @@ def cleanup_thread(sender, instance: Thread, **kwargs):
     )
     for cp, err in failed:
         logger.error("Failed to delete checkpoint %s: %s", cp.checkpoint_id, err)
+
+
+@receiver(pre_delete, sender=UserFile)
+def cleanup_userfile_storage(sender, instance: UserFile, **kwargs):
+    """Ensure MinIO cleanup also happens on cascade/queryset deletion paths."""
+    try:
+        instance.delete_storage_object()
+    except Exception as exc:
+        logger.error("Failed to delete storage object for file %s: %s", instance.pk, exc)
 
 
 # --------------------------------------------------------------------------

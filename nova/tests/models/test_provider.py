@@ -1,5 +1,6 @@
 # nova/tests/models/test_provider.py
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from django.test import override_settings
 
 from nova.models.Provider import LLMProvider, ProviderType, check_and_create_system_provider
@@ -65,6 +66,71 @@ class ProviderModelsTest(BaseTestCase):
             model="test-model",
         )
         self.assertEqual(str(provider), "Test Provider (ollama)")
+
+    def test_compute_validation_fingerprint_changes_with_configuration(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Fingerprint Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="secret-a",
+        )
+
+        original_fingerprint = provider.compute_validation_fingerprint()
+        provider.model = "gpt-4.1-mini"
+        changed_fingerprint = provider.compute_validation_fingerprint()
+
+        self.assertNotEqual(original_fingerprint, changed_fingerprint)
+
+    def test_save_marks_provider_validation_stale_after_configuration_change(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Validated Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="secret-a",
+        )
+        provider.apply_validation_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "validation_summary": "Validated successfully.",
+                "validation_capabilities": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 15},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 20},
+                },
+                "validated_at": timezone.now(),
+            }
+        )
+
+        provider.model = "gpt-4.1-mini"
+        provider.save(update_fields=["model"])
+        provider.refresh_from_db()
+
+        self.assertEqual(provider.validation_status, LLMProvider.ValidationStatus.STALE)
+        self.assertEqual(provider.validation_summary, "Validated successfully.")
+
+    def test_save_clears_running_validation_state_after_configuration_change(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Testing Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="secret-a",
+        )
+        provider.mark_validation_started(
+            task_id="task-123",
+            requested_fingerprint=provider.compute_validation_fingerprint(),
+        )
+
+        provider.model = "gpt-4.1-mini"
+        provider.save(update_fields=["model"])
+        provider.refresh_from_db()
+
+        self.assertEqual(provider.validation_status, LLMProvider.ValidationStatus.UNTESTED)
+        self.assertEqual(provider.validation_task_id, "")
+        self.assertEqual(provider.validation_requested_fingerprint, "")
 
     def test_check_and_create_system_provider_no_settings(self):
         """

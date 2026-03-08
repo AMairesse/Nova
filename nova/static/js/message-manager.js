@@ -24,6 +24,11 @@
             this._initialized = false;
             this._handlersBound = false;
             this._setupPrefillApplied = false;
+            this.composerAttachments = [];
+            this.maxComposerAttachments = 4;
+            this.maxComposerAttachmentBytes = 4 * 1024 * 1024;
+            this.composerAttachmentSizeLabel = '4 MB';
+            this.isComposerSubmitting = false;
         }
 
         init() {
@@ -83,6 +88,7 @@
                         dropdownButton.innerHTML = '<i class="bi bi-robot"></i>';
                         dropdownButton.setAttribute('title', label);
                     }
+                    this.syncComposerCapabilityNotice();
                 },
                 '.interaction-answer-btn': (e, target) => {
                     e.preventDefault();
@@ -102,6 +108,24 @@
                 '#voice-btn': (e, target) => {
                     e.preventDefault();
                     this.handleVoiceButtonClick();
+                },
+                '#attach-image-btn': (e) => {
+                    e.preventDefault();
+                    this.openComposerAttachmentPicker('message-attachment-input');
+                },
+                '#camera-capture-btn': (e) => {
+                    e.preventDefault();
+                    this.openComposerAttachmentPicker('message-camera-input');
+                },
+                '#send-btn': (e, target) => {
+                    e.preventDefault();
+                    const form = target.closest('form');
+                    if (form) this.triggerComposerSubmit(form);
+                },
+                '.composer-attachment-remove': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.composer-attachment-remove');
+                    this.removeComposerAttachment(button?.dataset.attachmentId || '');
                 },
                 '.compact-thread-link': (e, target) => {
                     e.preventDefault();
@@ -131,7 +155,13 @@
             document.addEventListener('submit', async (e) => {
                 if (e.target.id === 'message-form') {
                     e.preventDefault();
-                    await this.handleFormSubmit(e.target);
+                    await this.triggerComposerSubmit(e.target);
+                }
+            });
+
+            document.addEventListener('change', (e) => {
+                if (e.target.id === 'message-attachment-input' || e.target.id === 'message-camera-input') {
+                    void this.handleComposerAttachmentInputChange(e.target);
                 }
             });
 
@@ -139,8 +169,8 @@
             document.addEventListener('keydown', (e) => {
                 if (e.target.matches('#message-container textarea[name="new_message"]') && e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    const form = document.getElementById('message-form');
-                    if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                    const form = e.target.closest('form') || document.getElementById('message-form');
+                    if (form) this.triggerComposerSubmit(form);
                 }
             });
         }
@@ -156,6 +186,8 @@
 
                 const html = await response.text();
                 document.getElementById('message-container').innerHTML = html;
+                this.syncComposerAttachmentConfig();
+                this.resetComposerAttachments();
                 // Thread id can be implicit (when threadId param omitted).
                 // Always re-sync from the hidden input rendered by the server.
                 const renderedThreadId = document.querySelector('#message-container input[name="thread_id"]')?.value;
@@ -174,6 +206,7 @@
                 this.applyTemplateSetupPrefillFromUrl();
                 // Update voice button visibility based on browser support
                 this.updateVoiceButtonState();
+                this.syncComposerCapabilityNotice();
                 // Auto-scroll to bottom for new conversations
                 this.scrollToBottom();
 
@@ -237,6 +270,7 @@
             window.history.replaceState({}, '', nextUrl);
 
             this._setupPrefillApplied = true;
+            this.syncComposerCapabilityNotice();
         }
 
 
@@ -298,8 +332,11 @@
             const textarea = form.querySelector('textarea[name="new_message"]');
             const originalMessage = textarea ? textarea.value : '';
             const msg = originalMessage.trim();
-            if (!msg) return;
-            const formData = new FormData(form);
+            const hasAttachments = this.composerAttachments.length > 0;
+            if (!msg && !hasAttachments) return;
+            if (this.isComposerSubmitting) return;
+
+            this.isComposerSubmitting = true;
 
             // Disable send button
             const sendBtn = document.getElementById('send-btn');
@@ -315,19 +352,30 @@
             }
 
             try {
+                const formData = new FormData(form);
+                formData.set('new_message', originalMessage);
+                for (const attachment of this.composerAttachments) {
+                    formData.append('message_attachments', attachment.file, attachment.file.name);
+                }
+
                 // Send the message to the server
                 const response = await window.DOMUtils.csrfFetch(window.NovaApp.urls.addMessage, {
                     method: 'POST',
                     body: formData
                 });
 
-                const data = await response.json();
-                if (data.status !== "OK") throw new Error(data.message || "Failed to send message");
+                const isJsonResponse = (response.headers.get('content-type') || '').includes('application/json');
+                const data = isJsonResponse ? await response.json() : null;
+                const errorMessage = data?.message || data?.error || `Request failed (${response.status})`;
+                if (!response.ok || !data || data.status !== "OK") {
+                    throw new Error(errorMessage);
+                }
 
                 // Update thread ID if new thread was created
                 const threadIdInput = document.querySelector('input[name="thread_id"]');
                 if (threadIdInput) threadIdInput.value = data.thread_id;
                 this.currentThreadId = data.thread_id;
+                this.resetComposerAttachments();
 
                 // Add user message dynamically on the page
                 const userMessageEl = window.MessageRenderer.createMessageElement(data.message, '');
@@ -359,13 +407,256 @@
                     sendBtn.disabled = false;
                     sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
                 }
+                this.showToast(error?.message || gettext('Failed to send message.'), 'danger');
+            } finally {
+                this.isComposerSubmitting = false;
             }
+        }
+
+        triggerComposerSubmit(form) {
+            if (!form || this.isComposerSubmitting) return;
+            return this.handleFormSubmit(form);
         }
 
         resizeComposerTextarea(textarea) {
             if (!textarea) return;
             textarea.style.height = 'auto';
             textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+        }
+
+        syncComposerAttachmentConfig() {
+            const form = document.getElementById('message-form');
+            const dataset = form?.dataset || {};
+            const maxFiles = Number.parseInt(dataset.messageAttachmentMaxFiles || '', 10);
+            const maxBytes = Number.parseInt(dataset.messageAttachmentMaxBytes || '', 10);
+            const sizeLabel = `${dataset.messageAttachmentMaxSizeLabel || ''}`.trim();
+
+            if (Number.isFinite(maxFiles) && maxFiles > 0) {
+                this.maxComposerAttachments = maxFiles;
+            }
+            if (Number.isFinite(maxBytes) && maxBytes > 0) {
+                this.maxComposerAttachmentBytes = maxBytes;
+            }
+            this.composerAttachmentSizeLabel = sizeLabel || this.formatAttachmentSizeLabel(this.maxComposerAttachmentBytes);
+        }
+
+        formatAttachmentSizeLabel(sizeBytes) {
+            const mib = 1024 * 1024;
+            const kib = 1024;
+
+            if (sizeBytes >= mib) {
+                const sizeMb = sizeBytes / mib;
+                return Number.isInteger(sizeMb) ? `${sizeMb} MB` : `${sizeMb.toFixed(1)} MB`;
+            }
+            if (sizeBytes >= kib) {
+                const sizeKb = sizeBytes / kib;
+                return Number.isInteger(sizeKb) ? `${sizeKb} KB` : `${sizeKb.toFixed(1)} KB`;
+            }
+            return `${sizeBytes} bytes`;
+        }
+
+        interpolateMessage(template, params) {
+            return Object.entries(params || {}).reduce((result, [key, value]) => {
+                return result.replace(`%(${key})s`, String(value));
+            }, template);
+        }
+
+        buildAttachmentCountLimitMessage() {
+            return this.interpolateMessage(
+                gettext('You can attach up to %(count)s images per message.'),
+                { count: this.maxComposerAttachments }
+            );
+        }
+
+        buildAttachmentSizeLimitMessage() {
+            return this.interpolateMessage(
+                gettext('Each image must be %(size)s or less.'),
+                { size: this.composerAttachmentSizeLabel || this.formatAttachmentSizeLabel(this.maxComposerAttachmentBytes) }
+            );
+        }
+
+        openComposerAttachmentPicker(inputId) {
+            const input = document.getElementById(inputId);
+            if (input) input.click();
+        }
+
+        async handleComposerAttachmentInputChange(input) {
+            const files = Array.from(input?.files || []);
+            if (!files.length) return;
+            try {
+                await this.addComposerAttachments(files);
+            } catch (error) {
+                console.error('Error preparing attachments:', error);
+                this.showToast(gettext('Failed to prepare the selected image.'), 'danger');
+            } finally {
+                input.value = '';
+            }
+        }
+
+        async addComposerAttachments(files) {
+            const accepted = [];
+            const availableSlots = this.maxComposerAttachments - this.composerAttachments.length;
+            if (availableSlots <= 0) {
+                this.showToast(this.buildAttachmentCountLimitMessage(), 'warning');
+                return;
+            }
+
+            for (const file of files) {
+                if (accepted.length >= availableSlots) {
+                    this.showToast(this.buildAttachmentCountLimitMessage(), 'warning');
+                    break;
+                }
+                if (!(file.type || '').startsWith('image/')) {
+                    this.showToast(gettext('Only image attachments are supported here.'), 'warning');
+                    continue;
+                }
+                if (file.size > this.maxComposerAttachmentBytes) {
+                    this.showToast(this.buildAttachmentSizeLimitMessage(), 'warning');
+                    continue;
+                }
+                const stableFile = await this.cloneComposerFile(file);
+                accepted.push({
+                    id: (window.crypto && typeof window.crypto.randomUUID === 'function')
+                        ? window.crypto.randomUUID()
+                        : `${Date.now()}-${Math.random()}`,
+                    file: stableFile,
+                    previewUrl: URL.createObjectURL(stableFile),
+                });
+            }
+
+            if (!accepted.length) return;
+            this.composerAttachments.push(...accepted);
+            this.renderComposerAttachments();
+        }
+
+        async cloneComposerFile(file) {
+            if (!file || typeof file.arrayBuffer !== 'function' || typeof File === 'undefined') {
+                return file;
+            }
+
+            try {
+                const buffer = await file.arrayBuffer();
+                return new File([buffer], file.name || 'image', {
+                    type: file.type || 'application/octet-stream',
+                    lastModified: file.lastModified || Date.now(),
+                });
+            } catch (error) {
+                console.warn('Falling back to original File object for attachment:', error);
+                return file;
+            }
+        }
+
+        removeComposerAttachment(attachmentId) {
+            const nextAttachments = [];
+            for (const attachment of this.composerAttachments) {
+                if (attachment.id === attachmentId) {
+                    if (attachment.previewUrl) {
+                        URL.revokeObjectURL(attachment.previewUrl);
+                    }
+                    continue;
+                }
+                nextAttachments.push(attachment);
+            }
+            this.composerAttachments = nextAttachments;
+            this.renderComposerAttachments();
+        }
+
+        resetComposerAttachments() {
+            for (const attachment of this.composerAttachments) {
+                if (attachment.previewUrl) {
+                    URL.revokeObjectURL(attachment.previewUrl);
+                }
+            }
+            this.composerAttachments = [];
+
+            const galleryInput = document.getElementById('message-attachment-input');
+            const cameraInput = document.getElementById('message-camera-input');
+            if (galleryInput) galleryInput.value = '';
+            if (cameraInput) cameraInput.value = '';
+
+            this.renderComposerAttachments();
+            this.syncComposerCapabilityNotice();
+        }
+
+        renderComposerAttachments() {
+            const container = document.getElementById('composer-attachments');
+            if (!container) return;
+            if (!this.composerAttachments.length) {
+                container.innerHTML = '';
+                container.classList.add('d-none');
+                this.syncComposerCapabilityNotice();
+                return;
+            }
+
+            container.classList.remove('d-none');
+            container.innerHTML = this.composerAttachments.map((attachment) => `
+                <div class="composer-attachment-chip">
+                    <img src="${attachment.previewUrl}" alt="${window.DOMUtils.escapeHTML(attachment.file.name)}" class="composer-attachment-thumb">
+                    <div class="composer-attachment-meta">
+                        <div class="composer-attachment-name">${window.DOMUtils.escapeHTML(attachment.file.name)}</div>
+                        <div class="composer-attachment-size">${Math.max(1, Math.round(attachment.file.size / 1024))} KB</div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary composer-attachment-remove" data-attachment-id="${attachment.id}" aria-label="${gettext('Remove attachment')}">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            `).join('');
+            this.syncComposerCapabilityNotice();
+        }
+
+        getSelectedAgentCapabilityState() {
+            const selectedAgentInput = document.getElementById('selectedAgentInput');
+            const selectedAgentId = selectedAgentInput?.value;
+            if (!selectedAgentId) return null;
+
+            const selectedItem = document.querySelector(`.agent-dropdown-item[data-value="${selectedAgentId}"]`);
+            if (!selectedItem) return null;
+
+            return {
+                validationStatus: `${selectedItem.dataset.providerValidationStatus || ''}`.trim(),
+                visionStatus: `${selectedItem.dataset.providerVisionStatus || ''}`.trim(),
+            };
+        }
+
+        syncComposerCapabilityNotice() {
+            const note = document.getElementById('composer-provider-capability-note');
+            if (!note) return;
+
+            const hasAttachments = this.composerAttachments.length > 0;
+            if (!hasAttachments) {
+                note.className = 'alert py-2 px-3 small mt-2 d-none';
+                note.textContent = '';
+                return;
+            }
+
+            const state = this.getSelectedAgentCapabilityState();
+            if (!state) {
+                note.className = 'alert py-2 px-3 small mt-2 d-none';
+                note.textContent = '';
+                return;
+            }
+
+            const { validationStatus, visionStatus } = state;
+            if (validationStatus === 'valid' && (visionStatus === 'fail' || visionStatus === 'unsupported')) {
+                note.className = 'alert alert-danger py-2 px-3 small mt-2';
+                note.textContent = gettext('The selected agent provider was validated without image input support. Sending this message will be rejected.');
+                return;
+            }
+
+            if (validationStatus === 'untested') {
+                note.className = 'alert alert-warning py-2 px-3 small mt-2';
+                note.textContent = gettext('The selected agent provider has not been actively validated for image input yet.');
+                return;
+            }
+
+            if (validationStatus === 'stale') {
+                note.className = 'alert alert-warning py-2 px-3 small mt-2';
+                note.textContent = gettext('The selected agent provider changed since its last capability test. Image input is allowed, but compatibility is no longer confirmed.');
+                return;
+            }
+
+            note.className = 'alert py-2 px-3 small mt-2 d-none';
+            note.textContent = '';
         }
 
         appendMessage(messageElement) {
@@ -812,7 +1103,7 @@
                     if (transcript.trim()) {
                         const form = document.getElementById('message-form');
                         if (form) {
-                            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                            this.triggerComposerSubmit(form);
                         }
                     }
                 }

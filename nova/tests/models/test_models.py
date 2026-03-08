@@ -524,9 +524,11 @@ class UserFileModelsTest(BaseTestCase):
         Test UserFile model creation for file storage.
         Ensures that files are properly linked to users and threads with expiration.
         """
+        message = self.thread.add_message("Attachment source", actor=Actor.USER)
         user_file = UserFile.objects.create(
             user=self.user,
             thread=self.thread,
+            source_message=message,
             key="test-key",
             original_filename="test.txt",
             mime_type="text/plain",
@@ -534,7 +536,9 @@ class UserFileModelsTest(BaseTestCase):
         )
         self.assertEqual(user_file.user, self.user)
         self.assertEqual(user_file.thread, self.thread)
+        self.assertEqual(user_file.source_message, message)
         self.assertEqual(user_file.original_filename, "test.txt")
+        self.assertEqual(user_file.scope, UserFile.Scope.THREAD_SHARED)
         self.assertIsNotNone(user_file.expiration_date)
 
     def test_user_file_str(self):
@@ -567,6 +571,48 @@ class UserFileModelsTest(BaseTestCase):
         user_file.save()
         expected_key = f"users/{self.user.id}/threads/{self.thread.id}test.txt"
         self.assertEqual(user_file.key, expected_key)
+
+    def test_user_file_save_derives_thread_from_source_message(self):
+        message = self.thread.add_message("Attachment source", actor=Actor.USER)
+
+        user_file = UserFile(
+            user=self.user,
+            source_message=message,
+            original_filename="/.message_attachments/message_1/photo.png",
+            mime_type="image/png",
+            size=100,
+        )
+
+        user_file.save()
+
+        self.assertEqual(user_file.thread, self.thread)
+        expected_key = f"users/{self.user.id}/threads/{self.thread.id}/.message_attachments/message_1/photo.png"
+        self.assertEqual(user_file.key, expected_key)
+
+    @patch('boto3.client')
+    def test_user_file_cascade_from_message_deletes_storage(self, mock_boto3_client):
+        message = self.thread.add_message("Attachment source", actor=Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key="message-attachment-key",
+            original_filename="/.message_attachments/message_1/photo.png",
+            mime_type="image/png",
+            size=100,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        mock_s3_client = MagicMock()
+        mock_boto3_client.return_value = mock_s3_client
+
+        message.delete()
+
+        self.assertFalse(UserFile.objects.filter(pk=user_file.pk).exists())
+        mock_s3_client.delete_object.assert_called_once_with(
+            Bucket='test-bucket',
+            Key='message-attachment-key',
+        )
 
     def test_user_file_get_download_url_expired(self):
         """

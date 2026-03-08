@@ -1,19 +1,15 @@
 # nova/llm/llm_agent.py
 import uuid
 import logging
-from typing import Any, Callable, List
+from typing import Any, List
 from django.conf import settings
 
-# Load the langchain tools
-from langchain_mistralai.chat_models import ChatMistralAI
-from langchain_ollama.chat_models import ChatOllama
-from langchain_openai.chat_models import ChatOpenAI
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
-from nova.models.Provider import ProviderType, LLMProvider
+from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
 from nova.llm.checkpoints import get_checkpointer
@@ -21,6 +17,10 @@ from nova.llm.prompts import nova_system_prompt
 from nova.llm.skill_tool_filter import apply_skill_tool_filter
 from nova.llm.tool_error_handling import handle_tool_errors
 from nova.llm.agent_middleware import AgentContext
+from nova.providers import (
+    create_provider_llm as provider_create_provider_llm,
+    normalize_multimodal_content_for_provider as provider_normalize_multimodal_content_for_provider,
+)
 from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
@@ -30,87 +30,14 @@ from nova.models.Thread import Thread as ThreadModel
 logger = logging.getLogger(__name__)
 
 
-# Factory dictionary for LLM creation
-# --------------------------------------------------------------------- #
-_provider_factories = {}  # type: Dict[ProviderType,
-#                                      Callable[[LLMProvider], Any]]
-
-
-def register_provider(type_: ProviderType,
-                      factory: Callable[[LLMProvider], Any]) -> None:
-    """Register a factory function for a provider type."""
-    _provider_factories[type_] = factory
-
-
-# Register built-in providers
-# (call this once at app startup, or in settings.py)
-register_provider(
-    ProviderType.LLAMA_CPP,
-    lambda p: ChatOpenAI(
-        model=p.model,
-        openai_api_key="None",
-        base_url=p.base_url,
-        temperature=0,
-        max_retries=2,
-        streaming=True
-    )
-)
-register_provider(
-    ProviderType.MISTRAL,
-    lambda p: ChatMistralAI(
-        model=p.model,
-        mistral_api_key=p.api_key,
-        temperature=0,
-        max_retries=2,
-        streaming=True
-    )
-)
-register_provider(
-    ProviderType.OPENAI,
-    lambda p: ChatOpenAI(
-        model=p.model,
-        openai_api_key=p.api_key,
-        base_url=p.base_url,
-        temperature=0,
-        max_retries=2,
-        streaming=True
-    )
-)
-register_provider(
-    ProviderType.OLLAMA,
-    lambda p: ChatOllama(
-        model=p.model,
-        base_url=p.base_url or "http://localhost:11434",
-        temperature=0,
-        max_retries=2,
-        reasoning=False,
-        streaming=True
-    )
-)
-register_provider(
-    ProviderType.LLMSTUDIO,
-    lambda p: ChatOpenAI(
-        model=p.model,
-        openai_api_key="None",
-        base_url=p.base_url or "http://localhost:1234/v1",
-        temperature=0,
-        max_retries=2,
-        streaming=True
-    )
-)
-
-
-# Example: Adding a new provider (can be done anywhere, even in a plugin)
-# register_provider(ProviderType.ANTHROPIC, lambda p: ChatAnthropic(...))
-# --------------------------------------------------------------------- #
-
-
 def create_provider_llm(provider: LLMProvider):
-    """Create a LangChain chat model from a provider configuration."""
-    factory = _provider_factories.get(provider.provider_type)
-    if not factory:
-        raise ValueError(f"Unsupported provider type: {provider.provider_type}")
-    return factory(provider)
+    """Compatibility wrapper around the provider registry."""
+    return provider_create_provider_llm(provider)
+
+
+def normalize_multimodal_content_for_provider(provider, content):
+    """Compatibility wrapper around the provider registry."""
+    return provider_normalize_multimodal_content_for_provider(provider, content)
 
 
 class LLMAgent:
@@ -398,7 +325,7 @@ class LLMAgent:
             runtime.update({"recursion_limit": self.recursion_limit})
         return runtime
 
-    async def ainvoke(self, question: str, silent_mode=False, thread_id_override: str | None = None):
+    async def ainvoke(self, question, silent_mode=False, thread_id_override: str | None = None):
         config = self._build_runtime_config(
             silent_mode=silent_mode,
             thread_id_override=thread_id_override,
@@ -422,8 +349,12 @@ class LLMAgent:
             skill_control_tool_names=list(getattr(self, "skill_control_tool_names", []) or []),
         )
 
-        full_question = f"{question}"
-        message = HumanMessage(content=full_question)
+        if isinstance(question, list):
+            message = HumanMessage(
+                content=normalize_multimodal_content_for_provider(self._llm_provider, question)
+            )
+        else:
+            message = HumanMessage(content=f"{question}")
 
         while True:
             result = await self.langchain_agent.ainvoke(
@@ -485,7 +416,12 @@ class LLMAgent:
                         })
 
                     # Generate a new multimodal message with all images
-                    message = HumanMessage(content=content_parts)
+                    message = HumanMessage(
+                        content=normalize_multimodal_content_for_provider(
+                            self._llm_provider,
+                            content_parts,
+                        )
+                    )
                 else:
                     # No valid image artifacts found, continue with normal flow
                     final_msg = extract_final_answer(result)

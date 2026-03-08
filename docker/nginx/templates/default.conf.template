@@ -3,6 +3,7 @@ server {
 
     # Set nginx variable from environment
     set $static_cache_duration "${STATIC_CACHE_DURATION}";
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 
     location / {
         proxy_pass http://web;

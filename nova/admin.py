@@ -84,10 +84,19 @@ class ThreadAdmin(admin.ModelAdmin):
 
 @admin.register(LLMProvider)
 class LLMProviderAdmin(admin.ModelAdmin):
-    list_display = ('name', 'provider_type', 'model',
-                    'user', 'max_context_tokens')
+    list_display = (
+        'name',
+        'provider_type',
+        'model',
+        'validation_status',
+        'validated_at',
+        'user',
+        'max_context_tokens',
+    )
     fields = ('name', 'provider_type', 'model', 'api_key', 'base_url',
-              'additional_config', 'max_context_tokens', 'user')
+              'additional_config', 'max_context_tokens', 'validation_status',
+              'validated_at', 'validation_summary', 'validation_capabilities',
+              'validated_fingerprint', 'user')
 
 
 @admin.register(AgentConfig)
@@ -256,8 +265,8 @@ admin.site.register(User, UserAdmin)
 
 @admin.register(UserFile)
 class UserFileAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "thread", "original_filename", "size", "expiration_date")
-    list_filter = ("mime_type", "expiration_date")
+    list_display = ("id", "user", "thread", "source_message", "scope", "original_filename", "size", "expiration_date")
+    list_filter = ("scope", "mime_type", "expiration_date")
     search_fields = ("user__username", "original_filename", "key")
 
 

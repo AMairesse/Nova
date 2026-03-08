@@ -1,7 +1,9 @@
 # nova/tasks/tasks.py
 import asyncio
+import base64
 import datetime as dt
 import logging
+import posixpath
 from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
 from celery import shared_task
@@ -20,6 +22,12 @@ from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
+from nova.file_utils import download_file_content
+from nova.message_attachments import (
+    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
+    normalize_message_attachments,
+)
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
@@ -36,6 +44,115 @@ THREAD_TITLE_PROMPT = (
     "Use the same language as the conversation. "
     "Return title only, with no punctuation wrapper and no explanation."
 )
+
+
+def _build_message_attachment_text(message_text: str, attachments: list[dict]) -> str:
+    text = (message_text or "").strip()
+    if not text:
+        text = (
+            "Please analyze the attached image."
+            if len(attachments) == 1
+            else "Please analyze the attached images."
+        )
+    if not attachments:
+        return text
+
+    label = "Attached image:" if len(attachments) == 1 else "Attached images:"
+    names = "\n".join(
+        f"- {attachment.get('filename') or f'image-{attachment.get('id')}'}"
+        for attachment in attachments
+    )
+    return f"{text}\n\n{label}\n{names}"
+
+
+async def build_source_message_prompt(source_message: Message, *, fallback_prompt: str = ""):
+    """Build the runtime user turn payload from a stored source message."""
+    internal_data = source_message.internal_data if isinstance(source_message.internal_data, dict) else {}
+    attachments = normalize_message_attachments(
+        internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
+    )
+
+    def _load_attachment_files():
+        files = list(
+            UserFile.objects.filter(
+                user=source_message.user,
+                thread=source_message.thread,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                source_message=source_message,
+            ).order_by("created_at", "id")
+        )
+        if not attachments:
+            return [
+                (
+                    {
+                        "id": user_file.id,
+                        "filename": posixpath.basename(user_file.original_filename),
+                        "mime_type": user_file.mime_type,
+                        "size": user_file.size,
+                        "scope": user_file.scope,
+                    },
+                    user_file,
+                )
+                for user_file in files
+            ]
+
+        by_id = {user_file.id: user_file for user_file in files}
+        return [(attachment, by_id.get(attachment["id"])) for attachment in attachments]
+
+    ordered_files = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
+    if not ordered_files:
+        return source_message.text or fallback_prompt or ""
+
+    if not attachments:
+        attachments = [attachment for attachment, _user_file in ordered_files]
+
+    content_parts = [
+        {
+            "type": "text",
+            "text": _build_message_attachment_text(source_message.text or fallback_prompt, attachments),
+        }
+    ]
+
+    for attachment, user_file in ordered_files:
+        if not user_file:
+            logger.warning(
+                "Message attachment missing for message %s (attachment id=%s).",
+                source_message.id,
+                attachment.get("id"),
+            )
+            continue
+        if not str(user_file.mime_type or "").startswith("image/"):
+            logger.warning(
+                "Skipping non-image message attachment %s for message %s.",
+                user_file.id,
+                source_message.id,
+            )
+            continue
+
+        try:
+            content = await download_file_content(user_file)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load message attachment %s for message %s: %s",
+                user_file.id,
+                source_message.id,
+                exc,
+            )
+            continue
+
+        content_parts.append(
+            {
+                "type": "image",
+                "source_type": "base64",
+                "data": base64.b64encode(content).decode("utf-8"),
+                "mime_type": user_file.mime_type,
+                "filename": attachment.get("filename") or user_file.original_filename,
+            }
+        )
+
+    if len(content_parts) == 1:
+        return content_parts[0]["text"]
+    return content_parts
 
 
 def compute_trigger_retry_countdown(retries: int) -> int:
@@ -90,6 +207,20 @@ class AgentTaskExecutor (TaskExecutor):
         if self._normalize_text_for_compare(streamed_markdown) == self._normalize_text_for_compare(final_answer):
             return ""
         return streamed_markdown
+
+    async def _create_prompt(self):
+        if not self.source_message_id:
+            return self.prompt
+
+        try:
+            source_message = await sync_to_async(
+                Message.objects.select_related("thread", "user").get,
+                thread_sensitive=True,
+            )(pk=self.source_message_id, thread=self.thread, user=self.user)
+        except Message.DoesNotExist:
+            return self.prompt
+
+        return await build_source_message_prompt(source_message, fallback_prompt=self.prompt or "")
 
     async def _process_result(self, result):
         await super()._process_result(result)

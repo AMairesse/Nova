@@ -13,7 +13,7 @@ from django.shortcuts import get_object_or_404
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.llm.llm_agent import LLMAgent
-from nova.file_utils import batch_upload_files
+from nova.file_utils import batch_upload_files, download_file_content
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,10 @@ async def async_get_user_id(user):
 async def async_filter_files(thread):
     """Async wrapper for filter and exists."""
     files = await sync_to_async(UserFile.objects.filter,
-                                thread_sensitive=False)(thread=thread)
+                                thread_sensitive=False)(
+        thread=thread,
+        scope=UserFile.Scope.THREAD_SHARED,
+    )
     files_list = await sync_to_async(list, thread_sensitive=False)(files)
     exists = await sync_to_async(files.exists, thread_sensitive=False)()
     if not exists:
@@ -87,8 +90,13 @@ async def async_delete_file(file_id: int):
     """Async wrapper for delete."""
     file = await async_get_object_or_404(UserFile, id=file_id)
     thread_id = await sync_to_async(lambda: file.thread_id, thread_sensitive=False)()
+    file_scope = await sync_to_async(
+        lambda: getattr(file, "scope", UserFile.Scope.THREAD_SHARED),
+        thread_sensitive=False,
+    )()
     await sync_to_async(file.delete, thread_sensitive=False)()
-    await publish_file_update(thread_id, "file_delete")
+    if file_scope == UserFile.Scope.THREAD_SHARED:
+        await publish_file_update(thread_id, "file_delete")
     return "File deleted."
 
 
@@ -195,29 +203,18 @@ async def read_image(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
     if not file.mime_type.startswith('image/'):
         return "File is not an image. Use read_file_chunk for other types.", None
 
-    session = aioboto3.Session()
-    async with session.client(
-        's3',
-        endpoint_url=settings.MINIO_ENDPOINT_URL,
-        aws_access_key_id=settings.MINIO_ACCESS_KEY,
-        aws_secret_access_key=settings.MINIO_SECRET_KEY
-    ) as s3_client:
-        try:
-            response = await s3_client.get_object(
-                Bucket=settings.MINIO_BUCKET_NAME,
-                Key=file.key
-            )
-            content = await response['Body'].read()
-            b64image = base64.b64encode(content).decode('utf-8')
-            return 'Image loaded successfully. Ready for analysis.', {
-                "base64": b64image,
-                "mime_type": file.mime_type,
-                "file_id": file_id,
-                "filename": file.original_filename
-            }
-        except ClientError as e:
-            logger.error(f"Failed to read image {file_id}: {e}")
-            return f"Error reading image: {str(e)}", None
+    try:
+        content = await download_file_content(file)
+        b64image = base64.b64encode(content).decode('utf-8')
+        return 'Image loaded successfully. Ready for analysis.', {
+            "base64": b64image,
+            "mime_type": file.mime_type,
+            "file_id": file_id,
+            "filename": file.original_filename
+        }
+    except ClientError as e:
+        logger.error(f"Failed to read image {file_id}: {e}")
+        return f"Error reading image: {str(e)}", None
 
 
 async def get_functions(agent: LLMAgent) -> list[StructuredTool]:

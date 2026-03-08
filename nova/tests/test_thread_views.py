@@ -1,5 +1,5 @@
 # nova/tests/test_main_views.py
-from django.test import TestCase, RequestFactory
+from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -13,6 +13,7 @@ from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
 
@@ -123,6 +124,35 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
+
+    @override_settings(
+        MESSAGE_ATTACHMENT_MAX_FILES=2,
+        MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES=2 * 1024 * 1024,
+    )
+    def test_message_list_exposes_attachment_limits_from_settings(self):
+        thread = Thread.objects.create(user=self.user, subject="Composer limits")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        AgentConfig.objects.create(
+            user=self.user,
+            name="Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-message-attachment-max-files="2"')
+        self.assertContains(response, 'data-message-attachment-max-bytes="2097152"')
+        self.assertContains(response, 'Attach image (up to 2 images, 2 MB each)')
 
     def test_message_list_prefers_agent_display_markdown_when_available(self):
         thread = Thread.objects.create(user=self.user, subject="Agent display")
@@ -301,6 +331,128 @@ class MainViewsTests(TestCase):
         self.assertEqual(payload["status"], "OK")
         mocked_batch_upload.assert_awaited_once()
         mocked_publish_update.assert_awaited_once_with(thread.id, "attachment_upload")
+
+    @patch("nova.views.thread_views.publish_file_update", new_callable=AsyncMock)
+    @patch("nova.views.thread_views.upload_message_attachments")
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_with_message_attachments_skips_sidebar_refresh(
+        self,
+        _mock_delay,
+        mocked_upload_message_attachments,
+        mocked_publish_update,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-Image",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Image thread")
+        mocked_upload_message_attachments.return_value = (
+            [{
+                "id": 201,
+                "filename": "photo.jpg",
+                "mime_type": "image/jpeg",
+                "size": 1024,
+                "scope": UserFile.Scope.MESSAGE_ATTACHMENT,
+            }],
+            [],
+        )
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "",
+                "selected_agent": str(agent.id),
+                "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "OK")
+        self.assertEqual(payload["message"]["message_attachments"][0]["filename"], "photo.jpg")
+        self.assertEqual(payload["message"]["text"], "")
+        mocked_publish_update.assert_not_awaited()
+
+        message = thread.get_messages().latest("id")
+        self.assertEqual(message.internal_data["message_attachments"][0]["scope"], UserFile.Scope.MESSAGE_ATTACHMENT)
+
+    @patch("nova.views.thread_views.upload_message_attachments")
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_rejects_image_when_provider_validation_disallows_vision(
+        self,
+        mocked_run_ai_task,
+        mocked_upload_message_attachments,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-No-Vision",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        provider.apply_validation_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "validation_summary": "Validated with partial capabilities (vision: unsupported).",
+                "validation_capabilities": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "Vision inputs are not supported", "latency_ms": 13},
+                },
+            }
+        )
+
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Rejected image thread")
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Analyse cette image",
+                "selected_agent": str(agent.id),
+                "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(thread.get_messages().count(), 0)
+        mocked_upload_message_attachments.assert_not_called()
+        mocked_run_ai_task.assert_not_called()
+
+    def test_add_message_rejects_empty_payload_without_attachments(self):
+        self.client.login(username="alice", password="pass")
+        thread = Thread.objects.create(user=self.user, subject="Empty payload")
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={"thread_id": str(thread.id), "new_message": "   "},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
 
     # ------------ running_tasks -----------------------------------------
 

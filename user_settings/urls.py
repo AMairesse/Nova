@@ -7,6 +7,7 @@ from user_settings.views.provider import (
     ProviderCreateView,
     ProviderUpdateView,
     ProviderDeleteView,
+    provider_validation_status,
 )
 from user_settings.views.agent import (
     AgentListView,
@@ -55,6 +56,11 @@ urlpatterns += [
     path("providers/", ProviderListView.as_view(), name="providers"),
     path("providers/add/", ProviderCreateView.as_view(), name="provider-add"),
     path("providers/<int:pk>/edit/", ProviderUpdateView.as_view(), name="provider-edit"),
+    path(
+        "providers/<int:pk>/validation-status/",
+        provider_validation_status,
+        name="provider-validation-status",
+    ),
     path("providers/<int:pk>/delete/", ProviderDeleteView.as_view(), name="provider-delete"),
 ]
 

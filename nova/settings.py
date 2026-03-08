@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -29,7 +30,9 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
-if DEBUG:
+USING_TEST_SETTINGS = os.getenv('DJANGO_SETTINGS_MODULE', '') == 'nova.settings_test'
+ENABLE_DEBUGPY = os.getenv('ENABLE_DEBUGPY', 'True').lower() == 'true'
+if DEBUG and ENABLE_DEBUGPY and not USING_TEST_SETTINGS and 'test' not in sys.argv:
     import debugpy
     debugpy.listen(('0.0.0.0', 5678))
     # debugpy.wait_for_client()  # Uncomment to attach debugger
@@ -221,6 +224,31 @@ else:
             raise ValueError(
                 "USERFILE_EXPIRATION_DAYS must be an integer number of days, or 0/none to disable"
             ) from e
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a positive integer") from e
+
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+MESSAGE_ATTACHMENT_MAX_FILES = _get_positive_int_env(
+    "MESSAGE_ATTACHMENT_MAX_FILES",
+    4,
+)
+MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES = _get_positive_int_env(
+    "MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES",
+    4 * 1024 * 1024,
+)
 
 # Validate (fail-fast)
 if not all([MINIO_ACCESS_KEY, MINIO_SECRET_KEY]):

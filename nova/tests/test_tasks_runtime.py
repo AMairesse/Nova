@@ -9,10 +9,12 @@ from django.test import SimpleTestCase
 from langchain_core.messages import AIMessage, HumanMessage
 
 from nova.models.Message import Actor
+from nova.models.UserFile import UserFile
 from nova.tasks.tasks import (
     AgentTaskExecutor,
     ContextConsumptionTracker,
     SummarizationTaskExecutor,
+    build_source_message_prompt,
     delete_checkpoints,
     generate_thread_title_task,
     resume_ai_task_celery,
@@ -75,6 +77,142 @@ class ContextConsumptionTrackerTests(IsolatedAsyncioTestCase):
 
 
 class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
+    async def test_build_source_message_prompt_returns_multimodal_content(self):
+        source_message = SimpleNamespace(
+            id=55,
+            text="What do you see?",
+            internal_data={
+                "message_attachments": [
+                    {
+                        "id": 9,
+                        "filename": "photo.jpg",
+                        "mime_type": "image/jpeg",
+                        "size": 1200,
+                        "scope": "message_attachment",
+                    }
+                ]
+            },
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=2),
+        )
+
+        def immediate_sync_to_async(func, thread_sensitive=False):
+            async def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+
+        mocked_queryset = Mock()
+        mocked_queryset.order_by.return_value = [
+            SimpleNamespace(id=9, mime_type="image/jpeg", original_filename="/.message_attachments/message_55/photo.jpg"),
+        ]
+
+        with (
+            patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
+            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset) as mocked_filter,
+            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"image-bytes"),
+        ):
+            prompt = await build_source_message_prompt(source_message)
+
+        self.assertIsInstance(prompt, list)
+        self.assertEqual(prompt[0]["type"], "text")
+        self.assertIn("photo.jpg", prompt[0]["text"])
+        self.assertEqual(prompt[1]["type"], "image")
+        self.assertEqual(prompt[1]["filename"], "photo.jpg")
+        mocked_filter.assert_called_once_with(
+            user=source_message.user,
+            thread=source_message.thread,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            source_message=source_message,
+        )
+
+    async def test_build_source_message_prompt_keeps_attachment_text_when_image_load_fails(self):
+        source_message = SimpleNamespace(
+            id=56,
+            text="",
+            internal_data={
+                "message_attachments": [
+                    {
+                        "id": 10,
+                        "filename": "broken.jpg",
+                        "mime_type": "image/jpeg",
+                        "size": 1200,
+                        "scope": "message_attachment",
+                    }
+                ]
+            },
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=2),
+        )
+
+        def immediate_sync_to_async(func, thread_sensitive=False):
+            async def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+
+        mocked_queryset = Mock()
+        mocked_queryset.order_by.return_value = [
+            SimpleNamespace(id=10, mime_type="image/jpeg", original_filename="/.message_attachments/message_56/broken.jpg"),
+        ]
+
+        with (
+            patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
+            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset) as mocked_filter,
+            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, side_effect=RuntimeError("storage down")),
+        ):
+            prompt = await build_source_message_prompt(source_message)
+
+        self.assertIsInstance(prompt, str)
+        self.assertIn("Please analyze the attached image.", prompt)
+        self.assertIn("broken.jpg", prompt)
+        mocked_filter.assert_called_once_with(
+            user=source_message.user,
+            thread=source_message.thread,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            source_message=source_message,
+        )
+
+    async def test_build_source_message_prompt_falls_back_to_source_message_relation(self):
+        source_message = SimpleNamespace(
+            id=57,
+            text="Describe this",
+            internal_data={},
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=2),
+        )
+
+        def immediate_sync_to_async(func, thread_sensitive=False):
+            async def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+
+        mocked_queryset = Mock()
+        mocked_queryset.order_by.return_value = [
+            SimpleNamespace(
+                id=11,
+                mime_type="image/png",
+                original_filename="/.message_attachments/message_57/diagram.png",
+                size=128,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            ),
+        ]
+
+        with (
+            patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
+            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset) as mocked_filter,
+            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"png-bytes"),
+        ):
+            prompt = await build_source_message_prompt(source_message)
+
+        self.assertIsInstance(prompt, list)
+        self.assertIn("diagram.png", prompt[0]["text"])
+        self.assertEqual(prompt[1]["filename"], "diagram.png")
+        mocked_filter.assert_called_once_with(
+            user=source_message.user,
+            thread=source_message.thread,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            source_message=source_message,
+        )
+
     async def test_enqueue_thread_title_generation_only_for_default_titles(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
         thread = SimpleNamespace(id=42, subject="New thread 42")

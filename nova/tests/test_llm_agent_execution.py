@@ -132,6 +132,36 @@ class LLMAgentExecutionTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                 # Verify the middleware was called (through the agent's context)
                 # The actual prompt building is tested in test_llm_agent_prompts.py
 
+    async def test_ainvoke_accepts_multimodal_user_content(self):
+        mock_agent = self.create_mock_langchain_agent()
+        with patch.object(llm_agent_mod, "extract_final_answer", return_value="OK"):
+            with patch("nova.llm.prompts.UserFile.objects.filter") as mock_filter:
+                mock_filter.return_value.count.return_value = 0
+
+                agent = llm_agent_mod.LLMAgent(
+                    user=self.create_mock_user(),
+                    thread=self.create_mock_thread(),
+                    langgraph_thread_id="fake_id",
+                    agent_config=None,
+                    system_prompt=None,
+                    llm_provider=self.create_mock_provider(),
+                )
+                agent.langchain_agent = mock_agent
+
+                multimodal_content = [
+                    {"type": "text", "text": "Please analyze the attached image."},
+                    {"type": "image", "source_type": "base64", "data": "ZmFrZQ==", "mime_type": "image/jpeg"},
+                ]
+
+                await agent.ainvoke(multimodal_content, silent_mode=False)
+
+                payload, _config = mock_agent.invocations[0]
+                self.assertEqual(payload["messages"].content[0], multimodal_content[0])
+                self.assertEqual(payload["messages"].content[1]["type"], "image_url")
+                self.assertTrue(
+                    payload["messages"].content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+                )
+
 
 class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
     """Test cases for agent creation and initialization."""
@@ -143,6 +173,27 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
     def tearDown(self):
         self.tearDownLLMAgent()
         super().tearDown()
+
+    def test_create_provider_llm_uses_openrouter_defaults(self):
+        provider = self.create_mock_provider(
+            provider_type=llm_agent_mod.ProviderType.OPENROUTER,
+            model="google/gemini-2.5-flash",
+            api_key="router-key",
+            base_url=None,
+        )
+
+        with patch("nova.providers.openai_compatible.ChatOpenAI") as mocked_chat_openai:
+            llm_agent_mod.create_provider_llm(provider)
+
+        mocked_chat_openai.assert_called_once()
+        self.assertEqual(
+            mocked_chat_openai.call_args.kwargs["base_url"],
+            "https://openrouter.ai/api/v1",
+        )
+        self.assertEqual(
+            mocked_chat_openai.call_args.kwargs["openai_api_key"],
+            "router-key",
+        )
 
     async def test_create_initializes_agent_successfully(self):
         """
