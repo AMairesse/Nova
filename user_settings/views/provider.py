@@ -57,7 +57,7 @@ class ProviderListView(LoginRequiredMixin, ListView):
         ).order_by('user', 'name')
 
 
-class ProviderValidationActionMixin:
+class ProviderVerificationActionMixin:
     test_action_name = "test_provider"
     refresh_action_name = "refresh_capabilities"
 
@@ -67,7 +67,7 @@ class ProviderValidationActionMixin:
         context["provider_instance"] = provider
         context["provider_defaults_map"] = get_provider_defaults_map()
         if provider and provider.pk:
-            context["provider_validation_status_url"] = reverse(
+            context["provider_verification_status_url"] = reverse(
                 "user_settings:provider-validation-status",
                 args=[provider.pk],
             )
@@ -85,14 +85,14 @@ class ProviderValidationActionMixin:
             return url
         return f"{url}?{urlencode({'from': origin})}"
 
-    def _handle_provider_validation_action(self):
+    def _handle_provider_verification_action(self):
         self.object = self.get_object() if "pk" in self.kwargs else None
         form = self.get_form()
         if not form.is_valid():
             return self.form_invalid(form)
 
         if not (form.cleaned_data.get("model") or "").strip():
-            form.add_error("model", _("Select or enter a model before testing this provider."))
+            form.add_error("model", _("Select or enter a model before running verification."))
             return self.form_invalid(form)
 
         provider = form.save(commit=False)
@@ -102,9 +102,6 @@ class ProviderValidationActionMixin:
 
         previous_state = {
             "validation_status": provider.validation_status,
-            "validation_summary": provider.validation_summary,
-            "validation_capabilities": provider.validation_capabilities,
-            "validated_at": provider.validated_at,
             "validated_fingerprint": provider.validated_fingerprint,
             "validation_task_id": provider.validation_task_id,
             "validation_requested_fingerprint": provider.validation_requested_fingerprint,
@@ -128,9 +125,6 @@ class ProviderValidationActionMixin:
             provider.save(
                 update_fields=[
                     "validation_status",
-                    "validation_summary",
-                    "validation_capabilities",
-                    "validated_at",
                     "validated_fingerprint",
                     "validation_task_id",
                     "validation_requested_fingerprint",
@@ -139,14 +133,14 @@ class ProviderValidationActionMixin:
             )
             messages.error(
                 self.request,
-                _("Provider validation could not be started: %(error)s")
+                _("Provider verification could not be started: %(error)s")
                 % {"error": str(exc)},
             )
             return redirect(self._build_edit_url(provider))
 
         messages.info(
             self.request,
-            _("Provider validation started in background. You can leave this page."),
+            _("Provider verification started in background. You can leave this page."),
         )
         return redirect(self._build_edit_url(provider))
 
@@ -170,20 +164,20 @@ class ProviderValidationActionMixin:
         except Exception as exc:
             messages.error(
                 self.request,
-                _("Provider capability refresh failed: %(error)s") % {"error": str(exc)},
+                _("Provider metadata refresh failed: %(error)s") % {"error": str(exc)},
             )
             return redirect(self._build_edit_url(provider))
 
-        provider.apply_capability_snapshot(snapshot)
+        provider.apply_declared_capabilities(snapshot)
         messages.success(
             self.request,
-            _("Provider capabilities refreshed successfully."),
+            _("Provider metadata refreshed successfully."),
         )
         return redirect(self._build_edit_url(provider))
 
     def post(self, request, *args, **kwargs):
         if request.POST.get("action") == self.test_action_name:
-            return self._handle_provider_validation_action()
+            return self._handle_provider_verification_action()
         if request.POST.get("action") == self.refresh_action_name:
             return self._handle_provider_capability_refresh_action()
         return super().post(request, *args, **kwargs)
@@ -193,7 +187,7 @@ class ProviderValidationActionMixin:
 #  CRUD                                                                      #
 # ---------------------------------------------------------------------------#
 class ProviderCreateView(
-    ProviderValidationActionMixin, DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView
+    ProviderVerificationActionMixin, DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView
 ):
     model = LLMProvider
     form_class = LLMProviderForm
@@ -202,7 +196,7 @@ class ProviderCreateView(
 
 
 class ProviderUpdateView(  # type: ignore[misc]
-    ProviderValidationActionMixin,
+    ProviderVerificationActionMixin,
     DashboardRedirectMixin,
     LoginRequiredMixin,
     OwnerUpdateView,
@@ -229,9 +223,9 @@ class ProviderDeleteView(  # type: ignore[misc]
 
 @login_required
 @require_GET
-def provider_validation_status(request, pk: int):
+def provider_verification_status(request, pk: int):
     provider = get_object_or_404(LLMProvider, pk=pk, user=request.user)
-    return JsonResponse(provider.build_validation_status_payload())
+    return JsonResponse(provider.build_verification_status_payload())
 
 
 @login_required

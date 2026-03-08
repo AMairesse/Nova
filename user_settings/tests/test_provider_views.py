@@ -13,7 +13,7 @@ from nova.models.Provider import LLMProvider, ProviderType
 User = get_user_model()
 
 
-def _valid_capabilities(*, vision_status="pass") -> dict:
+def _verified_operations(*, vision_status="pass") -> dict:
     return {
         "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
         "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
@@ -71,9 +71,9 @@ class ProviderViewsTests(TestCase):
         )
 
         edit_response = self.client.get(reverse("user_settings:provider-edit", args=[provider.pk]))
-        self.assertContains(edit_response, "Validation status")
-        self.assertContains(edit_response, "Validation is running in background.")
-        self.assertContains(edit_response, "Testing…")
+        self.assertContains(edit_response, "Capabilities")
+        self.assertContains(edit_response, "Verification is running in background.")
+        self.assertContains(edit_response, "Verifying…")
         self.assertNotContains(edit_response, "Provider validation in progress…")
         self.assertRegex(
             edit_response.content.decode(),
@@ -102,11 +102,11 @@ class ProviderViewsTests(TestCase):
             api_key="dummy-secret",
             max_context_tokens=4096,
         )
-        provider.apply_validation_result(
+        provider.apply_verification_result(
             {
                 "validation_status": LLMProvider.ValidationStatus.VALID,
-                "validation_summary": "Validated successfully.",
-                "validation_capabilities": _valid_capabilities(),
+                "verification_summary": "Validated successfully.",
+                "verified_operations": _verified_operations(),
             }
         )
 
@@ -150,9 +150,9 @@ class ProviderViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["validation_status"], LLMProvider.ValidationStatus.TESTING)
-        self.assertEqual(payload["validation_task_id"], provider.validation_task_id)
-        self.assertTrue(payload["is_testing"])
+        self.assertEqual(payload["verification_status"], LLMProvider.ValidationStatus.TESTING)
+        self.assertEqual(payload["verification_task_id"], provider.validation_task_id)
+        self.assertTrue(payload["is_verifying"])
         mocked_apply_async.assert_called_once()
 
     @patch("user_settings.views.provider.resolve_provider_capability_snapshot", new_callable=AsyncMock)
@@ -166,9 +166,9 @@ class ProviderViewsTests(TestCase):
             max_context_tokens=4096,
         )
         mocked_resolve_snapshot.return_value = {
-            "source": "OpenRouter models API",
-            "input_modalities": {"text": "pass", "image": "pass", "pdf": "pass"},
-            "output_modalities": {"text": "pass"},
+            "metadata_source_label": "OpenRouter models API",
+            "inputs": {"text": "pass", "image": "pass", "pdf": "pass"},
+            "outputs": {"text": "pass"},
             "operations": {"chat": "pass", "tools": "pass"},
             "limits": {"context_tokens": 128000},
             "model_state": {},
@@ -186,8 +186,8 @@ class ProviderViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         provider.refresh_from_db()
-        self.assertEqual(provider.capability_snapshot["input_modalities"]["pdf"], "pass")
-        self.assertIsNotNone(provider.capability_refreshed_at)
+        self.assertEqual(provider.known_pdf_input_status, "pass")
+        self.assertIsNotNone(provider.metadata_checked_at)
 
     def test_save_without_model_creates_connection_only_provider(self):
         response = self.client.post(
@@ -222,6 +222,79 @@ class ProviderViewsTests(TestCase):
             response.content.decode(),
             r'id="test-provider-btn"[^>]*disabled',
         )
+
+    def test_capabilities_card_only_shows_verified_badge_for_verified_capabilities(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Capability Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="openai/gpt-4.1-mini",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "OpenRouter models API",
+                "inputs": {"text": "pass", "image": "pass"},
+                "outputs": {"text": "pass"},
+                "operations": {"chat": "pass", "tools": "pass"},
+                "limits": {"context_tokens": 128000},
+                "model_state": {},
+            }
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Verified successfully.",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "no vision", "latency_ms": 13},
+                },
+            }
+        )
+
+        response = self.client.get(reverse("user_settings:provider-edit", args=[provider.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Verified")
+        self.assertNotContains(response, "Declared")
+        self.assertNotContains(response, "Merged")
+
+    def test_capabilities_card_shows_verified_badges_for_verified_inputs_and_outputs(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Capability Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="openai/gpt-4.1-mini",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "OpenRouter models API",
+                "inputs": {"text": "pass", "image": "pass"},
+                "outputs": {"text": "pass"},
+                "operations": {},
+                "limits": {"context_tokens": 128000},
+                "model_state": {},
+            }
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Verified successfully.",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                },
+            }
+        )
+
+        response = self.client.get(reverse("user_settings:provider-edit", args=[provider.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(response.content.decode().count("Verified"), 3)
 
     @patch("user_settings.views.provider.validate_provider_configuration_task.apply_async")
     def test_test_provider_requires_selected_model(self, mocked_apply_async):

@@ -39,15 +39,15 @@
   const resetMaxContextButton = document.getElementById("provider-reset-max-context-btn");
 
   const providerId = form.dataset.providerId || "";
-  const validationStatusUrl = form.dataset.validationStatusUrl || "";
+  const verificationStatusUrl = form.dataset.verificationStatusUrl || "";
   const modelCatalogUrl = form.dataset.modelCatalogUrl || "";
-  const validationPollIntervalMs = Number.parseInt(
-    form.dataset.validationPollIntervalMs || "2000",
+  const verificationPollIntervalMs = Number.parseInt(
+    form.dataset.verificationPollIntervalMs || "2000",
     10
   );
 
   const state = {
-    currentValidationStatus: form.dataset.validationStatus || "untested",
+    currentVerificationStatus: form.dataset.verificationStatus || "untested",
     initialConnection: {
       providerType: providerTypeInput ? providerTypeInput.value : "",
       baseUrl: baseUrlInput ? baseUrlInput.value.trim() : "",
@@ -62,15 +62,13 @@
     suggestedMaxContextTokens: null,
     manualMaxContextOverride: false,
     pollingHandle: null,
-    hasValidationSnapshot:
-      Boolean(testButton) && (testButton.textContent || "").toLowerCase().includes("retest"),
     labels: {
       saveConnection: "Save connection",
       saveProvider: "Save provider",
       loadModels: "Load models",
       refreshModels: "Refresh models",
-      testing: "Testing…",
-      test: testButton ? testButton.textContent.trim() : "Test selected model",
+      verifying: "Verifying…",
+      verify: testButton ? testButton.textContent.trim() : "Run active verification",
     },
   };
 
@@ -770,7 +768,7 @@
       return;
     }
     const label =
-      state.currentValidationStatus === "testing" ? state.labels.testing : state.labels.test;
+      state.currentVerificationStatus === "testing" ? state.labels.verifying : state.labels.verify;
     testButton.innerHTML = `<i class="bi bi-plug me-1"></i>${escapeHtml(label)}`;
   }
 
@@ -787,14 +785,14 @@
     updateTestButtonLabel();
     updateLoadButtonLabel();
 
-    const validationLocked = state.currentValidationStatus === "testing";
+    const verificationLocked = state.currentVerificationStatus === "testing";
 
     if (testButton) {
-      testButton.disabled = validationLocked || !hasSelectedModel();
+      testButton.disabled = verificationLocked || !hasSelectedModel();
     }
 
     if (refreshButton) {
-      refreshButton.disabled = validationLocked || !hasSelectedModel();
+      refreshButton.disabled = verificationLocked || !hasSelectedModel();
     }
 
     if (loadModelsButton) {
@@ -867,13 +865,13 @@
     }
   }
 
-  async function pollValidationStatus() {
-    if (!validationStatusUrl || state.currentValidationStatus !== "testing") {
+  async function pollVerificationStatus() {
+    if (!verificationStatusUrl || state.currentVerificationStatus !== "testing") {
       return;
     }
 
     try {
-      const response = await fetch(validationStatusUrl, {
+      const response = await fetch(verificationStatusUrl, {
         headers: {
           Accept: "application/json",
           "X-Requested-With": "XMLHttpRequest",
@@ -884,28 +882,28 @@
         return;
       }
       const payload = await response.json();
-      if (!payload || !payload.validation_status) {
+      if (!payload || !payload.verification_status) {
         return;
       }
 
-      if (payload.validation_status !== "testing") {
+      if (payload.verification_status !== "testing") {
         window.location.reload();
       }
     } catch (_error) {
-      // Keep polling silently while validation is in progress.
+      // Keep polling silently while verification is in progress.
     }
   }
 
-  function startValidationPolling() {
-    if (!validationStatusUrl || state.currentValidationStatus !== "testing" || state.pollingHandle) {
+  function startVerificationPolling() {
+    if (!verificationStatusUrl || state.currentVerificationStatus !== "testing" || state.pollingHandle) {
       return;
     }
 
     state.pollingHandle = window.setInterval(
-      pollValidationStatus,
-      Number.isFinite(validationPollIntervalMs) ? validationPollIntervalMs : 2000
+      pollVerificationStatus,
+      Number.isFinite(verificationPollIntervalMs) ? verificationPollIntervalMs : 2000
     );
-    pollValidationStatus();
+    pollVerificationStatus();
   }
 
   function bindEvents() {
@@ -991,7 +989,7 @@
           updateActionButtons();
           return;
         }
-        state.currentValidationStatus = "testing";
+        state.currentVerificationStatus = "testing";
         updateActionButtons();
       }
     });
@@ -1002,5 +1000,5 @@
   renderFilterPills();
   renderCatalog();
   bindEvents();
-  startValidationPolling();
+  startVerificationPolling();
 })();

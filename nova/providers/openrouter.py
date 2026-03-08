@@ -158,6 +158,8 @@ def build_openrouter_catalog_item(model_metadata: dict) -> dict:
     if not isinstance(pricing, dict):
         pricing = {}
 
+    supports_file_input = None if not input_modalities else ("file" in input_modalities or "pdf" in input_modalities)
+
     return {
         "id": model_metadata.get("id") or "",
         "label": model_metadata.get("name") or model_metadata.get("id") or "",
@@ -167,7 +169,7 @@ def build_openrouter_catalog_item(model_metadata: dict) -> dict:
         "input_modalities": {
             "text": "pass",
             "image": _normalize_snapshot_flag("image" in input_modalities if input_modalities else None),
-            "pdf": _normalize_snapshot_flag("pdf" in input_modalities if input_modalities else None),
+            "pdf": _normalize_snapshot_flag(supports_file_input),
             "audio": _normalize_snapshot_flag("audio" in input_modalities if input_modalities else None),
         },
         "output_modalities": {
@@ -248,16 +250,17 @@ def build_openrouter_capability_snapshot(model_metadata: dict) -> dict:
         if parameter
     }
 
+    supports_file_input = None if not input_modalities else ("file" in input_modalities or "pdf" in input_modalities)
+
     return {
-        "source": "OpenRouter models API",
-        "model_id": model_metadata.get("id") or "",
-        "input_modalities": {
+        "metadata_source_label": "OpenRouter models API",
+        "inputs": {
             "text": "pass",
             "image": _normalize_snapshot_flag("image" in input_modalities if input_modalities else None),
-            "pdf": _normalize_snapshot_flag("pdf" in input_modalities if input_modalities else None),
+            "pdf": _normalize_snapshot_flag(supports_file_input),
             "audio": _normalize_snapshot_flag("audio" in input_modalities if input_modalities else None),
         },
-        "output_modalities": {
+        "outputs": {
             "text": "pass",
             "image": _normalize_snapshot_flag("image" in output_modalities if output_modalities else None),
             "audio": _normalize_snapshot_flag("audio" in output_modalities if output_modalities else None),

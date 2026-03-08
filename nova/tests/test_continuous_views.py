@@ -154,11 +154,11 @@ class ContinuousViewsTests(TestCase):
         provider = create_provider(self.user, provider_type=ProviderType.OPENAI, name="No Vision", model="gpt-4o-mini")
         provider.api_key = "dummy"
         provider.save(update_fields=["api_key"])
-        provider.apply_validation_result(
+        provider.apply_verification_result(
             {
                 "validation_status": LLMProvider.ValidationStatus.VALID,
-                "validation_summary": "Validated with partial capabilities (vision: unsupported).",
-                "validation_capabilities": {
+                "verification_summary": "Validated with partial capabilities (vision: unsupported).",
+                "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
                     "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
@@ -182,6 +182,52 @@ class ContinuousViewsTests(TestCase):
         mocked_upload_message_attachments.assert_not_called()
         mocked_enqueue_followups.assert_not_called()
         mocked_run_ai_task.assert_not_called()
+
+    @patch("nova.views.continuous_views.upload_message_attachments")
+    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.views.continuous_views.run_ai_task_celery.delay")
+    def test_continuous_add_message_allows_image_when_provider_verification_is_stale(
+        self,
+        mocked_run_ai_task,
+        mocked_enqueue_followups,
+        mocked_upload_message_attachments,
+    ):
+        mocked_enqueue_followups.return_value = None
+
+        provider = create_provider(self.user, provider_type=ProviderType.OPENAI, name="Stale Vision", model="gpt-4o-mini")
+        provider.api_key = "dummy"
+        provider.save(update_fields=["api_key"])
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (vision: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "Vision inputs are not supported", "latency_ms": 13},
+                },
+            }
+        )
+        provider.model = "gpt-4.1-mini"
+        provider.save(update_fields=["model"])
+        agent = create_agent(self.user, provider, name="Vision agent")
+        mocked_upload_message_attachments.return_value = ([], [])
+
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={
+                "new_message": "Analyse cette image",
+                "selected_agent": str(agent.id),
+                "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "OK")
+        mocked_upload_message_attachments.assert_called_once()
+        mocked_enqueue_followups.assert_called_once()
+        mocked_run_ai_task.assert_called_once()
 
     def test_continuous_regenerate_summary_returns_404_when_segment_missing(self):
         response = self.client.post(reverse("continuous_regenerate_summary"), data={"day": "2026-01-01"})

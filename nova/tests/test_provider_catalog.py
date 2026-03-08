@@ -51,6 +51,29 @@ class ProviderCatalogTests(SimpleTestCase):
         self.assertEqual(payload[0]["operations"]["reasoning"], "pass")
         self.assertEqual(payload[0]["pricing"]["prompt"], "0.10")
 
+    @patch("nova.providers.openrouter.fetch_openrouter_model_catalog", new_callable=AsyncMock)
+    def test_openrouter_catalog_maps_file_input_to_pdf_capability(self, mocked_catalog):
+        mocked_catalog.return_value = [
+            {
+                "id": "x-ai/grok-vision",
+                "name": "Grok Vision",
+                "context_length": 128000,
+                "architecture": {
+                    "input_modalities": ["text", "image", "file"],
+                    "output_modalities": ["text"],
+                },
+                "supported_parameters": [],
+                "pricing": {},
+                "top_provider": {},
+            }
+        ]
+
+        payload = async_to_sync(list_provider_models)(
+            self._provider(ProviderType.OPENROUTER)
+        )
+
+        self.assertEqual(payload[0]["input_modalities"]["pdf"], "pass")
+
     @patch("nova.providers.lmstudio.fetch_lmstudio_models", new_callable=AsyncMock)
     def test_lmstudio_catalog_items_include_loaded_state_and_capabilities(self, mocked_models):
         mocked_models.return_value = [

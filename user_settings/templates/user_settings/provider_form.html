@@ -25,10 +25,10 @@
     id="provider-form"
     data-provider-id="{{ provider.pk|default:'' }}"
     data-is-new-provider="{% if provider.pk %}0{% else %}1{% endif %}"
-    data-validation-status="{{ provider.validation_status|default:'untested' }}"
-    data-validation-status-url="{{ provider_validation_status_url|default:'' }}"
+    data-verification-status="{{ provider.validation_status|default:'untested' }}"
+    data-verification-status-url="{{ provider_verification_status_url|default:'' }}"
     data-model-catalog-url="{{ provider_model_catalog_url|default:'' }}"
-    data-validation-poll-interval-ms="2000"
+    data-verification-poll-interval-ms="2000"
   >
     {% csrf_token %}
     <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
@@ -42,7 +42,7 @@
           <div>
             <h3 class="h5 mb-1">{% trans "Connection" %}</h3>
             <p class="text-muted small mb-0">
-              {% trans "Configure the provider type and connection settings first. No network call is made until you save or explicitly load models / validate." %}
+              {% trans "Configure the provider type and connection settings first. No network call is made until you save or explicitly load models / verify." %}
             </p>
           </div>
         </div>
@@ -143,77 +143,130 @@
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
             <div>
-              <h3 class="h5 mb-1">{% trans "Capabilities & validation" %}</h3>
+              <h3 class="h5 mb-1">{% trans "Capabilities" %}</h3>
               <p class="text-muted small mb-0">
                 {% if provider.has_model_configured %}
-                  {% trans "Refresh the saved snapshot and run active validation for the selected model." %}
+                  {% trans "Refresh declared metadata and run active verification for the selected model." %}
                 {% else %}
-                  {% trans "Select a model to refresh capabilities or run active validation." %}
+                  {% trans "Select a model to refresh metadata or run active verification." %}
                 {% endif %}
               </p>
             </div>
           </div>
 
-          <div class="row g-4">
-            <div class="col-lg-6">
-              <h4 class="h6 mb-2">{% trans "Validation status" %}</h4>
-              <div class="d-flex align-items-center gap-2 flex-wrap">
-                <span class="badge {{ provider.validation_status_badge_class }}">
-                  {{ provider.get_validation_status_display }}
-                </span>
-                {% if provider.validated_at %}
-                  <span class="text-muted small">
-                    {% blocktrans with validated_at=provider.validated_at|date:"SHORT_DATETIME_FORMAT" %}
-                      Last checked: {{ validated_at }}
-                    {% endblocktrans %}
-                  </span>
-                {% endif %}
-              </div>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <span class="badge {{ provider.verification_status_badge_class }}">
+              {{ provider.verification_status_label }}
+            </span>
+            {% if provider.metadata_checked_at %}
+              <span class="text-muted small">
+                {% blocktrans with refreshed_at=provider.metadata_checked_at|date:"SHORT_DATETIME_FORMAT" %}
+                  Metadata refreshed: {{ refreshed_at }}
+                {% endblocktrans %}
+              </span>
+            {% endif %}
+            {% if provider.probe_checked_at %}
+              <span class="text-muted small">
+                {% blocktrans with checked_at=provider.probe_checked_at|date:"SHORT_DATETIME_FORMAT" %}
+                  Verification checked: {{ checked_at }}
+                {% endblocktrans %}
+              </span>
+            {% endif %}
+          </div>
 
-              {% if provider.validation_summary %}
-                <p class="mt-3 mb-0 small text-muted">{{ provider.validation_summary }}</p>
-              {% elif provider.validation_status == 'untested' %}
-                <p class="mt-3 mb-0 small text-muted">
-                  {% trans "This provider has not been actively validated yet." %}
-                </p>
-              {% endif %}
+          {% if provider.capability_profile_summary %}
+            <p class="mt-3 mb-0 small text-muted">{{ provider.capability_profile_summary }}</p>
+          {% elif provider.validation_status == 'untested' %}
+            <p class="mt-3 mb-0 small text-muted">
+              {% trans "This provider has not been evaluated yet." %}
+            </p>
+          {% endif %}
 
-              {% if provider.validation_status == 'testing' %}
-                <div class="alert alert-info py-2 px-3 small mt-3 mb-0" id="provider-validation-running">
-                  <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                  {% trans "Validation is running in background. You can leave this page and come back later." %}
-                </div>
-              {% endif %}
+          {% if provider.validation_status == 'testing' %}
+            <div class="alert alert-info py-2 px-3 small mt-3 mb-0" id="provider-verification-running">
+              <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+              {% trans "Verification is running in background. You can leave this page and come back later." %}
+            </div>
+          {% endif %}
 
-              {% if provider.validation_status == 'stale' %}
-                <div class="alert alert-warning py-2 px-3 small mt-3 mb-0">
-                  {% trans "The provider configuration changed since the last validation run." %}
-                </div>
-              {% endif %}
+          {% if provider.validation_status == 'stale' %}
+            <div class="alert alert-warning py-2 px-3 small mt-3 mb-0">
+              {% trans "The provider configuration changed since the last evaluation." %}
+            </div>
+          {% endif %}
 
-              {% if provider.has_validation_snapshot %}
-                <div class="table-responsive mt-3">
+          {% if provider.has_capability_profile %}
+            <div class="row g-4 mt-1">
+              <div class="col-lg-4">
+                <h4 class="h6 mb-2">{% trans "Inputs" %}</h4>
+                <div class="table-responsive">
                   <table class="table table-sm align-middle mb-0">
-                    <thead>
-                      <tr>
-                        <th>{% trans "Capability" %}</th>
-                        <th>{% trans "Status" %}</th>
-                        <th>{% trans "Details" %}</th>
-                      </tr>
-                    </thead>
                     <tbody>
-                      {% for capability in provider.validation_capability_items %}
+                      {% for item in provider.capability_input_items %}
                         <tr>
-                          <td>{{ capability.label }}</td>
-                          <td>
-                            <span class="badge {{ capability.status_badge_class }}">
-                              {{ capability.status_label }}
-                            </span>
+                          <td class="fw-medium text-nowrap">{{ item.label }}</td>
+                          <td class="text-nowrap">
+                            <div class="d-flex flex-wrap gap-1">
+                              <span class="badge {{ item.status_badge_class }}">{{ item.status_label }}</span>
+                              {% if item.source == 'verified' or item.source == 'merged' %}
+                                <span class="badge text-bg-light text-dark border">{% trans "Verified" %}</span>
+                              {% endif %}
+                            </div>
                           </td>
-                          <td class="small text-muted">
-                            {% if capability.message %}{{ capability.message }}{% endif %}
-                            {% if capability.latency_ms %}
-                              <span class="d-inline-block ms-1">({{ capability.latency_ms }} ms)</span>
+                          <td class="small text-muted text-break">
+                            {% if item.message %}{{ item.message }}{% endif %}
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <h4 class="h6 mb-2">{% trans "Outputs" %}</h4>
+                <div class="table-responsive">
+                  <table class="table table-sm align-middle mb-0">
+                    <tbody>
+                      {% for item in provider.capability_output_items %}
+                        <tr>
+                          <td class="fw-medium text-nowrap">{{ item.label }}</td>
+                          <td class="text-nowrap">
+                            <div class="d-flex flex-wrap gap-1">
+                              <span class="badge {{ item.status_badge_class }}">{{ item.status_label }}</span>
+                              {% if item.source == 'verified' or item.source == 'merged' %}
+                                <span class="badge text-bg-light text-dark border">{% trans "Verified" %}</span>
+                              {% endif %}
+                            </div>
+                          </td>
+                          <td class="small text-muted text-break">
+                            {% if item.message %}{{ item.message }}{% endif %}
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <h4 class="h6 mb-2">{% trans "Operations" %}</h4>
+                <div class="table-responsive">
+                  <table class="table table-sm align-middle mb-0">
+                    <tbody>
+                      {% for item in provider.capability_operation_items %}
+                        <tr>
+                          <td class="fw-medium text-nowrap">{{ item.label }}</td>
+                          <td class="text-nowrap">
+                            <div class="d-flex flex-wrap gap-1">
+                              <span class="badge {{ item.status_badge_class }}">{{ item.status_label }}</span>
+                              {% if item.source == 'verified' or item.source == 'merged' %}
+                                <span class="badge text-bg-light text-dark border">{% trans "Verified" %}</span>
+                              {% endif %}
+                            </div>
+                          </td>
+                          <td class="small text-muted text-break">
+                            {% if item.message %}{{ item.message }}{% endif %}
+                            {% if item.latency_ms %}
+                              <span class="d-inline-block ms-1">({{ item.latency_ms }} ms)</span>
                             {% endif %}
                           </td>
                         </tr>
@@ -221,63 +274,16 @@
                     </tbody>
                   </table>
                 </div>
-              {% endif %}
+              </div>
             </div>
-
-            <div class="col-lg-6">
-              <h4 class="h6 mb-2">{% trans "Saved capability snapshot" %}</h4>
-              {% if provider.capability_refreshed_at %}
-                <div class="text-muted small">
-                  {% blocktrans with refreshed_at=provider.capability_refreshed_at|date:"SHORT_DATETIME_FORMAT" %}
-                    Last refreshed: {{ refreshed_at }}
-                  {% endblocktrans %}
-                </div>
-              {% else %}
-                <div class="text-muted small">
-                  {% trans "Capabilities have not been refreshed yet." %}
-                </div>
-              {% endif %}
-
-              {% if provider.capability_snapshot_summary %}
-                <p class="mt-3 mb-0 small text-muted">{{ provider.capability_snapshot_summary }}</p>
-              {% endif %}
-
-              {% if provider.has_capability_snapshot %}
-                <div class="mt-3">
-                  {% if provider.capability_snapshot_input_items %}
-                    <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Inputs" %}</div>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                      {% for item in provider.capability_snapshot_input_items %}
-                        <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
-                      {% endfor %}
-                    </div>
-                  {% endif %}
-                  {% if provider.capability_snapshot_output_items %}
-                    <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Outputs" %}</div>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                      {% for item in provider.capability_snapshot_output_items %}
-                        <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
-                      {% endfor %}
-                    </div>
-                  {% endif %}
-                  {% if provider.capability_snapshot_operation_items %}
-                    <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Operations" %}</div>
-                    <div class="d-flex flex-wrap gap-2">
-                      {% for item in provider.capability_snapshot_operation_items %}
-                        <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
-                      {% endfor %}
-                    </div>
-                  {% endif %}
-                </div>
-              {% endif %}
-            </div>
+          {% endif %}
           </div>
         </div>
       </div>
     {% endif %}
 
-    <div class="mt-4">
-      <button class="btn btn-primary me-2" type="submit" id="save-provider-btn" data-form-action="">
+    <div class="mt-4 d-flex flex-wrap gap-2 align-items-center">
+      <button class="btn btn-primary" type="submit" id="save-provider-btn" data-form-action="">
         <i class="bi bi-check-lg me-1"></i>
         {% if provider.has_model_configured %}
           {% trans "Save provider" %}
@@ -286,7 +292,7 @@
         {% endif %}
       </button>
       <button
-        class="btn btn-outline-secondary me-2"
+        class="btn btn-outline-secondary"
         type="submit"
         data-form-action="test_provider"
         id="test-provider-btn"
@@ -294,22 +300,22 @@
       >
         <i class="bi bi-plug me-1"></i>
         {% if provider.validation_status == 'testing' %}
-          {% trans "Testing…" %}
-        {% elif provider.has_validation_snapshot %}
-          {% trans "Retest selected model" %}
+          {% trans "Verifying…" %}
+        {% elif provider.has_verification_result %}
+          {% trans "Run verification again" %}
         {% else %}
-          {% trans "Test selected model" %}
+          {% trans "Run active verification" %}
         {% endif %}
       </button>
       {% if provider.pk %}
         <button
-          class="btn btn-outline-secondary me-2"
+          class="btn btn-outline-secondary"
           type="submit"
           data-form-action="refresh_capabilities"
           id="refresh-provider-capabilities-btn"
           {% if not provider.has_model_configured %}disabled{% endif %}
         >
-          <i class="bi bi-arrow-clockwise me-1"></i>{% trans "Refresh capabilities" %}
+          <i class="bi bi-arrow-clockwise me-1"></i>{% trans "Refresh metadata" %}
         </button>
       {% endif %}
       {% if request.GET.from %}

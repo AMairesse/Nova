@@ -643,7 +643,7 @@
             if (!selectedItem) return null;
 
             return {
-                validationStatus: `${selectedItem.dataset.providerValidationStatus || ''}`.trim(),
+                verificationStatus: `${selectedItem.dataset.providerVerificationStatus || ''}`.trim(),
                 visionStatus: `${selectedItem.dataset.providerVisionStatus || ''}`.trim(),
                 imageStatus: `${selectedItem.dataset.providerImageStatus || ''}`.trim(),
                 pdfStatus: `${selectedItem.dataset.providerPdfStatus || ''}`.trim(),
@@ -669,27 +669,27 @@
                 return;
             }
 
-            const { validationStatus, visionStatus, imageStatus, pdfStatus, audioStatus } = state;
+            const { verificationStatus, visionStatus, imageStatus, pdfStatus, audioStatus } = state;
             const kinds = Array.from(new Set(this.composerAttachments.map((attachment) => attachment.kind)));
             const imageUnsupported = kinds.includes('image') && (imageStatus === 'unsupported' || visionStatus === 'fail' || visionStatus === 'unsupported');
             const pdfUnsupported = kinds.includes('pdf') && pdfStatus === 'unsupported';
             const audioUnsupported = kinds.includes('audio') && audioStatus === 'unsupported';
 
-            if (validationStatus === 'valid' && (imageUnsupported || pdfUnsupported || audioUnsupported)) {
+            if (imageUnsupported || pdfUnsupported || audioUnsupported) {
                 note.className = 'alert alert-danger py-2 px-3 small mt-2';
-                note.textContent = gettext('The selected agent provider was explicitly marked without support for one of the attached input types. Sending this message will be rejected.');
+                note.textContent = gettext('The selected agent provider was explicitly verified without support for one of the attached input types. Sending this message will be rejected.');
                 return;
             }
 
-            if (validationStatus === 'untested') {
+            if (verificationStatus === 'untested') {
                 note.className = 'alert alert-warning py-2 px-3 small mt-2';
-                note.textContent = gettext('The selected agent provider has not been actively validated for these attachment types yet.');
+                note.textContent = gettext('The selected agent provider has not been actively verified for these attachment types yet.');
                 return;
             }
 
-            if (validationStatus === 'stale') {
+            if (verificationStatus === 'stale') {
                 note.className = 'alert alert-warning py-2 px-3 small mt-2';
-                note.textContent = gettext('The selected agent provider changed since its last capability test. These attachments are allowed, but compatibility is no longer confirmed.');
+                note.textContent = gettext('The selected agent provider changed since its last verification. These attachments are allowed, but compatibility is no longer confirmed.');
                 return;
             }
 

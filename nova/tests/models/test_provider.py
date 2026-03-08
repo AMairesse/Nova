@@ -1,6 +1,5 @@
 # nova/tests/models/test_provider.py
 from django.core.exceptions import ValidationError
-from django.utils import timezone
 from django.test import override_settings
 
 from nova.models.Provider import LLMProvider, ProviderType, check_and_create_system_provider
@@ -90,17 +89,16 @@ class ProviderModelsTest(BaseTestCase):
             model="gpt-4o-mini",
             api_key="secret-a",
         )
-        provider.apply_validation_result(
+        provider.apply_verification_result(
             {
                 "validation_status": LLMProvider.ValidationStatus.VALID,
-                "validation_summary": "Validated successfully.",
-                "validation_capabilities": {
+                "verification_summary": "Validated successfully.",
+                "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
                     "tools": {"status": "pass", "message": "ok", "latency_ms": 15},
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 20},
                 },
-                "validated_at": timezone.now(),
             }
         )
 
@@ -109,7 +107,7 @@ class ProviderModelsTest(BaseTestCase):
         provider.refresh_from_db()
 
         self.assertEqual(provider.validation_status, LLMProvider.ValidationStatus.STALE)
-        self.assertEqual(provider.validation_summary, "Validated successfully.")
+        self.assertEqual(provider.capability_profile_summary, "")
 
     def test_save_clears_running_validation_state_after_configuration_change(self):
         provider = LLMProvider.objects.create(
@@ -132,7 +130,7 @@ class ProviderModelsTest(BaseTestCase):
         self.assertEqual(provider.validation_task_id, "")
         self.assertEqual(provider.validation_requested_fingerprint, "")
 
-    def test_save_clears_capability_snapshot_after_configuration_change(self):
+    def test_save_clears_capability_profile_after_configuration_change(self):
         provider = LLMProvider.objects.create(
             user=self.user,
             name="Snapshot Provider",
@@ -140,11 +138,11 @@ class ProviderModelsTest(BaseTestCase):
             model="openrouter/model-a",
             api_key="secret-a",
         )
-        provider.apply_capability_snapshot(
+        provider.apply_declared_capabilities(
             {
-                "source": "OpenRouter models API",
-                "input_modalities": {"text": "pass", "pdf": "pass"},
-                "output_modalities": {"text": "pass"},
+                "metadata_source_label": "OpenRouter models API",
+                "inputs": {"text": "pass", "pdf": "pass"},
+                "outputs": {"text": "pass"},
                 "operations": {"chat": "pass"},
                 "limits": {"context_tokens": 100000},
                 "model_state": {},
@@ -155,8 +153,104 @@ class ProviderModelsTest(BaseTestCase):
         provider.save(update_fields=["model"])
         provider.refresh_from_db()
 
-        self.assertEqual(provider.capability_snapshot, {})
-        self.assertIsNone(provider.capability_refreshed_at)
+        self.assertEqual(provider.capability_profile, {})
+        self.assertIsNone(provider.metadata_checked_at)
+
+    def test_declared_and_verified_capabilities_merge_into_effective_profile(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Merged Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="openrouter/model-a",
+            api_key="secret-a",
+        )
+
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "OpenRouter models API",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "unsupported", "audio": "unknown"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "unsupported",
+                    "structured_output": "pass",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {"context_tokens": 128000},
+                "model_state": {},
+            }
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated successfully.",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 14},
+                    "vision": {"status": "pass", "message": "vision ok", "latency_ms": 16},
+                },
+            }
+        )
+        provider.refresh_from_db()
+
+        self.assertEqual(provider.known_image_input_status, "pass")
+        self.assertEqual(provider.known_pdf_input_status, "unsupported")
+        text_input_item = next(item for item in provider.capability_input_items if item["key"] == "text")
+        image_input_item = next(item for item in provider.capability_input_items if item["key"] == "image")
+        text_output_item = next(item for item in provider.capability_output_items if item["key"] == "text")
+        self.assertEqual(text_input_item["source"], "merged")
+        self.assertEqual(image_input_item["source"], "merged")
+        self.assertEqual(text_output_item["source"], "merged")
+        self.assertEqual(provider.get_capability_result("tools")["status"], "pass")
+        self.assertEqual(provider.get_capability_result("tools")["source"], "merged")
+        self.assertEqual(provider.get_capability_result("vision")["status"], "pass")
+        self.assertEqual(provider.get_capability_result("vision")["source"], "verified")
+        self.assertEqual(provider.capability_profile_schema_version, 1)
+
+    def test_effective_capabilities_are_unknown_when_profile_fingerprint_is_stale(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Stale Fingerprint Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="secret-a",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated successfully.",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 14},
+                    "vision": {"status": "unsupported", "message": "no vision", "latency_ms": 16},
+                },
+            }
+        )
+
+        provider.model = "gpt-4.1-mini"
+
+        self.assertEqual(provider.known_vision_capability_status, "")
+        self.assertFalse(provider.is_capability_explicitly_unavailable("vision"))
+
+    def test_unknown_input_capabilities_do_not_block_runtime_gating(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Unknown Capability Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="secret-a",
+        )
+
+        self.assertEqual(provider.capability_profile_schema_version, None)
+        self.assertEqual(provider.known_image_input_status, "")
+        self.assertFalse(provider.is_input_modality_explicitly_unavailable("image"))
+        self.assertFalse(provider.is_capability_explicitly_unavailable("vision"))
 
     def test_check_and_create_system_provider_no_settings(self):
         """

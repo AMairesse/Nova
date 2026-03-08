@@ -405,11 +405,11 @@ class MainViewsTests(TestCase):
             model="gpt-4o-mini",
             api_key="dummy",
         )
-        provider.apply_validation_result(
+        provider.apply_verification_result(
             {
                 "validation_status": LLMProvider.ValidationStatus.VALID,
-                "validation_summary": "Validated with partial capabilities (vision: unsupported).",
-                "validation_capabilities": {
+                "verification_summary": "Validated with partial capabilities (vision: unsupported).",
+                "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
                     "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
@@ -441,6 +441,103 @@ class MainViewsTests(TestCase):
         self.assertEqual(thread.get_messages().count(), 0)
         mocked_upload_message_attachments.assert_not_called()
         mocked_run_ai_task.assert_not_called()
+
+    @patch("nova.views.thread_views.upload_message_attachments")
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_allows_image_when_provider_verification_is_stale(
+        self,
+        mocked_run_ai_task,
+        mocked_upload_message_attachments,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-Stale-Vision",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (vision: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "Vision inputs are not supported", "latency_ms": 13},
+                },
+            }
+        )
+        provider.model = "gpt-4.1-mini"
+        provider.save(update_fields=["model"])
+
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Stale image thread")
+        mocked_upload_message_attachments.return_value = ([], [])
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Analyse cette image",
+                "selected_agent": str(agent.id),
+                "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "OK")
+        mocked_upload_message_attachments.assert_called_once()
+        mocked_run_ai_task.assert_called_once()
+
+    def test_message_list_exposes_stale_provider_capabilities_as_unknown_for_attachments(self):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-Stale-UI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (vision: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "vision": {"status": "unsupported", "message": "Vision inputs are not supported", "latency_ms": 13},
+                },
+            }
+        )
+        provider.model = "gpt-4.1-mini"
+        provider.save(update_fields=["model"])
+
+        AgentConfig.objects.create(
+            user=self.user,
+            name="Image Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Stale UI thread")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-provider-verification-status="stale"')
+        self.assertContains(response, 'data-provider-vision-status=""')
+        self.assertContains(response, 'data-provider-image-status=""')
 
     def test_add_message_rejects_empty_payload_without_attachments(self):
         self.client.login(username="alice", password="pass")

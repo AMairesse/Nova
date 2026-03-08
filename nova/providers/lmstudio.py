@@ -74,15 +74,14 @@ def build_lmstudio_capability_snapshot(model_metadata: dict) -> dict:
         loaded = bool(loaded_instances)
 
     return {
-        "source": "LM Studio models API",
-        "model_id": get_lmstudio_model_identifier(model_metadata),
-        "input_modalities": {
+        "metadata_source_label": "LM Studio models API",
+        "inputs": {
             "text": "pass",
             "image": "pass" if capabilities.get("vision") is True else "unsupported" if capabilities.get("vision") is False else "unknown",
             "pdf": "unknown",
             "audio": "unknown",
         },
-        "output_modalities": {
+        "outputs": {
             "text": "pass",
             "image": "unknown",
             "audio": "unknown",

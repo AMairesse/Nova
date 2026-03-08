@@ -96,14 +96,15 @@ class LLMProviderAdmin(admin.ModelAdmin):
         'provider_type',
         'model',
         'validation_status',
-        'validated_at',
+        'probe_checked_at',
         'user',
         'max_context_tokens',
     )
+    readonly_fields = ('probe_checked_at', 'metadata_checked_at')
     fields = ('name', 'provider_type', 'model', 'api_key', 'base_url',
               'additional_config', 'max_context_tokens', 'validation_status',
-              'validated_at', 'validation_summary', 'validation_capabilities',
-              'validated_fingerprint', 'capability_snapshot', 'capability_refreshed_at', 'user')
+              'probe_checked_at', 'metadata_checked_at', 'validated_fingerprint',
+              'capability_profile', 'user')
 
 
 @admin.register(MessageArtifact)
