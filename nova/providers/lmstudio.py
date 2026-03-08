@@ -37,6 +37,15 @@ def get_lmstudio_models_url(base_url: str | None) -> str:
     return urlunsplit((parsed.scheme or "http", parsed.netloc, api_path, "", ""))
 
 
+def get_lmstudio_model_identifier(model_metadata: dict) -> str:
+    return (
+        model_metadata.get("id")
+        or model_metadata.get("key")
+        or model_metadata.get("model_key")
+        or ""
+    )
+
+
 async def fetch_lmstudio_models(base_url: str | None) -> list[dict]:
     timeout = httpx.Timeout(20.0, connect=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -46,7 +55,11 @@ async def fetch_lmstudio_models(base_url: str | None) -> list[dict]:
         raise RuntimeError(f"LM Studio models request failed with HTTP {response.status_code}.")
 
     payload = response.json()
-    models = payload.get("data") if isinstance(payload, dict) else payload
+    models = payload
+    if isinstance(payload, dict):
+        models = payload.get("models")
+        if models is None:
+            models = payload.get("data")
     if not isinstance(models, list):
         raise RuntimeError("LM Studio models response has an unexpected shape.")
     return [item for item in models if isinstance(item, dict)]
@@ -62,7 +75,7 @@ def build_lmstudio_capability_snapshot(model_metadata: dict) -> dict:
 
     return {
         "source": "LM Studio models API",
-        "model_id": model_metadata.get("id") or model_metadata.get("model_key") or "",
+        "model_id": get_lmstudio_model_identifier(model_metadata),
         "input_modalities": {
             "text": "pass",
             "image": "pass" if capabilities.get("vision") is True else "unsupported" if capabilities.get("vision") is False else "unknown",
@@ -128,7 +141,10 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
         models = await fetch_lmstudio_models(provider.base_url)
         items = []
         for item in models:
-            model_id = item.get("id") or item.get("model_key") or ""
+            if item.get("type") not in {None, "", "llm"}:
+                continue
+
+            model_id = get_lmstudio_model_identifier(item)
             if not model_id:
                 continue
 
@@ -172,9 +188,9 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
                         "loaded_instances": loaded_instances if isinstance(loaded_instances, list) else [],
                     },
                     "provider_metadata": {
-                        "model_key": item.get("model_key") or "",
+                        "model_key": item.get("model_key") or item.get("key") or "",
                         "publisher": item.get("publisher") or "",
-                        "arch": item.get("arch") or "",
+                        "architecture": item.get("architecture") or item.get("arch") or "",
                         "format": item.get("format") or "",
                         "params_string": item.get("params_string") or "",
                     },
@@ -192,6 +208,6 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
     async def resolve_capability_snapshot(self, provider) -> dict:
         models = await fetch_lmstudio_models(provider.base_url)
         for item in models:
-            if item.get("id") == provider.model or item.get("model_key") == provider.model:
+            if get_lmstudio_model_identifier(item) == provider.model:
                 return build_lmstudio_capability_snapshot(item)
         raise RuntimeError(f"Model `{provider.model}` was not found in LM Studio.")

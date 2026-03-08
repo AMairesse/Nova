@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.providers import list_provider_models
+from nova.providers.lmstudio import fetch_lmstudio_models
 
 
 class ProviderCatalogTests(SimpleTestCase):
@@ -54,7 +55,8 @@ class ProviderCatalogTests(SimpleTestCase):
     def test_lmstudio_catalog_items_include_loaded_state_and_capabilities(self, mocked_models):
         mocked_models.return_value = [
             {
-                "id": "model-b",
+                "key": "model-b",
+                "type": "llm",
                 "display_name": "Model B",
                 "description": "Not loaded",
                 "max_context_length": 8192,
@@ -62,13 +64,23 @@ class ProviderCatalogTests(SimpleTestCase):
                 "capabilities": {"vision": False, "trained_for_tool_use": False},
             },
             {
-                "id": "model-a",
+                "key": "model-a",
+                "type": "llm",
                 "display_name": "Model A",
                 "description": "Loaded",
                 "publisher": "lmstudio-community",
                 "max_context_length": 16384,
                 "loaded_instances": [{"identifier": "gpu-1"}],
                 "capabilities": {"vision": True, "trained_for_tool_use": True},
+            },
+            {
+                "key": "text-embedding-model",
+                "type": "embeddings",
+                "display_name": "Embedding model",
+                "description": "Should be filtered out",
+                "max_context_length": 4096,
+                "loaded_instances": [],
+                "capabilities": {},
             },
         ]
 
@@ -81,7 +93,31 @@ class ProviderCatalogTests(SimpleTestCase):
         self.assertEqual(payload[0]["input_modalities"]["image"], "pass")
         self.assertEqual(payload[0]["operations"]["tools"], "pass")
         self.assertEqual(payload[0]["provider_metadata"]["publisher"], "lmstudio-community")
+        self.assertEqual(payload[0]["provider_metadata"]["model_key"], "model-a")
         self.assertEqual(payload[1]["state"]["loaded"], False)
+        self.assertEqual(len(payload), 2)
+
+    @patch("nova.providers.lmstudio.httpx.AsyncClient")
+    def test_fetch_lmstudio_models_accepts_models_payload_shape(self, mocked_client_class):
+        mocked_response = Mock()
+        mocked_response.status_code = 200
+        mocked_response.json.return_value = {
+            "object": "list",
+            "data": [],
+            "models": [
+                {"key": "model-a", "type": "llm"},
+                {"key": "model-b", "type": "llm"},
+            ],
+        }
+        mocked_client = AsyncMock()
+        mocked_client.get.return_value = mocked_response
+        mocked_client_class.return_value.__aenter__.return_value = mocked_client
+        mocked_client_class.return_value.__aexit__.return_value = False
+
+        payload = async_to_sync(fetch_lmstudio_models)("http://localhost:1234")
+
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0]["key"], "model-a")
 
     def test_manual_provider_types_return_empty_catalog(self):
         payload = async_to_sync(list_provider_models)(
