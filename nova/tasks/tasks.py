@@ -424,15 +424,9 @@ class AgentTaskExecutor (TaskExecutor):
         await sync_to_async(message.save, thread_sensitive=False)()
 
         if self.handler and hasattr(self.handler, "on_new_message"):
+            realtime_payload = await self._build_realtime_message_payload(message.id)
             await self.handler.on_new_message(
-                {
-                    "id": message.id,
-                    "text": message.text,
-                    "actor": message.actor,
-                    "internal_data": message.internal_data,
-                    "created_at": str(message.created_at),
-                    "artifacts": getattr(message, "message_artifacts", []),
-                },
+                realtime_payload,
                 task_id=self.task.id,
             )
 
@@ -442,6 +436,25 @@ class AgentTaskExecutor (TaskExecutor):
 
         # Trigger title generation asynchronously when the thread still has its default title.
         await self._enqueue_thread_title_generation()
+
+    async def _build_realtime_message_payload(self, message_id: int) -> dict:
+        def _load_message():
+            return Message.objects.select_related("thread", "user").get(
+                id=message_id,
+                thread=self.thread,
+                user=self.user,
+            )
+
+        fresh_message = await sync_to_async(_load_message, thread_sensitive=True)()
+        annotate_user_message(fresh_message)
+        return {
+            "id": fresh_message.id,
+            "text": fresh_message.text,
+            "actor": fresh_message.actor,
+            "internal_data": fresh_message.internal_data,
+            "created_at": str(fresh_message.created_at),
+            "artifacts": getattr(fresh_message, "message_artifacts", []),
+        }
 
     async def _sync_native_provider_checkpoint(self, native_result: dict, final_answer: str) -> None:
         if not self.llm or not getattr(self.llm, "langchain_agent", None):

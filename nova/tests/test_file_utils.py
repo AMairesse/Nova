@@ -175,6 +175,32 @@ class FileUtilsTest(BaseTestCase):
         path = await auto_rename_path(self.thread, '/newfile.txt')
         self.assertEqual(path, '/newfile.txt')
 
+    @patch("nova.file_utils.upload_file_to_minio", new_callable=AsyncMock)
+    @patch("nova.file_utils.detect_mime", return_value="application/octet-stream")
+    async def test_batch_upload_files_uses_explicit_mime_when_detection_is_generic(
+        self,
+        mocked_detect_mime,
+        mocked_upload,
+    ):
+        mocked_upload.return_value = f"users/{self.user.id}/threads/{self.thread.id}/generated.webp"
+
+        created, errors = await batch_upload_files(
+            self.thread,
+            self.user,
+            [
+                {
+                    "path": "/generated.webp",
+                    "content": b"webp-bytes",
+                    "mime_type": "image/webp",
+                }
+            ],
+            allowed_mime_prefixes=("image/",),
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(created[0]["mime_type"], "image/webp")
+        mocked_detect_mime.assert_called_once_with(b"webp-bytes")
+
     async def test_auto_rename_path_with_conflict(self):
         """Test auto-rename when conflict exists."""
         # Create existing file

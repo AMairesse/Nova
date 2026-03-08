@@ -369,6 +369,51 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         self.assertEqual(message.internal_data["final_answer"], "Agent answer")
         self.assertNotIn("display_markdown", message.internal_data)
 
+    async def test_process_result_publishes_reloaded_message_payload(self):
+        task = SimpleNamespace(
+            id=3,
+            progress_logs=[],
+            save=Mock(),
+            result=None,
+            current_response="",
+            streamed_markdown="",
+        )
+        message = SimpleNamespace(id=77, internal_data={}, save=Mock(), text="Agent answer", actor=Actor.AGENT, created_at="now")
+        thread = SimpleNamespace(subject="thread n°3", add_message=Mock(return_value=message), save=Mock())
+        handler = SimpleNamespace(
+            on_context_consumption=AsyncMock(),
+            on_new_message=AsyncMock(),
+            get_streamed_markdown=Mock(return_value=""),
+        )
+        executor = AgentTaskExecutor(
+            task=task,
+            user=SimpleNamespace(id=1),
+            thread=thread,
+            agent_config=SimpleNamespace(llm_provider=SimpleNamespace(max_context_tokens=1000)),
+            prompt="prompt",
+        )
+        executor.handler = handler
+        executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
+
+        realtime_payload = {
+            "id": 77,
+            "text": "Agent answer",
+            "actor": Actor.AGENT,
+            "internal_data": {"final_answer": "Agent answer"},
+            "created_at": "now",
+            "artifacts": [{"id": 9, "kind": "image", "content_url": "/artifact/9"}],
+        }
+
+        with (
+            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 1000)),
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+            patch.object(executor, "_build_realtime_message_payload", new_callable=AsyncMock, return_value=realtime_payload) as mocked_payload,
+        ):
+            await executor._process_result("Agent answer")
+
+        mocked_payload.assert_awaited_once_with(77)
+        handler.on_new_message.assert_awaited_once_with(realtime_payload, task_id=3)
+
 
 class GenerateThreadTitleTaskTests(SimpleTestCase):
     @patch("nova.tasks.tasks.Thread.objects.filter")

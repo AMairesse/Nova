@@ -164,7 +164,13 @@ async def publish_artifact_to_files(
     created, errors = await batch_upload_files(
         artifact.thread,
         artifact.user,
-        [{"path": f"/generated/{posixpath.basename(target_name)}", "content": content}],
+        [
+            {
+                "path": f"/generated/{posixpath.basename(target_name)}",
+                "content": content,
+                "mime_type": artifact.mime_type or getattr(artifact.user_file, "mime_type", ""),
+            }
+        ],
         scope=UserFile.Scope.THREAD_SHARED,
         allowed_mime_prefixes=("image/", "audio/"),
     )
