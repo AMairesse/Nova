@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from unittest.mock import patch
+from unittest.mock import AsyncMock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -153,3 +154,37 @@ class ProviderViewsTests(TestCase):
         self.assertEqual(payload["validation_task_id"], provider.validation_task_id)
         self.assertTrue(payload["is_testing"])
         mocked_apply_async.assert_called_once()
+
+    @patch("user_settings.views.provider.resolve_provider_capability_snapshot", new_callable=AsyncMock)
+    def test_refresh_capabilities_action_updates_provider_snapshot(self, mocked_resolve_snapshot):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Capability Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="google/gemini-2.5-flash",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+        mocked_resolve_snapshot.return_value = {
+            "source": "OpenRouter models API",
+            "input_modalities": {"text": "pass", "image": "pass", "pdf": "pass"},
+            "output_modalities": {"text": "pass"},
+            "operations": {"chat": "pass", "tools": "pass"},
+            "limits": {"context_tokens": 128000},
+            "model_state": {},
+        }
+
+        response = self.client.post(
+            reverse("user_settings:provider-edit", args=[provider.pk]),
+            data=self._payload(
+                name=provider.name,
+                provider_type=ProviderType.OPENROUTER,
+                model=provider.model,
+                action="refresh_capabilities",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        provider.refresh_from_db()
+        self.assertEqual(provider.capability_snapshot["input_modalities"]["pdf"], "pass")
+        self.assertIsNotNone(provider.capability_refreshed_at)

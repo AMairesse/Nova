@@ -8,6 +8,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const actionInput = document.getElementById("provider-form-action");
   const saveButton = document.getElementById("save-provider-btn");
   const testButton = document.getElementById("test-provider-btn");
+  const refreshCapabilitiesButton = document.getElementById("refresh-provider-capabilities-btn");
   const isNewProvider = form && form.dataset.isNewProvider === "1";
   let providerDefaults = {};
 
@@ -126,6 +127,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const isValidationRun = submitAction === "test_provider";
     if (saveButton) saveButton.disabled = true;
+    if (refreshCapabilitiesButton) refreshCapabilitiesButton.disabled = true;
     if (testButton) {
       testButton.disabled = true;
       if (isValidationRun) {

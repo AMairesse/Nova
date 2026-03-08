@@ -25,6 +25,9 @@
             {% if provider.validated_at %}
               <div class="small text-muted mt-1">{{ provider.validated_at|date:"SHORT_DATETIME_FORMAT" }}</div>
             {% endif %}
+            {% if provider.capability_snapshot_summary %}
+              <div class="small text-muted mt-1">{{ provider.capability_snapshot_summary }}</div>
+            {% endif %}
           </td>
           <td class="text-end">
             {% if provider.user == request.user %}

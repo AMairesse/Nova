@@ -213,6 +213,43 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             source_message=source_message,
         )
 
+    async def test_build_source_message_prompt_returns_pdf_blocks_for_pdf_artifacts(self):
+        source_message = SimpleNamespace(
+            id=58,
+            text="Summarize this PDF",
+            internal_data={},
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=2),
+        )
+
+        def immediate_sync_to_async(func, thread_sensitive=False):
+            async def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+
+        mocked_queryset = Mock()
+        mocked_queryset.order_by.return_value = [
+            SimpleNamespace(
+                id=12,
+                mime_type="application/pdf",
+                original_filename="/.message_attachments/message_58/report.pdf",
+                size=2048,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            ),
+        ]
+
+        with (
+            patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
+            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset),
+            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"%PDF-1.4"),
+        ):
+            prompt = await build_source_message_prompt(source_message)
+
+        self.assertIsInstance(prompt, list)
+        self.assertIn("report.pdf", prompt[0]["text"])
+        self.assertEqual(prompt[1]["type"], "file")
+        self.assertEqual(prompt[1]["mime_type"], "application/pdf")
+
     async def test_enqueue_thread_title_generation_only_for_default_titles(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
         thread = SimpleNamespace(id=42, subject="New thread 42")

@@ -8,6 +8,7 @@ from nova.models.ConversationEmbedding import DaySegmentEmbedding, TranscriptChu
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction
 from nova.models.Memory import MemoryTheme, MemoryItem, MemoryItemEmbedding
+from nova.models.MessageArtifact import MessageArtifact
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
 from nova.models.Task import Task
@@ -27,6 +28,12 @@ admin.site.site_header = "Nova Admin"
 class FilesInline(admin.TabularInline):
     model = UserFile
     verbose_name_plural = "files"
+    extra = 0
+
+
+class ArtifactsInline(admin.TabularInline):
+    model = MessageArtifact
+    verbose_name_plural = "artifacts"
     extra = 0
 
 
@@ -79,7 +86,7 @@ class ThreadAdmin(admin.ModelAdmin):
     list_filter = ("mode", "created_at")
     search_fields = ("subject", "user__username", "user__email")
     ordering = ("-created_at",)
-    inlines = [FilesInline, CheckpointLinksInline, DaySegmentsInline, TranscriptChunksInline]
+    inlines = [FilesInline, ArtifactsInline, CheckpointLinksInline, DaySegmentsInline, TranscriptChunksInline]
 
 
 @admin.register(LLMProvider)
@@ -96,7 +103,14 @@ class LLMProviderAdmin(admin.ModelAdmin):
     fields = ('name', 'provider_type', 'model', 'api_key', 'base_url',
               'additional_config', 'max_context_tokens', 'validation_status',
               'validated_at', 'validation_summary', 'validation_capabilities',
-              'validated_fingerprint', 'user')
+              'validated_fingerprint', 'capability_snapshot', 'capability_refreshed_at', 'user')
+
+
+@admin.register(MessageArtifact)
+class MessageArtifactAdmin(admin.ModelAdmin):
+    list_display = ("id", "thread", "message", "direction", "kind", "label", "published_to_file", "created_at")
+    list_filter = ("direction", "kind", "published_to_file", "created_at")
+    search_fields = ("label", "summary_text", "search_text", "message__text")
 
 
 @admin.register(AgentConfig)

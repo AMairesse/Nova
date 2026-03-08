@@ -51,6 +51,11 @@ class OpenRouterProviderMigrationTests(TransactionTestCase):
         self.executor.migrate([self.migrate_to])
         self.apps = self.executor.loader.project_state([self.migrate_to]).apps
 
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
     def test_migration_converts_openrouter_urls_to_openrouter_provider_type(self):
         Provider = self.apps.get_model("nova", "LLMProvider")
         provider = Provider.objects.get(name="OpenRouter Provider")

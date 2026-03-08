@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from urllib.parse import urlencode
 
+from asgiref.sync import async_to_sync
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -16,7 +17,7 @@ from django.views.decorators.http import require_GET
 from django.views.generic import ListView
 
 from nova.models.Provider import LLMProvider, check_and_create_system_provider
-from nova.providers import get_provider_defaults_map
+from nova.providers import get_provider_defaults_map, resolve_provider_capability_snapshot
 from nova.tasks.provider_validation_tasks import validate_provider_configuration_task
 from user_settings.forms import LLMProviderForm
 from user_settings.mixins import (
@@ -53,6 +54,7 @@ class ProviderListView(LoginRequiredMixin, ListView):
 
 class ProviderValidationActionMixin:
     test_action_name = "test_provider"
+    refresh_action_name = "refresh_capabilities"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -134,9 +136,38 @@ class ProviderValidationActionMixin:
         )
         return redirect(self._build_edit_url(provider))
 
+    def _handle_provider_capability_refresh_action(self):
+        self.object = self.get_object() if "pk" in self.kwargs else None
+        form = self.get_form()
+        if not form.is_valid():
+            return self.form_invalid(form)
+
+        provider = form.save(commit=False)
+        if not provider.user_id:
+            provider.user = self.request.user
+        provider.save()
+
+        try:
+            snapshot = async_to_sync(resolve_provider_capability_snapshot)(provider)
+        except Exception as exc:
+            messages.error(
+                self.request,
+                _("Provider capability refresh failed: %(error)s") % {"error": str(exc)},
+            )
+            return redirect(self._build_edit_url(provider))
+
+        provider.apply_capability_snapshot(snapshot)
+        messages.success(
+            self.request,
+            _("Provider capabilities refreshed successfully."),
+        )
+        return redirect(self._build_edit_url(provider))
+
     def post(self, request, *args, **kwargs):
         if request.POST.get("action") == self.test_action_name:
             return self._handle_provider_validation_action()
+        if request.POST.get("action") == self.refresh_action_name:
+            return self._handle_provider_capability_refresh_action()
         return super().post(request, *args, **kwargs)
 
 

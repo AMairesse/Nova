@@ -40,6 +40,18 @@ CAPABILITY_STATUS_BADGE_CLASSES = {
     "not_run": "text-bg-secondary",
 }
 
+CAPABILITY_SNAPSHOT_STATUS_LABELS = {
+    "pass": _("Available"),
+    "unsupported": _("Unavailable"),
+    "unknown": _("Unknown"),
+}
+
+CAPABILITY_SNAPSHOT_BADGE_CLASSES = {
+    "pass": "text-bg-success",
+    "unsupported": "text-bg-warning",
+    "unknown": "text-bg-secondary",
+}
+
 
 class ProviderType(models.TextChoices):
     OPENAI = "openai", "OpenAI"
@@ -91,6 +103,8 @@ class LLMProvider(models.Model):
     validated_fingerprint = models.CharField(max_length=64, blank=True, default="")
     validation_task_id = models.CharField(max_length=255, blank=True, default="")
     validation_requested_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    capability_snapshot = models.JSONField(default=dict, blank=True)
+    capability_refreshed_at = models.DateTimeField(null=True, blank=True)
 
     # If the LLMProvider is not owned by a user, this will be null
     # it means the LLMProvider is public (available to all users)
@@ -207,6 +221,9 @@ class LLMProvider(models.Model):
         validated_at = self.validated_at
         if validated_at is not None:
             validated_at = timezone.localtime(validated_at)
+        capability_refreshed_at = self.capability_refreshed_at
+        if capability_refreshed_at is not None:
+            capability_refreshed_at = timezone.localtime(capability_refreshed_at)
 
         return {
             "validation_status": self.validation_status,
@@ -222,6 +239,14 @@ class LLMProvider(models.Model):
             "validation_task_id": self.validation_task_id,
             "is_testing": self.validation_status == self.ValidationStatus.TESTING,
             "has_validation_snapshot": self.has_validation_snapshot,
+            "capability_refreshed_at": (
+                capability_refreshed_at.isoformat() if capability_refreshed_at else None
+            ),
+            "capability_refreshed_at_display": (
+                formats.date_format(capability_refreshed_at, "SHORT_DATETIME_FORMAT")
+                if capability_refreshed_at
+                else ""
+            ),
         }
 
     def apply_validation_result(self, result: dict, *, save: bool = True) -> None:
@@ -246,6 +271,113 @@ class LLMProvider(models.Model):
                     "updated_at",
                 ]
             )
+
+    @property
+    def has_capability_snapshot(self) -> bool:
+        return bool(self.capability_snapshot)
+
+    def get_capability_snapshot(self) -> dict:
+        return self.capability_snapshot if isinstance(self.capability_snapshot, dict) else {}
+
+    def _build_capability_snapshot_items(self, section_name: str, section_label: str) -> list[dict]:
+        snapshot = self.get_capability_snapshot()
+        section = snapshot.get(section_name)
+        if not isinstance(section, dict):
+            return []
+
+        items: list[dict] = []
+        for key, raw_status in section.items():
+            status = str(raw_status or "").strip().lower() or "unknown"
+            if status not in CAPABILITY_SNAPSHOT_STATUS_LABELS:
+                status = "unknown"
+            items.append(
+                {
+                    "key": key,
+                    "label": key.replace("_", " ").title(),
+                    "group": section_label,
+                    "status": status,
+                    "status_label": CAPABILITY_SNAPSHOT_STATUS_LABELS[status],
+                    "status_badge_class": CAPABILITY_SNAPSHOT_BADGE_CLASSES[status],
+                }
+            )
+        return items
+
+    @property
+    def capability_snapshot_input_items(self) -> list[dict]:
+        return self._build_capability_snapshot_items("input_modalities", _("Input"))
+
+    @property
+    def capability_snapshot_output_items(self) -> list[dict]:
+        return self._build_capability_snapshot_items("output_modalities", _("Output"))
+
+    @property
+    def capability_snapshot_operation_items(self) -> list[dict]:
+        return self._build_capability_snapshot_items("operations", _("Operations"))
+
+    def get_known_snapshot_status(self, section_name: str, key: str) -> str | None:
+        snapshot = self.get_capability_snapshot()
+        section = snapshot.get(section_name)
+        if not isinstance(section, dict):
+            return None
+        status = str(section.get(key) or "").strip().lower()
+        if status in {"pass", "unsupported"}:
+            return status
+        return None
+
+    def is_input_modality_explicitly_unavailable(self, modality: str) -> bool:
+        return self.get_known_snapshot_status("input_modalities", modality) == "unsupported"
+
+    @property
+    def known_image_input_status(self) -> str:
+        return self.get_known_snapshot_status("input_modalities", "image") or ""
+
+    @property
+    def known_pdf_input_status(self) -> str:
+        return self.get_known_snapshot_status("input_modalities", "pdf") or ""
+
+    @property
+    def known_audio_input_status(self) -> str:
+        return self.get_known_snapshot_status("input_modalities", "audio") or ""
+
+    @property
+    def capability_snapshot_summary(self) -> str:
+        snapshot = self.get_capability_snapshot()
+        if not snapshot:
+            return ""
+
+        source = str(snapshot.get("source") or "").strip()
+        inputs = [
+            item["label"].lower()
+            for item in self.capability_snapshot_input_items
+            if item["status"] == "pass"
+        ]
+        outputs = [
+            item["label"].lower()
+            for item in self.capability_snapshot_output_items
+            if item["status"] == "pass"
+        ]
+        operations = [
+            item["label"].lower()
+            for item in self.capability_snapshot_operation_items
+            if item["status"] == "pass"
+        ]
+
+        parts = []
+        if inputs:
+            parts.append(f"Inputs: {', '.join(inputs)}.")
+        if outputs:
+            parts.append(f"Outputs: {', '.join(outputs)}.")
+        if operations:
+            parts.append(f"Operations: {', '.join(operations)}.")
+        if source:
+            parts.append(f"Source: {source}.")
+        return " ".join(parts)
+
+    def apply_capability_snapshot(self, snapshot: dict | None, *, save: bool = True) -> None:
+        self.capability_snapshot = snapshot or {}
+        self.capability_refreshed_at = timezone.now() if snapshot else None
+        if save:
+            self.save(update_fields=["capability_snapshot", "capability_refreshed_at", "updated_at"])
 
     def mark_validation_started(
         self,
@@ -305,6 +437,11 @@ class LLMProvider(models.Model):
                             update_fields.update(
                                 {"validation_task_id", "validation_requested_fingerprint"}
                             )
+                if config_changed and previous.capability_snapshot:
+                    self.capability_snapshot = {}
+                    self.capability_refreshed_at = None
+                    if update_fields is not None:
+                        update_fields.update({"capability_snapshot", "capability_refreshed_at"})
 
         super().save(*args, **kwargs)
 

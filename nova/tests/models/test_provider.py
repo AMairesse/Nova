@@ -132,6 +132,32 @@ class ProviderModelsTest(BaseTestCase):
         self.assertEqual(provider.validation_task_id, "")
         self.assertEqual(provider.validation_requested_fingerprint, "")
 
+    def test_save_clears_capability_snapshot_after_configuration_change(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Snapshot Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="openrouter/model-a",
+            api_key="secret-a",
+        )
+        provider.apply_capability_snapshot(
+            {
+                "source": "OpenRouter models API",
+                "input_modalities": {"text": "pass", "pdf": "pass"},
+                "output_modalities": {"text": "pass"},
+                "operations": {"chat": "pass"},
+                "limits": {"context_tokens": 100000},
+                "model_state": {},
+            }
+        )
+
+        provider.model = "openrouter/model-b"
+        provider.save(update_fields=["model"])
+        provider.refresh_from_db()
+
+        self.assertEqual(provider.capability_snapshot, {})
+        self.assertIsNone(provider.capability_refreshed_at)
+
     def test_check_and_create_system_provider_no_settings(self):
         """
         Test system provider creation function with no settings.

@@ -10,6 +10,7 @@ from typing import Optional
 from langchain.agents.middleware import dynamic_prompt
 from langchain.agents.middleware.types import ModelRequest
 from django.db.models import Count, Q
+from nova.models.MessageArtifact import MessageArtifact
 from nova.models.UserFile import UserFile
 from nova.models.Memory import MemoryTheme
 from nova.models.Tool import Tool
@@ -77,6 +78,9 @@ async def build_nova_system_prompt(request: ModelRequest) -> str:
         file_context = await _get_file_context(thread, user)
         if file_context:
             sections.append(file_context)
+        artifact_context = await _get_artifact_context(thread, user)
+        if artifact_context:
+            sections.append(artifact_context)
     elif not thread:
         # When no thread is associated (e.g. /api/ask/), skip DB access
         sections.append("No attached files available.")
@@ -235,3 +239,45 @@ async def _get_file_context(thread, user) -> Optional[str]:
     except Exception as e:
         logger.warning(f"Failed to get file context: {e}")
         return "No attached files available."
+
+
+async def _get_artifact_context(thread, user) -> Optional[str]:
+    try:
+        def _load_artifact_context():
+            counts = list(
+                MessageArtifact.objects.filter(thread=thread, user=user)
+                .values("kind")
+                .annotate(total=Count("id"))
+                .order_by("kind")
+            )
+            recent = list(
+                MessageArtifact.objects.filter(thread=thread, user=user)
+                .select_related("user_file")
+                .order_by("-created_at", "-id")[:5]
+            )
+            return counts, recent
+
+        counts, recent = await sync_to_async(_load_artifact_context, thread_sensitive=True)()
+        if not counts:
+            return "No reusable conversation artifacts available."
+
+        count_summary = ", ".join(
+            [f"{item['kind']} ({item['total']})" for item in counts if item.get("kind")]
+        )
+        lines = [f"Conversation artifacts available: {count_summary}."]
+        if recent:
+            recent_labels = []
+            for artifact in recent:
+                label = artifact.label or (artifact.user_file.original_filename.rsplit("/", 1)[-1] if artifact.user_file_id else "")
+                if not label:
+                    label = f"{artifact.kind}-{artifact.id}"
+                recent_labels.append(label)
+            lines.append(
+                "Recent reusable artifacts: "
+                + ", ".join(recent_labels)
+                + ". Use artifact_search / artifact_attach when needed."
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"Failed to get artifact context: {e}")
+        return None

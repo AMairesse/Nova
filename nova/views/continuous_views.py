@@ -295,8 +295,7 @@ def continuous_messages(request):
         if m.actor == Actor.AGENT and m.internal_data:
             display_text = m.internal_data.get("display_markdown") or m.text
         m.rendered_html = markdown_to_html(display_text)
-        if m.actor == Actor.USER:
-            annotate_user_message(m)
+        annotate_user_message(m)
 
     pending_interactions = (
         Interaction.objects.filter(
@@ -340,13 +339,13 @@ def continuous_add_message(request):
 
     if not new_message.strip() and not message_attachments:
         return JsonResponse(
-            {"status": "ERROR", "message": "Message or image attachment required"},
+            {"status": "ERROR", "message": "Message or attachment required"},
             status=400,
         )
 
     agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
     if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config)
+        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
         if attachment_error:
             return JsonResponse(
                 {"status": "ERROR", "message": attachment_error},
@@ -377,6 +376,7 @@ def continuous_add_message(request):
         MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
     }
     msg.save(update_fields=["internal_data"])
+    annotate_user_message(msg)
 
     # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
     task = enqueue_message_agent_task(
@@ -405,6 +405,7 @@ def continuous_add_message(request):
         "file_count": 0,
         "internal_data": msg.internal_data or {},
         "message_attachments": message_attachment_meta,
+        "artifacts": getattr(msg, "message_artifacts", []),
     }
 
     return JsonResponse(

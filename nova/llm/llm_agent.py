@@ -5,13 +5,16 @@ from typing import Any, List
 from django.conf import settings
 
 from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
+from nova.models.MessageArtifact import ArtifactKind, MessageArtifact
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
+from nova.file_utils import download_file_content
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
 from nova.llm.skill_tool_filter import apply_skill_tool_filter
@@ -26,6 +29,7 @@ from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 from nova.models.Thread import Thread as ThreadModel
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -375,61 +379,148 @@ class LLMAgent:
             messages = result.get('messages', [])
             last_message = messages[-1]
 
-            # If the result is the specific "read_image" tool then we need to add an image
-            # message. The agent can call the tool multiple times in one turn so we need
-            # to loop through the last messages
-            if isinstance(last_message, ToolMessage) and last_message.name == "read_image":
-                # Loop through messages in reverse order to find all "read_image" tool calls
-                # since the last HumanMessage
-                image_artifacts = []
-                for msg in reversed(messages):
-                    if isinstance(msg, HumanMessage):
-                        # Found the last HumanMessage, stop looking
-                        break
-                    elif isinstance(msg, ToolMessage) and msg.name == "read_image":
-                        # Collect all "read_image" tool artifacts
-                        artifact = msg.artifact
-                        if artifact and "base64" in artifact and "mime_type" in artifact:
-                            image_artifacts.append(artifact)
+            followup_message = await self._build_tool_artifact_followup_message(messages)
+            if followup_message is not None:
+                message = followup_message
+                continue
 
-                # If we found any image artifacts, create a multimodal message with all images
-                if image_artifacts:
-                    # Reverse the order of the images to match the order of the tool calls
-                    image_artifacts = image_artifacts[::-1]
+            # Agent has finished, extract final answer
+            final_msg = extract_final_answer(result)
+            return final_msg
 
-                    # List all images in order to help the agent because not all LLM can read the
-                    # file name in the image type response
-                    text_response = "Here are the images:\n"
-                    text_response += "".join(
-                        [artifact["filename"] + "\n" for artifact in image_artifacts]
-                    )
-                    content_parts = [{"type": "text", "text": text_response}]
+    async def _build_tool_artifact_followup_message(self, messages):
+        if not messages:
+            return None
 
-                    # Add all images to the content
-                    for artifact in image_artifacts:
-                        content_parts.append({
-                            "type": "image",
-                            "source_type": "base64",
-                            "data": artifact["base64"],
-                            "mime_type": artifact["mime_type"],
-                            "filename": artifact["filename"],
-                        })
+        last_message = messages[-1]
+        if not isinstance(last_message, ToolMessage):
+            return None
 
-                    # Generate a new multimodal message with all images
-                    message = HumanMessage(
-                        content=normalize_multimodal_content_for_provider(
-                            self._llm_provider,
-                            content_parts,
-                        )
-                    )
-                else:
-                    # No valid image artifacts found, continue with normal flow
-                    final_msg = extract_final_answer(result)
-                    return final_msg
-            else:
-                # Agent has finished, extract final answer
-                final_msg = extract_final_answer(result)
-                return final_msg
+        legacy_images: list[dict] = []
+        artifact_refs: list[dict] = []
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                break
+            if not isinstance(msg, ToolMessage):
+                continue
+            artifact = getattr(msg, "artifact", None)
+            if msg.name == "read_image" and isinstance(artifact, dict):
+                if artifact.get("base64") and artifact.get("mime_type"):
+                    legacy_images.append(artifact)
+                continue
+            if isinstance(artifact, dict) and artifact.get("artifact_id"):
+                artifact_refs.append(artifact)
+
+        if not legacy_images and not artifact_refs:
+            return None
+
+        content_parts = []
+        labels: list[str] = []
+
+        if legacy_images:
+            for artifact in legacy_images[::-1]:
+                label = str(artifact.get("filename") or "image").strip()
+                labels.append(label)
+                if not content_parts:
+                    content_parts.append({"type": "text", "text": ""})
+                content_parts.append(
+                    {
+                        "type": "image",
+                        "source_type": "base64",
+                        "data": artifact["base64"],
+                        "mime_type": artifact["mime_type"],
+                        "filename": label,
+                    }
+                )
+
+        if artifact_refs:
+            for artifact_ref in artifact_refs[::-1]:
+                label, parts = await self._hydrate_artifact_ref(artifact_ref)
+                if label:
+                    labels.append(label)
+                content_parts.extend(parts)
+
+        if not content_parts:
+            return None
+
+        preamble = "Attached artifacts:\n" + "".join([f"- {label}\n" for label in labels]) if labels else ""
+        if content_parts and content_parts[0].get("type") == "text":
+            content_parts[0]["text"] = preamble + ("\n" + content_parts[0]["text"] if content_parts[0]["text"] else "")
+        else:
+            content_parts.insert(0, {"type": "text", "text": preamble or "Attached artifacts:"})
+
+        if len(content_parts) == 1 and content_parts[0].get("type") == "text":
+            return HumanMessage(content=content_parts[0]["text"])
+        return HumanMessage(
+            content=normalize_multimodal_content_for_provider(
+                self._llm_provider,
+                content_parts,
+            )
+        )
+
+    async def _hydrate_artifact_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
+        artifact_id = artifact_ref.get("artifact_id")
+
+        def _load_artifact():
+            return MessageArtifact.objects.select_related("user_file").get(
+                id=artifact_id,
+                thread=self.thread,
+                user=self.user,
+            )
+
+        try:
+            artifact = await sync_to_async(_load_artifact, thread_sensitive=True)()
+        except MessageArtifact.DoesNotExist:
+            logger.warning("Artifact %s could not be loaded for follow-up attach.", artifact_id)
+            return "", []
+
+        label = artifact.filename
+        if artifact.kind in {ArtifactKind.TEXT, ArtifactKind.ANNOTATION}:
+            text_content = artifact.summary_text or ""
+            if not text_content and artifact.user_file_id and artifact.mime_type.startswith("text/"):
+                try:
+                    text_content = (await download_file_content(artifact.user_file)).decode("utf-8", errors="ignore")
+                except Exception as exc:
+                    logger.warning("Could not load text artifact %s: %s", artifact.id, exc)
+            if not text_content:
+                return label, []
+            return label, [{"type": "text", "text": f"{label}:\n{text_content}"}]
+
+        if not artifact.user_file_id:
+            return label, []
+
+        try:
+            raw_content = await download_file_content(artifact.user_file)
+        except Exception as exc:
+            logger.warning("Could not load artifact %s content: %s", artifact.id, exc)
+            return label, []
+
+        base64_content = base64.b64encode(raw_content).decode("utf-8")
+        if artifact.kind == ArtifactKind.IMAGE:
+            return label, [{
+                "type": "image",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": artifact.mime_type,
+                "filename": label,
+            }]
+        if artifact.kind == ArtifactKind.PDF:
+            return label, [{
+                "type": "file",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": artifact.mime_type or "application/pdf",
+                "filename": label,
+            }]
+        if artifact.kind == ArtifactKind.AUDIO:
+            return label, [{
+                "type": "audio",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": artifact.mime_type,
+                "filename": label,
+            }]
+        return label, []
 
     async def aresume(self, command, silent_mode=False, thread_id_override: str | None = None):
         config = self._build_runtime_config(

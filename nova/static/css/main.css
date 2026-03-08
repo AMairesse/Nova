@@ -671,6 +671,15 @@ body {
     border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.composer-attachment-thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bs-light);
+    color: var(--bs-secondary-color);
+    font-size: 1.2rem;
+}
+
 .composer-attachment-meta {
     min-width: 0;
 }

@@ -176,9 +176,7 @@ def message_list(request):
                 if m.actor == Actor.AGENT and m.internal_data:
                     display_text = m.internal_data.get('display_markdown') or m.text
                 m.rendered_html = markdown_to_html(display_text)
-                # Add info about files used
-                if m.actor == Actor.USER:
-                    annotate_user_message(m)
+                annotate_user_message(m)
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
@@ -272,7 +270,7 @@ def add_message(request):
 
     if not new_message.strip() and not uploaded_files and not message_attachments:
         return JsonResponse(
-            {"status": "ERROR", "message": "Message or image attachment required"},
+            {"status": "ERROR", "message": "Message or attachment required"},
             status=400,
         )
 
@@ -287,7 +285,7 @@ def add_message(request):
     agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
 
     if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config)
+        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
         if attachment_error:
             return JsonResponse(
                 {"status": "ERROR", "message": attachment_error},
@@ -363,6 +361,7 @@ def add_message(request):
         MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
     }
     message.save()
+    annotate_user_message(message)
 
     task = enqueue_message_agent_task(
         user=request.user,
@@ -380,6 +379,7 @@ def add_message(request):
         "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
         "internal_data": message.internal_data or {},
         "message_attachments": message_attachment_meta,
+        "artifacts": getattr(message, "message_artifacts", []),
     }
 
     return JsonResponse({

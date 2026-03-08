@@ -9,6 +9,7 @@ from celery import shared_task
 
 from nova.llm.provider_validation import validate_provider_configuration
 from nova.models.Provider import LLMProvider
+from nova.providers import resolve_provider_capability_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,17 @@ def validate_provider_configuration_task(self, provider_pk: int, expected_finger
         logger.exception("Provider validation task %s failed for provider %s.", task_id, provider_pk)
         result = _build_validation_failure_result(exc)
 
+    snapshot = None
+    try:
+        snapshot = async_to_sync(resolve_provider_capability_snapshot)(provider)
+    except Exception:
+        logger.info(
+            "Capability snapshot refresh failed during validation task %s for provider %s.",
+            task_id,
+            provider_pk,
+            exc_info=True,
+        )
+
     provider.refresh_from_db()
     if not _should_apply_validation_result(
         provider,
@@ -73,5 +85,20 @@ def validate_provider_configuration_task(self, provider_pk: int, expected_finger
             provider_pk,
         )
         return
+
+    if snapshot is not None:
+        provider.apply_capability_snapshot(snapshot)
+        provider.refresh_from_db()
+        if not _should_apply_validation_result(
+            provider,
+            task_id=task_id,
+            expected_fingerprint=expected_fingerprint,
+        ):
+            logger.info(
+                "Discarding stale provider validation result from task %s for provider %s after snapshot refresh.",
+                task_id,
+                provider_pk,
+            )
+            return
 
     provider.apply_validation_result(result)
