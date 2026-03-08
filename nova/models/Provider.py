@@ -43,6 +43,7 @@ CAPABILITY_STATUS_BADGE_CLASSES = {
 
 class ProviderType(models.TextChoices):
     OPENAI = "openai", "OpenAI"
+    OPENROUTER = "openrouter", "OpenRouter"
     MISTRAL = "mistral", "Mistral"
     OLLAMA = "ollama", "Ollama"
     LLAMA_CPP = "llama.cpp", "llama.cpp"

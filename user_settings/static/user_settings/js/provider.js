@@ -2,19 +2,39 @@
 document.addEventListener("DOMContentLoaded", function () {
   const select = document.getElementById("id_provider_type");
   const input = document.getElementById("id_api_key");
+  const baseUrlInput = document.getElementById("id_base_url");
   const form = document.getElementById("provider-form");
+  const providerDefaultsScript = document.getElementById("provider-defaults-data");
   const actionInput = document.getElementById("provider-form-action");
   const saveButton = document.getElementById("save-provider-btn");
   const testButton = document.getElementById("test-provider-btn");
+  const isNewProvider = form && form.dataset.isNewProvider === "1";
+  let providerDefaults = {};
+
+  if (providerDefaultsScript) {
+    try {
+      providerDefaults = JSON.parse(providerDefaultsScript.textContent);
+    } catch (_error) {
+      providerDefaults = {};
+    }
+  }
 
   if (select && input) {
     let wrapper = input.closest(".mb-3") || input.parentElement;
-    const WITHOUT_KEY = new Set(["ollama", "lmstudio"]);
 
     function syncProviderTypeFields() {
-      const needsKey = !WITHOUT_KEY.has(select.value);
+      const defaults = providerDefaults[select.value] || {};
+      const needsKey = defaults.api_key_required !== false;
       DOMUtils.toggleFieldVisibility(wrapper, needsKey);
       if (!needsKey) input.value = "";
+      if (
+        isNewProvider &&
+        baseUrlInput &&
+        defaults.default_base_url &&
+        !baseUrlInput.value.trim()
+      ) {
+        baseUrlInput.value = defaults.default_base_url;
+      }
     }
 
     select.addEventListener("change", syncProviderTypeFields);

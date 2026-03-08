@@ -1,0 +1,59 @@
+"""Provider adapter registry and provider-level helper functions."""
+
+from __future__ import annotations
+
+from nova.models.Provider import ProviderType
+from nova.providers.base import ProviderDefaults
+from nova.providers.llama_cpp import LlamaCppProviderAdapter
+from nova.providers.lmstudio import LMStudioProviderAdapter
+from nova.providers.mistral import MistralProviderAdapter
+from nova.providers.ollama import OllamaProviderAdapter
+from nova.providers.openai import OpenAIProviderAdapter
+from nova.providers.openrouter import OpenRouterProviderAdapter
+
+_PROVIDER_ADAPTERS = {
+    ProviderType.OPENAI: OpenAIProviderAdapter(),
+    ProviderType.OPENROUTER: OpenRouterProviderAdapter(),
+    ProviderType.MISTRAL: MistralProviderAdapter(),
+    ProviderType.OLLAMA: OllamaProviderAdapter(),
+    ProviderType.LLAMA_CPP: LlamaCppProviderAdapter(),
+    ProviderType.LLMSTUDIO: LMStudioProviderAdapter(),
+}
+
+
+def _resolve_provider_type(provider_or_type):
+    if provider_or_type is None:
+        return ProviderType.OPENAI
+    return getattr(provider_or_type, "provider_type", provider_or_type)
+
+
+def get_provider_adapter(provider_or_type):
+    """Return the adapter registered for the provider or provider type."""
+    provider_type = _resolve_provider_type(provider_or_type)
+    adapter = _PROVIDER_ADAPTERS.get(provider_type)
+    if adapter is None:
+        raise ValueError(f"Unsupported provider type: {provider_type}")
+    return adapter
+
+
+def create_provider_llm(provider):
+    """Create the runtime LLM client for a provider."""
+    return get_provider_adapter(provider).create_llm(provider)
+
+
+def normalize_multimodal_content_for_provider(provider, content):
+    """Normalize Nova multimodal blocks to the provider-specific wire format."""
+    return get_provider_adapter(provider).normalize_multimodal_content(content)
+
+
+def get_provider_defaults(provider_or_type) -> ProviderDefaults:
+    """Return provider defaults used by forms and runtime."""
+    return get_provider_adapter(provider_or_type).get_defaults()
+
+
+def get_provider_defaults_map() -> dict[str, dict]:
+    """Return a JSON-serializable map of defaults keyed by provider type."""
+    return {
+        str(provider_type): adapter.get_defaults().as_dict()
+        for provider_type, adapter in _PROVIDER_ADAPTERS.items()
+    }

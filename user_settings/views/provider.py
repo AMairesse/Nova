@@ -16,6 +16,7 @@ from django.views.decorators.http import require_GET
 from django.views.generic import ListView
 
 from nova.models.Provider import LLMProvider, check_and_create_system_provider
+from nova.providers import get_provider_defaults_map
 from nova.tasks.provider_validation_tasks import validate_provider_configuration_task
 from user_settings.forms import LLMProviderForm
 from user_settings.mixins import (
@@ -57,6 +58,7 @@ class ProviderValidationActionMixin:
         context = super().get_context_data(**kwargs)
         provider = getattr(self, "object", None) or getattr(context.get("form"), "instance", None)
         context["provider_instance"] = provider
+        context["provider_defaults_map"] = get_provider_defaults_map()
         if provider and provider.pk:
             context["provider_validation_status_url"] = reverse(
                 "user_settings:provider-validation-status",

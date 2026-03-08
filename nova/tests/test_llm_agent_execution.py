@@ -174,6 +174,27 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
         self.tearDownLLMAgent()
         super().tearDown()
 
+    def test_create_provider_llm_uses_openrouter_defaults(self):
+        provider = self.create_mock_provider(
+            provider_type=llm_agent_mod.ProviderType.OPENROUTER,
+            model="google/gemini-2.5-flash",
+            api_key="router-key",
+            base_url=None,
+        )
+
+        with patch("nova.providers.openai_compatible.ChatOpenAI") as mocked_chat_openai:
+            llm_agent_mod.create_provider_llm(provider)
+
+        mocked_chat_openai.assert_called_once()
+        self.assertEqual(
+            mocked_chat_openai.call_args.kwargs["base_url"],
+            "https://openrouter.ai/api/v1",
+        )
+        self.assertEqual(
+            mocked_chat_openai.call_args.kwargs["openai_api_key"],
+            "router-key",
+        )
+
     async def test_create_initializes_agent_successfully(self):
         """
         Happy-path: create initializes LLMAgent and underlying langchain agent.
