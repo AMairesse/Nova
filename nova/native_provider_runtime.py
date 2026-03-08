@@ -21,12 +21,150 @@ from nova.models.UserFile import UserFile
 from nova.providers import invoke_native_provider, parse_native_provider_response
 
 
-def _get_response_mode(source_message: Message, fallback_prompt: str = "") -> str:
+AUTO_RESPONSE_MODE = "auto"
+IMAGE_RESPONSE_MODE = "image"
+AUDIO_RESPONSE_MODE = "audio"
+TEXT_RESPONSE_MODE = "text"
+
+AUTO_IMAGE_KEYWORDS = (
+    "image",
+    "picture",
+    "photo",
+    "illustration",
+    "draw",
+    "drawing",
+    "generate an image",
+    "generate image",
+    "create an image",
+    "create image",
+    "make an image",
+    "make image",
+    "edit this image",
+    "modify this image",
+    "design",
+    "logo",
+    "poster",
+    "render",
+    "visuel",
+    "image",
+    "photo",
+    "illustration",
+    "dessine",
+    "dessin",
+    "genere une image",
+    "génère une image",
+    "genere un visuel",
+    "génère un visuel",
+    "cree une image",
+    "crée une image",
+    "cree un visuel",
+    "crée un visuel",
+    "modifie cette image",
+    "edite cette image",
+    "édite cette image",
+    "retouche",
+    "affiche",
+    "visuel",
+)
+
+AUTO_AUDIO_KEYWORDS = (
+    "audio",
+    "voice",
+    "speech",
+    "spoken",
+    "podcast",
+    "read aloud",
+    "wav",
+    "mp3",
+    "ogg",
+    "voix",
+    "audio",
+    "oral",
+    "parle",
+    "lis a voix haute",
+    "lis à voix haute",
+)
+
+
+def _get_requested_response_mode(source_message: Message, fallback_prompt: str = "") -> str:
     internal_data = source_message.internal_data if isinstance(source_message.internal_data, dict) else {}
     response_mode = str(internal_data.get("response_mode") or "").strip().lower()
-    if response_mode in {"image", "audio"}:
+    if response_mode in {IMAGE_RESPONSE_MODE, AUDIO_RESPONSE_MODE, TEXT_RESPONSE_MODE, AUTO_RESPONSE_MODE}:
         return response_mode
-    return "text"
+    return AUTO_RESPONSE_MODE
+
+
+def _normalize_free_text_for_mode_detection(text: str) -> str:
+    normalized = str(text or "").strip().lower()
+    return " ".join(normalized.split())
+
+
+def _provider_supports_effective_output(provider, *, kind: str) -> bool:
+    if provider is None:
+        return False
+    output_status = provider.get_known_snapshot_status("outputs", kind)
+    if output_status == "pass":
+        return True
+    operation_key = "image_generation" if kind == ArtifactKind.IMAGE else "audio_generation"
+    return provider.get_known_snapshot_status("operations", operation_key) == "pass"
+
+
+def _looks_like_image_request(prompt_text: str, attachments: list[MessageArtifact]) -> bool:
+    normalized = _normalize_free_text_for_mode_detection(prompt_text)
+    if any(keyword in normalized for keyword in AUTO_IMAGE_KEYWORDS):
+        return True
+    if any(artifact.kind == ArtifactKind.IMAGE for artifact in attachments):
+        edit_markers = (
+            "edit",
+            "modify",
+            "transform",
+            "variation",
+            "retouch",
+            "retouche",
+            "modifie",
+            "transforme",
+            "variante",
+        )
+        return any(marker in normalized for marker in edit_markers)
+    return False
+
+
+def _looks_like_audio_request(prompt_text: str) -> bool:
+    normalized = _normalize_free_text_for_mode_detection(prompt_text)
+    return any(keyword in normalized for keyword in AUTO_AUDIO_KEYWORDS)
+
+
+async def resolve_native_response_mode(
+    provider,
+    source_message: Message,
+    *,
+    fallback_prompt: str = "",
+    attachments: list[MessageArtifact] | None = None,
+) -> str:
+    requested_mode = _get_requested_response_mode(source_message, fallback_prompt)
+    if requested_mode in {IMAGE_RESPONSE_MODE, AUDIO_RESPONSE_MODE, TEXT_RESPONSE_MODE}:
+        return requested_mode
+
+    if provider is None:
+        return TEXT_RESPONSE_MODE
+
+    if attachments is None:
+        attachments = await get_message_input_artifacts(source_message)
+
+    prompt_text = str(source_message.text or fallback_prompt or "").strip()
+    if (
+        _provider_supports_effective_output(provider, kind=ArtifactKind.IMAGE)
+        and _looks_like_image_request(prompt_text, attachments)
+    ):
+        return IMAGE_RESPONSE_MODE
+
+    if (
+        _provider_supports_effective_output(provider, kind=ArtifactKind.AUDIO)
+        and _looks_like_audio_request(prompt_text)
+    ):
+        return AUDIO_RESPONSE_MODE
+
+    return TEXT_RESPONSE_MODE
 
 
 def _build_attachment_text(message_text: str, attachments: list[MessageArtifact]) -> str:
@@ -126,9 +264,14 @@ async def should_use_native_provider_for_message(
 ) -> bool:
     if provider is None or getattr(provider, "provider_type", None) != "openrouter":
         return False
-    if _get_response_mode(source_message, fallback_prompt) in {"image", "audio"}:
-        return True
     artifacts = await get_message_input_artifacts(source_message)
+    if await resolve_native_response_mode(
+        provider,
+        source_message,
+        fallback_prompt=fallback_prompt,
+        attachments=artifacts,
+    ) in {IMAGE_RESPONSE_MODE, AUDIO_RESPONSE_MODE}:
+        return True
     return any(artifact.kind == ArtifactKind.PDF for artifact in artifacts)
 
 
@@ -148,6 +291,12 @@ async def invoke_native_provider_for_message(
         return None
 
     artifacts = await get_message_input_artifacts(source_message)
+    response_mode = await resolve_native_response_mode(
+        provider,
+        source_message,
+        fallback_prompt=fallback_prompt,
+        attachments=artifacts,
+    )
     payload_artifacts: list[dict[str, Any]] = []
     for artifact in artifacts:
         if not artifact.user_file_id:
@@ -175,7 +324,7 @@ async def invoke_native_provider_for_message(
         {
             "prompt": native_prompt,
             "artifacts": payload_artifacts,
-            "response_mode": _get_response_mode(source_message, fallback_prompt),
+            "response_mode": response_mode,
         },
     )
     parsed_response = await parse_native_provider_response(provider, raw_response)
@@ -185,7 +334,8 @@ async def invoke_native_provider_for_message(
         source_message.text or fallback_prompt,
         artifacts,
     )
-    parsed_response["response_mode"] = _get_response_mode(source_message, fallback_prompt)
+    parsed_response["requested_response_mode"] = _get_requested_response_mode(source_message, fallback_prompt)
+    parsed_response["response_mode"] = response_mode
     return parsed_response
 
 

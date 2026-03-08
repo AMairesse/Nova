@@ -178,11 +178,18 @@ async def artifact_publish(request, artifact_id):
         )
 
     filename = (request.POST.get('filename') or '').strip()
-    file_id, errors = await publish_artifact_to_files(artifact, filename=filename)
+    try:
+        file_id, errors = await publish_artifact_to_files(artifact, filename=filename)
+    except Exception:
+        logger.exception("Artifact publish failed for artifact %s", artifact.id)
+        return JsonResponse({'success': False, 'error': 'Artifact publish failed.'}, status=500)
     if errors and not file_id:
         return JsonResponse({'success': False, 'error': '; '.join(errors)}, status=400)
 
-    await publish_file_update(artifact.thread_id, "artifact_publish")
+    try:
+        await publish_file_update(artifact.thread_id, "artifact_publish")
+    except Exception:
+        logger.exception("Artifact publish sidebar refresh failed for artifact %s", artifact.id)
     return JsonResponse(
         {
             'success': True,

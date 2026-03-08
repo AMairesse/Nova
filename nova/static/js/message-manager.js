@@ -90,26 +90,26 @@
                         dropdownButton.innerHTML = '<i class="bi bi-robot"></i>';
                         dropdownButton.setAttribute('title', label);
                     }
+                    const responseModeInput = document.getElementById('responseModeInput');
+                    if (responseModeInput) {
+                        responseModeInput.value = 'auto';
+                    }
+                    document.querySelectorAll('.response-mode-item').forEach((entry) => {
+                        entry.classList.toggle('active', entry.dataset.value === 'auto');
+                    });
+                    this.syncResponseModeControl();
                     this.syncComposerCapabilityNotice();
                 },
                 '.response-mode-item': (e, target) => {
                     e.preventDefault();
                     const item = target.closest('.response-mode-item');
-                    const value = `${item?.dataset?.value || 'text'}`.trim() || 'text';
+                    const value = `${item?.dataset?.value || 'auto'}`.trim() || 'auto';
                     const input = document.getElementById('responseModeInput');
-                    const button = document.getElementById('response-mode-btn');
                     if (input) input.value = value;
                     document.querySelectorAll('.response-mode-item').forEach((entry) => {
                         entry.classList.toggle('active', entry === item);
                     });
-                    if (button) {
-                        const iconClass = value === 'image'
-                            ? 'bi-image'
-                            : value === 'audio'
-                                ? 'bi-mic'
-                                : 'bi-chat-dots';
-                        button.innerHTML = `<i class="bi ${iconClass}"></i><span class="visually-hidden">${gettext('Response mode')}</span>`;
-                    }
+                    this.syncResponseModeControl();
                     this.syncComposerCapabilityNotice();
                 },
                 '.interaction-answer-btn': (e, target) => {
@@ -235,6 +235,7 @@
                 this.applyTemplateSetupPrefillFromUrl();
                 // Update voice button visibility based on browser support
                 this.updateVoiceButtonState();
+                this.syncResponseModeControl();
                 this.syncComposerCapabilityNotice();
                 // Auto-scroll to bottom for new conversations
                 this.scrollToBottom();
@@ -670,6 +671,7 @@
 
             return {
                 verificationStatus: `${selectedItem.dataset.providerVerificationStatus || ''}`.trim(),
+                providerType: `${selectedItem.dataset.providerType || ''}`.trim(),
                 toolsStatus: `${selectedItem.dataset.providerToolsStatus || ''}`.trim(),
                 visionStatus: `${selectedItem.dataset.providerVisionStatus || ''}`.trim(),
                 imageStatus: `${selectedItem.dataset.providerImageStatus || ''}`.trim(),
@@ -683,7 +685,38 @@
 
         getSelectedResponseMode() {
             const input = document.getElementById('responseModeInput');
-            return `${input?.value || 'text'}`.trim() || 'text';
+            return `${input?.value || 'auto'}`.trim() || 'auto';
+        }
+
+        updateResponseModeButton(button, value) {
+            if (!button) return;
+            const normalizedValue = `${value || 'auto'}`.trim() || 'auto';
+            const labels = {
+                auto: gettext('Automatic'),
+                text: gettext('Text only'),
+                image: gettext('Image'),
+                audio: gettext('Audio'),
+            };
+            button.textContent = labels[normalizedValue] || labels.auto;
+        }
+
+        shouldShowResponseModeControl(state) {
+            if (!state) return false;
+            if (this.getSelectedResponseMode() !== 'auto') return true;
+
+            const providerType = `${state.providerType || ''}`.trim();
+            if (providerType === 'openrouter') return true;
+            return state.imageOutputStatus === 'pass' || state.audioOutputStatus === 'pass';
+        }
+
+        syncResponseModeControl() {
+            const row = document.getElementById('composer-output-mode-row');
+            const button = document.getElementById('response-mode-chip');
+            const state = this.getSelectedAgentCapabilityState();
+            if (!row || !button) return;
+
+            this.updateResponseModeButton(button, this.getSelectedResponseMode());
+            row.classList.toggle('d-none', !this.shouldShowResponseModeControl(state));
         }
 
         getComposerBlockingCapabilityError() {
@@ -728,6 +761,7 @@
         syncComposerCapabilityNotice() {
             const note = document.getElementById('composer-provider-capability-note');
             if (!note) return;
+            this.syncResponseModeControl();
 
             const hasAttachments = this.composerAttachments.length > 0;
             const state = this.getSelectedAgentCapabilityState();
@@ -764,7 +798,7 @@
                 return;
             }
 
-            if (!hasAttachments && responseMode === 'text') {
+            if (!hasAttachments && (responseMode === 'text' || responseMode === 'auto')) {
                 note.className = 'alert py-2 px-3 small mt-2 d-none';
                 note.textContent = '';
                 return;

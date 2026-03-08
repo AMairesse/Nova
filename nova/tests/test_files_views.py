@@ -220,6 +220,20 @@ class FilesViewsTests(TestCase):
         self.assertFalse(payload["success"])
         self.assertIn("cannot publish", payload["error"])
 
+    @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
+    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
+    def test_artifact_publish_succeeds_when_sidebar_refresh_fails(self, mocked_publish_artifact, mocked_publish_update):
+        artifact = self._create_artifact()
+        mocked_publish_artifact.return_value = (44, [])
+        mocked_publish_update.side_effect = RuntimeError("channel layer unavailable")
+
+        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["file_id"], 44)
+
     @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/artifact")
     def test_artifact_content_redirects_for_binary_artifact(self, mocked_get_url):
         user_file = self._create_user_file(name="clip.mp3")

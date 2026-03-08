@@ -11,7 +11,7 @@ from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
-from nova.native_provider_runtime import persist_native_result_artifacts
+from nova.native_provider_runtime import persist_native_result_artifacts, resolve_native_response_mode
 from nova.providers.openrouter import OpenRouterProviderAdapter
 from nova.tests.base import BaseTestCase
 
@@ -27,6 +27,25 @@ class NativeProviderRuntimeTests(BaseTestCase):
             provider_type=ProviderType.OPENROUTER,
             model="x-ai/grok-image",
             api_key="dummy",
+        )
+        self.provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "unknown", "pdf": "unknown", "audio": "unknown"},
+                "outputs": {"text": "pass", "image": "pass", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "unknown",
+                    "vision": "unknown",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "pass",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
         )
 
     def test_openrouter_parse_native_response_normalizes_image_url_parts(self):
@@ -59,6 +78,30 @@ class NativeProviderRuntimeTests(BaseTestCase):
         self.assertEqual(len(parsed["images"]), 1)
         self.assertEqual(parsed["images"][0]["data"], image_data_url)
         self.assertEqual(parsed["images"][0]["mime_type"], "image/png")
+
+    def test_resolve_native_response_mode_uses_image_for_auto_image_requests(self):
+        source_message = self.thread.add_message("Create an image of a lighthouse at sunset", actor=Actor.USER)
+        source_message.internal_data = {"response_mode": "auto"}
+        source_message.save(update_fields=["internal_data"])
+
+        resolved_mode = async_to_sync(resolve_native_response_mode)(
+            self.provider,
+            source_message,
+        )
+
+        self.assertEqual(resolved_mode, "image")
+
+    def test_resolve_native_response_mode_keeps_text_for_auto_non_media_requests(self):
+        source_message = self.thread.add_message("Explain why lighthouses are useful.", actor=Actor.USER)
+        source_message.internal_data = {"response_mode": "auto"}
+        source_message.save(update_fields=["internal_data"])
+
+        resolved_mode = async_to_sync(resolve_native_response_mode)(
+            self.provider,
+            source_message,
+        )
+
+        self.assertEqual(resolved_mode, "text")
 
     @patch("nova.native_provider_runtime.batch_upload_files", new_callable=AsyncMock)
     def test_persist_native_result_artifacts_handles_nested_image_url_payload(

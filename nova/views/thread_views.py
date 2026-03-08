@@ -271,7 +271,7 @@ def add_message(request):
     new_message = request.POST.get('new_message', '')
     new_message = new_message if new_message.strip() else ''
     selected_agent = request.POST.get('selected_agent')
-    response_mode = str(request.POST.get('response_mode') or 'text').strip().lower() or 'text'
+    response_mode = str(request.POST.get('response_mode') or 'auto').strip().lower() or 'auto'
     uploaded_files = request.FILES.getlist('files', [])
     message_attachments = request.FILES.getlist('message_attachments', [])
 

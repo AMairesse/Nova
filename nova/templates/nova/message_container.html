@@ -343,6 +343,7 @@
                   href="#"
                   data-value="{{ agent.id }}"
                   data-provider-verification-status="{{ agent.llm_provider.validation_status }}"
+                  data-provider-type="{{ agent.llm_provider.provider_type }}"
                   data-provider-tools-status="{{ agent.llm_provider.known_tools_capability_status }}"
                   data-provider-vision-status="{{ agent.llm_provider.known_vision_capability_status }}"
                   data-provider-image-status="{{ agent.llm_provider.known_image_input_status }}"
@@ -378,7 +379,7 @@
           type="hidden"
           name="response_mode"
           id="responseModeInput"
-          value="text"
+          value="auto"
         />
 
         <textarea class="form-control auto-resize-textarea"
@@ -387,23 +388,6 @@
                   rows="1"
                   maxlength="2000"
                   autofocus></textarea>
-        <button
-          type="button"
-          id="response-mode-btn"
-          class="btn btn-outline-secondary dropdown-toggle"
-          data-bs-toggle="dropdown"
-          aria-expanded="false"
-          title="{% trans 'Response mode' %}"
-          aria-label="{% trans 'Response mode' %}"
-        >
-          <i class="bi bi-chat-dots"></i>
-          <span class="visually-hidden">{% trans "Response mode" %}</span>
-        </button>
-        <ul class="dropdown-menu dropdown-menu-end">
-          <li><a class="dropdown-item response-mode-item active" href="#" data-value="text"><i class="bi bi-chat-dots me-2"></i>{% trans "Text response" %}</a></li>
-          <li><a class="dropdown-item response-mode-item" href="#" data-value="image"><i class="bi bi-image me-2"></i>{% trans "Image response" %}</a></li>
-          <li><a class="dropdown-item response-mode-item" href="#" data-value="audio"><i class="bi bi-mic me-2"></i>{% trans "Audio response" %}</a></li>
-        </ul>
         <button
           type="button"
           id="attach-image-btn"

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 import posixpath
 from typing import Any, Iterable
 
+import httpx
 from asgiref.sync import sync_to_async
 from django.urls import reverse
 
 from nova.file_utils import batch_upload_files, download_file_content
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.UserFile import UserFile
+
+logger = logging.getLogger(__name__)
 
 
 def detect_artifact_kind(mime_type: str | None, filename: str | None = None) -> str:
@@ -116,7 +120,40 @@ async def publish_artifact_to_files(
     target_name = (filename or "").strip() or artifact.filename
 
     if artifact.user_file_id:
-        content = await download_file_content(artifact.user_file)
+        try:
+            content = await download_file_content(artifact.user_file)
+        except Exception as exc:
+            logger.warning(
+                "Direct artifact binary download failed for artifact %s: %s",
+                artifact.id,
+                exc,
+            )
+            try:
+                download_url = await sync_to_async(
+                    artifact.user_file.get_download_url,
+                    thread_sensitive=True,
+                )(expires_in=3600)
+            except Exception as url_exc:
+                logger.exception(
+                    "Artifact fallback download URL generation failed for artifact %s",
+                    artifact.id,
+                )
+                return None, [f"Artifact publish failed: {url_exc}"]
+
+            if not download_url:
+                return None, ["Artifact publish failed: no download URL could be generated."]
+
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                    response = await client.get(download_url)
+                response.raise_for_status()
+                content = response.content
+            except Exception as fallback_exc:
+                logger.exception(
+                    "Artifact fallback binary download failed for artifact %s",
+                    artifact.id,
+                )
+                return None, [f"Artifact publish failed: {fallback_exc}"]
     elif artifact.summary_text:
         content = artifact.summary_text.encode("utf-8")
         if not target_name.endswith(".txt"):
@@ -129,6 +166,7 @@ async def publish_artifact_to_files(
         artifact.user,
         [{"path": f"/generated/{posixpath.basename(target_name)}", "content": content}],
         scope=UserFile.Scope.THREAD_SHARED,
+        allowed_mime_prefixes=("image/", "audio/"),
     )
     if errors and not created:
         return None, errors
