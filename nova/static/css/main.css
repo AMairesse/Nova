@@ -702,6 +702,35 @@ body {
     margin-top: 0.25rem;
 }
 
+.artifact-inline-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.artifact-inline-card {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.75rem;
+    background: var(--bs-body-bg);
+    padding: 0.75rem;
+}
+
+.artifact-inline-card-image {
+    padding: 0.5rem;
+    overflow: hidden;
+}
+
+.artifact-inline-image {
+    display: block;
+    max-height: 24rem;
+    width: 100%;
+    object-fit: contain;
+    background: var(--bs-light-bg-subtle);
+}
+
+.artifact-inline-card-audio audio {
+    display: block;
+}
+
 .artifact-summary-item {
     display: flex;
     align-items: center;

@@ -5,6 +5,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpResponse
 from django.urls import reverse
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from nova.models.AgentConfig import AgentConfig
@@ -13,6 +14,7 @@ from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
+from nova.models.Tool import Tool
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
@@ -550,6 +552,114 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["status"], "ERROR")
+
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_rejects_when_provider_has_no_tools_and_agent_depends_on_tools(
+        self,
+        mocked_run_ai_task,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-No-Tools",
+            provider_type=ProviderType.OPENROUTER,
+            model="grok-tool-less",
+            api_key="dummy",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Tool Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        agent.tools.add(tool)
+        thread = Thread.objects.create(user=self.user, subject="Tool-less block")
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Hello",
+                "selected_agent": str(agent.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(thread.get_messages().count(), 0)
+        self.assertIn("does not support tool use", response.json()["message"])
+        mocked_run_ai_task.assert_not_called()
+
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_allows_simple_agent_when_provider_has_no_tools(
+        self,
+        mocked_run_ai_task,
+    ):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-No-Tools",
+            provider_type=ProviderType.OPENROUTER,
+            model="grok-tool-less",
+            api_key="dummy",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Simple Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        thread = Thread.objects.create(user=self.user, subject="Tool-less simple")
+        mocked_run_ai_task.return_value = SimpleNamespace(id="task-123")
+
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": str(thread.id),
+                "new_message": "Hello",
+                "selected_agent": str(agent.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "OK")
+        self.assertEqual(thread.get_messages().count(), 1)
+        mocked_run_ai_task.assert_called_once()
 
     # ------------ running_tasks -----------------------------------------
 

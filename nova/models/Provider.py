@@ -291,6 +291,10 @@ class LLMProvider(models.Model):
     def known_vision_capability_status(self) -> str:
         return self.get_known_capability_status("vision") or ""
 
+    @property
+    def known_tools_capability_status(self) -> str:
+        return self.get_known_capability_status("tools") or ""
+
     def is_capability_explicitly_unavailable(self, capability: str) -> bool:
         return self.get_capability_result(capability)["status"] in {"fail", "unsupported"}
 
@@ -360,6 +364,14 @@ class LLMProvider(models.Model):
     @property
     def known_audio_input_status(self) -> str:
         return self.get_known_snapshot_status("inputs", "audio") or ""
+
+    @property
+    def known_image_output_status(self) -> str:
+        return self.get_known_snapshot_status("outputs", "image") or ""
+
+    @property
+    def known_audio_output_status(self) -> str:
+        return self.get_known_snapshot_status("outputs", "audio") or ""
 
     @property
     def capability_profile_summary(self) -> str:

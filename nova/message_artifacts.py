@@ -4,6 +4,7 @@ import posixpath
 from typing import Any, Iterable
 
 from asgiref.sync import sync_to_async
+from django.urls import reverse
 
 from nova.file_utils import batch_upload_files, download_file_content
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
@@ -32,7 +33,12 @@ def build_artifact_label(user_file: UserFile | None, *, fallback: str = "") -> s
 
 
 def build_message_artifact_manifest(artifact: MessageArtifact) -> dict[str, Any]:
-    return artifact.to_manifest()
+    manifest = artifact.to_manifest()
+    if artifact.pk and (artifact.user_file_id or artifact.summary_text):
+        content_url = reverse("artifact_content", args=[artifact.pk])
+        manifest["content_url"] = content_url
+        manifest["preview_url"] = content_url
+    return manifest
 
 
 def build_message_artifact_manifest_from_user_file(
@@ -86,6 +92,8 @@ def normalize_message_artifacts(value: Any) -> list[dict[str, Any]]:
                 "summary_text": str(item.get("summary_text") or "").strip(),
                 "size": max(0, size),
                 "published_to_file": bool(item.get("published_to_file")),
+                "content_url": str(item.get("content_url") or "").strip(),
+                "preview_url": str(item.get("preview_url") or "").strip(),
                 "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
             }
         )
@@ -131,3 +139,33 @@ async def publish_artifact_to_files(
     await sync_to_async(artifact.save, thread_sensitive=True)(update_fields=["published_to_file", "updated_at"])
     file_id = created[0].get("id") if created else None
     return file_id, errors
+
+
+def clone_artifact_for_message(
+    source_artifact: MessageArtifact,
+    *,
+    message,
+    direction: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> MessageArtifact:
+    cloned_metadata = dict(source_artifact.metadata or {})
+    cloned_metadata.update(metadata or {})
+    return MessageArtifact.objects.create(
+        user=message.user,
+        thread=message.thread,
+        message=message,
+        user_file=source_artifact.user_file,
+        source_artifact=source_artifact,
+        direction=direction or source_artifact.direction,
+        kind=source_artifact.kind,
+        mime_type=source_artifact.mime_type or "",
+        label=source_artifact.filename,
+        summary_text=source_artifact.summary_text or "",
+        search_text=source_artifact.search_text or source_artifact.filename,
+        provider_type=source_artifact.provider_type or "",
+        model=source_artifact.model or "",
+        provider_fingerprint=source_artifact.provider_fingerprint or "",
+        order=source_artifact.order,
+        published_to_file=source_artifact.published_to_file,
+        metadata=cloned_metadata,
+    )

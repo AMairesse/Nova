@@ -92,7 +92,9 @@ class LLMAgent:
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
                      agent_config: AgentConfig, parent_config=None,
-                     callbacks: List[BaseCallbackHandler] = None):
+                     callbacks: List[BaseCallbackHandler] = None,
+                     *,
+                     tools_enabled: bool = True):
         """
         Async factory to create an LLMAgent instance (an agent) with
         async-safe ORM accesses.
@@ -137,7 +139,8 @@ class LLMAgent:
             has_agent_tools=has_agent_tools,
             system_prompt=system_prompt,
             recursion_limit=recursion_limit,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
+            tools_enabled=tools_enabled,
         )
 
         # Keep reference for continuous checkpoint context rebuild.
@@ -147,7 +150,7 @@ class LLMAgent:
         agent.checkpointer = checkpointer
 
         # Load tools async after init (extracted to llm_tools.py)
-        tools = await load_tools(agent)
+        tools = await load_tools(agent, enabled=tools_enabled)
 
         llm = agent.create_llm_agent()
 
@@ -196,7 +199,8 @@ class LLMAgent:
                  has_agent_tools=False,
                  system_prompt=None,
                  recursion_limit=None,
-                 llm_provider=None):
+                 llm_provider=None,
+                 tools_enabled: bool = True):
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
@@ -264,6 +268,7 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self.recursion_limit = recursion_limit
         self._llm_provider = llm_provider
+        self.tools_enabled = tools_enabled
 
         # Initialize resources and loaded modules tracker
         self._resources = {}
@@ -272,6 +277,8 @@ class LLMAgent:
         self.middleware = []  # Agent middleware list
         self.skill_catalog = {}
         self.skill_control_tool_names = []
+        self.last_tool_artifact_refs = []
+        self.last_generated_tool_artifact_refs = []
 
         # Add summarization middleware if configured
         # NOTE: In continuous mode we use day summaries + explicit checkpoint rebuild,
@@ -330,6 +337,8 @@ class LLMAgent:
         return runtime
 
     async def ainvoke(self, question, silent_mode=False, thread_id_override: str | None = None):
+        self.last_tool_artifact_refs = []
+        self.last_generated_tool_artifact_refs = []
         config = self._build_runtime_config(
             silent_mode=silent_mode,
             thread_id_override=thread_id_override,
@@ -379,6 +388,13 @@ class LLMAgent:
             messages = result.get('messages', [])
             last_message = messages[-1]
 
+            self.last_tool_artifact_refs = self._collect_tool_artifact_refs(messages)
+            self.last_generated_tool_artifact_refs = [
+                artifact_ref
+                for artifact_ref in self.last_tool_artifact_refs
+                if artifact_ref.get("tool_output")
+            ]
+
             followup_message = await self._build_tool_artifact_followup_message(messages)
             if followup_message is not None:
                 message = followup_message
@@ -396,20 +412,7 @@ class LLMAgent:
         if not isinstance(last_message, ToolMessage):
             return None
 
-        legacy_images: list[dict] = []
-        artifact_refs: list[dict] = []
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                break
-            if not isinstance(msg, ToolMessage):
-                continue
-            artifact = getattr(msg, "artifact", None)
-            if msg.name == "read_image" and isinstance(artifact, dict):
-                if artifact.get("base64") and artifact.get("mime_type"):
-                    legacy_images.append(artifact)
-                continue
-            if isinstance(artifact, dict) and artifact.get("artifact_id"):
-                artifact_refs.append(artifact)
+        legacy_images, artifact_refs = self._split_tool_artifact_refs(messages)
 
         if not legacy_images and not artifact_refs:
             return None
@@ -457,6 +460,63 @@ class LLMAgent:
                 content_parts,
             )
         )
+
+    def _split_tool_artifact_refs(self, messages) -> tuple[list[dict], list[dict]]:
+        legacy_images: list[dict] = []
+        artifact_refs: list[dict] = []
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                break
+            if not isinstance(msg, ToolMessage):
+                continue
+            artifact = getattr(msg, "artifact", None)
+            if msg.name == "read_image" and isinstance(artifact, dict):
+                if artifact.get("base64") and artifact.get("mime_type"):
+                    legacy_images.append(artifact)
+                continue
+            if isinstance(artifact, dict):
+                artifact_refs.extend(self._normalize_tool_artifact_payload(artifact))
+        return legacy_images, artifact_refs
+
+    def _collect_tool_artifact_refs(self, messages) -> list[dict]:
+        _legacy_images, artifact_refs = self._split_tool_artifact_refs(messages)
+        return artifact_refs
+
+    def _normalize_tool_artifact_payload(self, artifact: dict) -> list[dict]:
+        refs: list[dict] = []
+        artifact_ids = artifact.get("artifact_ids")
+        if isinstance(artifact_ids, list):
+            for artifact_id in artifact_ids:
+                try:
+                    normalized_id = int(artifact_id)
+                except (TypeError, ValueError):
+                    continue
+                refs.append(
+                    {
+                        "artifact_id": normalized_id,
+                        "kind": artifact.get("kind") or "",
+                        "label": artifact.get("label") or "",
+                        "mime_type": artifact.get("mime_type") or "",
+                        "tool_output": bool(artifact.get("tool_output")),
+                    }
+                )
+            return refs
+
+        try:
+            artifact_id = int(artifact.get("artifact_id"))
+        except (TypeError, ValueError):
+            return refs
+
+        refs.append(
+            {
+                "artifact_id": artifact_id,
+                "kind": artifact.get("kind") or "",
+                "label": artifact.get("label") or "",
+                "mime_type": artifact.get("mime_type") or "",
+                "tool_output": bool(artifact.get("tool_output")),
+            }
+        )
+        return refs
 
     async def _hydrate_artifact_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
         artifact_id = artifact_ref.get("artifact_id")

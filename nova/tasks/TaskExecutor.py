@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Dict, Any
 from langgraph.types import Command
 
+from nova.agent_execution import provider_tools_explicitly_unavailable, requires_tools_for_run
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
@@ -151,9 +152,23 @@ class TaskExecutor:
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
+        tools_enabled = True
+        provider = getattr(self.agent_config, "llm_provider", None)
+        thread_mode = getattr(self.thread, "mode", None)
+        if provider_tools_explicitly_unavailable(provider):
+            if await sync_to_async(requires_tools_for_run, thread_sensitive=True)(
+                self.agent_config,
+                thread_mode,
+            ):
+                raise ValueError(
+                    "The selected provider does not support tool use, but this agent depends on tools or sub-agents."
+                )
+            tools_enabled = False
+
         self.llm = await LLMAgent.create(
             self.user, self.thread, self.agent_config,
-            callbacks=[self.handler]
+            callbacks=[self.handler],
+            tools_enabled=tools_enabled,
         )
 
         # Expose runtime resources to tools via agent._resources

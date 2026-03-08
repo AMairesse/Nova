@@ -109,9 +109,42 @@ class LLMProviderAdmin(admin.ModelAdmin):
 
 @admin.register(MessageArtifact)
 class MessageArtifactAdmin(admin.ModelAdmin):
-    list_display = ("id", "thread", "message", "direction", "kind", "label", "published_to_file", "created_at")
+    list_display = (
+        "id",
+        "thread",
+        "message",
+        "direction",
+        "kind",
+        "label",
+        "user_file",
+        "source_artifact",
+        "published_to_file",
+        "created_at",
+    )
     list_filter = ("direction", "kind", "published_to_file", "created_at")
-    search_fields = ("label", "summary_text", "search_text", "message__text")
+    search_fields = ("label", "summary_text", "search_text", "message__text", "user_file__original_filename")
+    readonly_fields = ("created_at", "updated_at")
+    fields = (
+        "user",
+        "thread",
+        "message",
+        "direction",
+        "kind",
+        "label",
+        "mime_type",
+        "user_file",
+        "source_artifact",
+        "published_to_file",
+        "summary_text",
+        "search_text",
+        "provider_type",
+        "model",
+        "provider_fingerprint",
+        "order",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(AgentConfig)
@@ -272,6 +305,7 @@ class MessageAdmin(admin.ModelAdmin):
     list_filter = ("actor", "message_type", "created_at")
     search_fields = ("user__username", "thread__subject", "text")
     ordering = ("-created_at",)
+    inlines = [ArtifactsInline]
 
 
 admin.site.unregister(User)

@@ -92,6 +92,26 @@
                     }
                     this.syncComposerCapabilityNotice();
                 },
+                '.response-mode-item': (e, target) => {
+                    e.preventDefault();
+                    const item = target.closest('.response-mode-item');
+                    const value = `${item?.dataset?.value || 'text'}`.trim() || 'text';
+                    const input = document.getElementById('responseModeInput');
+                    const button = document.getElementById('response-mode-btn');
+                    if (input) input.value = value;
+                    document.querySelectorAll('.response-mode-item').forEach((entry) => {
+                        entry.classList.toggle('active', entry === item);
+                    });
+                    if (button) {
+                        const iconClass = value === 'image'
+                            ? 'bi-image'
+                            : value === 'audio'
+                                ? 'bi-mic'
+                                : 'bi-chat-dots';
+                        button.innerHTML = `<i class="bi ${iconClass}"></i><span class="visually-hidden">${gettext('Response mode')}</span>`;
+                    }
+                    this.syncComposerCapabilityNotice();
+                },
                 '.interaction-answer-btn': (e, target) => {
                     e.preventDefault();
                     const btn = target.closest(".interaction-answer-btn");
@@ -344,6 +364,12 @@
             const hasAttachments = this.composerAttachments.length > 0;
             if (!msg && !hasAttachments) return;
             if (this.isComposerSubmitting) return;
+
+            const blockingCapabilityError = this.getComposerBlockingCapabilityError();
+            if (blockingCapabilityError) {
+                this.showToast(blockingCapabilityError, 'danger');
+                return;
+            }
 
             this.isComposerSubmitting = true;
 
@@ -644,11 +670,59 @@
 
             return {
                 verificationStatus: `${selectedItem.dataset.providerVerificationStatus || ''}`.trim(),
+                toolsStatus: `${selectedItem.dataset.providerToolsStatus || ''}`.trim(),
                 visionStatus: `${selectedItem.dataset.providerVisionStatus || ''}`.trim(),
                 imageStatus: `${selectedItem.dataset.providerImageStatus || ''}`.trim(),
                 pdfStatus: `${selectedItem.dataset.providerPdfStatus || ''}`.trim(),
                 audioStatus: `${selectedItem.dataset.providerAudioStatus || ''}`.trim(),
+                imageOutputStatus: `${selectedItem.dataset.providerImageOutputStatus || ''}`.trim(),
+                audioOutputStatus: `${selectedItem.dataset.providerAudioOutputStatus || ''}`.trim(),
+                agentRequiresTools: `${selectedItem.dataset.agentRequiresTools || ''}`.trim() === 'true',
             };
+        }
+
+        getSelectedResponseMode() {
+            const input = document.getElementById('responseModeInput');
+            return `${input?.value || 'text'}`.trim() || 'text';
+        }
+
+        getComposerBlockingCapabilityError() {
+            const state = this.getSelectedAgentCapabilityState();
+            if (!state) return '';
+
+            const responseMode = this.getSelectedResponseMode();
+            const {
+                toolsStatus,
+                visionStatus,
+                imageStatus,
+                pdfStatus,
+                audioStatus,
+                imageOutputStatus,
+                audioOutputStatus,
+                agentRequiresTools,
+            } = state;
+            const kinds = Array.from(new Set(this.composerAttachments.map((attachment) => attachment.kind)));
+
+            if (toolsStatus === 'fail' || toolsStatus === 'unsupported') {
+                if (agentRequiresTools) {
+                    return gettext('The selected agent depends on tools or sub-agents, but this provider/model was explicitly verified without tool support.');
+                }
+            }
+
+            if (responseMode === 'image' && imageOutputStatus === 'unsupported') {
+                return gettext('The selected agent provider was explicitly verified without image output support.');
+            }
+            if (responseMode === 'audio' && audioOutputStatus === 'unsupported') {
+                return gettext('The selected agent provider was explicitly verified without audio output support.');
+            }
+
+            const imageUnsupported = kinds.includes('image') && (imageStatus === 'unsupported' || visionStatus === 'fail' || visionStatus === 'unsupported');
+            const pdfUnsupported = kinds.includes('pdf') && pdfStatus === 'unsupported';
+            const audioUnsupported = kinds.includes('audio') && audioStatus === 'unsupported';
+            if (imageUnsupported || pdfUnsupported || audioUnsupported) {
+                return gettext('The selected agent provider was explicitly verified without support for one of the attached input types.');
+            }
+            return '';
         }
 
         syncComposerCapabilityNotice() {
@@ -656,12 +730,6 @@
             if (!note) return;
 
             const hasAttachments = this.composerAttachments.length > 0;
-            if (!hasAttachments) {
-                note.className = 'alert py-2 px-3 small mt-2 d-none';
-                note.textContent = '';
-                return;
-            }
-
             const state = this.getSelectedAgentCapabilityState();
             if (!state) {
                 note.className = 'alert py-2 px-3 small mt-2 d-none';
@@ -669,21 +737,42 @@
                 return;
             }
 
-            const { verificationStatus, visionStatus, imageStatus, pdfStatus, audioStatus } = state;
+            const responseMode = this.getSelectedResponseMode();
+            const { verificationStatus, toolsStatus, visionStatus, imageStatus, pdfStatus, audioStatus, imageOutputStatus, audioOutputStatus, agentRequiresTools } = state;
             const kinds = Array.from(new Set(this.composerAttachments.map((attachment) => attachment.kind)));
             const imageUnsupported = kinds.includes('image') && (imageStatus === 'unsupported' || visionStatus === 'fail' || visionStatus === 'unsupported');
             const pdfUnsupported = kinds.includes('pdf') && pdfStatus === 'unsupported';
             const audioUnsupported = kinds.includes('audio') && audioStatus === 'unsupported';
+            const imageOutputUnsupported = responseMode === 'image' && imageOutputStatus === 'unsupported';
+            const audioOutputUnsupported = responseMode === 'audio' && audioOutputStatus === 'unsupported';
 
-            if (imageUnsupported || pdfUnsupported || audioUnsupported) {
+            if ((toolsStatus === 'fail' || toolsStatus === 'unsupported') && agentRequiresTools) {
                 note.className = 'alert alert-danger py-2 px-3 small mt-2';
-                note.textContent = gettext('The selected agent provider was explicitly verified without support for one of the attached input types. Sending this message will be rejected.');
+                note.textContent = gettext('This agent depends on tools or sub-agents, but the selected provider/model was explicitly verified without tool support.');
+                return;
+            }
+
+            if (imageUnsupported || pdfUnsupported || audioUnsupported || imageOutputUnsupported || audioOutputUnsupported) {
+                note.className = 'alert alert-danger py-2 px-3 small mt-2';
+                if (imageOutputUnsupported) {
+                    note.textContent = gettext('The selected agent provider was explicitly verified without image output support.');
+                } else if (audioOutputUnsupported) {
+                    note.textContent = gettext('The selected agent provider was explicitly verified without audio output support.');
+                } else {
+                    note.textContent = gettext('The selected agent provider was explicitly verified without support for one of the attached input types. Sending this message will be rejected.');
+                }
+                return;
+            }
+
+            if (!hasAttachments && responseMode === 'text') {
+                note.className = 'alert py-2 px-3 small mt-2 d-none';
+                note.textContent = '';
                 return;
             }
 
             if (verificationStatus === 'untested') {
                 note.className = 'alert alert-warning py-2 px-3 small mt-2';
-                note.textContent = gettext('The selected agent provider has not been actively verified for these attachment types yet.');
+                note.textContent = gettext('The selected agent provider has not been actively verified for these attachment or output types yet.');
                 return;
             }
 

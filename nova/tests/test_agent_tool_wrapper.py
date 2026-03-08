@@ -3,18 +3,32 @@ import types
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+from django.test import TransactionTestCase
+
+from nova.models.Message import Actor
+from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
-from .base import BaseTestCase
 
 
-class AgentToolWrapperTests(BaseTestCase):
+User = get_user_model()
+
+
+class AgentToolWrapperTests(TransactionTestCase):
+    reset_sequences = True
+
     def setUp(self):
         """
         Ensure each test runs with its own thread and a fresh AgentToolWrapper
         import so sys.modules and fake dependencies are fully controlled.
         """
         super().setUp()
-        # Base.py already sets up a test user
+        self.user = User.objects.create_user(
+            username="testuser",
+            email="test@example.com",
+            password="testpass123",
+        )
         self.thread = Thread.objects.create(user=self.user, subject="T")
         self.AgentToolWrapper = self._import_wrapper()
 
@@ -37,8 +51,15 @@ class AgentToolWrapperTests(BaseTestCase):
 
         class StructuredTool:
             @classmethod
-            def from_function(cls, func=None, coroutine=None,
-                              name=None, description=None, args_schema=None):
+            def from_function(
+                cls,
+                func=None,
+                coroutine=None,
+                name=None,
+                description=None,
+                args_schema=None,
+                **kwargs,
+            ):
                 # Return a plain object capturing what
                 # was passed for assertions
                 return {
@@ -47,6 +68,7 @@ class AgentToolWrapperTests(BaseTestCase):
                     "name": name,
                     "description": description,
                     "args_schema": args_schema,
+                    **kwargs,
                 }
 
         lc_core_tools.StructuredTool = StructuredTool
@@ -100,10 +122,14 @@ class AgentToolWrapperTests(BaseTestCase):
         self.assertIn("question", schema.get("required", []))
         self.assertIn("Sub Agent 1",
                       schema["properties"]["question"]["description"])
+        self.assertIn("artifact_ids", schema.get("properties", {}))
+        self.assertIn("output_mode", schema.get("properties", {}))
 
         # Ensure the tool exposes an async coroutine (no sync func expected)
         self.assertIsNone(tool["func"])
         self.assertTrue(callable(tool["coroutine"]))
+        self.assertTrue(tool["return_direct"])
+        self.assertEqual(tool["response_format"], "content_and_artifact")
 
     def test_execute_agent_success_invokes_and_cleans_up_and_tags(self):
         """
@@ -115,26 +141,35 @@ class AgentToolWrapperTests(BaseTestCase):
         # Fake LLMAgent with async factory 'create',
         # then async 'invoke' and 'cleanup'
         class FakeLLMAgent:
+            instances = []
+            generated_artifact_id = None
+
             def __init__(self, result="OK"):
                 self.result = result
                 self.cleanup_called = False
-                self.create_calls = []
                 self.invoke_calls = []
+                self.last_generated_tool_artifact_refs = []
 
             @classmethod
-            async def create(cls, user, thread, agent_config,
-                             parent_config=None):
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
                 inst = cls(result="ANSWER")
-                inst.create_calls.append(
-                    {"user": user,  "thread": thread,
-                     "agent_config": agent_config,
-                     "parent_config": parent_config}
-                )
-                # Attach for test inspection
                 inst._user = user
                 inst._thread = thread
                 inst._agent_config = agent_config
-                inst._parent_config = parent_config
+                inst._callbacks = callbacks
+                inst._tools_enabled = tools_enabled
+                if cls.generated_artifact_id is not None:
+                    inst.last_generated_tool_artifact_refs = [
+                        {"artifact_id": cls.generated_artifact_id}
+                    ]
+                cls.instances.append(inst)
                 return inst
 
             async def ainvoke(self, question):
@@ -144,20 +179,72 @@ class AgentToolWrapperTests(BaseTestCase):
             async def cleanup(self):
                 self.cleanup_called = True
 
-        agent_stub = SimpleNamespace(name="Delegate A",
-                                     tool_description="desc")
-        parent_user = SimpleNamespace(id=42)
+        source_message = self.thread.add_message("Existing source", actor=Actor.USER)
+        source_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=source_message,
+            direction=ArtifactDirection.INPUT,
+            kind=ArtifactKind.IMAGE,
+            label="source-image.png",
+            mime_type="image/png",
+        )
+        generated_message = self.thread.add_message("Generated", actor=Actor.AGENT)
+        generated_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=generated_message,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated-image.png",
+            mime_type="image/png",
+        )
 
-        wrapper = self.AgentToolWrapper(agent_config=agent_stub,
-                                        thread=self.thread, user=parent_user)
+        agent_stub = SimpleNamespace(
+            name="Delegate A",
+            tool_description="desc",
+            llm_provider=None,
+            id=17,
+        )
+
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent_stub,
+            thread=self.thread,
+            user=self.user,
+        )
 
         # Patch the LLMAgent symbol used in the module under test
         with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            FakeLLMAgent.generated_artifact_id = generated_artifact.id
             tool = wrapper.create_langchain_tool()
-            # Execute the coroutine with a question
-            answer = asyncio.run(tool["coroutine"]("What time is it?"))
-
+            answer, artifact_payload = asyncio.run(
+                tool["coroutine"](
+                    "What time is it?",
+                    artifact_ids=[source_artifact.id],
+                    output_mode="image",
+                )
+            )
         self.assertEqual(answer, "ANSWER")
+        self.assertEqual(
+            artifact_payload,
+            {"artifact_ids": [generated_artifact.id], "tool_output": True},
+        )
+        self.assertTrue(FakeLLMAgent.instances[-1].cleanup_called)
+        self.assertTrue(FakeLLMAgent.instances[-1]._tools_enabled)
+        self.assertTrue(FakeLLMAgent.instances[-1].invoke_calls)
+
+        hidden_message = (
+            self.thread.get_messages()
+            .filter(actor=Actor.SYSTEM, internal_data__hidden_subagent_trace=True)
+            .latest("id")
+        )
+        self.assertEqual(hidden_message.internal_data["response_mode"], "image")
+        cloned_input = MessageArtifact.objects.get(
+            message=hidden_message,
+            direction=ArtifactDirection.INPUT,
+            source_artifact=source_artifact,
+        )
+        self.assertEqual(cloned_input.kind, ArtifactKind.IMAGE)
 
     def test_execute_agent_failure_returns_formatted_error_and_cleans_up(self):
         """
@@ -167,13 +254,23 @@ class AgentToolWrapperTests(BaseTestCase):
         - still run cleanup() to avoid leaking resources.
         """
         class FailingLLMAgent:
+            instances = []
+
             def __init__(self):
                 self.cleanup_called = False
 
             @classmethod
-            async def create(cls, user, thread,
-                             agent_config, parent_config=None):
-                return cls()
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                inst = cls()
+                cls.instances.append(inst)
+                return inst
 
             async def ainvoke(self, question):
                 raise RuntimeError("boom")
@@ -181,7 +278,12 @@ class AgentToolWrapperTests(BaseTestCase):
             async def cleanup(self):
                 self.cleanup_called = True
 
-        agent_stub = SimpleNamespace(name="SubTool X", tool_description="desc")
+        agent_stub = SimpleNamespace(
+            name="SubTool X",
+            tool_description="desc",
+            llm_provider=None,
+            id=29,
+        )
         wrapper = self.AgentToolWrapper(
             agent_config=agent_stub,
             thread=self.thread,
@@ -190,8 +292,10 @@ class AgentToolWrapperTests(BaseTestCase):
 
         with patch("nova.tools.agent_tool_wrapper.LLMAgent", FailingLLMAgent):
             tool = wrapper.create_langchain_tool()
-            result = asyncio.run(tool["coroutine"]("Hello"))
+            result, artifact_payload = asyncio.run(tool["coroutine"]("Hello"))
 
         # Error string should include the agent name and guidance
         self.assertIn("Error in sub-agent SubTool X: boom", result)
         self.assertIn("Check connections or config", result)
+        self.assertEqual(artifact_payload, {})
+        self.assertTrue(FailingLLMAgent.instances[-1].cleanup_called)

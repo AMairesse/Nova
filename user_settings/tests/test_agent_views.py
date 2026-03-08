@@ -111,6 +111,35 @@ class AgentViewsTest(BaseTestCase):
             provider_ids,
         )
 
+    def test_edit_form_warns_when_provider_has_no_tools_but_agent_depends_on_them(self):
+        provider = self._create_provider(
+            provider_type="openrouter",
+            name="Tool-less Provider",
+            model="grok-tool-less",
+        )
+        provider.api_key = "dummy"
+        provider.save(update_fields=["api_key"])
+        provider.apply_verification_result(
+            {
+                "validation_status": provider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        tool = create_tool(self.user, name="Memory")
+        agent = create_agent(self.user, provider=provider, name="Tool Agent")
+        agent.tools.add(tool)
+
+        response = self.client.get(reverse("user_settings:agent-edit", args=[agent.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "verified without tool support")
+
     def test_create_agent_requires_tool_description_when_marked_tool(self):
         provider = self._create_provider()
         url = reverse("user_settings:agent-add")

@@ -7,7 +7,6 @@ OwnerFormKwargsMixin (or legacy view) can safely inject it.
 All comments are in English.
 """
 from __future__ import annotations
-
 from typing import Any
 
 from django import forms
@@ -222,6 +221,8 @@ class AgentForm(forms.ModelForm):
                 css_id="summarization-settings",
             ),
         )
+        self.provider_tool_warning = self._compute_provider_tool_warning()
+        self.provider_capability_map = self._build_provider_capability_map()
 
     # ------------------------------------------------------------------ #
     #  Validation                                                         #
@@ -241,6 +242,59 @@ class AgentForm(forms.ModelForm):
                 _("Required when using an agent as a tool."),
             )
         return data
+
+    def _compute_provider_tool_warning(self) -> str:
+        provider = self._resolve_selected_provider()
+        if not provider or not provider.is_capability_explicitly_unavailable("tools"):
+            return ""
+        if not self._has_selected_tool_dependencies():
+            if not bool(self._bound_or_initial_value("is_tool")):
+                return _(
+                    "This provider/model was verified without tool support. Simple thread runs can still work in tool-less mode, but this agent will not be usable in continuous mode."
+                )
+            return ""
+        return _(
+            "This provider/model was verified without tool support, but this agent currently depends on tools or sub-agents."
+        )
+
+    def _resolve_selected_provider(self):
+        provider_value = self._bound_or_initial_value("llm_provider")
+        try:
+            provider_id = int(provider_value)
+        except (TypeError, ValueError):
+            return getattr(self.instance, "llm_provider", None)
+        return self.fields["llm_provider"].queryset.filter(pk=provider_id).first()
+
+    def _bound_or_initial_value(self, field_name: str):
+        if self.is_bound:
+            if hasattr(self.data, "getlist"):
+                values = self.data.getlist(field_name)
+                if len(values) > 1:
+                    return values
+            return self.data.get(field_name)
+        if field_name == "tools" and self.instance.pk:
+            return list(self.instance.tools.values_list("pk", flat=True))
+        if field_name == "agent_tools" and self.instance.pk:
+            return list(self.instance.agent_tools.values_list("pk", flat=True))
+        return self.initial.get(field_name) or getattr(self.instance, field_name, None)
+
+    def _has_selected_tool_dependencies(self) -> bool:
+        if self.is_bound and hasattr(self.data, "getlist"):
+            selected_tools = [value for value in self.data.getlist("tools") if str(value).strip()]
+            selected_agents = [value for value in self.data.getlist("agent_tools") if str(value).strip()]
+            return bool(selected_tools or selected_agents)
+        if self.instance.pk:
+            return self.instance.has_explicit_tool_dependencies()
+        return False
+
+    def _build_provider_capability_map(self) -> dict[str, dict[str, str]]:
+        provider_queryset = self.fields["llm_provider"].queryset
+        return {
+            str(provider.pk): {
+                "tools_status": provider.known_tools_capability_status or "",
+            }
+            for provider in provider_queryset
+        }
 
     class Media:
         js = ["user_settings/js/agent.js"]

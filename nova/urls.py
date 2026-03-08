@@ -17,7 +17,7 @@ from nova.views.continuous_views import (
 from nova.views.task_views import running_tasks
 from nova.views.files_views import (
     sidebar_panel_view, file_list,
-    file_download_url, file_upload, FileDeleteView, artifact_publish
+    file_download_url, file_upload, FileDeleteView, artifact_publish, artifact_content
 )
 from nova.views.interaction_views import (
     answer_interaction, cancel_interaction
@@ -72,6 +72,7 @@ urlpatterns += [
     path('files/upload/<int:thread_id>/', file_upload, name='file_upload'),
     path('files/delete/<int:file_id>/', FileDeleteView.as_view(), name='file_delete'),
     path('files/publish-artifact/<int:artifact_id>/', artifact_publish, name='artifact_publish'),
+    path('files/artifact-content/<int:artifact_id>/', artifact_content, name='artifact_content'),
 ]
 
 # Users' interactions from agents

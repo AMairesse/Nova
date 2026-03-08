@@ -104,7 +104,15 @@ def _classify_capability_failure(capability: str, exc: Exception) -> str:
     message = _format_exception_message(exc).lower()
     unsupported_markers = {
         "streaming": ("stream", "streaming", "not implemented"),
-        "tools": ("tool", "function calling", "structured output", "not implemented"),
+        "tools": (
+            "tool",
+            "tool use",
+            "tool calling",
+            "function calling",
+            "no endpoints found that support tool use",
+            "structured output",
+            "not implemented",
+        ),
         "vision": ("vision", "image", "multimodal", "modalit", "not implemented"),
     }
     markers = unsupported_markers.get(capability, ())

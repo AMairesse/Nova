@@ -436,6 +436,8 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
 
     async def build_native_request(self, provider, invocation_request: dict[str, object]) -> dict[str, object]:
         prompt = str(invocation_request.get("prompt") or "").strip()
+        response_mode = str(invocation_request.get("response_mode") or "text").strip().lower()
+        additional_config = provider.additional_config if isinstance(provider.additional_config, dict) else {}
         content = []
         if prompt:
             content.append({"type": "text", "text": prompt})
@@ -482,7 +484,7 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
                 )
 
         normalized_content = self.normalize_multimodal_content(content)
-        return {
+        payload = {
             "model": provider.model,
             "messages": [
                 {
@@ -491,6 +493,17 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
                 }
             ],
         }
+        if response_mode == "image":
+            payload["modalities"] = ["text", "image"]
+            image_options = additional_config.get("image_generation")
+            if isinstance(image_options, dict) and image_options:
+                payload.update(image_options)
+        elif response_mode == "audio":
+            payload["modalities"] = ["text", "audio"]
+            audio_options = additional_config.get("audio")
+            if isinstance(audio_options, dict) and audio_options:
+                payload["audio"] = audio_options
+        return payload
 
     async def invoke_native(self, provider, invocation_request: dict[str, object]) -> dict[str, object]:
         payload = await self.build_native_request(provider, invocation_request)
@@ -517,6 +530,54 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
         except ValueError as exc:
             raise OpenRouterMetadataTransientError("OpenRouter returned invalid JSON.") from exc
 
+    @staticmethod
+    def _extract_image_payload(image_entry):
+        if isinstance(image_entry, str):
+            return image_entry, "", ""
+        if not isinstance(image_entry, dict):
+            return "", "", ""
+
+        nested_image = image_entry.get("image_url")
+        if isinstance(nested_image, dict):
+            return (
+                str(
+                    nested_image.get("url")
+                    or nested_image.get("data")
+                    or nested_image.get("b64_json")
+                    or ""
+                ).strip(),
+                str(
+                    image_entry.get("mime_type")
+                    or nested_image.get("mime_type")
+                    or nested_image.get("media_type")
+                    or ""
+                ).strip(),
+                str(
+                    image_entry.get("filename")
+                    or nested_image.get("filename")
+                    or ""
+                ).strip(),
+            )
+        if isinstance(nested_image, str):
+            return (
+                nested_image.strip(),
+                str(image_entry.get("mime_type") or "").strip(),
+                str(image_entry.get("filename") or "").strip(),
+            )
+
+        return (
+            str(
+                image_entry.get("data")
+                or image_entry.get("b64_json")
+                or image_entry.get("image_base64")
+                or image_entry.get("image_data")
+                or image_entry.get("url")
+                or ""
+            ).strip(),
+            str(image_entry.get("mime_type") or image_entry.get("media_type") or "").strip(),
+            str(image_entry.get("filename") or "").strip(),
+        )
+
     async def parse_native_response(self, provider, raw_response: dict[str, object]) -> dict[str, object]:
         _provider = provider
         choices = raw_response.get("choices") or []
@@ -534,11 +595,36 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
                     continue
                 if part.get("type") == "text":
                     text_parts.append(str(part.get("text") or ""))
+                elif part.get("type") in {"image", "image_url", "output_image"}:
+                    pass
+
+        images = message.get("images") or raw_response.get("images") or []
+        if not images and isinstance(content, list):
+            images = [
+                part
+                for part in content
+                if isinstance(part, dict) and part.get("type") in {"image", "image_url", "output_image"}
+            ]
+        if not images and isinstance(message.get("image"), (dict, str)):
+            images = [message.get("image")]
+
+        normalized_images = []
+        for image in list(images or []):
+            data, mime_type, filename = self._extract_image_payload(image)
+            if not data:
+                continue
+            normalized_images.append(
+                {
+                    "data": data,
+                    "mime_type": mime_type or "image/png",
+                    "filename": filename,
+                }
+            )
 
         parsed = {
             "text": "\n".join([part for part in text_parts if part]).strip(),
             "annotations": message.get("annotations") or raw_response.get("annotations") or [],
-            "images": message.get("images") or [],
+            "images": normalized_images,
             "audio": message.get("audio") or raw_response.get("audio") or None,
             "raw_message": message,
             "raw_response": raw_response,

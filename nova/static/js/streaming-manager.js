@@ -190,7 +190,7 @@
                 },
                 'new_message': (data) => {
                     // Handle real-time message updates (e.g., system messages from completed tasks)
-                    this.onNewMessage(data.message, data.thread_id);
+                    this.onNewMessage(data.message, data.thread_id, data.task_id || null);
                 },
                 'task_complete': (data) => {
                     // Update thread title in sidebars if backend provided it
@@ -330,9 +330,18 @@
         }
 
         // Handle real-time message updates like system messages
-        onNewMessage(messageData, thread_id) {
+        onNewMessage(messageData, thread_id, taskId = null) {
             // Create message element for the new message
             const messageElement = window.MessageRenderer.createMessageElement(messageData, thread_id);
+
+            if (taskId && this.activeStreams.has(taskId)) {
+                const stream = this.activeStreams.get(taskId);
+                if (stream?.element?.parentNode) {
+                    stream.element.replaceWith(messageElement);
+                    stream.element = messageElement;
+                    return;
+                }
+            }
 
             // Reuse MessageManager append flow to keep empty-state handling consistent.
             if (this.messageManager) {

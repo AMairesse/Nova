@@ -1,6 +1,7 @@
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 
+from nova.agent_execution import requires_tools_for_run
 from nova.message_artifacts import detect_artifact_kind
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Thread import Thread
@@ -49,6 +50,33 @@ def get_message_attachment_capability_error(agent_config, uploaded_files=None) -
 
     if "audio" in attachment_kinds and provider.is_input_modality_explicitly_unavailable("audio"):
         return _("The selected provider does not support audio attachments for message input.")
+
+    return None
+
+
+def get_agent_execution_capability_error(
+    agent_config,
+    *,
+    thread_mode: str | None,
+    response_mode: str = "text",
+) -> str | None:
+    provider = getattr(agent_config, "llm_provider", None)
+    if not provider:
+        return None
+
+    if provider.is_capability_explicitly_unavailable("tools") and requires_tools_for_run(
+        agent_config,
+        thread_mode,
+    ):
+        return _(
+            "The selected provider does not support tool use, but this agent depends on tools or sub-agents."
+        )
+
+    normalized_response_mode = str(response_mode or "text").strip().lower()
+    if normalized_response_mode == "image" and provider.get_known_snapshot_status("outputs", "image") == "unsupported":
+        return _("The selected provider does not support image output for this model.")
+    if normalized_response_mode == "audio" and provider.get_known_snapshot_status("outputs", "audio") == "unsupported":
+        return _("The selected provider does not support audio output for this model.")
 
     return None
 

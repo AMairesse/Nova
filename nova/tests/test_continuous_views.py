@@ -140,6 +140,50 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["status"], "ERROR")
 
+    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.views.continuous_views.run_ai_task_celery.delay")
+    def test_continuous_add_message_rejects_tool_less_provider_even_for_simple_agent(
+        self,
+        mocked_run_ai_task,
+        mocked_enqueue_followups,
+    ):
+        mocked_enqueue_followups.return_value = None
+
+        provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="No Tools",
+            model="grok-tool-less",
+        )
+        provider.api_key = "dummy"
+        provider.save(update_fields=["api_key"])
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        agent = create_agent(self.user, provider, name="Simple continuous agent")
+
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={
+                "new_message": "Hello",
+                "selected_agent": str(agent.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("does not support tool use", response.json()["message"])
+        mocked_enqueue_followups.assert_not_called()
+        mocked_run_ai_task.assert_not_called()
+
     @patch("nova.views.continuous_views.upload_message_attachments")
     @patch("nova.views.continuous_views.enqueue_continuous_followups")
     @patch("nova.views.continuous_views.run_ai_task_celery.delay")

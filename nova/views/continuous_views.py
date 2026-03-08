@@ -22,11 +22,13 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
+from nova.models.Thread import Thread
 from nova.models.UserObjects import UserParameters
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.views.agent_dispatch import (
     enqueue_message_agent_task,
+    get_agent_execution_capability_error,
     get_message_attachment_capability_error,
     resolve_selected_or_default_agent,
 )
@@ -144,6 +146,10 @@ def continuous_home(request):
                 created_at__gte=day_segment.starts_at_message.created_at,
             ).order_by("created_at", "id")
         )
+        timeline_messages = [
+            message for message in timeline_messages
+            if not ((message.internal_data or {}).get("hidden_subagent_trace"))
+        ]
         for m in timeline_messages:
             display_text = m.text
             if m.actor == Actor.AGENT and m.internal_data:
@@ -258,6 +264,8 @@ def continuous_messages(request):
     allow_posting = day_label is None or day_label == today_label
 
     user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
+    for agent in user_agents:
+        agent.requires_tools_for_current_thread = agent.requires_tools_for_thread_mode(Thread.Mode.CONTINUOUS)
     agent_id = request.GET.get("agent_id")
     default_agent = None
     if agent_id:
@@ -290,6 +298,10 @@ def continuous_messages(request):
             if end_dt:
                 qs = qs.filter(created_at__lt=end_dt)
             messages = list(qs.order_by("created_at", "id"))
+    messages = [
+        message for message in messages
+        if not ((message.internal_data or {}).get("hidden_subagent_trace"))
+    ]
     for m in messages:
         display_text = m.text
         if m.actor == Actor.AGENT and m.internal_data:
@@ -335,6 +347,7 @@ def continuous_add_message(request):
     new_message = request.POST.get("new_message", "")
     new_message = new_message if new_message.strip() else ""
     selected_agent = request.POST.get("selected_agent")
+    response_mode = str(request.POST.get("response_mode") or "text").strip().lower() or "text"
     message_attachments = request.FILES.getlist("message_attachments", [])
 
     if not new_message.strip() and not message_attachments:
@@ -344,6 +357,16 @@ def continuous_add_message(request):
         )
 
     agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+    execution_error = get_agent_execution_capability_error(
+        agent_config,
+        thread_mode=Thread.Mode.CONTINUOUS,
+        response_mode=response_mode,
+    )
+    if execution_error:
+        return JsonResponse(
+            {"status": "ERROR", "message": execution_error},
+            status=400,
+        )
     if message_attachments:
         attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
         if attachment_error:
@@ -374,6 +397,7 @@ def continuous_add_message(request):
 
     msg.internal_data = {
         MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
+        "response_mode": response_mode,
     }
     msg.save(update_fields=["internal_data"])
     annotate_user_message(msg)

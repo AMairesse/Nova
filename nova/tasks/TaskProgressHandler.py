@@ -108,13 +108,11 @@ class TaskProgressHandler(AsyncCallbackHandler):
         await self.publish_update('context_consumption', {'real_tokens': real, 'approx_tokens': approx,
                                                           'max_context': max})
 
-    async def on_new_message(self, id, text, actor, internal_data, created_at):
-        await self.publish_update('new_message', {'message': {'id': id,
-                                                              'text': text,
-                                                              'actor': actor,
-                                                              'internal_data': internal_data,
-                                                              'created_at': created_at
-                                                              }})
+    async def on_new_message(self, message_payload, *, task_id=None):
+        payload = {'message': message_payload}
+        if task_id is not None:
+            payload['task_id'] = task_id
+        await self.publish_update('new_message', payload)
 
     async def on_summarization_complete(self, summary_text, original_tokens, summary_tokens, strategy):
         '''

@@ -240,6 +240,56 @@ class TaskExecutorTests(TransactionTestCase):
 
         self.assertIs(executor.llm, fake_llm)
 
+    @patch("nova.tasks.TaskExecutor.LLMAgent.create", new_callable=AsyncMock)
+    def test_create_llm_agent_disables_tools_for_simple_tool_less_provider(self, mocked_create):
+        self.provider.apply_verification_result(
+            {
+                "validation_status": self.provider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        executor = self._make_executor()
+        fake_llm = AsyncMock()
+        fake_llm._resources = {}
+        mocked_create.return_value = fake_llm
+
+        asyncio.run(executor._create_llm_agent())
+
+        mocked_create.assert_awaited_once()
+        self.assertEqual(mocked_create.await_args.kwargs["tools_enabled"], False)
+
+    @patch("nova.tasks.TaskExecutor.LLMAgent.create", new_callable=AsyncMock)
+    def test_create_llm_agent_raises_for_continuous_tool_less_provider(self, mocked_create):
+        self.provider.apply_verification_result(
+            {
+                "validation_status": self.provider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="continuous",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        executor = self._make_executor(thread=continuous_thread)
+
+        with self.assertRaisesMessage(ValueError, "does not support tool use"):
+            asyncio.run(executor._create_llm_agent())
+
+        mocked_create.assert_not_awaited()
+
     def test_create_interaction_persists_question_message(self):
         executor = self._make_executor()
 

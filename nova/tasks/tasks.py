@@ -27,6 +27,13 @@ from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.file_utils import download_file_content
+from nova.message_utils import annotate_user_message
+from nova.native_provider_runtime import (
+    attach_tool_output_artifacts_to_message,
+    invoke_native_provider_for_message,
+    persist_native_result_artifacts,
+    summarize_native_result,
+)
 from nova.providers import invoke_native_provider, parse_native_provider_response
 from nova.message_artifacts import detect_artifact_kind
 from nova.message_attachments import (
@@ -334,7 +341,7 @@ class AgentTaskExecutor (TaskExecutor):
         native_result = await self._run_native_provider_if_supported()
         if native_result is not None:
             self._native_provider_result = native_result
-            return native_result.get("text") or ""
+            return summarize_native_result(native_result)
         return await super()._run_agent()
 
     async def _run_native_provider_if_supported(self):
@@ -342,103 +349,13 @@ class AgentTaskExecutor (TaskExecutor):
         source_message = getattr(self, "_source_message", None)
         if provider is None or source_message is None:
             return None
-        if getattr(provider, "provider_type", None) != "openrouter":
-            return None
-
-        def _load_artifacts():
-            return list(
-                MessageArtifact.objects.filter(
-                    message=source_message,
-                    thread=self.thread,
-                    user=self.user,
-                    direction=ArtifactDirection.INPUT,
-                    kind=ArtifactKind.PDF,
-                )
-                .select_related("user_file")
-                .order_by("order", "created_at", "id")
-            )
-
-        pdf_artifacts = await sync_to_async(_load_artifacts, thread_sensitive=True)()
-        if not pdf_artifacts:
-            return None
-
-        payload_artifacts = []
-        for artifact in pdf_artifacts:
-            if not artifact.user_file_id:
-                continue
-            raw_content = await download_file_content(artifact.user_file)
-            payload_artifacts.append(
-                {
-                    "artifact_id": artifact.id,
-                    "kind": artifact.kind,
-                    "label": artifact.filename,
-                    "filename": artifact.filename,
-                    "mime_type": artifact.mime_type or "application/pdf",
-                    "data": base64.b64encode(raw_content).decode("utf-8"),
-                }
-            )
-
-        if not payload_artifacts:
-            return None
-
-        native_prompt = await self._build_native_provider_prompt(source_message)
-        raw_response = await invoke_native_provider(
+        return await invoke_native_provider_for_message(
             provider,
-            {
-                "prompt": native_prompt,
-                "artifacts": payload_artifacts,
-            },
+            thread=self.thread,
+            user=self.user,
+            source_message=source_message,
+            fallback_prompt=self.prompt or "",
         )
-        parsed_response = await parse_native_provider_response(provider, raw_response)
-        parsed_response["source_artifact_ids"] = [artifact.id for artifact in pdf_artifacts]
-        parsed_response["source_message_id"] = source_message.id
-        parsed_response["prompt_surrogate"] = _build_message_attachment_text(
-            source_message.text or self.prompt or "",
-            [
-                {
-                    "id": artifact.id,
-                    "kind": artifact.kind,
-                    "label": artifact.filename,
-                }
-                for artifact in pdf_artifacts
-            ],
-        )
-        return parsed_response
-
-    async def _build_native_provider_prompt(self, source_message: Message) -> str:
-        def _load_recent_messages():
-            return list(
-                Message.objects.filter(
-                    thread=self.thread,
-                    user=self.user,
-                    created_at__lte=source_message.created_at,
-                )
-                .exclude(id=source_message.id)
-                .order_by("-created_at", "-id")[:8]
-            )[::-1]
-
-        recent_messages = await sync_to_async(_load_recent_messages, thread_sensitive=True)()
-        transcript = []
-        for message in recent_messages:
-            if message.actor == Actor.USER:
-                role = "User"
-            elif message.actor == Actor.AGENT:
-                role = "Assistant"
-            else:
-                continue
-            text = " ".join((message.text or "").split())
-            if text:
-                transcript.append(f"{role}: {text}")
-
-        current_request = source_message.text or self.prompt or ""
-        if transcript:
-            return (
-                "Recent conversation context:\n"
-                + "\n".join(transcript)
-                + "\n\nCurrent request:\n"
-                + current_request
-            ).strip()
-        return current_request
 
     async def _process_result(self, result):
         await super()._process_result(result)
@@ -452,8 +369,27 @@ class AgentTaskExecutor (TaskExecutor):
 
         native_result = getattr(self, "_native_provider_result", None)
         if native_result:
-            await self._persist_native_provider_artifacts(message, native_result)
+            await persist_native_result_artifacts(
+                message=message,
+                native_result=native_result,
+                provider=self.agent_config.llm_provider,
+            )
             await self._sync_native_provider_checkpoint(native_result, final_answer)
+        generated_tool_artifact_ids = [
+            int(artifact_ref["artifact_id"])
+            for artifact_ref in list(getattr(self.llm, "last_generated_tool_artifact_refs", []) or [])
+            if artifact_ref.get("artifact_id")
+        ]
+        if generated_tool_artifact_ids:
+            await sync_to_async(
+                attach_tool_output_artifacts_to_message,
+                thread_sensitive=True,
+            )(
+                message=message,
+                artifact_ids=generated_tool_artifact_ids,
+            )
+
+        annotate_user_message(message)
 
         # Calculate and store context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
@@ -487,43 +423,25 @@ class AgentTaskExecutor (TaskExecutor):
             message.internal_data['display_markdown'] = display_markdown
         await sync_to_async(message.save, thread_sensitive=False)()
 
+        if self.handler and hasattr(self.handler, "on_new_message"):
+            await self.handler.on_new_message(
+                {
+                    "id": message.id,
+                    "text": message.text,
+                    "actor": message.actor,
+                    "internal_data": message.internal_data,
+                    "created_at": str(message.created_at),
+                    "artifacts": getattr(message, "message_artifacts", []),
+                },
+                task_id=self.task.id,
+            )
+
         # Clear transient stream state now that durable message persistence is complete.
         self.task.current_response = None
         self.task.streamed_markdown = ""
 
         # Trigger title generation asynchronously when the thread still has its default title.
         await self._enqueue_thread_title_generation()
-
-    async def _persist_native_provider_artifacts(self, message: Message, native_result: dict) -> None:
-        source_artifact_ids = list(native_result.get("source_artifact_ids") or [])
-        source_artifacts = {}
-        if source_artifact_ids:
-            def _load_source_artifacts():
-                return {
-                    artifact.id: artifact
-                    for artifact in MessageArtifact.objects.filter(id__in=source_artifact_ids)
-                }
-
-            source_artifacts = await sync_to_async(_load_source_artifacts, thread_sensitive=True)()
-
-        annotations = native_result.get("annotations") or []
-        if annotations:
-            first_source = source_artifacts.get(source_artifact_ids[0]) if source_artifact_ids else None
-            await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
-                user=self.user,
-                thread=self.thread,
-                message=message,
-                direction=ArtifactDirection.DERIVED,
-                kind=ArtifactKind.ANNOTATION,
-                label="PDF annotations",
-                summary_text=json.dumps(annotations, ensure_ascii=True),
-                search_text=json.dumps(annotations, ensure_ascii=True),
-                provider_type=getattr(self.agent_config.llm_provider, "provider_type", ""),
-                model=getattr(self.agent_config.llm_provider, "model", ""),
-                provider_fingerprint=getattr(self.agent_config.llm_provider, "compute_validation_fingerprint", lambda: "")(),
-                source_artifact=first_source,
-                metadata={"annotations": annotations},
-            )
 
     async def _sync_native_provider_checkpoint(self, native_result: dict, final_answer: str) -> None:
         if not self.llm or not getattr(self.llm, "langchain_agent", None):

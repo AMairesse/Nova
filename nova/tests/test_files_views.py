@@ -219,3 +219,31 @@ class FilesViewsTests(TestCase):
         payload = response.json()
         self.assertFalse(payload["success"])
         self.assertIn("cannot publish", payload["error"])
+
+    @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/artifact")
+    def test_artifact_content_redirects_for_binary_artifact(self, mocked_get_url):
+        user_file = self._create_user_file(name="clip.mp3")
+        artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.thread.add_message("audio", actor=Actor.AGENT),
+            user_file=user_file,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.AUDIO,
+            label="clip.mp3",
+            mime_type="audio/mpeg",
+        )
+
+        response = self.client.get(reverse("artifact_content", args=[artifact.id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "https://download.test/artifact")
+        mocked_get_url.assert_called_once_with(expires_in=3600)
+
+    def test_artifact_content_returns_summary_text_when_no_binary_exists(self):
+        artifact = self._create_artifact()
+
+        response = self.client.get(reverse("artifact_content", args=[artifact.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode("utf-8"), "Generated notes")

@@ -57,11 +57,18 @@ def _dedupe_tool_names(tools: list[StructuredTool]) -> list[StructuredTool]:
     return tools
 
 
-async def load_tools(agent) -> List[StructuredTool]:
+async def load_tools(agent, *, enabled: bool = True) -> List[StructuredTool]:
     """
     Load and initialize tools associated with the agent.
     Returns a list of Langchain-ready tools.
     """
+    if not enabled:
+        agent._loaded_builtin_modules = []
+        agent.tool_prompt_hints = []
+        agent.skill_catalog = {}
+        agent.skill_control_tool_names = []
+        return []
+
     tools = []
     loaded_builtin_modules = []
     collected_prompt_hints: list[str] = []

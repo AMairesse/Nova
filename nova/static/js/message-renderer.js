@@ -76,6 +76,67 @@
             `;
         }
 
+        static renderInlineArtifact(attachment) {
+            const contentUrl = `${attachment?.content_url || attachment?.preview_url || ''}`.trim();
+            const label = window.DOMUtils.escapeHTML(attachment?.label || attachment?.filename || attachment?.kind || 'artifact');
+            const kind = `${attachment?.kind || ''}`.trim();
+            if (!contentUrl) {
+                return '';
+            }
+
+            if (kind === 'image') {
+                return `
+                    <div class="artifact-inline-card artifact-inline-card-image">
+                        <img src="${window.DOMUtils.escapeHTML(contentUrl)}" alt="${label}" class="artifact-inline-image img-fluid rounded border">
+                    </div>
+                `;
+            }
+
+            if (kind === 'audio') {
+                return `
+                    <div class="artifact-inline-card artifact-inline-card-audio">
+                        <div class="small fw-semibold mb-2">${label}</div>
+                        <audio controls preload="metadata" class="w-100" src="${window.DOMUtils.escapeHTML(contentUrl)}"></audio>
+                    </div>
+                `;
+            }
+
+            if (kind === 'pdf') {
+                return `
+                    <div class="artifact-inline-card artifact-inline-card-pdf">
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                            <div class="d-flex align-items-center gap-2">
+                                <i class="bi bi-file-earmark-pdf fs-4 text-danger"></i>
+                                <div>
+                                    <div class="fw-semibold">${label}</div>
+                                    <div class="small text-muted">${this.t('PDF document')}</div>
+                                </div>
+                            </div>
+                            <a href="${window.DOMUtils.escapeHTML(contentUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary">
+                                ${this.t('Open')}
+                            </a>
+                        </div>
+                    </div>
+                `;
+            }
+
+            return '';
+        }
+
+        static renderInlineArtifacts(attachments, { withTopMargin = false } = {}) {
+            const items = attachments
+                .map((attachment) => this.renderInlineArtifact(attachment))
+                .filter(Boolean);
+            if (!items.length) {
+                return '';
+            }
+            return `
+                <div class="${withTopMargin ? 'mt-3 ' : ''}artifact-inline-list">
+                    ${items.join('')}
+                </div>
+            `;
+        }
+
         static createMessageElement(messageData, thread_id) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message mb-3';
@@ -90,6 +151,7 @@
                 const textHtml = messageData.text
                     ? `<div class="user-message-text text-primary">${this.renderUserText(messageData.text)}</div>`
                     : '';
+                const inlineArtifactsHtml = this.renderInlineArtifacts(attachments, { withTopMargin: Boolean(messageData.text) });
                 const attachmentSummaryHtml = attachments.length
                     ? `
               <div class="${messageData.text ? 'mt-2 ' : ''}small text-muted">${attachments.length} artifact(s) attached</div>
@@ -97,16 +159,18 @@
               `
                     : '';
                 messageDiv.innerHTML = `
-          <div class="card border-primary">
+            <div class="card border-primary">
             <div class="card-body py-2">
               ${textHtml}
+              ${inlineArtifactsHtml}
               ${attachmentSummaryHtml}
               ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
             </div>
           </div>
         `;
-            } else if (messageData.actor === 'agent') {
+            } else if (messageData.actor === 'agent' || messageData.actor === 'AGT') {
                 const attachments = this.getMessageAttachments(messageData);
+                const inlineArtifactsHtml = this.renderInlineArtifacts(attachments, { withTopMargin: true });
                 const attachmentSummaryHtml = this.renderArtifactSummary(attachments, { withTopMargin: true });
                 const compactLinkHtml = isContinuousPage ? '' : `
               <a href="#" class="compact-thread-link text-decoration-none small me-2 d-none" title="${gettext('Summarize conversation to save context space')}">
@@ -118,6 +182,7 @@
           <div class="card border-secondary">
             <div class="card-body py-2">
               <div class="streaming-content assistant-markdown">${window.DOMUtils.escapeHTML(messageData.text)}</div>
+              ${inlineArtifactsHtml}
               ${attachmentSummaryHtml}
             </div>
             <div class="card-footer py-1 text-muted small d-flex justify-content-end align-items-center d-none">

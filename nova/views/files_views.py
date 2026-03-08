@@ -2,7 +2,7 @@ import asyncio
 from channels.layers import get_channel_layer
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse, HttpResponseRedirect
 from django.shortcuts import render, get_object_or_404
 from django.views import View
 from django.views.decorators.http import require_POST, require_GET
@@ -191,3 +191,31 @@ async def artifact_publish(request, artifact_id):
             'thread_id': artifact.thread_id,
         }
     )
+
+
+@csrf_protect
+@require_GET
+@login_required(login_url='login')
+def artifact_content(request, artifact_id):
+    artifact = get_object_or_404(
+        MessageArtifact.objects.select_related("user_file"),
+        id=artifact_id,
+        user=request.user,
+    )
+
+    if artifact.user_file_id:
+        try:
+            url = artifact.user_file.get_download_url(expires_in=3600)
+        except ValueError as exc:
+            return JsonResponse({'error': str(exc)}, status=410)
+        if not url:
+            return JsonResponse({'error': 'Failed to generate URL'}, status=500)
+        return HttpResponseRedirect(url)
+
+    if artifact.summary_text:
+        return HttpResponse(
+            artifact.summary_text,
+            content_type=artifact.mime_type or "text/plain; charset=utf-8",
+        )
+
+    return JsonResponse({'error': 'Artifact has no downloadable content'}, status=404)

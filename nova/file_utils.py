@@ -107,6 +107,11 @@ def build_message_attachment_path(message_id: int, filename: str) -> str:
     return f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_{int(message_id)}/{safe_name}"
 
 
+def build_message_artifact_output_path(message_id: int, filename: str) -> str:
+    safe_name = posixpath.basename(sanitize_user_path(filename or "artifact").rstrip("/")) or "artifact"
+    return f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/generated_{int(message_id)}/{safe_name}"
+
+
 async def auto_rename_path(
     thread: Thread,
     proposed_path: str,
