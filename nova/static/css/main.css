@@ -702,6 +702,33 @@ body {
     margin-top: 0.25rem;
 }
 
+.artifact-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.artifact-summary-state,
+.artifact-publish-btn {
+    font-size: 0.78rem;
+    line-height: 1.2;
+}
+
+.artifact-publish-btn {
+    text-decoration: none;
+}
+
+.artifact-publish-btn:hover,
+.artifact-publish-btn:focus {
+    text-decoration: underline;
+}
+
+.message .card.border-primary .artifact-publish-btn,
+.message .card.border-primary .artifact-summary-state {
+    color: rgba(255, 255, 255, 0.88) !important;
+}
+
 /* Progress Indicators */
 #progress-logs {
     transition: opacity 0.3s ease;

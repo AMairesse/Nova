@@ -3,6 +3,9 @@ from __future__ import annotations
 import posixpath
 from typing import Any, Iterable
 
+from asgiref.sync import sync_to_async
+
+from nova.file_utils import batch_upload_files, download_file_content
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.UserFile import UserFile
 
@@ -95,3 +98,36 @@ def filter_image_attachment_manifests(artifacts: Iterable[dict[str, Any]]) -> li
         for artifact in artifacts
         if str(artifact.get("kind") or "").strip() == ArtifactKind.IMAGE
     ]
+
+
+async def publish_artifact_to_files(
+    artifact: MessageArtifact,
+    *,
+    filename: str = "",
+) -> tuple[int | None, list[str]]:
+    target_name = (filename or "").strip() or artifact.filename
+
+    if artifact.user_file_id:
+        content = await download_file_content(artifact.user_file)
+    elif artifact.summary_text:
+        content = artifact.summary_text.encode("utf-8")
+        if not target_name.endswith(".txt"):
+            target_name = f"{target_name}.txt"
+    else:
+        return None, ["Artifact cannot be published because it has no binary or text content."]
+
+    created, errors = await batch_upload_files(
+        artifact.thread,
+        artifact.user,
+        [{"path": f"/generated/{posixpath.basename(target_name)}", "content": content}],
+        scope=UserFile.Scope.THREAD_SHARED,
+    )
+    if errors and not created:
+        return None, errors
+    if not created:
+        return None, ["Artifact publish did not create a file."]
+
+    artifact.published_to_file = True
+    await sync_to_async(artifact.save, thread_sensitive=True)(update_fields=["published_to_file", "updated_at"])
+    file_id = created[0].get("id") if created else None
+    return file_id, errors

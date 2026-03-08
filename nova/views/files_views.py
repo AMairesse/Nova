@@ -10,6 +10,8 @@ from django.views.decorators.csrf import csrf_protect
 from asgiref.sync import sync_to_async, async_to_sync
 import logging
 
+from nova.message_artifacts import publish_artifact_to_files
+from nova.models.MessageArtifact import MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.file_utils import (
@@ -148,3 +150,44 @@ class FileDeleteView(LoginRequiredMixin, View):
         if file.scope == UserFile.Scope.THREAD_SHARED:
             async_to_sync(publish_file_update)(thread_id, "file_delete")
         return JsonResponse({'success': True})
+
+
+@csrf_protect
+@require_POST
+@login_required(login_url='login')
+async def artifact_publish(request, artifact_id):
+    def _get_artifact():
+        return (
+            MessageArtifact.objects.select_related("thread", "message", "user_file")
+            .filter(id=artifact_id, user=request.user)
+            .first()
+        )
+
+    artifact = await sync_to_async(_get_artifact, thread_sensitive=True)()
+    if not artifact:
+        return JsonResponse({'error': 'Artifact not found or unauthorized'}, status=403)
+
+    if artifact.published_to_file:
+        return JsonResponse(
+            {
+                'success': True,
+                'artifact_id': artifact.id,
+                'thread_id': artifact.thread_id,
+                'already_published': True,
+            }
+        )
+
+    filename = (request.POST.get('filename') or '').strip()
+    file_id, errors = await publish_artifact_to_files(artifact, filename=filename)
+    if errors and not file_id:
+        return JsonResponse({'success': False, 'error': '; '.join(errors)}, status=400)
+
+    await publish_file_update(artifact.thread_id, "artifact_publish")
+    return JsonResponse(
+        {
+            'success': True,
+            'artifact_id': artifact.id,
+            'file_id': file_id,
+            'thread_id': artifact.thread_id,
+        }
+    )

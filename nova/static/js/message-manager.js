@@ -129,6 +129,13 @@
                     const button = target.closest('.composer-attachment-remove');
                     this.removeComposerAttachment(button?.dataset.attachmentId || '');
                 },
+                '.artifact-publish-btn': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.artifact-publish-btn');
+                    if (button) {
+                        void this.publishArtifact(button);
+                    }
+                },
                 '.compact-thread-link': (e, target) => {
                     e.preventDefault();
                     this.summarizeCurrentThread();
@@ -709,6 +716,63 @@
             if (kind === 'pdf') return gettext('PDF');
             if (kind === 'audio') return gettext('audio');
             return gettext('image');
+        }
+
+        async publishArtifact(button) {
+            const artifactId = `${button?.dataset?.artifactId || ''}`.trim();
+            const urlTemplate = window.NovaApp?.urls?.artifactPublish;
+            if (!artifactId || !urlTemplate) {
+                this.showToast(gettext('Artifact publishing is not configured on this page.'), 'warning');
+                return;
+            }
+            if (button.disabled) return;
+
+            const originalHtml = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = gettext('Adding…');
+
+            try {
+                const response = await window.DOMUtils.csrfFetch(
+                    urlTemplate.replace('0', artifactId),
+                    { method: 'POST' }
+                );
+                const isJsonResponse = (response.headers.get('content-type') || '').includes('application/json');
+                const data = isJsonResponse ? await response.json() : null;
+                if (!response.ok || !data?.success) {
+                    throw new Error(data?.error || data?.message || `Request failed (${response.status})`);
+                }
+
+                this.markArtifactAsPublished(button);
+                this.showToast(
+                    data?.already_published
+                        ? gettext('Artifact was already available in Files.')
+                        : gettext('Artifact added to Files.'),
+                    'success'
+                );
+
+                document.dispatchEvent(
+                    new CustomEvent('threadChanged', {
+                        detail: { threadId: data?.thread_id || this.currentThreadId || null }
+                    })
+                );
+            } catch (error) {
+                console.error('Error publishing artifact:', error);
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+                this.showToast(error?.message || gettext('Failed to add artifact to Files.'), 'danger');
+            }
+        }
+
+        markArtifactAsPublished(button) {
+            const item = button.closest('.artifact-summary-item');
+            if (item) {
+                item.dataset.publishedToFile = 'true';
+            }
+
+            const state = document.createElement('span');
+            state.className = 'artifact-summary-state text-success small';
+            state.textContent = gettext('Added to Files');
+            button.replaceWith(state);
         }
 
         appendMessage(messageElement) {

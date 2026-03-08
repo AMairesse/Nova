@@ -6,6 +6,10 @@
     // MESSAGE RENDERER
     // ============================================================================
     window.MessageRenderer = class MessageRenderer {
+        static t(message) {
+            return (window.gettext && typeof window.gettext === 'function') ? window.gettext(message) : message;
+        }
+
         static renderUserText(text) {
             return window.DOMUtils.escapeHTML(text || '').replace(/\r\n|\r|\n/g, '<br>');
         }
@@ -26,6 +30,52 @@
             return [];
         }
 
+        static isPublishableArtifact(attachment) {
+            const metadata = attachment?.metadata || {};
+            const hasContent = Boolean(attachment?.user_file_id || `${attachment?.summary_text || ''}`.trim());
+            return Boolean(attachment?.id) && !attachment?.published_to_file && !metadata.legacy && hasContent;
+        }
+
+        static renderArtifactSummaryItem(attachment) {
+            const label = window.DOMUtils.escapeHTML(attachment?.label || attachment?.filename || attachment?.kind || 'artifact');
+            const kind = `${attachment?.kind || ''}`.trim();
+            const kindSuffix = kind ? ` · ${window.DOMUtils.escapeHTML(kind)}` : '';
+            const published = Boolean(attachment?.published_to_file);
+            const publishedStateHtml = published
+                ? `<span class="artifact-summary-state text-success small">${this.t('Added to Files')}</span>`
+                : '';
+            const publishButtonHtml = (!published && this.isPublishableArtifact(attachment))
+                ? `
+                <button
+                    type="button"
+                    class="btn btn-link btn-sm p-0 artifact-publish-btn"
+                    data-artifact-id="${attachment.id}"
+                    aria-label="${this.t('Add artifact to Files')}"
+                >
+                    ${this.t('Add to Files')}
+                </button>
+                `
+                : '';
+
+            return `
+                <div class="artifact-summary-item" data-artifact-id="${attachment?.id || ''}" data-published-to-file="${published ? 'true' : 'false'}">
+                    <span class="badge rounded-pill text-bg-light border me-1 mb-1">${label}${kindSuffix}</span>
+                    ${publishedStateHtml || publishButtonHtml}
+                </div>
+            `;
+        }
+
+        static renderArtifactSummary(attachments, { withTopMargin = false } = {}) {
+            if (!attachments.length) {
+                return '';
+            }
+            return `
+              <div class="${withTopMargin ? 'mt-3 ' : ''}composer-attachment-summary">
+                ${attachments.map((attachment) => this.renderArtifactSummaryItem(attachment)).join('')}
+              </div>
+            `;
+        }
+
         static createMessageElement(messageData, thread_id) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message mb-3';
@@ -43,9 +93,7 @@
                 const attachmentSummaryHtml = attachments.length
                     ? `
               <div class="${messageData.text ? 'mt-2 ' : ''}small text-muted">${attachments.length} artifact(s) attached</div>
-              <div class="composer-attachment-summary">
-                ${attachments.map((attachment) => `<span class="badge rounded-pill text-bg-light border me-1 mb-1">${window.DOMUtils.escapeHTML(attachment.label || attachment.filename || attachment.kind || 'artifact')}${attachment.kind ? ` · ${window.DOMUtils.escapeHTML(attachment.kind)}` : ''}</span>`).join('')}
-              </div>
+              ${this.renderArtifactSummary(attachments)}
               `
                     : '';
                 messageDiv.innerHTML = `
@@ -59,13 +107,7 @@
         `;
             } else if (messageData.actor === 'agent') {
                 const attachments = this.getMessageAttachments(messageData);
-                const attachmentSummaryHtml = attachments.length
-                    ? `
-              <div class="mt-3 composer-attachment-summary">
-                ${attachments.map((attachment) => `<span class="badge rounded-pill text-bg-light border me-1 mb-1">${window.DOMUtils.escapeHTML(attachment.label || attachment.filename || attachment.kind || 'artifact')}${attachment.kind ? ` · ${window.DOMUtils.escapeHTML(attachment.kind)}` : ''}</span>`).join('')}
-              </div>
-              `
-                    : '';
+                const attachmentSummaryHtml = this.renderArtifactSummary(attachments, { withTopMargin: true });
                 const compactLinkHtml = isContinuousPage ? '' : `
               <a href="#" class="compact-thread-link text-decoration-none small me-2 d-none" title="${gettext('Summarize conversation to save context space')}">
                 <i class="bi bi-compress me-1"></i>${gettext('Compact')}

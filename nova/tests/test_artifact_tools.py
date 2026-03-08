@@ -55,12 +55,10 @@ class ArtifactToolsTests(BaseTestCase):
         self.assertEqual(payload["kind"], ArtifactKind.IMAGE)
 
     @patch("nova.tools.artifacts.publish_file_update", new_callable=AsyncMock)
-    @patch("nova.tools.artifacts.batch_upload_files", new_callable=AsyncMock)
-    @patch("nova.tools.artifacts.download_file_content", new_callable=AsyncMock)
+    @patch("nova.tools.artifacts.publish_artifact_to_files", new_callable=AsyncMock)
     def test_artifact_publish_to_files_copies_binary_artifact(
         self,
-        mocked_download,
-        mocked_batch_upload,
+        mocked_publish_artifact,
         mocked_publish_update,
     ):
         user_file = UserFile.objects.create(
@@ -83,12 +81,10 @@ class ArtifactToolsTests(BaseTestCase):
             label="report.pdf",
             mime_type="application/pdf",
         )
-        mocked_download.return_value = b"%PDF-1.4"
-        mocked_batch_upload.return_value = ([{"id": 99}], [])
+        mocked_publish_artifact.return_value = (99, [])
 
         result = async_to_sync(artifact_publish_to_files)(self.agent, artifact.id)
 
-        artifact.refresh_from_db()
-        self.assertTrue(artifact.published_to_file)
         self.assertIn("file ID 99", result)
+        mocked_publish_artifact.assert_awaited_once()
         mocked_publish_update.assert_awaited_once()

@@ -6,6 +6,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
+from nova.models.Message import Actor
+from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tests.factories import create_user
@@ -29,6 +31,21 @@ class FilesViewsTests(TestCase):
             original_filename=name,
             mime_type="text/plain",
             size=12,
+        )
+
+    def _create_artifact(self, *, user=None, thread: Thread | None = None, published: bool = False) -> MessageArtifact:
+        owner = user or self.user
+        thread = thread or self.thread
+        message = thread.add_message("artifact source", actor=Actor.USER)
+        return MessageArtifact.objects.create(
+            user=owner,
+            thread=thread,
+            message=message,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.TEXT,
+            label="notes.txt",
+            summary_text="Generated notes",
+            published_to_file=published,
         )
 
     def test_file_list_returns_403_for_missing_or_unauthorized_thread(self):
@@ -160,3 +177,45 @@ class FilesViewsTests(TestCase):
         self.assertFalse(UserFile.objects.filter(id=user_file.id).exists())
         mocked_s3.delete_object.assert_called_once()
         mocked_runner.assert_called_once_with(self.thread.id, "file_delete")
+
+    def test_artifact_publish_returns_403_when_not_found(self):
+        response = self.client.post(reverse("artifact_publish", args=[999999]))
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("error", response.json())
+
+    @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
+    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
+    def test_artifact_publish_success(self, mocked_publish_artifact, mocked_publish_update):
+        artifact = self._create_artifact()
+        mocked_publish_artifact.return_value = (44, [])
+
+        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["file_id"], 44)
+        mocked_publish_artifact.assert_awaited_once()
+        mocked_publish_update.assert_awaited_once_with(self.thread.id, "artifact_publish")
+
+    def test_artifact_publish_short_circuits_when_already_published(self):
+        artifact = self._create_artifact(published=True)
+
+        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["already_published"])
+
+    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
+    def test_artifact_publish_returns_400_on_publish_error(self, mocked_publish_artifact):
+        artifact = self._create_artifact()
+        mocked_publish_artifact.return_value = (None, ["cannot publish"])
+
+        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertFalse(payload["success"])
+        self.assertIn("cannot publish", payload["error"])

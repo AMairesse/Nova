@@ -171,7 +171,7 @@ def annotate_user_message(message) -> None:
                 "summary_text": "",
                 "size": int(attachment.get("size") or 0),
                 "published_to_file": False,
-                "metadata": {"scope": attachment.get("scope") or ""},
+                "metadata": {"scope": attachment.get("scope") or "", "legacy": True},
             }
             for attachment in legacy_attachments
         ]

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import logging
-import posixpath
 from typing import Any, Tuple
 
 from asgiref.sync import sync_to_async
 from langchain_core.tools import StructuredTool
 
-from nova.file_utils import batch_upload_files, download_file_content
-from nova.message_artifacts import build_message_artifact_manifest
+from nova.message_artifacts import (
+    build_message_artifact_manifest,
+    publish_artifact_to_files,
+)
 from nova.models.MessageArtifact import ArtifactKind, MessageArtifact
 from nova.models.UserFile import UserFile
 from nova.realtime.sidebar_updates import publish_file_update
@@ -149,33 +150,11 @@ async def artifact_attach(agent, artifact_id: int) -> Tuple[str, Any]:
 
 async def artifact_publish_to_files(agent, artifact_id: int, filename: str = "") -> str:
     artifact = await _load_thread_artifact(agent, artifact_id)
-    target_name = (filename or "").strip()
-    if not target_name:
-        target_name = artifact.filename
-
-    if artifact.user_file_id:
-        content = await download_file_content(artifact.user_file)
-    elif artifact.summary_text:
-        content = artifact.summary_text.encode("utf-8")
-        if not target_name.endswith(".txt"):
-            target_name = f"{target_name}.txt"
-    else:
-        return "Artifact cannot be published because it has no binary or text content."
-
-    created, errors = await batch_upload_files(
-        agent.thread,
-        agent.user,
-        [{"path": f"/generated/{posixpath.basename(target_name)}", "content": content}],
-        scope=UserFile.Scope.THREAD_SHARED,
-    )
-    if errors and not created:
+    file_id, errors = await publish_artifact_to_files(artifact, filename=filename)
+    if errors and not file_id:
         return f"Failed to publish artifact: {'; '.join(errors)}"
 
-    artifact.published_to_file = True
-    await sync_to_async(artifact.save, thread_sensitive=True)(update_fields=["published_to_file", "updated_at"])
-
     await publish_file_update(agent.thread.id, "artifact_publish")
-    file_id = created[0].get("id") if created else None
     return f"Artifact published to Files as file ID {file_id}."
 
 

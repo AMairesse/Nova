@@ -25,6 +25,7 @@
         fileList: root.dataset.urlFileList,
         fileUpload: root.dataset.urlFileUpload,
         fileDelete: root.dataset.urlFileDelete,
+        artifactPublish: root.dataset.urlArtifactPublish,
         interactionAnswer: root.dataset.urlInteractionAnswer,
         interactionCancel: root.dataset.urlInteractionCancel,
     };
