@@ -79,6 +79,7 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
             self.fields["api_key"].required = (
                 get_provider_defaults(ptype_current).api_key_required and not bool(existing_api_key)
             )
+        self.fields["model"].required = False
 
     # ------------------------------------------------------------------ #
     #  Validation helpers                                                 #
@@ -97,6 +98,19 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
         if data is not None and data < 512:
             raise forms.ValidationError(
                 _("Max context tokens must be at least 512.")
+            )
+        return data
+
+    def clean_model(self) -> str:
+        return str(self.cleaned_data.get("model") or "").strip()
+
+    def clean(self):
+        data = super().clean()
+        model = str(data.get("model") or "").strip()
+        if not model and self.instance.pk and self.instance.AgentsConfig.exists():
+            self.add_error(
+                "model",
+                _("A model is still required because this provider is currently used by one or more agents."),
             )
         return data
 
@@ -148,7 +162,7 @@ class AgentForm(forms.ModelForm):
         if user:
             self.fields["llm_provider"].queryset = LLMProvider.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
-            )
+            ).exclude(model="")
             self.fields["tools"].queryset = Tool.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             )

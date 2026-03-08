@@ -188,3 +188,128 @@ class ProviderViewsTests(TestCase):
         provider.refresh_from_db()
         self.assertEqual(provider.capability_snapshot["input_modalities"]["pdf"], "pass")
         self.assertIsNotNone(provider.capability_refreshed_at)
+
+    def test_save_without_model_creates_connection_only_provider(self):
+        response = self.client.post(
+            reverse("user_settings:provider-add"),
+            data=self._payload(model=""),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        provider = LLMProvider.objects.get(user=self.user, name="Vision Provider")
+        self.assertEqual(provider.model, "")
+
+        list_response = self.client.get(reverse("user_settings:providers"))
+        self.assertContains(list_response, "Connection only")
+
+    def test_edit_page_for_catalog_provider_exposes_model_catalog_controls(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenRouter Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+
+        response = self.client.get(reverse("user_settings:provider-edit", args=[provider.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="load-provider-models-btn"')
+        self.assertContains(response, 'data-model-catalog-url=')
+        self.assertContains(response, "Save connection")
+        self.assertRegex(
+            response.content.decode(),
+            r'id="test-provider-btn"[^>]*disabled',
+        )
+
+    @patch("user_settings.views.provider.validate_provider_configuration_task.apply_async")
+    def test_test_provider_requires_selected_model(self, mocked_apply_async):
+        response = self.client.post(
+            reverse("user_settings:provider-add"),
+            data=self._payload(model="", action="test_provider"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertIn("model", form.errors)
+        mocked_apply_async.assert_not_called()
+
+    @patch("user_settings.views.provider.resolve_provider_capability_snapshot", new_callable=AsyncMock)
+    def test_refresh_capabilities_requires_selected_model(self, mocked_resolve_snapshot):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Capability Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+
+        response = self.client.post(
+            reverse("user_settings:provider-edit", args=[provider.pk]),
+            data=self._payload(
+                name=provider.name,
+                provider_type=ProviderType.OPENROUTER,
+                model="",
+                action="refresh_capabilities",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertIn("model", form.errors)
+        mocked_resolve_snapshot.assert_not_awaited()
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_provider_model_catalog_endpoint_returns_catalog(self, mocked_list_models):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenRouter Provider",
+            provider_type=ProviderType.OPENROUTER,
+            model="",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+        mocked_list_models.return_value = [
+            {
+                "id": "openai/gpt-4.1-mini",
+                "label": "GPT-4.1 Mini",
+                "description": "Fast",
+                "context_length": 128000,
+                "suggested_max_context_tokens": 128000,
+                "input_modalities": {"text": "pass", "image": "pass"},
+                "output_modalities": {"text": "pass"},
+                "operations": {"chat": "pass", "tools": "pass"},
+                "pricing": {"prompt": "0.10"},
+                "state": {},
+                "provider_metadata": {},
+            }
+        ]
+
+        response = self.client.get(
+            reverse("user_settings:provider-model-catalog", args=[provider.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["provider_id"], provider.pk)
+        self.assertEqual(payload["selected_model"], "")
+        self.assertEqual(payload["models"][0]["id"], "openai/gpt-4.1-mini")
+        mocked_list_models.assert_awaited_once()
+
+    def test_provider_model_catalog_endpoint_rejects_manual_provider_types(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+
+        response = self.client.get(
+            reverse("user_settings:provider-model-catalog", args=[provider.pk])
+        )
+
+        self.assertEqual(response.status_code, 400)

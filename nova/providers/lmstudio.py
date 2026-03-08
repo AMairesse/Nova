@@ -16,6 +16,14 @@ from nova.providers.openai_compatible import (
 LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1"
 
 
+def _status_from_optional_bool(value: bool | None) -> str:
+    if value is True:
+        return "pass"
+    if value is False:
+        return "unsupported"
+    return "unknown"
+
+
 def get_lmstudio_base_url(base_url: str | None) -> str:
     return (base_url or LMSTUDIO_DEFAULT_BASE_URL).rstrip("/")
 
@@ -102,6 +110,7 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
                 default_base_url=LMSTUDIO_DEFAULT_BASE_URL,
                 default_max_context_tokens=4_096,
                 api_key_required=False,
+                supports_model_catalog=True,
             )
         )
 
@@ -117,16 +126,68 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
 
     async def list_models(self, provider) -> list[dict]:
         models = await fetch_lmstudio_models(provider.base_url)
-        return [
-            {
-                "id": item.get("id") or item.get("model_key") or "",
-                "label": item.get("id") or item.get("model_key") or "",
-                "context_length": item.get("max_context_length"),
-                "loaded": bool(item.get("loaded_instances")),
-            }
-            for item in models
-            if item.get("id") or item.get("model_key")
-        ]
+        items = []
+        for item in models:
+            model_id = item.get("id") or item.get("model_key") or ""
+            if not model_id:
+                continue
+
+            capabilities = item.get("capabilities") or {}
+            vision = capabilities.get("vision")
+            tool_use = capabilities.get("trained_for_tool_use")
+            loaded_instances = item.get("loaded_instances")
+            loaded = bool(loaded_instances) if isinstance(loaded_instances, list) else None
+            context_length = item.get("max_context_length")
+
+            items.append(
+                {
+                    "id": model_id,
+                    "label": item.get("display_name") or model_id,
+                    "description": item.get("description") or "",
+                    "context_length": context_length,
+                    "suggested_max_context_tokens": context_length,
+                    "input_modalities": {
+                        "text": "pass",
+                        "image": _status_from_optional_bool(vision if isinstance(vision, bool) else None),
+                        "pdf": "unknown",
+                        "audio": "unknown",
+                    },
+                    "output_modalities": {
+                        "text": "pass",
+                        "image": "unknown",
+                        "audio": "unknown",
+                    },
+                    "operations": {
+                        "chat": "pass",
+                        "streaming": "pass",
+                        "tools": _status_from_optional_bool(tool_use if isinstance(tool_use, bool) else None),
+                        "structured_output": "unknown",
+                        "reasoning": "unknown",
+                        "image_generation": "unknown",
+                        "audio_generation": "unknown",
+                    },
+                    "pricing": {},
+                    "state": {
+                        "loaded": loaded,
+                        "loaded_instances": loaded_instances if isinstance(loaded_instances, list) else [],
+                    },
+                    "provider_metadata": {
+                        "model_key": item.get("model_key") or "",
+                        "publisher": item.get("publisher") or "",
+                        "arch": item.get("arch") or "",
+                        "format": item.get("format") or "",
+                        "params_string": item.get("params_string") or "",
+                    },
+                }
+            )
+
+        items.sort(
+            key=lambda item: (
+                0 if item.get("state", {}).get("loaded") else 1,
+                str(item.get("label") or "").lower(),
+            )
+        )
+        return items
 
     async def resolve_capability_snapshot(self, provider) -> dict:
         models = await fetch_lmstudio_models(provider.base_url)

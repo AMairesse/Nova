@@ -17,7 +17,12 @@ from django.views.decorators.http import require_GET
 from django.views.generic import ListView
 
 from nova.models.Provider import LLMProvider, check_and_create_system_provider
-from nova.providers import get_provider_defaults_map, resolve_provider_capability_snapshot
+from nova.providers import (
+    get_provider_defaults,
+    get_provider_defaults_map,
+    list_provider_models,
+    resolve_provider_capability_snapshot,
+)
 from nova.tasks.provider_validation_tasks import validate_provider_configuration_task
 from user_settings.forms import LLMProviderForm
 from user_settings.mixins import (
@@ -66,6 +71,11 @@ class ProviderValidationActionMixin:
                 "user_settings:provider-validation-status",
                 args=[provider.pk],
             )
+            if get_provider_defaults(provider).supports_model_catalog:
+                context["provider_model_catalog_url"] = reverse(
+                    "user_settings:provider-model-catalog",
+                    args=[provider.pk],
+                )
         return context
 
     def _build_edit_url(self, provider: LLMProvider) -> str:
@@ -79,6 +89,10 @@ class ProviderValidationActionMixin:
         self.object = self.get_object() if "pk" in self.kwargs else None
         form = self.get_form()
         if not form.is_valid():
+            return self.form_invalid(form)
+
+        if not (form.cleaned_data.get("model") or "").strip():
+            form.add_error("model", _("Select or enter a model before testing this provider."))
             return self.form_invalid(form)
 
         provider = form.save(commit=False)
@@ -140,6 +154,10 @@ class ProviderValidationActionMixin:
         self.object = self.get_object() if "pk" in self.kwargs else None
         form = self.get_form()
         if not form.is_valid():
+            return self.form_invalid(form)
+
+        if not (form.cleaned_data.get("model") or "").strip():
+            form.add_error("model", _("Select or enter a model before refreshing capabilities."))
             return self.form_invalid(form)
 
         provider = form.save(commit=False)
@@ -214,3 +232,29 @@ class ProviderDeleteView(  # type: ignore[misc]
 def provider_validation_status(request, pk: int):
     provider = get_object_or_404(LLMProvider, pk=pk, user=request.user)
     return JsonResponse(provider.build_validation_status_payload())
+
+
+@login_required
+@require_GET
+def provider_model_catalog(request, pk: int):
+    provider = get_object_or_404(LLMProvider, pk=pk, user=request.user)
+    defaults = get_provider_defaults(provider)
+    if not defaults.supports_model_catalog:
+        return JsonResponse(
+            {"error": _("This provider type does not expose a model catalog.")},
+            status=400,
+        )
+
+    try:
+        models_payload = async_to_sync(list_provider_models)(provider)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(
+        {
+            "provider_id": provider.pk,
+            "provider_type": provider.provider_type,
+            "selected_model": provider.model or "",
+            "models": models_payload,
+        }
+    )

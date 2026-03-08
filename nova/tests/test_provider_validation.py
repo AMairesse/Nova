@@ -82,6 +82,12 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["validation_capabilities"]["tools"]["status"], "pass")
         self.assertEqual(result["validation_capabilities"]["vision"]["status"], "pass")
 
+    def test_validate_provider_configuration_requires_model(self):
+        result = async_to_sync(validate_provider_configuration)(self._provider(model=""))
+
+        self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.INVALID)
+        self.assertIn("requires a selected model", result["validation_summary"])
+
     @patch("nova.providers.validation.create_provider_llm", side_effect=RuntimeError("401 Unauthorized"))
     def test_validate_provider_configuration_marks_invalid_when_provider_creation_fails(
         self,

@@ -17,7 +17,13 @@
         <tr>
           <td>{{ provider.name }}</td>
           <td>{{ provider.get_provider_type_display }}</td>
-          <td>{{ provider.model }}</td>
+          <td>
+            {% if provider.has_model_configured %}
+              {{ provider.model }}
+            {% else %}
+              <span class="badge text-bg-secondary">{% trans "Connection only" %}</span>
+            {% endif %}
+          </td>
           <td>
             <span class="badge {{ provider.validation_status_badge_class }}">
               {{ provider.get_validation_status_display }}

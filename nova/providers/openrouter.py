@@ -115,6 +115,111 @@ def _normalize_snapshot_flag(value: bool | None) -> str:
     return "unknown"
 
 
+def _safe_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_openrouter_catalog_item(model_metadata: dict) -> dict:
+    architecture = model_metadata.get("architecture") or {}
+    top_provider = model_metadata.get("top_provider") or {}
+
+    input_modalities_raw = architecture.get("input_modalities")
+    if input_modalities_raw is None:
+        input_modalities_raw = model_metadata.get("input_modalities")
+
+    output_modalities_raw = architecture.get("output_modalities")
+    if output_modalities_raw is None:
+        output_modalities_raw = model_metadata.get("output_modalities")
+
+    supported_parameters_raw = model_metadata.get("supported_parameters")
+
+    input_modalities = {
+        str(modality).strip().lower()
+        for modality in input_modalities_raw or []
+        if modality
+    }
+    output_modalities = {
+        str(modality).strip().lower()
+        for modality in output_modalities_raw or []
+        if modality
+    }
+    supported_parameters = {
+        str(parameter).strip().lower()
+        for parameter in supported_parameters_raw or []
+        if parameter
+    }
+
+    suggested_context = _safe_int(top_provider.get("context_length")) or _safe_int(model_metadata.get("context_length"))
+
+    pricing = model_metadata.get("pricing")
+    if not isinstance(pricing, dict):
+        pricing = {}
+
+    return {
+        "id": model_metadata.get("id") or "",
+        "label": model_metadata.get("name") or model_metadata.get("id") or "",
+        "description": model_metadata.get("description") or "",
+        "context_length": _safe_int(model_metadata.get("context_length")),
+        "suggested_max_context_tokens": suggested_context,
+        "input_modalities": {
+            "text": "pass",
+            "image": _normalize_snapshot_flag("image" in input_modalities if input_modalities else None),
+            "pdf": _normalize_snapshot_flag("pdf" in input_modalities if input_modalities else None),
+            "audio": _normalize_snapshot_flag("audio" in input_modalities if input_modalities else None),
+        },
+        "output_modalities": {
+            "text": "pass",
+            "image": _normalize_snapshot_flag("image" in output_modalities if output_modalities else None),
+            "audio": _normalize_snapshot_flag("audio" in output_modalities if output_modalities else None),
+        },
+        "operations": {
+            "chat": "pass",
+            "streaming": "pass",
+            "tools": _normalize_snapshot_flag(
+                bool(supported_parameters.intersection(OPENROUTER_TOOL_PARAMETERS))
+                if supported_parameters
+                else None
+            ),
+            "structured_output": _normalize_snapshot_flag(
+                bool(supported_parameters.intersection(OPENROUTER_STRUCTURED_OUTPUT_PARAMETERS))
+                if supported_parameters
+                else None
+            ),
+            "reasoning": _normalize_snapshot_flag(
+                "reasoning" in supported_parameters if supported_parameters else None
+            ),
+            "image_generation": _normalize_snapshot_flag(
+                "image" in output_modalities if output_modalities else None
+            ),
+            "audio_generation": _normalize_snapshot_flag(
+                "audio" in output_modalities if output_modalities else None
+            ),
+        },
+        "pricing": {
+            key: pricing.get(key)
+            for key in (
+                "prompt",
+                "completion",
+                "request",
+                "image",
+                "input_cache_read",
+                "input_cache_write",
+                "web_search",
+            )
+            if pricing.get(key) not in {None, ""}
+        },
+        "state": {},
+        "provider_metadata": {
+            "canonical_slug": model_metadata.get("canonical_slug") or "",
+            "architecture": architecture,
+            "top_provider": top_provider,
+        },
+    }
+
+
 def build_openrouter_capability_snapshot(model_metadata: dict) -> dict:
     architecture = model_metadata.get("architecture") or {}
     input_modalities_raw = architecture.get("input_modalities")
@@ -288,6 +393,7 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
                 default_base_url=OPENROUTER_DEFAULT_BASE_URL,
                 default_max_context_tokens=100_000,
                 api_key_required=True,
+                supports_model_catalog=True,
             )
         )
 
@@ -304,11 +410,7 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
     async def list_models(self, provider) -> list[dict]:
         models = await fetch_openrouter_model_catalog(provider.api_key or "", provider.base_url)
         return [
-            {
-                "id": item.get("id") or "",
-                "label": item.get("name") or item.get("id") or "",
-                "context_length": item.get("context_length"),
-            }
+            build_openrouter_catalog_item(item)
             for item in models
             if item.get("id")
         ]

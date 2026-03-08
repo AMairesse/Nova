@@ -8,7 +8,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="container py-4" style="max-width: 640px;">
+<div class="container py-4" style="max-width: 1080px;">
   {% with provider=provider_instance|default:form.instance %}
   {{ provider_defaults_map|json_script:"provider-defaults-data" }}
   <h2 class="mb-3">
@@ -27,19 +27,136 @@
     data-is-new-provider="{% if provider.pk %}0{% else %}1{% endif %}"
     data-validation-status="{{ provider.validation_status|default:'untested' }}"
     data-validation-status-url="{{ provider_validation_status_url|default:'' }}"
+    data-model-catalog-url="{{ provider_model_catalog_url|default:'' }}"
     data-validation-poll-interval-ms="2000"
   >
     {% csrf_token %}
     <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
     <input type="hidden" name="action" id="provider-form-action" value="">
-    {{ form|crispy }}
+    {{ form.non_field_errors }}
+    {{ form.additional_config }}
+
+    <div class="card">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+          <div>
+            <h3 class="h5 mb-1">{% trans "Connection" %}</h3>
+            <p class="text-muted small mb-0">
+              {% trans "Configure the provider type and connection settings first. No network call is made until you save or explicitly load models / validate." %}
+            </p>
+          </div>
+        </div>
+        {{ form.name|as_crispy_field }}
+        {{ form.provider_type|as_crispy_field }}
+        {{ form.api_key|as_crispy_field }}
+        {{ form.base_url|as_crispy_field }}
+      </div>
+    </div>
+
+    <div class="card mt-4" id="provider-model-card">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start gap-3">
+          <div>
+            <h3 class="h5 mb-1">{% trans "Model" %}</h3>
+            <p class="text-muted small mb-0" id="provider-model-card-help">
+              {% trans "Choose a model after the connection is saved. For providers without discovery support, enter the model manually." %}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-outline-secondary btn-sm"
+            id="load-provider-models-btn"
+          >
+            <i class="bi bi-arrow-repeat me-1"></i>{% trans "Load models" %}
+          </button>
+        </div>
+
+        <div id="provider-model-catalog-status" class="small text-muted mt-3"></div>
+
+        <div id="provider-model-catalog-controls" class="mt-3 d-none">
+          <div class="row g-2">
+            <div class="col-md-8">
+              <label class="form-label" for="provider-model-search">{% trans "Search models" %}</label>
+              <input
+                type="text"
+                class="form-control"
+                id="provider-model-search"
+                placeholder="{% trans 'Search by name, capability, provider, or description' %}"
+              >
+            </div>
+            <div class="col-md-4 d-flex align-items-end" id="provider-model-loaded-filter-wrapper">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" value="" id="provider-model-loaded-only">
+                <label class="form-check-label" for="provider-model-loaded-only">
+                  {% trans "Loaded only" %}
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-3" id="provider-model-filter-pills"></div>
+        </div>
+
+        <div id="provider-model-catalog-empty" class="alert alert-light border small mt-3 mb-0">
+          {% trans "Save this connection first, then load the provider model catalog if available." %}
+        </div>
+
+        <div id="provider-model-catalog" class="row g-3 mt-1"></div>
+
+        <div class="mt-4">
+          <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Selected model" %}</div>
+          <div id="provider-selected-model-summary" class="border rounded p-3 bg-light-subtle small text-muted">
+            {% if provider.has_model_configured %}
+              <div class="fw-semibold">{{ provider.model }}</div>
+              <div class="mt-1">{% trans "This provider currently has a selected model." %}</div>
+            {% else %}
+              {% trans "No model selected yet. You can save this provider as a connection only, then choose a model later." %}
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-md-7">
+            {{ form.model|as_crispy_field }}
+            <div class="small text-muted mt-1" id="provider-model-manual-help">
+              {% trans "You can enter a manual model id, or let the catalog fill this field." %}
+            </div>
+          </div>
+          <div class="col-md-5">
+            {{ form.max_context_tokens|as_crispy_field }}
+            <div class="small text-muted mt-1" id="provider-max-context-note">
+              {% if provider.has_model_configured %}
+                {% trans "This value is stored on the provider, but represents the selected model context window." %}
+              {% else %}
+                {% trans "Set this manually for providers without a model catalog, or after selecting a model." %}
+              {% endif %}
+            </div>
+            <button type="button" class="btn btn-link btn-sm p-0 d-none" id="provider-reset-max-context-btn">
+              {% trans "Use suggested value" %}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     {% if provider.pk %}
       <div class="card mt-4">
         <div class="card-body">
-          <div class="d-flex justify-content-between align-items-start gap-3">
+          <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
             <div>
-              <h3 class="h6 mb-1">{% trans "Validation status" %}</h3>
+              <h3 class="h5 mb-1">{% trans "Capabilities & validation" %}</h3>
+              <p class="text-muted small mb-0">
+                {% if provider.has_model_configured %}
+                  {% trans "Refresh the saved snapshot and run active validation for the selected model." %}
+                {% else %}
+                  {% trans "Select a model to refresh capabilities or run active validation." %}
+                {% endif %}
+              </p>
+            </div>
+          </div>
+
+          <div class="row g-4">
+            <div class="col-lg-6">
+              <h4 class="h6 mb-2">{% trans "Validation status" %}</h4>
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <span class="badge {{ provider.validation_status_badge_class }}">
                   {{ provider.get_validation_status_display }}
@@ -52,69 +169,63 @@
                   </span>
                 {% endif %}
               </div>
+
+              {% if provider.validation_summary %}
+                <p class="mt-3 mb-0 small text-muted">{{ provider.validation_summary }}</p>
+              {% elif provider.validation_status == 'untested' %}
+                <p class="mt-3 mb-0 small text-muted">
+                  {% trans "This provider has not been actively validated yet." %}
+                </p>
+              {% endif %}
+
+              {% if provider.validation_status == 'testing' %}
+                <div class="alert alert-info py-2 px-3 small mt-3 mb-0" id="provider-validation-running">
+                  <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                  {% trans "Validation is running in background. You can leave this page and come back later." %}
+                </div>
+              {% endif %}
+
+              {% if provider.validation_status == 'stale' %}
+                <div class="alert alert-warning py-2 px-3 small mt-3 mb-0">
+                  {% trans "The provider configuration changed since the last validation run." %}
+                </div>
+              {% endif %}
+
+              {% if provider.has_validation_snapshot %}
+                <div class="table-responsive mt-3">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>{% trans "Capability" %}</th>
+                        <th>{% trans "Status" %}</th>
+                        <th>{% trans "Details" %}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for capability in provider.validation_capability_items %}
+                        <tr>
+                          <td>{{ capability.label }}</td>
+                          <td>
+                            <span class="badge {{ capability.status_badge_class }}">
+                              {{ capability.status_label }}
+                            </span>
+                          </td>
+                          <td class="small text-muted">
+                            {% if capability.message %}{{ capability.message }}{% endif %}
+                            {% if capability.latency_ms %}
+                              <span class="d-inline-block ms-1">({{ capability.latency_ms }} ms)</span>
+                            {% endif %}
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% endif %}
             </div>
-          </div>
 
-          {% if provider.validation_summary %}
-            <p class="mt-3 mb-0 small text-muted">{{ provider.validation_summary }}</p>
-          {% elif provider.validation_status == 'untested' %}
-            <p class="mt-3 mb-0 small text-muted">
-              {% trans "This provider has not been actively validated yet." %}
-            </p>
-          {% endif %}
-
-          {% if provider.validation_status == 'testing' %}
-            <div class="alert alert-info py-2 px-3 small mt-3 mb-0" id="provider-validation-running">
-              <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-              {% trans "Validation is running in background. You can leave this page and come back later." %}
-            </div>
-          {% endif %}
-
-          {% if provider.validation_status == 'stale' %}
-            <div class="alert alert-warning py-2 px-3 small mt-3 mb-0">
-              {% trans "The provider configuration changed since the last validation run." %}
-            </div>
-          {% endif %}
-
-          {% if provider.has_validation_snapshot %}
-            <div class="table-responsive mt-3">
-              <table class="table table-sm align-middle mb-0">
-                <thead>
-                  <tr>
-                    <th>{% trans "Capability" %}</th>
-                    <th>{% trans "Status" %}</th>
-                    <th>{% trans "Details" %}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for capability in provider.validation_capability_items %}
-                    <tr>
-                      <td>{{ capability.label }}</td>
-                      <td>
-                        <span class="badge {{ capability.status_badge_class }}">
-                          {{ capability.status_label }}
-                        </span>
-                      </td>
-                      <td class="small text-muted">
-                        {% if capability.message %}{{ capability.message }}{% endif %}
-                        {% if capability.latency_ms %}
-                          <span class="d-inline-block ms-1">({{ capability.latency_ms }} ms)</span>
-                        {% endif %}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="card mt-4">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-start gap-3">
-            <div>
-              <h3 class="h6 mb-1">{% trans "Model capabilities" %}</h3>
+            <div class="col-lg-6">
+              <h4 class="h6 mb-2">{% trans "Saved capability snapshot" %}</h4>
               {% if provider.capability_refreshed_at %}
                 <div class="text-muted small">
                   {% blocktrans with refreshed_at=provider.capability_refreshed_at|date:"SHORT_DATETIME_FORMAT" %}
@@ -126,63 +237,68 @@
                   {% trans "Capabilities have not been refreshed yet." %}
                 </div>
               {% endif %}
+
+              {% if provider.capability_snapshot_summary %}
+                <p class="mt-3 mb-0 small text-muted">{{ provider.capability_snapshot_summary }}</p>
+              {% endif %}
+
+              {% if provider.has_capability_snapshot %}
+                <div class="mt-3">
+                  {% if provider.capability_snapshot_input_items %}
+                    <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Inputs" %}</div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                      {% for item in provider.capability_snapshot_input_items %}
+                        <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                  {% if provider.capability_snapshot_output_items %}
+                    <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Outputs" %}</div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                      {% for item in provider.capability_snapshot_output_items %}
+                        <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                  {% if provider.capability_snapshot_operation_items %}
+                    <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Operations" %}</div>
+                    <div class="d-flex flex-wrap gap-2">
+                      {% for item in provider.capability_snapshot_operation_items %}
+                        <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                </div>
+              {% endif %}
             </div>
           </div>
-
-          {% if provider.capability_snapshot_summary %}
-            <p class="mt-3 mb-0 small text-muted">{{ provider.capability_snapshot_summary }}</p>
-          {% endif %}
-
-          {% if provider.has_capability_snapshot %}
-            <div class="mt-3">
-              {% if provider.capability_snapshot_input_items %}
-                <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Inputs" %}</div>
-                <div class="d-flex flex-wrap gap-2 mb-3">
-                  {% for item in provider.capability_snapshot_input_items %}
-                    <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
-                  {% endfor %}
-                </div>
-              {% endif %}
-              {% if provider.capability_snapshot_output_items %}
-                <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Outputs" %}</div>
-                <div class="d-flex flex-wrap gap-2 mb-3">
-                  {% for item in provider.capability_snapshot_output_items %}
-                    <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
-                  {% endfor %}
-                </div>
-              {% endif %}
-              {% if provider.capability_snapshot_operation_items %}
-                <div class="small fw-semibold text-uppercase text-muted mb-2">{% trans "Operations" %}</div>
-                <div class="d-flex flex-wrap gap-2">
-                  {% for item in provider.capability_snapshot_operation_items %}
-                    <span class="badge {{ item.status_badge_class }}">{{ item.label }}: {{ item.status_label }}</span>
-                  {% endfor %}
-                </div>
-              {% endif %}
-            </div>
-          {% endif %}
         </div>
       </div>
     {% endif %}
 
     <div class="mt-4">
       <button class="btn btn-primary me-2" type="submit" id="save-provider-btn" data-form-action="">
-        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+        <i class="bi bi-check-lg me-1"></i>
+        {% if provider.has_model_configured %}
+          {% trans "Save provider" %}
+        {% else %}
+          {% trans "Save connection" %}
+        {% endif %}
       </button>
       <button
         class="btn btn-outline-secondary me-2"
         type="submit"
         data-form-action="test_provider"
         id="test-provider-btn"
-        {% if provider.validation_status == 'testing' %}disabled{% endif %}
+        {% if provider.validation_status == 'testing' or not provider.has_model_configured %}disabled{% endif %}
       >
         <i class="bi bi-plug me-1"></i>
         {% if provider.validation_status == 'testing' %}
           {% trans "Testing…" %}
         {% elif provider.has_validation_snapshot %}
-          {% trans "Retest provider" %}
+          {% trans "Retest selected model" %}
         {% else %}
-          {% trans "Test provider" %}
+          {% trans "Test selected model" %}
         {% endif %}
       </button>
       {% if provider.pk %}
@@ -191,6 +307,7 @@
           type="submit"
           data-form-action="refresh_capabilities"
           id="refresh-provider-capabilities-btn"
+          {% if not provider.has_model_configured %}disabled{% endif %}
         >
           <i class="bi bi-arrow-clockwise me-1"></i>{% trans "Refresh capabilities" %}
         </button>

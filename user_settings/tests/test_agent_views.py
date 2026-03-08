@@ -44,6 +44,15 @@ class AgentViewsTest(BaseTestCase):
         self.assertContains(response, "btn btn-sm btn-primary disabled")
         self.assertContains(response, "Go to Providers")
 
+    def test_list_view_with_only_connection_only_provider_still_disables_add_button(self):
+        self._create_provider(name="Connection Only", model="")
+
+        response = self.client.get(reverse("user_settings:agents"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["has_providers"])
+        self.assertContains(response, "btn btn-sm btn-primary disabled")
+
     def test_list_view_partial_renders_fragment_template(self):
         provider = self._create_provider()
         create_agent(self.user, provider=provider)
@@ -85,6 +94,21 @@ class AgentViewsTest(BaseTestCase):
         self.assertEqual(response["Location"], reverse("user_settings:dashboard") + "#pane-agents")
         self.assertTrue(
             AgentConfig.objects.filter(user=self.user, name="Created Agent").exists()
+        )
+
+    def test_create_form_excludes_connection_only_providers(self):
+        usable_provider = self._create_provider(name="Ready Provider")
+        self._create_provider(name="Connection Only", model="")
+
+        response = self.client.get(reverse("user_settings:agent-add"))
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        provider_ids = {str(value) for value, _label in form.fields["llm_provider"].choices if value}
+        self.assertIn(str(usable_provider.pk), provider_ids)
+        self.assertNotIn(
+            str(LLMProvider.objects.get(user=self.user, name="Connection Only").pk),
+            provider_ids,
         )
 
     def test_create_agent_requires_tool_description_when_marked_tool(self):

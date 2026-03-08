@@ -13,6 +13,7 @@ class ProviderDefaults:
     default_base_url: str = ""
     default_max_context_tokens: int = 4096
     api_key_required: bool = True
+    supports_model_catalog: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

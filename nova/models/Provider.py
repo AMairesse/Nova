@@ -76,7 +76,7 @@ class LLMProvider(models.Model):
         choices=ProviderType.choices,
         default=ProviderType.OLLAMA,
     )
-    model = models.CharField(max_length=120)
+    model = models.CharField(max_length=120, blank=True, default="")
     api_key = EncryptedCharField(max_length=255, blank=True, null=True)
     base_url = models.CharField(
         max_length=200,
@@ -145,6 +145,10 @@ class LLMProvider(models.Model):
             ensure_ascii=True,
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @property
+    def has_model_configured(self) -> bool:
+        return bool((self.model or "").strip())
 
     @property
     def has_validation_snapshot(self) -> bool:

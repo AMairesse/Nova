@@ -297,6 +297,12 @@ def _build_declared_capabilities(adapter, declared_capabilities: dict[str, bool 
 
 async def validate_provider_configuration(provider) -> dict:
     """Validate provider capabilities using provider-specific adapters and shared probes."""
+    if not str(getattr(provider, "model", "") or "").strip():
+        return _build_invalid_result(
+            "Validation requires a selected model.",
+            "Skipped because no model is configured.",
+        )
+
     capabilities = _default_capabilities()
     metadata_used = False
     metadata_fallback_used = False
