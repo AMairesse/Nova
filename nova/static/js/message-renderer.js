@@ -33,7 +33,7 @@
         static isPublishableArtifact(attachment) {
             const metadata = attachment?.metadata || {};
             const hasContent = Boolean(attachment?.user_file_id || `${attachment?.summary_text || ''}`.trim());
-            return Boolean(attachment?.id) && !attachment?.published_to_file && !metadata.legacy && hasContent;
+            return Boolean(attachment?.id) && !metadata.legacy && hasContent;
         }
 
         static renderArtifactSummaryItem(attachment) {
@@ -41,18 +41,15 @@
             const kind = `${attachment?.kind || ''}`.trim();
             const kindSuffix = kind ? ` · ${window.DOMUtils.escapeHTML(kind)}` : '';
             const published = Boolean(attachment?.published_to_file);
-            const publishedStateHtml = published
-                ? `<span class="artifact-summary-state text-success small">${this.t('Added to Files')}</span>`
-                : '';
-            const publishButtonHtml = (!published && this.isPublishableArtifact(attachment))
+            const publishButtonHtml = this.isPublishableArtifact(attachment)
                 ? `
                 <button
                     type="button"
-                    class="btn btn-link btn-sm p-0 artifact-publish-btn"
+                    class="btn btn-link btn-sm p-0 artifact-publish-btn${published ? ' artifact-publish-btn-published text-success' : ''}"
                     data-artifact-id="${attachment.id}"
                     aria-label="${this.t('Add artifact to Files')}"
                 >
-                    ${this.t('Add to Files')}
+                    ${published ? this.t('Added to Files') : this.t('Add to Files')}
                 </button>
                 `
                 : '';
@@ -60,7 +57,7 @@
             return `
                 <div class="artifact-summary-item" data-artifact-id="${attachment?.id || ''}" data-published-to-file="${published ? 'true' : 'false'}">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">${label}${kindSuffix}</span>
-                    ${publishedStateHtml || publishButtonHtml}
+                    ${publishButtonHtml}
                 </div>
             `;
         }

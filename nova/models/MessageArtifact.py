@@ -43,6 +43,13 @@ class MessageArtifact(models.Model):
         blank=True,
         related_name="artifacts",
     )
+    published_file = models.ForeignKey(
+        "UserFile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="published_artifacts",
+    )
     source_artifact = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -69,7 +76,6 @@ class MessageArtifact(models.Model):
     model = models.CharField(max_length=120, blank=True, default="")
     provider_fingerprint = models.CharField(max_length=64, blank=True, default="")
     order = models.PositiveIntegerField(default=0)
-    published_to_file = models.BooleanField(default=False)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -100,6 +106,10 @@ class MessageArtifact(models.Model):
             return self.user_file.original_filename.rsplit("/", 1)[-1]
         return f"{self.kind}-{self.pk or 'artifact'}"
 
+    @property
+    def is_currently_published_to_file(self) -> bool:
+        return bool(self.published_file_id)
+
     def to_manifest(self) -> dict:
         size = 0
         if self.user_file_id:
@@ -115,7 +125,7 @@ class MessageArtifact(models.Model):
             "label": self.filename,
             "summary_text": self.summary_text or "",
             "size": size,
-            "published_to_file": bool(self.published_to_file),
+            "published_to_file": self.is_currently_published_to_file,
             "metadata": self.metadata or {},
         }
 

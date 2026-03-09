@@ -223,9 +223,23 @@ async def publish_artifact_to_files(
         if not created:
             return None, ["Artifact publish did not create a file."]
 
-        artifact.published_to_file = True
-        await sync_to_async(artifact.save, thread_sensitive=True)(update_fields=["published_to_file", "updated_at"])
         file_id = created[0].get("id") if created else None
+        published_file = None
+        if file_id:
+            def _load_published_file():
+                return UserFile.objects.filter(
+                    id=file_id,
+                    user=artifact.user,
+                    thread=artifact.thread,
+                    scope=UserFile.Scope.THREAD_SHARED,
+                ).first()
+
+            published_file = await sync_to_async(_load_published_file, thread_sensitive=True)()
+
+        artifact.published_file = published_file
+        await sync_to_async(artifact.save, thread_sensitive=True)(
+            update_fields=["published_file", "updated_at"]
+        )
         return file_id, errors
     except Exception as exc:
         logger.exception("Unexpected artifact publish failure for artifact %s", artifact.id)
@@ -257,6 +271,6 @@ def clone_artifact_for_message(
         model=source_artifact.model or "",
         provider_fingerprint=source_artifact.provider_fingerprint or "",
         order=source_artifact.order,
-        published_to_file=source_artifact.published_to_file,
+        published_file=None,
         metadata=cloned_metadata,
     )

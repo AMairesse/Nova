@@ -117,11 +117,12 @@ class MessageArtifactAdmin(admin.ModelAdmin):
         "kind",
         "label",
         "user_file",
+        "published_file",
         "source_artifact",
-        "published_to_file",
+        "is_currently_published_to_file",
         "created_at",
     )
-    list_filter = ("direction", "kind", "published_to_file", "created_at")
+    list_filter = ("direction", "kind", "created_at")
     search_fields = ("label", "summary_text", "search_text", "message__text", "user_file__original_filename")
     readonly_fields = ("created_at", "updated_at")
     fields = (
@@ -133,8 +134,8 @@ class MessageArtifactAdmin(admin.ModelAdmin):
         "label",
         "mime_type",
         "user_file",
+        "published_file",
         "source_artifact",
-        "published_to_file",
         "summary_text",
         "search_text",
         "provider_type",
@@ -145,6 +146,10 @@ class MessageArtifactAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
+
+    @admin.display(boolean=True, description="Published")
+    def is_currently_published_to_file(self, obj):
+        return obj.is_currently_published_to_file
 
 
 @admin.register(AgentConfig)

@@ -126,17 +126,19 @@
                 {% for attachment in message.message_artifacts %}
                   <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
-                    {% if attachment.published_to_file %}
-                      <span class="artifact-summary-state text-success small">{% trans "Added to Files" %}</span>
-                    {% elif attachment.id and not attachment.metadata.legacy %}
+                    {% if attachment.id and not attachment.metadata.legacy %}
                       {% if attachment.user_file_id or attachment.summary_text %}
                         <button
                           type="button"
-                          class="btn btn-link btn-sm p-0 artifact-publish-btn"
+                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
                           data-artifact-id="{{ attachment.id }}"
                           aria-label="{% trans 'Add artifact to Files' %}"
                         >
-                          {% trans "Add to Files" %}
+                          {% if attachment.published_to_file %}
+                            {% trans "Added to Files" %}
+                          {% else %}
+                            {% trans "Add to Files" %}
+                          {% endif %}
                         </button>
                       {% endif %}
                     {% endif %}
@@ -195,17 +197,19 @@
                 {% for attachment in message.message_artifacts %}
                   <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
-                    {% if attachment.published_to_file %}
-                      <span class="artifact-summary-state text-success small">{% trans "Added to Files" %}</span>
-                    {% elif attachment.id and not attachment.metadata.legacy %}
+                    {% if attachment.id and not attachment.metadata.legacy %}
                       {% if attachment.user_file_id or attachment.summary_text %}
                         <button
                           type="button"
-                          class="btn btn-link btn-sm p-0 artifact-publish-btn"
+                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
                           data-artifact-id="{{ attachment.id }}"
                           aria-label="{% trans 'Add artifact to Files' %}"
                         >
-                          {% trans "Add to Files" %}
+                          {% if attachment.published_to_file %}
+                            {% trans "Added to Files" %}
+                          {% else %}
+                            {% trans "Add to Files" %}
+                          {% endif %}
                         </button>
                       {% endif %}
                     {% endif %}

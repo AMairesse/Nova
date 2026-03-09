@@ -158,7 +158,7 @@ class FileDeleteView(LoginRequiredMixin, View):
 async def artifact_publish(request, artifact_id):
     def _get_artifact():
         return (
-            MessageArtifact.objects.select_related("thread", "message", "user_file")
+            MessageArtifact.objects.select_related("thread", "message", "user_file", "published_file")
             .filter(id=artifact_id, user=request.user)
             .first()
         )
@@ -167,7 +167,7 @@ async def artifact_publish(request, artifact_id):
     if not artifact:
         return JsonResponse({'error': 'Artifact not found or unauthorized'}, status=403)
 
-    if artifact.published_to_file:
+    if artifact.published_file_id:
         return JsonResponse(
             {
                 'success': True,

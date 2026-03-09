@@ -891,11 +891,9 @@
             if (item) {
                 item.dataset.publishedToFile = 'true';
             }
-
-            const state = document.createElement('span');
-            state.className = 'artifact-summary-state text-success small';
-            state.textContent = gettext('Added to Files');
-            button.replaceWith(state);
+            button.disabled = false;
+            button.classList.add('artifact-publish-btn-published', 'text-success');
+            button.textContent = gettext('Added to Files');
         }
 
         appendMessage(messageElement) {
