@@ -160,7 +160,7 @@ class AgentToolWrapper:
                 try:
                     # Generic cleanup (handles browser if assigned as builtin)
                     await asyncio.wait_for(
-                        agent_llm.cleanup(),
+                        agent_llm.cleanup_runtime(),
                         timeout=SUBAGENT_CLEANUP_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:

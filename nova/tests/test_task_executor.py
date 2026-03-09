@@ -424,7 +424,7 @@ class TaskExecutorTests(TransactionTestCase):
     def test_cleanup_logs_when_llm_cleanup_fails(self):
         executor = self._make_executor()
         executor.llm = AsyncMock()
-        executor.llm.cleanup.side_effect = RuntimeError("cleanup fail")
+        executor.llm.cleanup_runtime.side_effect = RuntimeError("cleanup fail")
 
         with self.assertLogs("nova.tasks.TaskExecutor", level="ERROR") as logs:
             asyncio.run(executor._cleanup())
@@ -434,10 +434,10 @@ class TaskExecutorTests(TransactionTestCase):
     def test_cleanup_logs_when_llm_cleanup_times_out(self):
         executor = self._make_executor()
 
-        async def slow_cleanup():
+        async def slow_cleanup_runtime():
             await asyncio.sleep(1)
 
-        executor.llm = SimpleNamespace(cleanup=slow_cleanup)
+        executor.llm = SimpleNamespace(cleanup_runtime=slow_cleanup_runtime)
 
         with (
             patch("nova.tasks.TaskExecutor.LLM_CLEANUP_TIMEOUT_SECONDS", 0.01),

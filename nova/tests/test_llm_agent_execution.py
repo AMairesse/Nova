@@ -327,9 +327,10 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
         self.assertIsInstance(agent, llm_agent_mod.LLMAgent)
 
     async def test_cleanup_closes_checkpointer(self):
-        """Test that cleanup properly closes the checkpointer."""
+        """Test that runtime cleanup properly closes Nova resources without flushing Langfuse."""
         mock_checkpointer = MagicMock()
         mock_checkpointer.conn.close = AsyncMock()
+        mock_module = SimpleNamespace(close=AsyncMock())
 
         agent = llm_agent_mod.LLMAgent(
             user=self.create_mock_user(),
@@ -340,23 +341,16 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
             llm_provider=self.create_mock_provider(),
         )
         agent.checkpointer = mock_checkpointer
+        agent._loaded_builtin_modules = [mock_module]
 
-        # Mock Langfuse client
-        agent._langfuse_client = MagicMock()
-        agent._langfuse_client.flush = MagicMock()
-        agent._langfuse_client.shutdown = MagicMock()
-
-        await agent.cleanup()
+        await agent.cleanup_runtime()
 
         # Verify checkpointer.conn.close was called
         mock_checkpointer.conn.close.assert_awaited_once()
-
-        # Verify Langfuse cleanup was called
-        agent._langfuse_client.flush.assert_called_once()
-        agent._langfuse_client.shutdown.assert_called_once()
+        mock_module.close.assert_awaited_once_with(agent)
 
     async def test_cleanup_handles_missing_checkpointer(self):
-        """Test that cleanup handles cases where checkpointer is None."""
+        """Test that runtime cleanup handles cases where checkpointer is None."""
         agent = llm_agent_mod.LLMAgent(
             user=self.create_mock_user(),
             thread=self.create_mock_thread(),
@@ -368,6 +362,25 @@ class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
         agent.checkpointer = None
 
         # Should not raise exception
-        await agent.cleanup()
+        await agent.cleanup_runtime()
 
         # No assertions needed, just ensure no exception
+
+    async def test_cleanup_runtime_ignores_langfuse_client(self):
+        agent = llm_agent_mod.LLMAgent(
+            user=self.create_mock_user(),
+            thread=self.create_mock_thread(),
+            langgraph_thread_id="fake_id",
+            agent_config=None,
+            system_prompt=None,
+            llm_provider=self.create_mock_provider(),
+        )
+        agent.checkpointer = None
+        agent._langfuse_client = MagicMock()
+        agent._langfuse_client.flush.side_effect = AssertionError("flush must not run during runtime cleanup")
+        agent._langfuse_client.shutdown.side_effect = AssertionError("shutdown must not run during runtime cleanup")
+
+        await agent.cleanup_runtime()
+
+        agent._langfuse_client.flush.assert_not_called()
+        agent._langfuse_client.shutdown.assert_not_called()

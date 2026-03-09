@@ -437,7 +437,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                     "[summarize_day_segment] failed cleanup for ephemeral checkpoint_id=%s",
                     ephemeral_thread_id,
                 )
-        await agent.cleanup()
+        await agent.cleanup_runtime()
 
 
 @shared_task(bind=True, name="summarize_day_segment")

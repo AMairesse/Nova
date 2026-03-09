@@ -2,9 +2,9 @@
 import asyncio
 import base64
 import datetime as dt
-import json
 import logging
 import posixpath
+import time
 from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
 from celery import shared_task
@@ -34,13 +34,11 @@ from nova.native_provider_runtime import (
     persist_native_result_artifacts,
     summarize_native_result,
 )
-from nova.providers import invoke_native_provider, parse_native_provider_response
 from nova.message_artifacts import detect_artifact_kind
 from nova.message_attachments import (
     MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
     normalize_message_attachments,
 )
-from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
@@ -577,12 +575,20 @@ class AgentTaskExecutor (TaskExecutor):
             return
         if not is_default_thread_subject(self.thread.subject):
             return
+        enqueue_start = time.perf_counter()
         try:
             await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
                 thread_id=self.thread.id,
                 user_id=self.user.id,
                 agent_config_id=self.agent_config.id,
                 source_task_id=self.task.id,
+            )
+            duration_ms = int((time.perf_counter() - enqueue_start) * 1000)
+            logger.debug(
+                "Enqueued thread title generation (thread_id=%s, task_id=%s) in %sms.",
+                getattr(self.thread, "id", None),
+                getattr(self.task, "id", None),
+                duration_ms,
             )
         except Exception as exc:
             logger.warning(
@@ -680,9 +686,9 @@ def _build_langfuse_invoke_config(user, *, session_id: str):
             "Could not load Langfuse user parameters for user %s. Continuing without tracing.",
             getattr(user, "id", "unknown"),
         )
-        return {}, None
+        return {}
     if not (allow_langfuse and langfuse_public_key and langfuse_secret_key):
-        return {}, None
+        return {}
 
     try:
         from langfuse import Langfuse
@@ -705,13 +711,13 @@ def _build_langfuse_invoke_config(user, *, session_id: str):
                 "langfuse_session_id": session_id,
             },
         }
-        return invoke_config, client
+        return invoke_config
     except Exception:
         logger.exception(
             "Failed to initialize Langfuse callback for direct LLM call (user_id=%s).",
             getattr(user, "id", "unknown"),
         )
-        return {}, None
+        return {}
 
 
 def _build_thread_title_prompt(messages: list[Message]) -> str:
@@ -805,6 +811,7 @@ def generate_thread_title_task(
     source_task_id: int | None = None,
 ):
     """Generate a short thread title asynchronously without touching agent checkpoints."""
+    title_task_start = time.perf_counter()
     try:
         thread = Thread.objects.select_related("user").get(id=thread_id, user_id=user_id)
         if not is_default_thread_subject(thread.subject):
@@ -820,24 +827,16 @@ def generate_thread_title_task(
         agent_config = AgentConfig.objects.select_related("llm_provider").get(id=agent_config_id, user_id=user_id)
         llm = create_provider_llm(agent_config.llm_provider)
 
-        invoke_config, langfuse_client = _build_langfuse_invoke_config(
+        invoke_config = _build_langfuse_invoke_config(
             thread.user,
             session_id=f"thread_title_{thread_id}",
         )
-        try:
-            response = asyncio.run(
-                llm.ainvoke(
-                    [HumanMessage(content=_build_thread_title_prompt(messages))],
-                    config=invoke_config or None,
-                )
+        response = asyncio.run(
+            llm.ainvoke(
+                [HumanMessage(content=_build_thread_title_prompt(messages))],
+                config=invoke_config or None,
             )
-        finally:
-            if langfuse_client is not None:
-                try:
-                    langfuse_client.flush()
-                    langfuse_client.shutdown()
-                except Exception:
-                    logger.warning("Failed to cleanup Langfuse client for thread title generation.")
+        )
 
         raw_title = strip_thinking_blocks(getattr(response, "content", None) or str(response))
         normalized_title = normalize_generated_thread_title(raw_title)
@@ -854,6 +853,13 @@ def generate_thread_title_task(
             return {"status": "skipped", "reason": "subject_changed_during_generation"}
 
         _publish_thread_subject_update(source_task_id, thread_id, normalized_title)
+        duration_ms = int((time.perf_counter() - title_task_start) * 1000)
+        logger.debug(
+            "Thread title generation completed (thread_id=%s, source_task_id=%s, duration=%sms).",
+            thread_id,
+            source_task_id,
+            duration_ms,
+        )
         return {"status": "ok", "thread_id": thread_id, "thread_subject": normalized_title}
     except Exception as e:
         logger.error("Thread title generation failed for thread %s: %s", thread_id, e, exc_info=True)
@@ -1023,7 +1029,7 @@ class SummarizationTaskExecutor(TaskExecutor):
                 raise ValueError(f"Summarization failed for {agent_config.name}: {result['message']}")
 
         finally:
-            await agent.cleanup()
+            await agent.cleanup_runtime()
 
 
 def _mark_task_definition_success(task_definition: TaskDefinition):

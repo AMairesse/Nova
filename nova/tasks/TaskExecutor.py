@@ -2,6 +2,7 @@
 import asyncio
 import datetime as dt
 import logging
+import time
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from enum import Enum
@@ -317,15 +318,23 @@ class TaskExecutor:
     async def _cleanup(self):
         """Ensure proper cleanup of resources."""
         if self.llm:
+            cleanup_start = time.perf_counter()
             try:
                 await asyncio.wait_for(
-                    self.llm.cleanup(),
+                    self.llm.cleanup_runtime(),
                     timeout=LLM_CLEANUP_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
                 logger.error("Timed out while cleaning up LLM resources")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup LLM: {cleanup_error}")
+            else:
+                duration_ms = int((time.perf_counter() - cleanup_start) * 1000)
+                logger.debug(
+                    "TaskExecutor cleanup finished for task %s in %sms.",
+                    getattr(self.task, "id", None),
+                    duration_ms,
+                )
 
     async def _process_result(self, result):
         """Process the agent result and update related data."""

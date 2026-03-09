@@ -1,6 +1,7 @@
 # nova/llm/llm_agent.py
 import uuid
 import logging
+import time
 from typing import Any, List
 from django.conf import settings
 
@@ -220,10 +221,7 @@ class LLMAgent:
                     secret_key=langfuse_secret_key,
                     host=langfuse_host,
                 )
-                # Store client reference for cleanup
-                self._langfuse_client = langfuse
                 langfuse_handler = CallbackHandler(public_key=langfuse_public_key)
-                self._langfuse_handler = langfuse_handler
 
                 if not langfuse.auth_check():
                     logger.warning(
@@ -289,27 +287,33 @@ class LLMAgent:
         ):
             self.middleware.append(SummarizationMiddleware(self.agent_config, self))
 
-    async def cleanup(self):
-        """Async cleanup method to close resources for loaded builtin modules, Langfuse client, and checkpointer."""
-        # Cleanup Langfuse client
-        if hasattr(self, '_langfuse_client') and self._langfuse_client:
-            try:
-                self._langfuse_client.flush()
-                self._langfuse_client.shutdown()
-            except Exception as e:
-                logger.warning(f"Failed to cleanup Langfuse client: {e}")
+    async def cleanup_runtime(self):
+        """Close per-run Nova resources without touching process-scoped telemetry."""
+        cleanup_start = time.perf_counter()
 
-        # Cleanup checkpointer
         if self.checkpointer:
             try:
                 await self.checkpointer.conn.close()
             except Exception as e:
                 logger.warning(f"Failed to cleanup checkpointer: {e}")
 
-        # Cleanup builtin modules
         for module in self._loaded_builtin_modules:
             if hasattr(module, 'close'):
                 await module.close(self)
+
+        duration_ms = int((time.perf_counter() - cleanup_start) * 1000)
+        if duration_ms >= 1000:
+            logger.warning(
+                "LLM runtime cleanup was slow (thread_id=%s, duration=%sms).",
+                self.config.get("configurable", {}).get("thread_id"),
+                duration_ms,
+            )
+        else:
+            logger.debug(
+                "LLM runtime cleanup completed (thread_id=%s, duration=%sms).",
+                self.config.get("configurable", {}).get("thread_id"),
+                duration_ms,
+            )
 
     def create_llm_agent(self):
         if not self._llm_provider:

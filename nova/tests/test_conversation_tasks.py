@@ -221,7 +221,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         fake_agent = SimpleNamespace(
             ainvoke=AsyncMock(return_value="[THINK]internal[/THINK]\n## Summary\nAll good"),
             checkpointer=fake_checkpointer,
-            cleanup=AsyncMock(),
+            cleanup_runtime=AsyncMock(),
         )
         mocked_create_agent.return_value = fake_agent
 
@@ -247,7 +247,7 @@ class ConversationTasksDbTests(TransactionTestCase):
             thread_id_override=ANY,
         )
         fake_checkpointer.adelete_thread.assert_awaited_once()
-        fake_agent.cleanup.assert_awaited_once()
+        fake_agent.cleanup_runtime.assert_awaited_once()
         self.assertTrue(any(call.args[1] == "continuous_summary_ready" for call in mocked_publish.await_args_list))
 
     @patch("nova.tasks.conversation_tasks.compute_day_segment_embedding_task.delay")
@@ -282,7 +282,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         fake_agent = SimpleNamespace(
             ainvoke=AsyncMock(return_value="## Summary\nArtifact-only day"),
             checkpointer=fake_checkpointer,
-            cleanup=AsyncMock(),
+            cleanup_runtime=AsyncMock(),
         )
         mocked_create_agent.return_value = fake_agent
 
@@ -321,7 +321,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         fake_agent = SimpleNamespace(
             ainvoke=AsyncMock(return_value="## Summary\nRegenerated"),
             checkpointer=fake_checkpointer,
-            cleanup=AsyncMock(),
+            cleanup_runtime=AsyncMock(),
         )
         mocked_create_agent.return_value = fake_agent
 

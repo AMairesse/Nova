@@ -665,7 +665,7 @@ class GenerateThreadTitleTaskTests(SimpleTestCase):
         mocked_thread_filter.return_value.update.return_value = 1
 
         with (
-            patch("nova.tasks.tasks._build_langfuse_invoke_config", return_value=({}, None)),
+            patch("nova.tasks.tasks._build_langfuse_invoke_config", return_value={}),
             patch("nova.tasks.tasks._publish_thread_subject_update") as mocked_publish,
         ):
             result = generate_thread_title_task.run(
@@ -852,7 +852,7 @@ class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
 
     @patch("nova.llm.llm_agent.LLMAgent.create", new_callable=AsyncMock)
     async def test_summarize_single_agent_raises_when_middleware_missing(self, mocked_create_agent):
-        fake_agent = SimpleNamespace(middleware=[], cleanup=AsyncMock())
+        fake_agent = SimpleNamespace(middleware=[], cleanup_runtime=AsyncMock())
         mocked_create_agent.return_value = fake_agent
         executor = SummarizationTaskExecutor(
             task=SimpleNamespace(id=1, progress_logs=[], save=Mock()),
@@ -864,12 +864,12 @@ class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "SummarizationMiddleware not found"):
             await executor._summarize_single_agent(SimpleNamespace(name="sub"))
 
-        fake_agent.cleanup.assert_awaited_once()
+        fake_agent.cleanup_runtime.assert_awaited_once()
 
     @patch("nova.llm.llm_agent.LLMAgent.create", new_callable=AsyncMock)
     async def test_summarize_single_agent_raises_on_failed_summary(self, mocked_create_agent):
         middleware = SimpleNamespace(manual_summarize=AsyncMock(return_value={"status": "error", "message": "boom"}))
-        fake_agent = SimpleNamespace(middleware=[middleware], cleanup=AsyncMock())
+        fake_agent = SimpleNamespace(middleware=[middleware], cleanup_runtime=AsyncMock())
         mocked_create_agent.return_value = fake_agent
         executor = SummarizationTaskExecutor(
             task=SimpleNamespace(id=1, progress_logs=[], save=Mock()),
@@ -881,7 +881,7 @@ class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "Summarization failed"):
             await executor._summarize_single_agent(SimpleNamespace(name="main"))
 
-        fake_agent.cleanup.assert_awaited_once()
+        fake_agent.cleanup_runtime.assert_awaited_once()
 
     @patch("nova.tasks.tasks.get_checkpointer", new_callable=AsyncMock)
     async def test_delete_checkpoints_always_closes_connection(self, mocked_get_checkpointer):

@@ -137,7 +137,7 @@ class AgentToolWrapperTests(TransactionTestCase):
         Ensure the wrapped tool:
         - constructs LLMAgent with the correct user/thread/agent_config
         - calls ainvoke(question) and returns its result
-        - performs cleanup() after execution.
+        - performs cleanup_runtime() after execution.
         """
         # Fake LLMAgent with async factory 'create',
         # then async 'invoke' and 'cleanup'
@@ -177,7 +177,7 @@ class AgentToolWrapperTests(TransactionTestCase):
                 self.invoke_calls.append(question)
                 return self.result
 
-            async def cleanup(self):
+            async def cleanup_runtime(self):
                 self.cleanup_called = True
 
         source_message = self.thread.add_message("Existing source", actor=Actor.USER)
@@ -252,7 +252,7 @@ class AgentToolWrapperTests(TransactionTestCase):
         When the delegated LLMAgent fails:
         - return a readable error string including agent name and message
         - include configuration guidance
-        - still run cleanup() to avoid leaking resources.
+        - still run cleanup_runtime() to avoid leaking resources.
         """
         class FailingLLMAgent:
             instances = []
@@ -276,7 +276,7 @@ class AgentToolWrapperTests(TransactionTestCase):
             async def ainvoke(self, question):
                 raise RuntimeError("boom")
 
-            async def cleanup(self):
+            async def cleanup_runtime(self):
                 self.cleanup_called = True
 
         agent_stub = SimpleNamespace(
@@ -329,7 +329,7 @@ class AgentToolWrapperTests(TransactionTestCase):
                 self.invoke_calls.append(question)
                 return self.result
 
-            async def cleanup(self):
+            async def cleanup_runtime(self):
                 self.cleanup_called = True
 
         provider = create_provider(self.user, name="sub-provider")
