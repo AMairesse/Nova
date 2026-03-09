@@ -8,6 +8,7 @@ Utility that exposes another `Agent` instance as a LangChain
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import base64
 from django.conf import settings
@@ -30,6 +31,7 @@ from nova.models.Thread import Thread
 
 import logging
 logger = logging.getLogger(__name__)
+SUBAGENT_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
 class AgentToolWrapper:
@@ -157,7 +159,12 @@ class AgentToolWrapper:
             finally:
                 try:
                     # Generic cleanup (handles browser if assigned as builtin)
-                    await agent_llm.cleanup()
+                    await asyncio.wait_for(
+                        agent_llm.cleanup(),
+                        timeout=SUBAGENT_CLEANUP_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error("Timed out while cleaning up sub-agent %s", self.agent_config.name)
                 except Exception as cleanup_error:
                     logger.error(f"Failed to cleanup sub-agent {self.agent_config.name}: {str(cleanup_error)}")
 

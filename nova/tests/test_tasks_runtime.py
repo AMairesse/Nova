@@ -17,6 +17,7 @@ from nova.tasks.tasks import (
     ContextConsumptionTracker,
     SummarizationTaskExecutor,
     build_source_message_prompt,
+    create_and_dispatch_agent_task,
     delete_checkpoints,
     generate_thread_title_task,
     resume_ai_task_celery,
@@ -311,7 +312,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             current_response="<p>Interim thought</p>",
             streamed_markdown="Interim thought\n\nAgent answer",
         )
-        message = SimpleNamespace(internal_data={}, save=Mock())
+        message = SimpleNamespace(id=71, internal_data={}, save=Mock())
         thread = SimpleNamespace(subject="thread n°1", add_message=Mock(return_value=message), save=Mock())
         executor = AgentTaskExecutor(
             task=task,
@@ -323,9 +324,19 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         executor.handler = SimpleNamespace(on_context_consumption=AsyncMock())
         executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
 
+        async def persist_message_state(*_args, **kwargs):
+            message.internal_data.update({
+                "real_tokens": 50,
+                "approx_tokens": None,
+                "max_context": 1000,
+                "final_answer": "Agent answer",
+                "display_markdown": "Interim thought\n\nAgent answer",
+            })
+
         with (
             patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(50, None, 1000)),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock) as mocked_enqueue_title,
+            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock, side_effect=persist_message_state),
         ):
             await executor._process_result("Agent answer")
 
@@ -348,7 +359,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             current_response="<p>Agent answer</p>",
             streamed_markdown="Agent answer",
         )
-        message = SimpleNamespace(internal_data={}, save=Mock())
+        message = SimpleNamespace(id=72, internal_data={}, save=Mock())
         thread = SimpleNamespace(subject="thread n°2", add_message=Mock(return_value=message), save=Mock())
         executor = AgentTaskExecutor(
             task=task,
@@ -363,9 +374,18 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         )
         executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
 
+        async def persist_message_state(*_args, **kwargs):
+            message.internal_data.update({
+                "real_tokens": 12,
+                "approx_tokens": None,
+                "max_context": 1000,
+                "final_answer": "Agent answer",
+            })
+
         with (
             patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(12, None, 1000)),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock, side_effect=persist_message_state),
         ):
             await executor._process_result("Agent answer")
 
@@ -410,6 +430,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         with (
             patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 1000)),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock),
             patch.object(executor, "_build_realtime_message_payload", new_callable=AsyncMock, return_value=realtime_payload) as mocked_payload,
         ):
             await executor._process_result("Agent answer")
@@ -445,6 +466,45 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
 
         self.assertIn("<ul>", payload["rendered_html"])
         self.assertIn("Intro paragraph", payload["rendered_html"])
+
+    def test_build_realtime_message_payload_includes_output_artifacts(self):
+        source_message = self.thread.add_message("prompt", actor=Actor.USER)
+        message = self.thread.add_message("Generated 1 image.", actor=Actor.AGENT)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/generated.png",
+            original_filename="/generated/generated.png",
+            mime_type="image/png",
+            size=16,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=message,
+            user_file=user_file,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated.png",
+            mime_type="image/png",
+        )
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=14, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+
+        payload = asyncio.run(executor._build_realtime_message_payload(message.id))
+
+        self.assertEqual(len(payload["artifacts"]), 1)
+        self.assertEqual(payload["artifacts"][0]["kind"], ArtifactKind.IMAGE)
+        self.assertTrue(payload["artifacts"][0]["content_url"])
 
     def test_collect_hidden_subagent_output_artifact_ids_finds_hidden_outputs(self):
         source_message = self.thread.add_message("Please create an image", actor=Actor.USER)
@@ -537,6 +597,38 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
         cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
         self.assertEqual(cloned_artifact.source_artifact_id, source_artifact.id)
         self.assertEqual(cloned_artifact.user_file_id, user_file.id)
+
+
+class AgentTaskDispatchTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        self.user = create_user(username="dispatch-user", email="dispatch@example.com")
+        self.provider = create_provider(self.user, name="dispatch-provider")
+        self.agent = create_agent(self.user, self.provider, name="dispatch-agent")
+        self.thread = Thread.objects.create(user=self.user, subject="Dispatch thread")
+        self.message = self.thread.add_message("Hello", actor=Actor.USER)
+
+    def test_create_and_dispatch_agent_task_initializes_pending_log(self):
+        dispatcher_task = SimpleNamespace(delay=Mock())
+
+        task = create_and_dispatch_agent_task(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            source_message_id=self.message.id,
+            dispatcher_task=dispatcher_task,
+        )
+
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.progress_logs[0]["step"], "Task queued for dispatch")
+        dispatcher_task.delay.assert_called_once_with(
+            task.id,
+            self.user.id,
+            self.thread.id,
+            self.agent.id,
+            self.message.id,
+        )
 
 
 class GenerateThreadTitleTaskTests(SimpleTestCase):

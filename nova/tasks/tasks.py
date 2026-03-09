@@ -397,8 +397,6 @@ class AgentTaskExecutor (TaskExecutor):
                 artifact_ids=generated_tool_artifact_ids,
             )
 
-        annotate_user_message(message)
-
         # Calculate and store context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
             self.agent_config, self.llm
@@ -419,17 +417,15 @@ class AgentTaskExecutor (TaskExecutor):
         # Publish context consumption
         await self.handler.on_context_consumption(real_tokens, approx_tokens, max_context)
 
-        # Store in message
-        message.internal_data.update({
-            'real_tokens': real_tokens,
-            'approx_tokens': approx_tokens,
-            'max_context': max_context,
-            'final_answer': final_answer,
-        })
         display_markdown = self._get_display_markdown(final_answer)
-        if display_markdown:
-            message.internal_data['display_markdown'] = display_markdown
-        await sync_to_async(message.save, thread_sensitive=False)()
+        await self._persist_agent_message_state(
+            message.id,
+            final_answer=final_answer,
+            real_tokens=real_tokens,
+            approx_tokens=approx_tokens,
+            max_context=max_context,
+            display_markdown=display_markdown,
+        )
 
         if self.handler and hasattr(self.handler, "on_new_message"):
             realtime_payload = await self._build_realtime_message_payload(message.id)
@@ -445,30 +441,81 @@ class AgentTaskExecutor (TaskExecutor):
         # Trigger title generation asynchronously when the thread still has its default title.
         await self._enqueue_thread_title_generation()
 
+    async def _persist_agent_message_state(
+        self,
+        message_id: int,
+        *,
+        final_answer: str,
+        real_tokens: int | None,
+        approx_tokens: int | None,
+        max_context: int | None,
+        display_markdown: str,
+    ) -> None:
+        def _persist_message_state() -> None:
+            fresh_message = (
+                Message.objects.select_related("thread", "user")
+                .prefetch_related(
+                    "artifacts__user_file",
+                    "artifacts__published_file",
+                )
+                .get(
+                    id=message_id,
+                    thread=self.thread,
+                    user=self.user,
+                )
+            )
+            annotate_user_message(fresh_message)
+            internal_data = (
+                fresh_message.internal_data
+                if isinstance(fresh_message.internal_data, dict)
+                else {}
+            )
+            internal_data.update({
+                "real_tokens": real_tokens,
+                "approx_tokens": approx_tokens,
+                "max_context": max_context,
+                "final_answer": final_answer,
+            })
+            if display_markdown:
+                internal_data["display_markdown"] = display_markdown
+            else:
+                internal_data.pop("display_markdown", None)
+            fresh_message.internal_data = internal_data
+            fresh_message.save(update_fields=["internal_data"])
+
+        await sync_to_async(_persist_message_state, thread_sensitive=True)()
+
     async def _build_realtime_message_payload(self, message_id: int) -> dict:
         def _load_message():
-            return Message.objects.select_related("thread", "user").get(
-                id=message_id,
-                thread=self.thread,
-                user=self.user,
+            fresh_message = (
+                Message.objects.select_related("thread", "user")
+                .prefetch_related(
+                    "artifacts__user_file",
+                    "artifacts__published_file",
+                )
+                .get(
+                    id=message_id,
+                    thread=self.thread,
+                    user=self.user,
+                )
             )
+            annotate_user_message(fresh_message)
+            display_text = ""
+            if isinstance(fresh_message.internal_data, dict):
+                display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
+            if not display_text:
+                display_text = fresh_message.text or ""
+            return {
+                "id": fresh_message.id,
+                "text": fresh_message.text,
+                "actor": fresh_message.actor,
+                "internal_data": fresh_message.internal_data,
+                "created_at": str(fresh_message.created_at),
+                "rendered_html": markdown_to_html(display_text),
+                "artifacts": getattr(fresh_message, "message_artifacts", []),
+            }
 
-        fresh_message = await sync_to_async(_load_message, thread_sensitive=True)()
-        annotate_user_message(fresh_message)
-        display_text = ""
-        if isinstance(fresh_message.internal_data, dict):
-            display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
-        if not display_text:
-            display_text = fresh_message.text or ""
-        return {
-            "id": fresh_message.id,
-            "text": fresh_message.text,
-            "actor": fresh_message.actor,
-            "internal_data": fresh_message.internal_data,
-            "created_at": str(fresh_message.created_at),
-            "rendered_html": markdown_to_html(display_text),
-            "artifacts": getattr(fresh_message, "message_artifacts", []),
-        }
+        return await sync_to_async(_load_message, thread_sensitive=True)()
 
     async def _collect_hidden_subagent_output_artifact_ids(self) -> list[int]:
         source_message = getattr(self, "_source_message", None)
@@ -729,6 +776,13 @@ def create_and_dispatch_agent_task(
         thread=thread,
         agent_config=agent_config,
         status=TaskStatus.PENDING,
+        progress_logs=[
+            {
+                "step": "Task queued for dispatch",
+                "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+                "severity": "info",
+            }
+        ],
     )
 
     dispatcher_task.delay(

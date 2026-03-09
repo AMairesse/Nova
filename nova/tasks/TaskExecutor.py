@@ -1,4 +1,5 @@
 # nova/tasks/TaskExecutor.py
+import asyncio
 import datetime as dt
 import logging
 from asgiref.sync import sync_to_async
@@ -15,6 +16,7 @@ from nova.models.Task import TaskStatus
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
 logger = logging.getLogger(__name__)
+LLM_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
 class TaskErrorCategory(Enum):
@@ -316,7 +318,12 @@ class TaskExecutor:
         """Ensure proper cleanup of resources."""
         if self.llm:
             try:
-                await self.llm.cleanup()
+                await asyncio.wait_for(
+                    self.llm.cleanup(),
+                    timeout=LLM_CLEANUP_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Timed out while cleaning up LLM resources")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup LLM: {cleanup_error}")
 

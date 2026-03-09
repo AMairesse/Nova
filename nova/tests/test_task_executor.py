@@ -431,6 +431,22 @@ class TaskExecutorTests(TransactionTestCase):
 
         self.assertTrue(any("Failed to cleanup LLM" in line for line in logs.output))
 
+    def test_cleanup_logs_when_llm_cleanup_times_out(self):
+        executor = self._make_executor()
+
+        async def slow_cleanup():
+            await asyncio.sleep(1)
+
+        executor.llm = SimpleNamespace(cleanup=slow_cleanup)
+
+        with (
+            patch("nova.tasks.TaskExecutor.LLM_CLEANUP_TIMEOUT_SECONDS", 0.01),
+            self.assertLogs("nova.tasks.TaskExecutor", level="ERROR") as logs,
+        ):
+            asyncio.run(executor._cleanup())
+
+        self.assertTrue(any("Timed out while cleaning up LLM resources" in line for line in logs.output))
+
     def test_purge_continuous_subagent_checkpoints_returns_without_context(self):
         executor = TaskExecutor(
             task=self.task,

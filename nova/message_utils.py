@@ -145,15 +145,39 @@ def annotate_user_message(message) -> None:
         message.file_count = 0
 
     artifact_manifests: list[dict] = []
-    related_artifacts = getattr(message, "artifacts", None)
-    if related_artifacts is not None:
+    prefetched_artifacts = None
+    prefetched_cache = getattr(message, "_prefetched_objects_cache", None)
+    if isinstance(prefetched_cache, dict):
+        prefetched_artifacts = prefetched_cache.get("artifacts")
+
+    if prefetched_artifacts is not None:
         try:
+            ordered_artifacts = sorted(
+                prefetched_artifacts,
+                key=lambda artifact: (
+                    str(getattr(artifact, "direction", "") or ""),
+                    int(getattr(artifact, "order", 0) or 0),
+                    getattr(artifact, "created_at", None),
+                    int(getattr(artifact, "id", 0) or 0),
+                ),
+            )
             artifact_manifests = [
                 build_message_artifact_manifest(artifact)
-                for artifact in related_artifacts.select_related("user_file").order_by("direction", "order", "created_at", "id")
+                for artifact in ordered_artifacts
             ]
         except Exception:
             artifact_manifests = []
+    else:
+        related_artifacts = getattr(message, "artifacts", None)
+        if related_artifacts is not None:
+            try:
+                artifact_manifests = [
+                    build_message_artifact_manifest(artifact)
+                    for artifact in related_artifacts.select_related("user_file").order_by("direction", "order",
+                                                                                           "created_at", "id")
+                ]
+            except Exception:
+                artifact_manifests = []
 
     if not artifact_manifests:
         legacy_attachments = normalize_message_attachments(
