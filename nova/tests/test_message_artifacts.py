@@ -70,8 +70,6 @@ class MessageArtifactsTests(TestCase):
         mocked_async_client,
     ):
         mocked_download.side_effect = RuntimeError("minio read failed")
-        self.user_file.get_download_url = lambda expires_in=3600: "https://download.test/generated.webp"
-
         response = MagicMock()
         response.content = b"webp-bytes"
         response.raise_for_status.return_value = None
@@ -85,4 +83,33 @@ class MessageArtifactsTests(TestCase):
 
         self.assertEqual(file_id, 78)
         self.assertEqual(errors, [])
-        client.get.assert_awaited_once_with("https://download.test/generated.webp")
+        client.get.assert_awaited_once()
+        requested_url = client.get.await_args.args[0]
+        self.assertIn("generated.webp", requested_url)
+
+    @patch("nova.message_artifacts.download_file_content", new_callable=AsyncMock)
+    @patch("nova.message_artifacts.batch_upload_files", new_callable=AsyncMock)
+    def test_publish_artifact_to_files_uses_source_artifact_binary_when_needed(
+        self,
+        mocked_batch_upload,
+        mocked_download,
+    ):
+        source_artifact = self.artifact
+        derived_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.message,
+            source_artifact=source_artifact,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="derived.webp",
+            mime_type="image/webp",
+        )
+        mocked_download.return_value = b"webp-bytes"
+        mocked_batch_upload.return_value = ([{"id": 79, "path": "/generated/derived.webp"}], [])
+
+        file_id, errors = async_to_sync(publish_artifact_to_files)(derived_artifact)
+
+        self.assertEqual(file_id, 79)
+        self.assertEqual(errors, [])
+        mocked_download.assert_awaited_once()

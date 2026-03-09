@@ -112,77 +112,124 @@ def filter_image_attachment_manifests(artifacts: Iterable[dict[str, Any]]) -> li
     ]
 
 
+async def _resolve_publish_source_user_file(artifact: MessageArtifact) -> UserFile | None:
+    artifact_chain_ids: list[int] = []
+    current_artifact = artifact
+
+    while current_artifact and current_artifact.pk and current_artifact.pk not in artifact_chain_ids:
+        artifact_chain_ids.append(current_artifact.pk)
+
+        if current_artifact.user_file_id:
+            def _load_user_file():
+                return UserFile.objects.filter(
+                    id=current_artifact.user_file_id,
+                    user=current_artifact.user,
+                    thread=current_artifact.thread,
+                ).first()
+
+            user_file = await sync_to_async(_load_user_file, thread_sensitive=True)()
+            if user_file is not None:
+                return user_file
+
+        if not current_artifact.source_artifact_id:
+            break
+
+        def _load_source_artifact():
+            return (
+                MessageArtifact.objects.select_related("user_file", "source_artifact")
+                .filter(
+                    id=current_artifact.source_artifact_id,
+                    user=artifact.user,
+                    thread=artifact.thread,
+                )
+                .first()
+            )
+
+        current_artifact = await sync_to_async(_load_source_artifact, thread_sensitive=True)()
+
+    return None
+
+
 async def publish_artifact_to_files(
     artifact: MessageArtifact,
     *,
     filename: str = "",
 ) -> tuple[int | None, list[str]]:
-    target_name = (filename or "").strip() or artifact.filename
+    try:
+        target_name = (filename or "").strip() or artifact.filename
+        source_user_file = await _resolve_publish_source_user_file(artifact)
 
-    if artifact.user_file_id:
-        try:
-            content = await download_file_content(artifact.user_file)
-        except Exception as exc:
-            logger.warning(
-                "Direct artifact binary download failed for artifact %s: %s",
-                artifact.id,
-                exc,
-            )
+        if source_user_file is not None:
             try:
-                download_url = await sync_to_async(
-                    artifact.user_file.get_download_url,
-                    thread_sensitive=True,
-                )(expires_in=3600)
-            except Exception as url_exc:
-                logger.exception(
-                    "Artifact fallback download URL generation failed for artifact %s",
+                content = await download_file_content(source_user_file)
+            except Exception as exc:
+                logger.warning(
+                    "Direct artifact binary download failed for artifact %s: %s",
                     artifact.id,
+                    exc,
                 )
-                return None, [f"Artifact publish failed: {url_exc}"]
+                try:
+                    download_url = await sync_to_async(
+                        source_user_file.get_download_url,
+                        thread_sensitive=True,
+                    )(expires_in=3600)
+                except Exception as url_exc:
+                    logger.exception(
+                        "Artifact fallback download URL generation failed for artifact %s",
+                        artifact.id,
+                    )
+                    return None, [f"Artifact publish failed: {url_exc}"]
 
-            if not download_url:
-                return None, ["Artifact publish failed: no download URL could be generated."]
+                if not download_url:
+                    return None, ["Artifact publish failed: no download URL could be generated."]
 
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-                    response = await client.get(download_url)
-                response.raise_for_status()
-                content = response.content
-            except Exception as fallback_exc:
-                logger.exception(
-                    "Artifact fallback binary download failed for artifact %s",
-                    artifact.id,
-                )
-                return None, [f"Artifact publish failed: {fallback_exc}"]
-    elif artifact.summary_text:
-        content = artifact.summary_text.encode("utf-8")
-        if not target_name.endswith(".txt"):
-            target_name = f"{target_name}.txt"
-    else:
-        return None, ["Artifact cannot be published because it has no binary or text content."]
+                try:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                        response = await client.get(download_url)
+                    response.raise_for_status()
+                    content = response.content
+                except Exception as fallback_exc:
+                    logger.exception(
+                        "Artifact fallback binary download failed for artifact %s",
+                        artifact.id,
+                    )
+                    return None, [f"Artifact publish failed: {fallback_exc}"]
+            explicit_mime_type = artifact.mime_type or source_user_file.mime_type or ""
+            if not target_name:
+                target_name = build_artifact_label(source_user_file, fallback=f"artifact-{artifact.id}")
+        elif artifact.summary_text:
+            content = artifact.summary_text.encode("utf-8")
+            explicit_mime_type = artifact.mime_type or "text/plain"
+            if not target_name.endswith(".txt"):
+                target_name = f"{target_name}.txt"
+        else:
+            return None, ["Artifact cannot be published because it has no binary or text content."]
 
-    created, errors = await batch_upload_files(
-        artifact.thread,
-        artifact.user,
-        [
-            {
-                "path": f"/generated/{posixpath.basename(target_name)}",
-                "content": content,
-                "mime_type": artifact.mime_type or getattr(artifact.user_file, "mime_type", ""),
-            }
-        ],
-        scope=UserFile.Scope.THREAD_SHARED,
-        allowed_mime_prefixes=("image/", "audio/"),
-    )
-    if errors and not created:
-        return None, errors
-    if not created:
-        return None, ["Artifact publish did not create a file."]
+        created, errors = await batch_upload_files(
+            artifact.thread,
+            artifact.user,
+            [
+                {
+                    "path": f"/generated/{posixpath.basename(target_name)}",
+                    "content": content,
+                    "mime_type": explicit_mime_type,
+                }
+            ],
+            scope=UserFile.Scope.THREAD_SHARED,
+            allowed_mime_prefixes=("image/", "audio/"),
+        )
+        if errors and not created:
+            return None, errors
+        if not created:
+            return None, ["Artifact publish did not create a file."]
 
-    artifact.published_to_file = True
-    await sync_to_async(artifact.save, thread_sensitive=True)(update_fields=["published_to_file", "updated_at"])
-    file_id = created[0].get("id") if created else None
-    return file_id, errors
+        artifact.published_to_file = True
+        await sync_to_async(artifact.save, thread_sensitive=True)(update_fields=["published_to_file", "updated_at"])
+        file_id = created[0].get("id") if created else None
+        return file_id, errors
+    except Exception as exc:
+        logger.exception("Unexpected artifact publish failure for artifact %s", artifact.id)
+        return None, [f"Artifact publish failed: {exc}"]
 
 
 def clone_artifact_for_message(
