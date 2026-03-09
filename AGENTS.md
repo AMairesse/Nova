@@ -22,6 +22,16 @@ Primary code areas:
 - Multi-tenancy: all user data is user-scoped in models and queries.
 - Secrets: API keys are encrypted at rest.
 - Files: stored in MinIO under user/thread-scoped paths.
+- Provider runtime is provider-aware:
+  - generic orchestration stays in `nova/llm/`
+  - provider-specific behavior lives in `nova/providers/`
+  - `LLMProvider.capability_profile` is the single persisted source of model capabilities and verification state
+- Multimodal conversation state is split:
+  - `UserFile` stores binaries
+  - `MessageArtifact` stores message-scoped inputs/outputs/derived artifacts
+  - thread `Files` and conversation `Artifacts` are intentionally distinct
+- Tool-less execution is a first-class runtime mode for providers/models that do not support tools.
+- Langfuse shutdown is process-scoped; per-task cleanup should only release Nova runtime resources.
 
 ## 3) Current Feature Baselines to Preserve
 
@@ -37,10 +47,23 @@ Primary code areas:
 - Continuous conversation recall tools are system capabilities from `nova/continuous/tools/conversation_tools.py` (not user-addable builtins).
 - Continuous mode uses day segments, summaries, and checkpoint rebuild semantics; avoid regressions in context reconstruction behavior.
 
+### Provider-aware multimodal behavior
+
+- Preserve the distinction between:
+  - provider metadata refresh
+  - active verification
+  - effective capability gating from `capability_profile`
+- OpenRouter and LM Studio have provider-aware model discovery; do not regress the “connection first, model second” flow.
+- Message media should appear as `MessageArtifact` outputs in the thread and remain publishable to `Files`.
+- Main agents may delegate artifacts to sub-agents; sub-agent outputs must remain recoverable by the parent agent.
+- Models verified as `tools=unsupported` must not receive default Nova tools unless the run is explicitly tool-less.
+
 ## 4) Repository Conventions
 
 - Models: one model per file under `nova/models/`.
 - Builtin tools: modules under `nova/tools/builtins/` exposing `get_functions()`.
+- Provider-specific logic: under `nova/providers/`.
+- Telemetry/process-scoped cleanup helpers: under `nova/telemetry/`.
 - Celery tasks: in `nova/tasks/`.
 - Views: feature-grouped under `nova/views/` and `user_settings/views/`.
 - Avoid editing vendored or minified artifacts.
@@ -109,5 +132,7 @@ python manage.py test --settings nova.settings_test
 
 - `README-dev.md` for development structure.
 - `README-agents.md` for functional agent setup.
+- `README.md` for product-level capabilities and quickstart.
+- `user_settings/README.md` for provider/agent settings UI behavior.
 - `plans/continuous_discussion.md` for continuous mode decisions.
 - `plans/memory.md` for memory system design context.

@@ -54,6 +54,7 @@ Nova is a web platform to build and run user-scoped AI agents with strong privac
 
 - Agent-centric orchestration: each user can create specialized agents and compose them as tools.
 - Local or remote model routing: choose per-provider and per-agent what model backend to use.
+- Provider-aware model catalogs: OpenRouter and LM Studio can expose model lists, declared capabilities, and verification state in the UI.
 - Real-time execution flow: tool calls and agent progress are streamed live in the UI.
 - Multi-tenancy by design: data access is scoped to the authenticated user.
 - Background runtime: long operations run asynchronously through Celery.
@@ -79,6 +80,20 @@ Agents can use:
 
 Nova also supports on-demand skills in the runtime (`list_skills`, `load_skill`) so some tool families can be activated only when needed for the current turn.
 
+### Multimodal Artifacts
+
+- Users can attach images, PDFs and audio directly to a message.
+- Providers can generate media that is rendered inline in the thread.
+- Conversation artifacts are stored separately from thread `Files`.
+- Artifacts can be explicitly copied to `Files` when they should become durable workspace files.
+
+### Provider-Aware Routing
+
+- `OpenRouter` and `LM Studio` support provider-aware model discovery in Settings.
+- Nova persists a unified capability profile per provider/model.
+- Metadata refresh and active verification are separate actions.
+- Models without tool support can still run in tool-less thread mode when the agent does not depend on tools.
+
 ### Automation and Scheduled Tasks
 
 Nova includes user-managed scheduled tasks in Settings:
@@ -99,6 +114,7 @@ Long-term memory is structured and queryable:
 ### Files and Web Apps
 
 - User files are scoped per user/thread and stored in MinIO.
+- Message-scoped artifacts can be promoted to thread files on demand.
 - Agents can generate static mini web apps and expose them under `/apps/<slug>/`.
 - Web app serving enforces user ownership checks.
 
@@ -154,7 +170,9 @@ Nova
 │  ├─ api/                # REST API endpoints
 │  ├─ continuous/         # Continuous-mode context and conversation tools
 │  ├─ llm/                # Agent runtime, prompts, middleware, skill policy
+│  ├─ providers/          # Provider adapters, model catalogs, capability metadata
 │  ├─ models/             # One model per file
+│  ├─ telemetry/          # Process-scoped telemetry helpers
 │  ├─ tasks/              # Celery tasks and task templates
 │  ├─ tools/              # Built-in tools, tool loading, agent-tool wrappers
 │  ├─ views/              # App views (threads, continuous, files, tasks...)
@@ -182,6 +200,8 @@ Nova
 2. Structured long-term memory with optional embeddings.
 3. On-demand skill loading in the runtime.
 4. Scheduled tasks with templates and maintenance flows.
+5. Provider-aware model discovery and capability verification.
+6. Multimodal message artifacts and inline media rendering.
 
 ### Planned
 

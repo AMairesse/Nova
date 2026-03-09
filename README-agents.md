@@ -5,6 +5,7 @@ This guide explains how to configure agents in Nova.
 Nova now uses a hybrid model:
 - a main agent (`Nova`) with direct tools and on-demand skills
 - a small set of specialized sub-agents for focused domains (internet, code)
+- optional media-oriented agents can be added for image/audio generation when needed
 
 Mail and calendar are no longer configured as dedicated sub-agents in the default setup.
 
@@ -22,13 +23,21 @@ If using Docker, select your stack in `docker/.env` (`COMPOSE_FILE`) and run `do
 
 You need at least one LLM provider to power your agents.
 
+Nova provider configuration is now provider-aware:
+- save the connection first if needed
+- load/select a model when the provider supports a live catalog
+- refresh metadata to get declared capabilities
+- run active verification to confirm chat/streaming/tools/vision support
+
+For `OpenRouter` and `LMStudio`, Nova can load the available models directly from the provider.
+
 ### Example for Local Provider
 
 | Field | Value |
 | --- | --- |
 | Name | `LMStudio - Magistral` |
 | Type | `LMStudio` |
-| Model | `mistralai/magistral-small-2509` |
+| Model | `Select from the LM Studio catalog or enter manually` |
 | Base URL | `http://host.docker.internal:1234/v1` |
 | Max context tokens | `50000` |
 
@@ -37,11 +46,17 @@ You need at least one LLM provider to power your agents.
 | Field | Value |
 | --- | --- |
 | Name | `OpenRouter - GPT-5-mini` |
-| Type | `OpenAI` |
+| Type | `OpenRouter` |
 | Model | `openai/gpt-5-mini` |
 | API key | `Enter your API key` |
-| Base URL | `https://openrouter.ai/api/v1` |
+| Base URL | `Auto-filled: https://openrouter.ai/api/v1` |
 | Max context tokens | `400000` |
+
+Recommended provider workflow:
+1. Save the provider connection.
+2. Use `Load models` to browse/select a model.
+3. Use `Refresh metadata` to import declared capabilities.
+4. Use `Run active verification` before assigning the provider to important agents.
 
 ## 2. Create Your Tools
 
@@ -67,6 +82,10 @@ Nova defaults to:
 - two sub-agents used as tools: `Internet Agent`, `Code Agent`
 
 Do not create dedicated `Calendar Agent` or `Email Agent` in the default model.
+
+Important provider rule:
+- the main agent and tool-calling sub-agents should use a model verified with tool support
+- models verified as `tools unavailable` are better suited to simple thread runs or specialized media generation
 
 ### 3.1 Internet Agent
 
@@ -104,6 +123,23 @@ Do not create dedicated `Calendar Agent` or `Email Agent` in the default model.
 | Associated tools | `Ask user`, `Memory`, `Date / Time`, `WebApp`, `Email` (1..n), `CalDAV` (1..n) |
 | Agents as tools | `Internet Agent`, `Code Agent` |
 
+## 3.4 Optional Media Agent
+
+If you want an agent dedicated to generating or transforming media:
+
+| Field | Value |
+| --- | --- |
+| Name | `Image Agent` |
+| Provider | `OpenRouter` image-capable model or another media-capable provider |
+| Use as a tool | `Yes` |
+| Tool description | `Use this agent to generate or transform images.` |
+
+Notes:
+- media-oriented models often do **not** support tools
+- they should usually be used as specialized sub-agents, not as the main `Nova` agent
+- Nova can pass conversation artifacts to these sub-agents and recover the generated media back into the main thread
+- generated media appears inline in the thread and can be published to `Files`
+
 ## 4. Skills Runtime Behavior
 
 Mail and Calendar are exposed as on-demand skills in tool-based agent runtime:
@@ -111,11 +147,24 @@ Mail and Calendar are exposed as on-demand skills in tool-based agent runtime:
 - `Nova` can activate them on demand (for example via `load_skill("mail")` or `load_skill("caldav")`).
 - With multiple configured instances, Nova uses aggregated tools and a selector argument (for example mailbox/account identifier).
 
-## 5. Run Your Agent
+## 5. Multimodal Threads
+
+Nova supports message-scoped multimodal artifacts:
+- user images, PDFs and audio can be attached directly to a message
+- provider-generated media is stored as conversation artifacts
+- artifacts stay distinct from thread `Files`
+- a generated artifact can be explicitly copied to `Files` with `Add to Files`
+
+If a model does not support tools:
+- simple thread runs may still work in tool-less mode
+- continuous mode and tool-dependent agents are not compatible
+- prefer using such models as specialized media agents
+
+## 6. Run Your Agent
 
 Click the Nova icon in the top-left corner to start a conversation.
 
-## 6. Testing and Examples
+## 7. Testing and Examples
 
 Test your setup with these scenarios:
 - **Internet**: "What's the weather in Paris?" (should delegate to `Internet Agent`).
@@ -123,8 +172,11 @@ Test your setup with these scenarios:
 - **Calendar skill**: "Any events next week?" (should activate CalDAV skill and use calendar tools).
 - **Code**: "Sum numbers in this list: [1,2,3]." (should delegate to `Code Agent`).
 - **Main orchestration**: "Read my last email then draft a reply." (mail workflow through skills, no Email sub-agent required).
+- **Image generation**: ask a dedicated media agent to generate an image; the resulting image should appear inline in the thread and remain publishable to `Files`.
 
 ## Migration Note
 
 Default bootstrap automatically detaches legacy `Calendar Agent` and `Email Agent` links from `Nova`.
 These legacy agent rows are not deleted from the database.
+
+Existing providers that previously used `OpenAI` + `https://openrouter.ai/api/v1` are migrated to the explicit `OpenRouter` provider type.

@@ -15,7 +15,7 @@ Nova
 |  |  └─ views.py                       # Django REST views
 |  ├─ llm/                              # LLM integration
 |  |  ├─ checkpoints.py                 # LLM's checkpoints management functions
-|  |  ├─ llm_agent.py                   # Base model for an LLM agent
+|  |  ├─ llm_agent.py                   # LangGraph/LangChain agent orchestration
 |  |  └─ llm_tools.py                   # Tools management functions for the LLM agent
 |  ├─ mcp/                              # Thin wrapper around FastMCP
 |  |  └─ client.py                      # MCPClient class
@@ -25,6 +25,7 @@ Nova
 |  |  ├─ CheckpointLink.py              # CheckpointLink object's model
 |  |  ├─ Interaction.py                 # Interaction and InteractionStatus objects' model
 |  |  ├─ Message.py                     # Actor, Message, MessageType objects' model
+|  |  ├─ MessageArtifact.py             # Multimodal artifacts linked to messages
 |  |  ├─ Provider.py                    # ProviderType and LLMProvider objects' model
 |  |  ├─ Task.py                        # Task and TaskStatus objects' model
 |  |  ├─ Thread.py                      # Thread object's model
@@ -32,6 +33,7 @@ Nova
 |  |  ├─ Memory.py                      # MemoryTheme, MemoryItem and MemoryItemEmbedding objects' model
 |  |  ├─ UserFile.py                    # UserFile object's model
 |  |  └─ UserObjects.py                 # UserParameters and UserProfile objects' model
+|  ├─ providers/                        # Provider-specific adapters, catalogs and capability logic
 |  ├─ static/                           # JS helpers (streaming, tool modal manager…)
 |  |  ├─ css/                           # CSS helpers
 |  |  |  └─ main.css                    # CSS helpers
@@ -46,6 +48,7 @@ Nova
 |  |  └─ sw.js                          # Service Worker
 |  ├─ templates/                        # Django + Bootstrap 5 UI
 |  ├─ tests/                            # Django tests
+|  ├─ telemetry/                        # Process-scoped telemetry helpers
 |  ├─ tools/                            # Built‑in tool modules (CalDav, agent wrapper…)
 |  ├─ views/                            # Django views
 |  ├─ admin.py                          # Django admin
@@ -83,6 +86,35 @@ Nova
 - The conversation between a user and one or multiple agent is a ```Thread``` object.
 - During a conversation the user can choose to switch to another agent for each new message sent.
 - A Thread contains multiple ```Messages```.
+
+### Files vs. artifacts
+
+- `UserFile` stores persisted binaries in MinIO.
+- `MessageArtifact` stores message-scoped multimodal inputs, outputs and derived artifacts.
+- `Files` are user-visible thread resources.
+- `Artifacts` are conversation/runtime resources that can optionally be published to `Files`.
+
+### Provider capabilities
+
+- `LLMProvider` stores connection + selected model.
+- Model capability state is persisted in `LLMProvider.capability_profile`.
+- The provider settings flow separates:
+  - connection save
+  - model discovery (OpenRouter / LM Studio)
+  - metadata refresh
+  - active verification
+
+## Provider-aware runtime
+
+- `nova/llm/` owns agent orchestration, checkpoints and tool execution.
+- `nova/providers/` owns provider-specific client creation, model catalogs, multimodal payloads and capability metadata.
+- Tool-less execution is supported for models that do not support tools.
+- Native provider paths are used for non-text multimodal operations such as provider-native image/audio/PDF flows.
+
+## Telemetry cleanup
+
+- Per-task cleanup must only release Nova runtime resources (`cleanup_runtime()`).
+- Langfuse shutdown is process-scoped and handled at worker shutdown, not at the end of each task.
 
 
 ## Translation
@@ -143,6 +175,15 @@ To keep tests deterministic for WebPush, `nova/settings_test.py` explicitly forc
 - `WEBPUSH_VAPID_SUBJECT = ''`
 
 This avoids local `.env` values unexpectedly enabling push features during test runs.
+
+Recommended full test command:
+
+```bash
+DEBUG=False \
+CSRF_TRUSTED_ORIGINS='https://localhost,https://testserver' \
+DJANGO_SETTINGS_MODULE=nova.settings_test \
+python manage.py test
+```
 
 ## WebApp Skill Authoring Pattern
 
