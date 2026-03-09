@@ -5,10 +5,12 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from langchain_core.messages import AIMessage, HumanMessage
 
 from nova.models.Message import Actor
+from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
+from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.tasks import (
     AgentTaskExecutor,
@@ -21,6 +23,7 @@ from nova.tasks.tasks import (
     run_ai_task_celery,
     summarize_thread_task,
 )
+from nova.tests.factories import create_agent, create_provider, create_user
 
 
 class ContextConsumptionTrackerTests(IsolatedAsyncioTestCase):
@@ -413,6 +416,127 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
 
         mocked_payload.assert_awaited_once_with(77)
         handler.on_new_message.assert_awaited_once_with(realtime_payload, task_id=3)
+
+
+class AgentTaskExecutorArtifactTests(TransactionTestCase):
+    reset_sequences = True
+    def setUp(self):
+        self.user = create_user(username="runtime-user", email="runtime@example.com")
+        self.provider = create_provider(self.user, name="runtime-provider")
+        self.agent = create_agent(self.user, self.provider, name="runtime-agent")
+        self.thread = Thread.objects.create(user=self.user, subject="Runtime thread")
+
+    def test_build_realtime_message_payload_includes_rendered_html(self):
+        source_message = self.thread.add_message("prompt", actor=Actor.USER)
+        message = self.thread.add_message("Final answer", actor=Actor.AGENT)
+        message.internal_data = {"display_markdown": "Intro paragraph\n\n- one\n- two"}
+        message.save(update_fields=["internal_data"])
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=10, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+
+        payload = asyncio.run(executor._build_realtime_message_payload(message.id))
+
+        self.assertIn("<ul>", payload["rendered_html"])
+        self.assertIn("Intro paragraph", payload["rendered_html"])
+
+    def test_collect_hidden_subagent_output_artifact_ids_finds_hidden_outputs(self):
+        source_message = self.thread.add_message("Please create an image", actor=Actor.USER)
+        hidden_message = self.thread.add_message("hidden trace", actor=Actor.SYSTEM)
+        hidden_message.internal_data = {"hidden_subagent_trace": True}
+        hidden_message.save(update_fields=["internal_data"])
+        artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=hidden_message,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated.png",
+            mime_type="image/png",
+        )
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=11, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+        executor._source_message = source_message
+
+        artifact_ids = asyncio.run(executor._collect_hidden_subagent_output_artifact_ids())
+
+        self.assertEqual(artifact_ids, [artifact.id])
+
+    def test_process_result_clones_hidden_subagent_output_artifacts(self):
+        source_message = self.thread.add_message("Please create an image", actor=Actor.USER)
+        hidden_message = self.thread.add_message("hidden trace", actor=Actor.SYSTEM)
+        hidden_message.internal_data = {"hidden_subagent_trace": True}
+        hidden_message.save(update_fields=["internal_data"])
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=hidden_message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/generated.png",
+            original_filename="/.message_attachments/generated/generated.png",
+            mime_type="image/png",
+            size=8,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        source_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=hidden_message,
+            user_file=user_file,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated.png",
+            mime_type="image/png",
+        )
+        task = SimpleNamespace(
+            id=12,
+            progress_logs=[],
+            save=Mock(),
+            result=None,
+            current_response="",
+            streamed_markdown="",
+        )
+        handler = SimpleNamespace(
+            on_context_consumption=AsyncMock(),
+            on_new_message=AsyncMock(),
+            get_streamed_markdown=Mock(return_value=""),
+        )
+        executor = AgentTaskExecutor(
+            task=task,
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+        executor._source_message = source_message
+        executor.handler = handler
+        executor.llm = SimpleNamespace(
+            last_generated_tool_artifact_refs=[],
+        )
+
+        with (
+            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 4096)),
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+        ):
+            asyncio.run(executor._process_result("Generated 1 image."))
+
+        final_message = self.thread.get_messages().filter(actor=Actor.AGENT).latest("id")
+        cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
+        self.assertEqual(cloned_artifact.source_artifact_id, source_artifact.id)
+        self.assertEqual(cloned_artifact.user_file_id, user_file.id)
 
 
 class GenerateThreadTitleTaskTests(SimpleTestCase):

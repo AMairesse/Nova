@@ -169,6 +169,8 @@
                 const attachments = this.getMessageAttachments(messageData);
                 const inlineArtifactsHtml = this.renderInlineArtifacts(attachments, { withTopMargin: true });
                 const attachmentSummaryHtml = this.renderArtifactSummary(attachments, { withTopMargin: true });
+                const renderedHtml = `${messageData.rendered_html || ''}`.trim();
+                const contentHtml = renderedHtml || window.DOMUtils.escapeHTML(messageData.text || '');
                 const compactLinkHtml = isContinuousPage ? '' : `
               <a href="#" class="compact-thread-link text-decoration-none small me-2 d-none" title="${gettext('Summarize conversation to save context space')}">
                 <i class="bi bi-compress me-1"></i>${gettext('Compact')}
@@ -178,7 +180,7 @@
                 messageDiv.innerHTML = `
           <div class="card border-secondary">
             <div class="card-body py-2">
-              <div class="streaming-content assistant-markdown">${window.DOMUtils.escapeHTML(messageData.text)}</div>
+              <div class="streaming-content assistant-markdown">${contentHtml}</div>
               ${inlineArtifactsHtml}
               ${attachmentSummaryHtml}
             </div>

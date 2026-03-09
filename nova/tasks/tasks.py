@@ -45,7 +45,7 @@ from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
-from nova.utils import strip_thinking_blocks
+from nova.utils import strip_thinking_blocks, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -380,6 +380,14 @@ class AgentTaskExecutor (TaskExecutor):
             for artifact_ref in list(getattr(self.llm, "last_generated_tool_artifact_refs", []) or [])
             if artifact_ref.get("artifact_id")
         ]
+        hidden_subagent_artifact_ids = await self._collect_hidden_subagent_output_artifact_ids()
+        if hidden_subagent_artifact_ids:
+            seen_artifact_ids = set(generated_tool_artifact_ids)
+            generated_tool_artifact_ids.extend(
+                artifact_id
+                for artifact_id in hidden_subagent_artifact_ids
+                if artifact_id not in seen_artifact_ids
+            )
         if generated_tool_artifact_ids:
             await sync_to_async(
                 attach_tool_output_artifacts_to_message,
@@ -447,14 +455,50 @@ class AgentTaskExecutor (TaskExecutor):
 
         fresh_message = await sync_to_async(_load_message, thread_sensitive=True)()
         annotate_user_message(fresh_message)
+        display_text = ""
+        if isinstance(fresh_message.internal_data, dict):
+            display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
+        if not display_text:
+            display_text = fresh_message.text or ""
         return {
             "id": fresh_message.id,
             "text": fresh_message.text,
             "actor": fresh_message.actor,
             "internal_data": fresh_message.internal_data,
             "created_at": str(fresh_message.created_at),
+            "rendered_html": markdown_to_html(display_text),
             "artifacts": getattr(fresh_message, "message_artifacts", []),
         }
+
+    async def _collect_hidden_subagent_output_artifact_ids(self) -> list[int]:
+        source_message = getattr(self, "_source_message", None)
+        if source_message is None or not getattr(source_message, "id", None):
+            return []
+
+        def _load_artifact_ids():
+            hidden_message_ids = list(
+                Message.objects.filter(
+                    thread=self.thread,
+                    user=self.user,
+                    actor=Actor.SYSTEM,
+                    id__gt=source_message.id,
+                    internal_data__hidden_subagent_trace=True,
+                ).values_list("id", flat=True)
+            )
+            if not hidden_message_ids:
+                return []
+            return list(
+                MessageArtifact.objects.filter(
+                    thread=self.thread,
+                    user=self.user,
+                    message_id__in=hidden_message_ids,
+                    direction=ArtifactDirection.OUTPUT,
+                )
+                .order_by("created_at", "id")
+                .values_list("id", flat=True)
+            )
+
+        return await sync_to_async(_load_artifact_ids, thread_sensitive=True)()
 
     async def _sync_native_provider_checkpoint(self, native_result: dict, final_answer: str) -> None:
         if not self.llm or not getattr(self.llm, "langchain_agent", None):
