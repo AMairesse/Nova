@@ -10,6 +10,7 @@ from django.test import TransactionTestCase
 from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
+from nova.tests.factories import create_agent, create_provider
 
 
 User = get_user_model()
@@ -299,3 +300,61 @@ class AgentToolWrapperTests(TransactionTestCase):
         self.assertIn("Check connections or config", result)
         self.assertEqual(artifact_payload, {})
         self.assertTrue(FailingLLMAgent.instances[-1].cleanup_called)
+
+    def test_execute_agent_loads_real_provider_without_sync_orm_in_async_context(self):
+        class FakeLLMAgent:
+            instances = []
+
+            def __init__(self, result="OK"):
+                self.result = result
+                self.cleanup_called = False
+                self.invoke_calls = []
+                self.last_generated_tool_artifact_refs = []
+
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                inst = cls(result="ANSWER")
+                inst._tools_enabled = tools_enabled
+                cls.instances.append(inst)
+                return inst
+
+            async def ainvoke(self, question):
+                self.invoke_calls.append(question)
+                return self.result
+
+            async def cleanup(self):
+                self.cleanup_called = True
+
+        provider = create_provider(self.user, name="sub-provider")
+        agent = create_agent(
+            self.user,
+            provider,
+            name="DB-backed sub-agent",
+            is_tool=True,
+            tool_description="desc",
+        )
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            with patch(
+                "nova.tools.agent_tool_wrapper.invoke_native_provider_for_message",
+                return_value=None,
+            ):
+                tool = wrapper.create_langchain_tool()
+                answer, artifact_payload = asyncio.run(tool["coroutine"]("Hello from parent"))
+
+        self.assertEqual(answer, "ANSWER")
+        self.assertEqual(artifact_payload, {})
+        self.assertTrue(FakeLLMAgent.instances[-1].cleanup_called)
+        self.assertTrue(FakeLLMAgent.instances[-1].invoke_calls)

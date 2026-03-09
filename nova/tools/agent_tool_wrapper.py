@@ -86,7 +86,7 @@ class AgentToolWrapper:
             if artifact_ids:
                 await self._attach_input_artifacts(source_message, artifact_ids)
 
-            provider = self.agent_config.llm_provider
+            provider = await self._load_provider()
             if provider_tools_explicitly_unavailable(provider) and await sync_to_async(
                 requires_tools_for_run,
                 thread_sensitive=True,
@@ -333,3 +333,16 @@ class AgentToolWrapper:
         if len(content_parts) == 1:
             return content_parts[0]["text"]
         return content_parts
+
+    async def _load_provider(self):
+        if not isinstance(self.agent_config, AgentConfig):
+            return getattr(self.agent_config, "llm_provider", None)
+
+        def _get_provider():
+            return (
+                AgentConfig.objects.select_related("llm_provider")
+                .get(id=self.agent_config.id, user=self.user)
+                .llm_provider
+            )
+
+        return await sync_to_async(_get_provider, thread_sensitive=True)()
