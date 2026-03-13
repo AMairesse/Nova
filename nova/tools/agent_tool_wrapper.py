@@ -88,32 +88,33 @@ class AgentToolWrapper:
                 update_fields=["internal_data"]
             )
 
-            if artifact_ids:
-                await self._attach_input_artifacts(source_message, artifact_ids)
-            if file_ids:
-                await self._attach_input_files(source_message, file_ids)
-
-            provider = await self._load_provider()
-            if provider_tools_explicitly_unavailable(provider) and await sync_to_async(
-                requires_tools_for_run,
-                thread_sensitive=True,
-            )(
-                self.agent_config,
-                getattr(self.thread, "mode", None),
-            ):
-                error_msg = _(
-                    "Error in sub-agent %(name)s: this model does not support tool use for this delegated run."
-                ) % {"name": self.agent_config.name}
-                return error_msg, {}
-
-            tools_enabled = not provider_tools_explicitly_unavailable(provider)
-            agent_llm = await LLMAgent.create(
-                self.user,
-                self.thread,
-                self.agent_config,
-                tools_enabled=tools_enabled,
-            )
+            agent_llm = None
             try:
+                if artifact_ids:
+                    await self._attach_input_artifacts(source_message, artifact_ids)
+                if file_ids:
+                    await self._attach_input_files(source_message, file_ids)
+
+                provider = await self._load_provider()
+                if provider_tools_explicitly_unavailable(provider) and await sync_to_async(
+                    requires_tools_for_run,
+                    thread_sensitive=True,
+                )(
+                    self.agent_config,
+                    getattr(self.thread, "mode", None),
+                ):
+                    error_msg = _(
+                        "Error in sub-agent %(name)s: this model does not support tool use for this delegated run."
+                    ) % {"name": self.agent_config.name}
+                    return error_msg, {}
+
+                tools_enabled = not provider_tools_explicitly_unavailable(provider)
+                agent_llm = await LLMAgent.create(
+                    self.user,
+                    self.thread,
+                    self.agent_config,
+                    tools_enabled=tools_enabled,
+                )
                 prompt = await self._build_source_message_prompt(
                     source_message,
                     fallback_prompt=question,
@@ -162,16 +163,17 @@ class AgentToolWrapper:
                 }
                 return error_msg + _(" Check connections or config."), {}
             finally:
-                try:
-                    # Generic cleanup (handles browser if assigned as builtin)
-                    await asyncio.wait_for(
-                        agent_llm.cleanup_runtime(),
-                        timeout=SUBAGENT_CLEANUP_TIMEOUT_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    logger.error("Timed out while cleaning up sub-agent %s", self.agent_config.name)
-                except Exception as cleanup_error:
-                    logger.error(f"Failed to cleanup sub-agent {self.agent_config.name}: {str(cleanup_error)}")
+                if agent_llm is not None:
+                    try:
+                        # Generic cleanup (handles browser if assigned as builtin)
+                        await asyncio.wait_for(
+                            agent_llm.cleanup_runtime(),
+                            timeout=SUBAGENT_CLEANUP_TIMEOUT_SECONDS,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error("Timed out while cleaning up sub-agent %s", self.agent_config.name)
+                    except Exception as cleanup_error:
+                        logger.error(f"Failed to cleanup sub-agent {self.agent_config.name}: {str(cleanup_error)}")
 
         async def execute_agent_wrapper(
             question: str,
