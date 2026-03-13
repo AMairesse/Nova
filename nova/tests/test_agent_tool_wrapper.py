@@ -127,6 +127,14 @@ class AgentToolWrapperTests(TransactionTestCase):
         self.assertIn("artifact_ids", schema.get("properties", {}))
         self.assertIn("file_ids", schema.get("properties", {}))
         self.assertIn("output_mode", schema.get("properties", {}))
+        self.assertIn(
+            "Use only IDs returned by artifact_ls or artifact_search.",
+            schema["properties"]["artifact_ids"]["description"],
+        )
+        self.assertIn(
+            "Use only IDs returned by file_ls.",
+            schema["properties"]["file_ids"]["description"],
+        )
 
         # Ensure the tool exposes an async coroutine (no sync func expected)
         self.assertIsNone(tool["func"])
@@ -420,6 +428,47 @@ class AgentToolWrapperTests(TransactionTestCase):
         self.assertEqual(cloned_input.kind, ArtifactKind.IMAGE)
         self.assertEqual(cloned_input.metadata.get("source"), "artifact_id_fallback")
         self.assertEqual(cloned_input.metadata.get("requested_via"), "file_ids")
+
+    def test_execute_agent_invalid_file_ids_error_points_to_file_ls_and_artifacts(self):
+        class FakeLLMAgent:
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                raise AssertionError("LLMAgent.create should not be called when input attachment fails")
+
+        provider = create_provider(self.user, name="media-provider")
+        agent = create_agent(
+            self.user,
+            provider,
+            name="Image sub-agent",
+            is_tool=True,
+            tool_description="Modify images",
+        )
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            tool = wrapper.create_langchain_tool()
+            result, artifact_payload = asyncio.run(
+                tool["coroutine"](
+                    "Please modify this image.",
+                    file_ids=[9999],
+                    output_mode="image",
+                )
+            )
+
+        self.assertIn("Call file_ls to discover valid file_ids.", result)
+        self.assertIn("use artifact_ls or artifact_search and pass artifact_ids instead", result)
+        self.assertEqual(artifact_payload, {})
 
     def test_execute_agent_failure_returns_formatted_error_and_cleans_up(self):
         """

@@ -34,6 +34,8 @@ METADATA = {
 def get_skill_instructions(agent=None, tools=None) -> list[str]:
     return [
         "Use file_ls first to discover file ids and types before reading or deleting.",
+        "Always call file_ls before using file_ids.",
+        "Never guess file_ids.",
         "For large documents, iterate with file_read_chunk using small chunk_size values to control context usage.",
         "Use file_read_image only for image/* mime types; use file_read_chunk for non-image files.",
         "Use file_attach to bring image, PDF, or audio thread files into the current multimodal turn.",

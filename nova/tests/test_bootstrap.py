@@ -207,6 +207,14 @@ class BootstrapSkillsTests(TestCase):
         self.assertEqual(image_agent.llm_provider, image_provider)
         self.assertTrue(nova.agent_tools.filter(pk=image_agent.pk).exists())
         self.assertIn("Image Agent", summary.get("created_agents", []))
+        self.assertIn("Never invent a file_id or artifact_id.", nova.system_prompt)
+        self.assertIn("Use file_ls to discover thread file IDs.", nova.system_prompt)
+        self.assertIn("Use artifact_ls or artifact_search to discover conversation artifact IDs.", nova.system_prompt)
+        self.assertIn("Pass file_ids only for thread file IDs returned by file_ls.", image_agent.tool_description)
+        self.assertIn(
+            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search.",
+            image_agent.tool_description,
+        )
 
     def test_bootstrap_prefers_image_provider_with_editing_support(self):
         self._apply_provider_capabilities(self.provider, tools="pass")

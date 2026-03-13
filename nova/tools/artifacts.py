@@ -30,6 +30,8 @@ METADATA = {
 def get_skill_instructions(agent=None, tools=None) -> list[str]:
     return [
         "Use artifact_search or artifact_ls to discover reusable message artifacts.",
+        "Always call artifact_ls or artifact_search before using artifact_ids.",
+        "Never guess artifact_ids.",
         "Use artifact_attach to bring a past artifact back into the current turn without copying it into Files.",
         "Use artifact_publish_to_files only when a generated artifact should become a visible thread file.",
     ]

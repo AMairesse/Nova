@@ -201,12 +201,18 @@ class AgentToolWrapper:
                 "artifact_ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": _("Optional conversation artifact IDs to pass to the sub-agent."),
+                    "description": _(
+                        "Optional conversation artifact IDs to pass to the sub-agent. "
+                        "Use only IDs returned by artifact_ls or artifact_search."
+                    ),
                 },
                 "file_ids": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": _("Optional thread file IDs to pass to the sub-agent as multimodal inputs."),
+                    "description": _(
+                        "Optional thread file IDs to pass to the sub-agent as multimodal inputs. "
+                        "Use only IDs returned by file_ls."
+                    ),
                 },
                 "output_mode": {
                     "type": "string",
@@ -332,7 +338,8 @@ class AgentToolWrapper:
             raise ValueError(
                 _(
                     "Thread file(s) not found or not accessible: %(ids)s. "
-                    "If these refer to conversation artifacts, pass them via artifact_ids."
+                    "Call file_ls to discover valid file_ids. "
+                    "If these refer to conversation artifacts, use artifact_ls or artifact_search and pass artifact_ids instead."
                 ) % {
                     "ids": ", ".join(str(file_id) for file_id in missing_ids),
                 }

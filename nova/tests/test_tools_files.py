@@ -19,6 +19,8 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
         instructions = self.files_tools.get_skill_instructions()
         self.assertIsInstance(instructions, list)
         self.assertTrue(any(str(i).strip() for i in instructions))
+        self.assertIn("Always call file_ls before using file_ids.", instructions)
+        self.assertIn("Never guess file_ids.", instructions)
 
     async def test_list_files_returns_no_files_message(self):
         fake_thread = SimpleNamespace(id=1)

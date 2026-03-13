@@ -522,7 +522,9 @@ def ensure_image_agent(
         recursion_limit=10,
         is_tool=True,
         tool_description=(
-            "Use this agent to generate or transform images from text instructions and optional image artifacts."
+            "Use this agent to generate or transform images from text instructions and optional media inputs. "
+            "Pass file_ids only for thread file IDs returned by file_ls. "
+            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search."
         ),
     )
 
@@ -547,6 +549,8 @@ def ensure_nova_agent(
         "language and reply in Markdown. Only call tools or sub‑agents when clearly needed. If "
         "you can read/store user data, persist relevant information and consult it before replying; "
         "only retrieve themes relevant to the current query (e.g., check stored location when asked the time). "
+        "Never invent a file_id or artifact_id. Use file_ls to discover thread file IDs. "
+        "Use artifact_ls or artifact_search to discover conversation artifact IDs. "
         "When a query clearly belongs to a specialized agent (internet, code), delegate "
         "to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. "
         f"{'Delegate image generation or image transformation requests to the Image Agent when appropriate. ' if has_image_agent else ''}"

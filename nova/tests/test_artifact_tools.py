@@ -10,7 +10,12 @@ from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, Message
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tests.base import BaseTestCase
-from nova.tools.artifacts import artifact_attach, artifact_ls, artifact_publish_to_files
+from nova.tools.artifacts import (
+    artifact_attach,
+    artifact_ls,
+    artifact_publish_to_files,
+    get_skill_instructions,
+)
 
 
 class ArtifactToolsTests(BaseTestCase):
@@ -36,6 +41,12 @@ class ArtifactToolsTests(BaseTestCase):
         self.assertIn(f"ID: {artifact.id}", output)
         self.assertIn("Kind: pdf", output)
         self.assertIn("report.pdf", output)
+
+    def test_get_skill_instructions_warns_against_guessing_ids(self):
+        instructions = get_skill_instructions()
+
+        self.assertIn("Always call artifact_ls or artifact_search before using artifact_ids.", instructions)
+        self.assertIn("Never guess artifact_ids.", instructions)
 
     def test_artifact_attach_returns_reference_payload(self):
         artifact = MessageArtifact.objects.create(
