@@ -19,6 +19,7 @@ from asgiref.sync import sync_to_async
 from nova.agent_execution import provider_tools_explicitly_unavailable, requires_tools_for_run
 from nova.file_utils import download_file_content
 from nova.llm.llm_agent import LLMAgent
+from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.native_provider_runtime import (
     invoke_native_provider_for_message,
     persist_native_result_artifacts,
@@ -28,6 +29,7 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
 
 import logging
 logger = logging.getLogger(__name__)
@@ -59,6 +61,7 @@ class AgentToolWrapper:
         async def execute_agent(
             question: str,
             artifact_ids: list[int] | None = None,
+            file_ids: list[int] | None = None,
             output_mode: str = "text",
         ) -> tuple[str, dict]:
             """
@@ -87,6 +90,8 @@ class AgentToolWrapper:
 
             if artifact_ids:
                 await self._attach_input_artifacts(source_message, artifact_ids)
+            if file_ids:
+                await self._attach_input_files(source_message, file_ids)
 
             provider = await self._load_provider()
             if provider_tools_explicitly_unavailable(provider) and await sync_to_async(
@@ -171,11 +176,13 @@ class AgentToolWrapper:
         async def execute_agent_wrapper(
             question: str,
             artifact_ids: list[int] | None = None,
+            file_ids: list[int] | None = None,
             output_mode: str = "text",
         ) -> tuple[str, dict]:
             return await execute_agent(
                 question=question,
                 artifact_ids=artifact_ids,
+                file_ids=file_ids,
                 output_mode=output_mode,
             )
 
@@ -195,6 +202,11 @@ class AgentToolWrapper:
                     "type": "array",
                     "items": {"type": "integer"},
                     "description": _("Optional conversation artifact IDs to pass to the sub-agent."),
+                },
+                "file_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": _("Optional thread file IDs to pass to the sub-agent as multimodal inputs."),
                 },
                 "output_mode": {
                     "type": "string",
@@ -239,13 +251,16 @@ class AgentToolWrapper:
         if not unique_ids:
             return
 
+        thread_id = getattr(self.thread, "id", None)
+        user_id = getattr(self.user, "id", None)
+
         def _load_source_artifacts():
             return list(
                 MessageArtifact.objects.select_related("user_file")
                 .filter(
                     id__in=unique_ids,
-                    thread=self.thread,
-                    user=self.user,
+                    thread_id=thread_id,
+                    user_id=user_id,
                 )
                 .order_by("created_at", "id")
             )
@@ -271,13 +286,161 @@ class AgentToolWrapper:
                 metadata={"subagent_input": True},
             )
 
+    async def _attach_input_files(self, source_message, file_ids: list[int]) -> None:
+        unique_ids = []
+        seen_ids: set[int] = set()
+        for file_id in file_ids:
+            try:
+                normalized = int(file_id)
+            except (TypeError, ValueError):
+                continue
+            if normalized in seen_ids:
+                continue
+            seen_ids.add(normalized)
+            unique_ids.append(normalized)
+
+        if not unique_ids:
+            return
+
+        thread_id = getattr(self.thread, "id", None)
+        user_id = getattr(self.user, "id", None)
+
+        def _load_files():
+            return list(
+                UserFile.objects.filter(
+                    id__in=unique_ids,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    scope=UserFile.Scope.THREAD_SHARED,
+                ).order_by("created_at", "id")
+            )
+
+        source_files = await sync_to_async(_load_files, thread_sensitive=True)()
+        loaded_ids = {file.id for file in source_files}
+        missing_ids = [file_id for file_id in unique_ids if file_id not in loaded_ids]
+        if missing_ids:
+            fallback_artifacts = await self._attach_missing_file_ids_as_artifacts(
+                source_message,
+                missing_ids,
+            )
+            missing_ids = [
+                file_id
+                for file_id in missing_ids
+                if file_id not in fallback_artifacts
+            ]
+        if missing_ids:
+            raise ValueError(
+                _(
+                    "Thread file(s) not found or not accessible: %(ids)s. "
+                    "If these refer to conversation artifacts, pass them via artifact_ids."
+                ) % {
+                    "ids": ", ".join(str(file_id) for file_id in missing_ids),
+                }
+            )
+
+        def _count_existing_inputs():
+            return MessageArtifact.objects.filter(
+                message=source_message,
+                direction=ArtifactDirection.INPUT,
+            ).count()
+
+        order_offset = await sync_to_async(_count_existing_inputs, thread_sensitive=True)()
+
+        for index, user_file in enumerate(source_files):
+            artifact_kind = detect_artifact_kind(user_file.mime_type, user_file.original_filename)
+            if artifact_kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+                raise ValueError(
+                    _("Thread file %(name)s cannot be passed multimodally.") % {
+                        "name": build_artifact_label(user_file, fallback=f"file-{user_file.id}"),
+                    }
+                )
+
+            await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
+                user=self.user,
+                thread=self.thread,
+                message=source_message,
+                user_file=user_file,
+                direction=ArtifactDirection.INPUT,
+                kind=artifact_kind,
+                mime_type=user_file.mime_type or "",
+                label=build_artifact_label(user_file, fallback=f"file-{user_file.id}"),
+                summary_text="",
+                search_text=build_artifact_label(user_file, fallback=f"file-{user_file.id}"),
+                order=order_offset + index,
+                metadata={"subagent_input": True, "source": "thread_file"},
+            )
+
+    async def _attach_missing_file_ids_as_artifacts(self, source_message, missing_ids: list[int]) -> set[int]:
+        if not missing_ids:
+            return set()
+
+        thread_id = getattr(self.thread, "id", None)
+        user_id = getattr(self.user, "id", None)
+
+        def _load_fallback_artifacts():
+            return list(
+                MessageArtifact.objects.select_related("user_file")
+                .filter(
+                    id__in=missing_ids,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
+                .order_by("created_at", "id")
+            )
+
+        fallback_artifacts = await sync_to_async(_load_fallback_artifacts, thread_sensitive=True)()
+        if not fallback_artifacts:
+            return set()
+
+        def _count_existing_inputs():
+            return MessageArtifact.objects.filter(
+                message=source_message,
+                direction=ArtifactDirection.INPUT,
+            ).count()
+
+        next_order = await sync_to_async(_count_existing_inputs, thread_sensitive=True)()
+        attached_ids: set[int] = set()
+        for artifact in fallback_artifacts:
+            if artifact.kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+                continue
+
+            await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
+                user=self.user,
+                thread=self.thread,
+                message=source_message,
+                user_file=artifact.user_file,
+                source_artifact=artifact,
+                direction=ArtifactDirection.INPUT,
+                kind=artifact.kind,
+                mime_type=artifact.mime_type or "",
+                label=artifact.filename,
+                summary_text=artifact.summary_text or "",
+                search_text=artifact.search_text or artifact.filename,
+                provider_type=artifact.provider_type or "",
+                model=artifact.model or "",
+                provider_fingerprint=artifact.provider_fingerprint or "",
+                order=next_order,
+                metadata={
+                    "subagent_input": True,
+                    "source": "artifact_id_fallback",
+                    "requested_via": "file_ids",
+                },
+            )
+            next_order += 1
+            attached_ids.add(artifact.id)
+
+        return attached_ids
+
     async def _build_source_message_prompt(self, source_message, *, fallback_prompt: str = ""):
+        thread_id = getattr(self.thread, "id", None)
+        user_id = getattr(self.user, "id", None)
+
         def _load_artifacts():
             return list(
                 MessageArtifact.objects.filter(
                     message=source_message,
-                    thread=self.thread,
-                    user=self.user,
+                    thread_id=thread_id,
+                    user_id=user_id,
                     direction=ArtifactDirection.INPUT,
                 )
                 .select_related("user_file")

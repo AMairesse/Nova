@@ -15,6 +15,7 @@ from nova.models.MessageArtifact import ArtifactKind, MessageArtifact
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
+from nova.models.UserFile import UserFile
 from nova.file_utils import download_file_content
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
@@ -25,6 +26,7 @@ from nova.providers import (
     create_provider_llm as provider_create_provider_llm,
     normalize_multimodal_content_for_provider as provider_normalize_multimodal_content_for_provider,
 )
+from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
@@ -442,7 +444,7 @@ class LLMAgent:
 
         if artifact_refs:
             for artifact_ref in artifact_refs[::-1]:
-                label, parts = await self._hydrate_artifact_ref(artifact_ref)
+                label, parts = await self._hydrate_tool_ref(artifact_ref)
                 if label:
                     labels.append(label)
                 content_parts.extend(parts)
@@ -497,7 +499,27 @@ class LLMAgent:
                     continue
                 refs.append(
                     {
+                        "ref_type": "artifact",
                         "artifact_id": normalized_id,
+                        "kind": artifact.get("kind") or "",
+                        "label": artifact.get("label") or "",
+                        "mime_type": artifact.get("mime_type") or "",
+                        "tool_output": bool(artifact.get("tool_output")),
+                    }
+                )
+            return refs
+
+        file_ids = artifact.get("file_ids")
+        if isinstance(file_ids, list):
+            for file_id in file_ids:
+                try:
+                    normalized_id = int(file_id)
+                except (TypeError, ValueError):
+                    continue
+                refs.append(
+                    {
+                        "ref_type": "file",
+                        "file_id": normalized_id,
                         "kind": artifact.get("kind") or "",
                         "label": artifact.get("label") or "",
                         "mime_type": artifact.get("mime_type") or "",
@@ -509,11 +531,30 @@ class LLMAgent:
         try:
             artifact_id = int(artifact.get("artifact_id"))
         except (TypeError, ValueError):
+            artifact_id = None
+
+        if artifact_id is not None:
+            refs.append(
+                {
+                    "ref_type": "artifact",
+                    "artifact_id": artifact_id,
+                    "kind": artifact.get("kind") or "",
+                    "label": artifact.get("label") or "",
+                    "mime_type": artifact.get("mime_type") or "",
+                    "tool_output": bool(artifact.get("tool_output")),
+                }
+            )
+            return refs
+
+        try:
+            file_id = int(artifact.get("file_id"))
+        except (TypeError, ValueError):
             return refs
 
         refs.append(
             {
-                "artifact_id": artifact_id,
+                "ref_type": "file",
+                "file_id": file_id,
                 "kind": artifact.get("kind") or "",
                 "label": artifact.get("label") or "",
                 "mime_type": artifact.get("mime_type") or "",
@@ -521,6 +562,11 @@ class LLMAgent:
             }
         )
         return refs
+
+    async def _hydrate_tool_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
+        if artifact_ref.get("ref_type") == "file" or artifact_ref.get("file_id"):
+            return await self._hydrate_file_ref(artifact_ref)
+        return await self._hydrate_artifact_ref(artifact_ref)
 
     async def _hydrate_artifact_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
         artifact_id = artifact_ref.get("artifact_id")
@@ -585,6 +631,66 @@ class LLMAgent:
                 "filename": label,
             }]
         return label, []
+
+    async def _hydrate_file_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
+        file_id = artifact_ref.get("file_id")
+
+        def _load_file():
+            return UserFile.objects.get(
+                id=file_id,
+                thread=self.thread,
+                user=self.user,
+                scope=UserFile.Scope.THREAD_SHARED,
+            )
+
+        try:
+            user_file = await sync_to_async(_load_file, thread_sensitive=True)()
+        except UserFile.DoesNotExist:
+            logger.warning("File %s could not be loaded for follow-up attach.", file_id)
+            return "", []
+
+        label = str(artifact_ref.get("label") or "").strip() or build_artifact_label(
+            user_file,
+            fallback=f"file-{user_file.id}",
+        )
+        kind = str(artifact_ref.get("kind") or "").strip() or detect_artifact_kind(
+            user_file.mime_type,
+            user_file.original_filename,
+        )
+
+        if kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+            return label, []
+
+        try:
+            raw_content = await download_file_content(user_file)
+        except Exception as exc:
+            logger.warning("Could not load file %s content for follow-up attach: %s", user_file.id, exc)
+            return label, []
+
+        base64_content = base64.b64encode(raw_content).decode("utf-8")
+        if kind == ArtifactKind.IMAGE:
+            return label, [{
+                "type": "image",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": user_file.mime_type,
+                "filename": label,
+            }]
+        if kind == ArtifactKind.PDF:
+            return label, [{
+                "type": "file",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": user_file.mime_type or "application/pdf",
+                "filename": label,
+            }]
+        return label, [{
+            "type": "audio",
+            "source_type": "base64",
+            "data": base64_content,
+            "mime_type": user_file.mime_type,
+            "filename": label,
+        }]
 
     async def aresume(self, command, silent_mode=False, thread_id_override: str | None = None):
         config = self._build_runtime_config(

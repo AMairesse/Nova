@@ -162,6 +162,55 @@ class LLMAgentExecutionTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
                     payload["messages"].content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
                 )
 
+    async def test_build_tool_artifact_followup_message_supports_file_refs(self):
+        agent = llm_agent_mod.LLMAgent(
+            user=self.create_mock_user(),
+            thread=self.create_mock_thread(),
+            langgraph_thread_id="fake_id",
+            agent_config=None,
+            system_prompt=None,
+            llm_provider=self.create_mock_provider(),
+        )
+
+        with patch.object(
+            agent,
+            "_hydrate_file_ref",
+            AsyncMock(
+                return_value=(
+                    "photo.png",
+                    [
+                        {
+                            "type": "image",
+                            "source_type": "base64",
+                            "data": "ZmFrZQ==",
+                            "mime_type": "image/png",
+                            "filename": "photo.png",
+                        }
+                    ],
+                )
+            ),
+        ):
+            followup = await agent._build_tool_artifact_followup_message(
+                [
+                    llm_agent_mod.ToolMessage(
+                        content="Attached file",
+                        tool_call_id="call-1",
+                        name="file_attach",
+                        artifact={
+                            "file_id": 11,
+                            "kind": "image",
+                            "label": "photo.png",
+                            "mime_type": "image/png",
+                        },
+                    )
+                ]
+            )
+
+        self.assertIsNotNone(followup)
+        self.assertEqual(followup.content[0]["type"], "text")
+        self.assertIn("photo.png", followup.content[0]["text"])
+        self.assertEqual(followup.content[1]["type"], "image_url")
+
 
 class LLMAgentCreationTests(LLMAgentTestMixin, IsolatedAsyncioTestCase):
     """Test cases for agent creation and initialization."""

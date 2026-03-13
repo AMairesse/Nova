@@ -10,6 +10,7 @@ from django.test import TransactionTestCase
 from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
+from nova.models.UserFile import UserFile
 from nova.tests.factories import create_agent, create_provider
 
 
@@ -124,6 +125,7 @@ class AgentToolWrapperTests(TransactionTestCase):
         self.assertIn("Sub Agent 1",
                       schema["properties"]["question"]["description"])
         self.assertIn("artifact_ids", schema.get("properties", {}))
+        self.assertIn("file_ids", schema.get("properties", {}))
         self.assertIn("output_mode", schema.get("properties", {}))
 
         # Ensure the tool exposes an async coroutine (no sync func expected)
@@ -246,6 +248,178 @@ class AgentToolWrapperTests(TransactionTestCase):
             source_artifact=source_artifact,
         )
         self.assertEqual(cloned_input.kind, ArtifactKind.IMAGE)
+
+    def test_execute_agent_accepts_thread_file_ids_and_clones_them_as_input_artifacts(self):
+        class FakeLLMAgent:
+            instances = []
+
+            def __init__(self, result="OK"):
+                self.result = result
+                self.cleanup_called = False
+                self.invoke_calls = []
+                self.last_generated_tool_artifact_refs = []
+
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                inst = cls(result="ANSWER")
+                inst._tools_enabled = tools_enabled
+                cls.instances.append(inst)
+                return inst
+
+            async def ainvoke(self, question):
+                self.invoke_calls.append(question)
+                return self.result
+
+            async def cleanup_runtime(self):
+                self.cleanup_called = True
+
+        provider = create_provider(self.user, name="media-provider")
+        thread_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/image.png",
+            original_filename="/image.png",
+            mime_type="image/png",
+            size=512,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+        agent = create_agent(
+            self.user,
+            provider,
+            name="Image sub-agent",
+            is_tool=True,
+            tool_description="Modify images",
+        )
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            with patch(
+                "nova.tools.agent_tool_wrapper.invoke_native_provider_for_message",
+                return_value=None,
+            ):
+                with patch(
+                    "nova.tools.agent_tool_wrapper.download_file_content",
+                    return_value=b"fake-image",
+                ):
+                    tool = wrapper.create_langchain_tool()
+                    answer, artifact_payload = asyncio.run(
+                        tool["coroutine"](
+                            "Please modify this image.",
+                            file_ids=[thread_file.id],
+                            output_mode="image",
+                        )
+                    )
+
+        self.assertEqual(answer, "ANSWER")
+        self.assertEqual(artifact_payload, {})
+        hidden_message = (
+            self.thread.get_messages()
+            .filter(actor=Actor.SYSTEM, internal_data__hidden_subagent_trace=True)
+            .latest("id")
+        )
+        cloned_input = MessageArtifact.objects.get(
+            message=hidden_message,
+            direction=ArtifactDirection.INPUT,
+            user_file=thread_file,
+        )
+        self.assertEqual(cloned_input.kind, ArtifactKind.IMAGE)
+        self.assertEqual(cloned_input.metadata.get("source"), "thread_file")
+
+    def test_execute_agent_accepts_artifact_ids_accidentally_passed_via_file_ids(self):
+        class FakeLLMAgent:
+            instances = []
+
+            def __init__(self, result="OK"):
+                self.result = result
+                self.cleanup_called = False
+                self.invoke_calls = []
+                self.last_generated_tool_artifact_refs = []
+
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                inst = cls(result="ANSWER")
+                inst._tools_enabled = tools_enabled
+                cls.instances.append(inst)
+                return inst
+
+            async def ainvoke(self, question):
+                self.invoke_calls.append(question)
+                return self.result
+
+            async def cleanup_runtime(self):
+                self.cleanup_called = True
+
+        provider = create_provider(self.user, name="media-provider")
+        source_message = self.thread.add_message("Source", actor=Actor.USER)
+        source_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=source_message,
+            direction=ArtifactDirection.INPUT,
+            kind=ArtifactKind.IMAGE,
+            mime_type="image/png",
+            label="input-image.png",
+        )
+        agent = create_agent(
+            self.user,
+            provider,
+            name="Image sub-agent",
+            is_tool=True,
+            tool_description="Modify images",
+        )
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            with patch(
+                "nova.tools.agent_tool_wrapper.invoke_native_provider_for_message",
+                return_value=None,
+            ):
+                tool = wrapper.create_langchain_tool()
+                answer, artifact_payload = asyncio.run(
+                    tool["coroutine"](
+                        "Please modify this image.",
+                        file_ids=[source_artifact.id],
+                        output_mode="image",
+                    )
+                )
+
+        self.assertEqual(answer, "ANSWER")
+        self.assertEqual(artifact_payload, {})
+        hidden_message = (
+            self.thread.get_messages()
+            .filter(actor=Actor.SYSTEM, internal_data__hidden_subagent_trace=True)
+            .latest("id")
+        )
+        cloned_input = MessageArtifact.objects.get(
+            message=hidden_message,
+            direction=ArtifactDirection.INPUT,
+            source_artifact=source_artifact,
+        )
+        self.assertEqual(cloned_input.kind, ArtifactKind.IMAGE)
+        self.assertEqual(cloned_input.metadata.get("source"), "artifact_id_fallback")
+        self.assertEqual(cloned_input.metadata.get("requested_via"), "file_ids")
 
     def test_execute_agent_failure_returns_formatted_error_and_cleans_up(self):
         """

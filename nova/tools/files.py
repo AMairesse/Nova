@@ -14,6 +14,8 @@ from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.llm.llm_agent import LLMAgent
 from nova.file_utils import batch_upload_files, download_file_content
+from nova.message_artifacts import build_artifact_label, detect_artifact_kind
+from nova.models.MessageArtifact import ArtifactKind
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,8 @@ def get_skill_instructions(agent=None, tools=None) -> list[str]:
         "Use file_ls first to discover file ids and types before reading or deleting.",
         "For large documents, iterate with file_read_chunk using small chunk_size values to control context usage.",
         "Use file_read_image only for image/* mime types; use file_read_chunk for non-image files.",
+        "Use file_attach to bring image, PDF, or audio thread files into the current multimodal turn.",
+        "When delegating a thread file to a media sub-agent, pass file_ids directly to the sub-agent tool instead of reading the file first.",
     ]
 
 
@@ -217,6 +221,39 @@ async def read_image(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
         return f"Error reading image: {str(e)}", None
 
 
+async def file_attach(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
+    """Attach a multimodal thread file to the current reasoning turn."""
+    file = await async_get_object_or_404(UserFile, id=file_id)
+    thread_id, user = await async_get_threadid_and_user(agent)
+    file_thread_id, file_user = await async_get_threadid_and_user(file)
+    file_scope = await sync_to_async(
+        lambda: getattr(file, "scope", UserFile.Scope.THREAD_SHARED),
+        thread_sensitive=False,
+    )()
+    if file_thread_id != thread_id or file_user != user:
+        return "Permission denied: File does not belong to current thread/user.", None
+    if file_scope != UserFile.Scope.THREAD_SHARED:
+        return "Only thread Files can be attached with file_attach.", None
+
+    artifact_kind = detect_artifact_kind(file.mime_type, file.original_filename)
+    if artifact_kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+        return (
+            "File cannot be attached multimodally. Only image, PDF, and audio files are supported.",
+            None,
+        )
+
+    label = build_artifact_label(file, fallback=f"file-{file.id}")
+    return (
+        f"File attached: {label}. Continue your reasoning with this file included.",
+        {
+            "file_id": file.id,
+            "kind": artifact_kind,
+            "label": label,
+            "mime_type": file.mime_type or "",
+        },
+    )
+
+
 async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
     """Return a list of StructuredTool instances
        with agent bound via partial."""
@@ -239,6 +276,9 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
 
     async def read_image_wrapper(file_id: int) -> str:
         return await read_image(agent, file_id)
+
+    async def file_attach_wrapper(file_id: int) -> Tuple[str, Any]:
+        return await file_attach(agent, file_id)
 
     return [
         StructuredTool.from_function(
@@ -286,5 +326,13 @@ async def get_functions(agent: LLMAgent) -> list[StructuredTool]:
             args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]},
             return_direct=True,
             response_format="content_and_artifact"
+        ),
+        StructuredTool.from_function(
+            coroutine=file_attach_wrapper,
+            name="file_attach",
+            description="Attach an image, PDF, or audio file from the current thread so the model can inspect it multimodally.",
+            args_schema={"type": "object", "properties": {"file_id": {"type": "integer"}}, "required": ["file_id"]},
+            return_direct=True,
+            response_format="content_and_artifact",
         )
     ]
