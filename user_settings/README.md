@@ -84,3 +84,7 @@ The capability state shown in the UI comes from `LLMProvider.capability_profile`
 - Agents now surface compatibility warnings when the selected provider/model is verified without tool support.
 - Simple thread runs may still work in tool-less mode.
 - Continuous mode and agents with tool dependencies require tool-capable providers.
+- Default agent bootstrap is role-aware:
+  - `Nova`, `Internet Agent`, and `Code Agent` use the best available provider with tool support or unknown tool capability
+  - `Image Agent` is bootstrapped separately when a provider has current known image output capability
+  - an existing `Image Agent` is reused rather than silently reassigned to a different provider

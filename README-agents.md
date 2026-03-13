@@ -80,12 +80,14 @@ You can configure multiple email and CalDAV tools for the same user. Nova will a
 Nova defaults to:
 - one main agent: `Nova`
 - two sub-agents used as tools: `Internet Agent`, `Code Agent`
+- one optional sub-agent used as a tool: `Image Agent` when a provider with known image output capability exists
 
 Do not create dedicated `Calendar Agent` or `Email Agent` in the default model.
 
 Important provider rule:
 - the main agent and tool-calling sub-agents should use a model verified with tool support
 - models verified as `tools unavailable` are better suited to simple thread runs or specialized media generation
+- bootstrap is role-aware: it may choose a different provider for `Image Agent` than for `Nova`
 
 ### 3.1 Internet Agent
 
@@ -130,13 +132,18 @@ If you want an agent dedicated to generating or transforming media:
 | Field | Value |
 | --- | --- |
 | Name | `Image Agent` |
-| Provider | `OpenRouter` image-capable model or another media-capable provider |
+| Provider | `OpenRouter` image-capable model or another provider with current known image output capability |
+| Prompt | `You are an AI Agent specialized in creating and modifying images...` when image input is known available, otherwise a generation-first prompt that explains the editing limitation and proposes a newly generated variant instead of pretending to modify the original |
+| Recursion limit | `10` |
 | Use as a tool | `Yes` |
-| Tool description | `Use this agent to generate or transform images.` |
+| Tool description | `Use this agent to generate or transform images from text instructions and optional image artifacts.` |
+| Associated tools | `None` |
+| Bootstrap behavior | `Created automatically only when Nova has a bootstrapable main provider and a provider with current known image output capability exists; reused if already present` |
 
 Notes:
 - media-oriented models often do **not** support tools
 - they should usually be used as specialized sub-agents, not as the main `Nova` agent
+- bootstrap may choose a different provider for `Image Agent` than for `Nova`
 - Nova can pass conversation artifacts to these sub-agents and recover the generated media back into the main thread
 - generated media appears inline in the thread and can be published to `Files`
 
@@ -178,5 +185,10 @@ Test your setup with these scenarios:
 
 Default bootstrap automatically detaches legacy `Calendar Agent` and `Email Agent` links from `Nova`.
 These legacy agent rows are not deleted from the database.
+
+Default bootstrap is now role-aware:
+- `Nova`, `Internet Agent`, and `Code Agent` use the best available tool-capable provider
+- `Image Agent` is created only when Nova has a bootstrapable main provider and a provider with current known image output capability exists
+- if an `Image Agent` already exists, bootstrap reuses it and does not silently reassign its provider
 
 Existing providers that previously used `OpenAI` + `https://openrouter.ai/api/v1` are migrated to the explicit `OpenRouter` provider type.
