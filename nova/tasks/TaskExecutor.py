@@ -18,6 +18,7 @@ from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
 logger = logging.getLogger(__name__)
 LLM_CLEANUP_TIMEOUT_SECONDS = 5.0
+_UNSET = object()
 
 
 class TaskErrorCategory(Enum):
@@ -60,6 +61,29 @@ class TaskExecutor:
             thread_mode=getattr(self.thread, "mode", None),
             initial_streamed_markdown=getattr(self.task, "streamed_markdown", "") or "",
         )
+        self._llm_provider = _UNSET
+
+    async def _get_llm_provider(self):
+        """Resolve agent_config.llm_provider without sync ORM access inside async code."""
+        if self._llm_provider is not _UNSET:
+            return self._llm_provider
+
+        if not self.agent_config:
+            self._llm_provider = None
+            return None
+
+        state = getattr(self.agent_config, "_state", None)
+        fields_cache = getattr(state, "fields_cache", None)
+        if isinstance(fields_cache, dict) and "llm_provider" not in fields_cache:
+            provider = await sync_to_async(
+                lambda: self.agent_config.llm_provider,
+                thread_sensitive=True,
+            )()
+        else:
+            provider = getattr(self.agent_config, "llm_provider", None)
+
+        self._llm_provider = provider
+        return provider
 
     async def execute_or_resume(self, interruption_response=None):
         """Main execution method with comprehensive error handling."""
@@ -156,7 +180,7 @@ class TaskExecutor:
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
         tools_enabled = True
-        provider = getattr(self.agent_config, "llm_provider", None)
+        provider = await self._get_llm_provider()
         thread_mode = getattr(self.thread, "mode", None)
         if provider_tools_explicitly_unavailable(provider):
             if await sync_to_async(requires_tools_for_run, thread_sensitive=True)(

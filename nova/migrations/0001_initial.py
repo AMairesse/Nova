@@ -2,7 +2,6 @@
 
 import django.db.models.deletion
 import encrypted_model_fields.fields
-import nova.models
 from django.conf import settings
 from django.db import migrations, models
 

@@ -10,16 +10,23 @@ from __future__ import annotations
 
 import asyncio
 import re
-import base64
 from django.conf import settings
 from django.utils.translation import gettext as _
 from langchain_core.tools import StructuredTool
 from asgiref.sync import sync_to_async
 
-from nova.agent_execution import provider_tools_explicitly_unavailable, requires_tools_for_run
+from nova.agent_execution import (
+    provider_tools_explicitly_unavailable,
+    requires_tools_for_run,
+)
 from nova.file_utils import download_file_content
 from nova.llm.llm_agent import LLMAgent
 from nova.message_artifacts import build_artifact_label, detect_artifact_kind
+from nova.multimodal_prompts import (
+    PromptInput,
+    build_multimodal_intro_text,
+    build_multimodal_prompt_content,
+)
 from nova.native_provider_runtime import (
     invoke_native_provider_for_message,
     persist_native_result_artifacts,
@@ -27,11 +34,16 @@ from nova.native_provider_runtime import (
 )
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Message import Actor
-from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
+from nova.models.MessageArtifact import (
+    ArtifactDirection,
+    ArtifactKind,
+    MessageArtifact,
+)
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 
 import logging
+
 logger = logging.getLogger(__name__)
 SUBAGENT_CLEANUP_TIMEOUT_SECONDS = 5.0
 
@@ -68,7 +80,9 @@ class AgentToolWrapper:
             Inner callable executed by LangChain.
             Forwards the prompt to the wrapped agent and returns its answer.
             """
-            normalized_output_mode = str(output_mode or "text").strip().lower() or "text"
+            normalized_output_mode = (
+                str(output_mode or "text").strip().lower() or "text"
+            )
             if normalized_output_mode not in {"text", "image", "audio"}:
                 normalized_output_mode = "text"
 
@@ -96,15 +110,15 @@ class AgentToolWrapper:
                     await self._attach_input_files(source_message, file_ids)
 
                 provider = await self._load_provider()
-                if provider_tools_explicitly_unavailable(provider) and await sync_to_async(
+                if provider_tools_explicitly_unavailable(
+                    provider
+                ) and await sync_to_async(
                     requires_tools_for_run,
                     thread_sensitive=True,
-                )(
-                    self.agent_config,
-                    getattr(self.thread, "mode", None),
-                ):
+                )(self.agent_config, getattr(self.thread, "mode", None)):
                     error_msg = _(
-                        "Error in sub-agent %(name)s: this model does not support tool use for this delegated run."
+                        "Error in sub-agent %(name)s: this model does not "
+                        "support tool use for this delegated run."
                     ) % {"name": self.agent_config.name}
                     return error_msg, {}
 
@@ -138,12 +152,21 @@ class AgentToolWrapper:
                         for artifact in created_artifacts
                         if artifact.direction == ArtifactDirection.OUTPUT
                     ]
-                    result = summarize_native_result(native_result) or _("Generated media artifact.")
+                    result = summarize_native_result(
+                        native_result
+                    ) or _("Generated media artifact.")
                 else:
                     result = await agent_llm.ainvoke(prompt)
                     output_artifact_ids = [
                         int(artifact_ref["artifact_id"])
-                        for artifact_ref in list(getattr(agent_llm, "last_generated_tool_artifact_refs", []) or [])
+                        for artifact_ref in list(
+                            getattr(
+                                agent_llm,
+                                "last_generated_tool_artifact_refs",
+                                [],
+                            )
+                            or []
+                        )
                         if artifact_ref.get("artifact_id")
                     ]
                 artifact_payload = (
@@ -171,9 +194,16 @@ class AgentToolWrapper:
                             timeout=SUBAGENT_CLEANUP_TIMEOUT_SECONDS,
                         )
                     except asyncio.TimeoutError:
-                        logger.error("Timed out while cleaning up sub-agent %s", self.agent_config.name)
+                        logger.error(
+                            "Timed out while cleaning up sub-agent %s",
+                            self.agent_config.name,
+                        )
                     except Exception as cleanup_error:
-                        logger.error(f"Failed to cleanup sub-agent {self.agent_config.name}: {str(cleanup_error)}")
+                        logger.error(
+                            "Failed to cleanup sub-agent %s: %s",
+                            self.agent_config.name,
+                            cleanup_error,
+                        )
 
         async def execute_agent_wrapper(
             question: str,
@@ -212,7 +242,8 @@ class AgentToolWrapper:
                     "type": "array",
                     "items": {"type": "integer"},
                     "description": _(
-                        "Optional thread file IDs to pass to the sub-agent as multimodal inputs. "
+                        "Optional thread file IDs to pass to the sub-agent as "
+                        "multimodal inputs. "
                         "Use only IDs returned by file_ls."
                     ),
                 },
@@ -243,7 +274,11 @@ class AgentToolWrapper:
             response_format="content_and_artifact",
         )
 
-    async def _attach_input_artifacts(self, source_message, artifact_ids: list[int]) -> None:
+    async def _attach_input_artifacts(
+        self,
+        source_message,
+        artifact_ids: list[int],
+    ) -> None:
         unique_ids = []
         seen_ids: set[int] = set()
         for artifact_id in artifact_ids:
@@ -273,7 +308,10 @@ class AgentToolWrapper:
                 .order_by("created_at", "id")
             )
 
-        source_artifacts = await sync_to_async(_load_source_artifacts, thread_sensitive=True)()
+        source_artifacts = await sync_to_async(
+            _load_source_artifacts,
+            thread_sensitive=True,
+        )()
         for index, artifact in enumerate(source_artifacts):
             await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
                 user=self.user,
@@ -341,7 +379,9 @@ class AgentToolWrapper:
                 _(
                     "Thread file(s) not found or not accessible: %(ids)s. "
                     "Call file_ls to discover valid file_ids. "
-                    "If these refer to conversation artifacts, use artifact_ls or artifact_search and pass artifact_ids instead."
+                    "If these refer to conversation artifacts, use "
+                    "artifact_ls or artifact_search and pass artifact_ids "
+                    "instead."
                 ) % {
                     "ids": ", ".join(str(file_id) for file_id in missing_ids),
                 }
@@ -353,17 +393,34 @@ class AgentToolWrapper:
                 direction=ArtifactDirection.INPUT,
             ).count()
 
-        order_offset = await sync_to_async(_count_existing_inputs, thread_sensitive=True)()
+        order_offset = await sync_to_async(
+            _count_existing_inputs,
+            thread_sensitive=True,
+        )()
 
         for index, user_file in enumerate(source_files):
-            artifact_kind = detect_artifact_kind(user_file.mime_type, user_file.original_filename)
-            if artifact_kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+            artifact_kind = detect_artifact_kind(
+                user_file.mime_type,
+                user_file.original_filename,
+            )
+            if artifact_kind not in {
+                ArtifactKind.IMAGE,
+                ArtifactKind.PDF,
+                ArtifactKind.AUDIO,
+            }:
                 raise ValueError(
                     _("Thread file %(name)s cannot be passed multimodally.") % {
-                        "name": build_artifact_label(user_file, fallback=f"file-{user_file.id}"),
+                        "name": build_artifact_label(
+                            user_file,
+                            fallback=f"file-{user_file.id}",
+                        ),
                     }
                 )
 
+            file_label = build_artifact_label(
+                user_file,
+                fallback=f"file-{user_file.id}",
+            )
             await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
                 user=self.user,
                 thread=self.thread,
@@ -372,14 +429,18 @@ class AgentToolWrapper:
                 direction=ArtifactDirection.INPUT,
                 kind=artifact_kind,
                 mime_type=user_file.mime_type or "",
-                label=build_artifact_label(user_file, fallback=f"file-{user_file.id}"),
+                label=file_label,
                 summary_text="",
-                search_text=build_artifact_label(user_file, fallback=f"file-{user_file.id}"),
+                search_text=file_label,
                 order=order_offset + index,
                 metadata={"subagent_input": True, "source": "thread_file"},
             )
 
-    async def _attach_missing_file_ids_as_artifacts(self, source_message, missing_ids: list[int]) -> set[int]:
+    async def _attach_missing_file_ids_as_artifacts(
+        self,
+        source_message,
+        missing_ids: list[int],
+    ) -> set[int]:
         if not missing_ids:
             return set()
 
@@ -397,7 +458,10 @@ class AgentToolWrapper:
                 .order_by("created_at", "id")
             )
 
-        fallback_artifacts = await sync_to_async(_load_fallback_artifacts, thread_sensitive=True)()
+        fallback_artifacts = await sync_to_async(
+            _load_fallback_artifacts,
+            thread_sensitive=True,
+        )()
         if not fallback_artifacts:
             return set()
 
@@ -407,10 +471,17 @@ class AgentToolWrapper:
                 direction=ArtifactDirection.INPUT,
             ).count()
 
-        next_order = await sync_to_async(_count_existing_inputs, thread_sensitive=True)()
+        next_order = await sync_to_async(
+            _count_existing_inputs,
+            thread_sensitive=True,
+        )()
         attached_ids: set[int] = set()
         for artifact in fallback_artifacts:
-            if artifact.kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+            if artifact.kind not in {
+                ArtifactKind.IMAGE,
+                ArtifactKind.PDF,
+                ArtifactKind.AUDIO,
+            }:
                 continue
 
             await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
@@ -440,7 +511,12 @@ class AgentToolWrapper:
 
         return attached_ids
 
-    async def _build_source_message_prompt(self, source_message, *, fallback_prompt: str = ""):
+    async def _build_source_message_prompt(
+        self,
+        source_message,
+        *,
+        fallback_prompt: str = "",
+    ):
         thread_id = getattr(self.thread, "id", None)
         user_id = getattr(self.user, "id", None)
 
@@ -460,58 +536,21 @@ class AgentToolWrapper:
         if not artifacts:
             return source_message.text or fallback_prompt or ""
 
-        lines = "\n".join(f"- {artifact.filename}" for artifact in artifacts)
-        base_text = (source_message.text or fallback_prompt or "").strip() or _("Please process the attached artifacts.")
-        content_parts: list[dict] = [
-            {
-                "type": "text",
-                "text": f"{base_text}\n\nAttached artifacts:\n{lines}",
-            }
-        ]
-
-        for artifact in artifacts:
-            if artifact.kind in {ArtifactKind.TEXT, ArtifactKind.ANNOTATION}:
-                if artifact.summary_text:
-                    content_parts.append({"type": "text", "text": f"{artifact.filename}:\n{artifact.summary_text}"})
-                continue
-            if not artifact.user_file_id:
-                continue
-            raw_content = await download_file_content(artifact.user_file)
-            encoded = base64.b64encode(raw_content).decode("utf-8")
-            if artifact.kind == ArtifactKind.IMAGE:
-                content_parts.append(
-                    {
-                        "type": "image",
-                        "source_type": "base64",
-                        "data": encoded,
-                        "mime_type": artifact.mime_type or "image/png",
-                        "filename": artifact.filename,
-                    }
-                )
-            elif artifact.kind == ArtifactKind.PDF:
-                content_parts.append(
-                    {
-                        "type": "file",
-                        "source_type": "base64",
-                        "data": encoded,
-                        "mime_type": artifact.mime_type or "application/pdf",
-                        "filename": artifact.filename,
-                    }
-                )
-            elif artifact.kind == ArtifactKind.AUDIO:
-                content_parts.append(
-                    {
-                        "type": "audio",
-                        "source_type": "base64",
-                        "data": encoded,
-                        "mime_type": artifact.mime_type or "audio/wav",
-                        "filename": artifact.filename,
-                    }
-                )
-
-        if len(content_parts) == 1:
-            return content_parts[0]["text"]
-        return content_parts
+        prompt_inputs = [PromptInput.from_artifact(artifact) for artifact in artifacts]
+        intro_text = build_multimodal_intro_text(
+            source_message.text or fallback_prompt,
+            prompt_inputs,
+            empty_text_style="process",
+            heading="Attached artifacts:",
+        )
+        return await build_multimodal_prompt_content(
+            prompt_inputs,
+            intro_text=intro_text,
+            content_downloader=download_file_content,
+            log_subject=(
+                f"sub-agent message {getattr(source_message, 'id', None)}"
+            ),
+        )
 
     async def _load_provider(self):
         if not isinstance(self.agent_config, AgentConfig):

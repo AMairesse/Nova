@@ -18,26 +18,22 @@ from nova.continuous.utils import (
     ensure_continuous_thread,
     get_day_label_for_user,
 )
-from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
-from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserParameters
+from nova.message_panel import get_message_panel_agents, get_pending_interactions
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
-from nova.views.agent_dispatch import (
-    enqueue_message_agent_task,
-    get_agent_execution_capability_error,
-    get_message_attachment_capability_error,
-    resolve_selected_or_default_agent,
-)
 from nova.utils import markdown_to_html
-from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    get_message_attachment_template_context,
+from nova.message_attachments import get_message_attachment_template_context
+from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
+from nova.message_submission import (
+    MessageSubmissionError,
+    SubmissionContext,
+    submit_user_message,
 )
-from nova.message_utils import annotate_user_message, upload_message_attachments
+from nova.message_utils import upload_message_attachments
 
 _YEAR_RE = re.compile(r"^\d{4}$")
 _YEAR_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
@@ -139,22 +135,17 @@ def continuous_home(request):
     # causes each timeline message to render as a top-level UI notification.
     timeline_messages = []
     if day_segment and day_segment.starts_at_message_id:
-        timeline_messages = list(
-            Message.objects.filter(
-                user=request.user,
-                thread=thread,
-                created_at__gte=day_segment.starts_at_message.created_at,
-            ).order_by("created_at", "id")
+        timeline_messages = prepare_messages_for_display(
+            list(
+                with_message_display_relations(
+                    Message.objects.filter(
+                        user=request.user,
+                        thread=thread,
+                        created_at__gte=day_segment.starts_at_message.created_at,
+                    ).order_by("created_at", "id")
+                )
+            )
         )
-        timeline_messages = [
-            message for message in timeline_messages
-            if not ((message.internal_data or {}).get("hidden_subagent_trace"))
-        ]
-        for m in timeline_messages:
-            display_text = m.text
-            if m.actor == Actor.AGENT and m.internal_data:
-                display_text = m.internal_data.get("display_markdown") or m.text
-            m.rendered_html = markdown_to_html(display_text)
 
     return render(
         request,
@@ -263,25 +254,20 @@ def continuous_messages(request):
     # If the user is browsing a past day, the UI should be read-only.
     allow_posting = day_label is None or day_label == today_label
 
-    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
-    for agent in user_agents:
-        agent.requires_tools_for_current_thread = agent.requires_tools_for_thread_mode(Thread.Mode.CONTINUOUS)
-    agent_id = request.GET.get("agent_id")
-    default_agent = None
-    if agent_id:
-        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
-            id=agent_id,
-            user=request.user,
-        ).first()
-    if not default_agent:
-        default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
+    user_agents, default_agent = get_message_panel_agents(
+        request.user,
+        thread_mode=Thread.Mode.CONTINUOUS,
+        selected_agent_id=request.GET.get("agent_id"),
+    )
 
     if day_label is None:
         latest_messages = list(
-            Message.objects.filter(user=request.user, thread=thread)
-            .order_by("-created_at", "-id")[:recent_messages_limit]
+            with_message_display_relations(
+                Message.objects.filter(user=request.user, thread=thread)
+                .order_by("-created_at", "-id")[:recent_messages_limit]
+            )
         )
-        messages = list(reversed(latest_messages))
+        messages = prepare_messages_for_display(list(reversed(latest_messages)))
     else:
         seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
         if not seg or not seg.starts_at_message_id:
@@ -297,26 +283,9 @@ def continuous_messages(request):
             qs = Message.objects.filter(user=request.user, thread=thread, created_at__gte=start_dt)
             if end_dt:
                 qs = qs.filter(created_at__lt=end_dt)
-            messages = list(qs.order_by("created_at", "id"))
-    messages = [
-        message for message in messages
-        if not ((message.internal_data or {}).get("hidden_subagent_trace"))
-    ]
-    for m in messages:
-        display_text = m.text
-        if m.actor == Actor.AGENT and m.internal_data:
-            display_text = m.internal_data.get("display_markdown") or m.text
-        m.rendered_html = markdown_to_html(display_text)
-        annotate_user_message(m)
-
-    pending_interactions = (
-        Interaction.objects.filter(
-            thread=thread,
-            status=InteractionStatus.PENDING,
-        )
-        .select_related("task", "agent_config")
-        .order_by("created_at", "id")
-    )
+            messages = prepare_messages_for_display(
+                list(with_message_display_relations(qs.order_by("created_at", "id")))
+            )
 
     # Keep template contract consistent with thread mode.
     return render(
@@ -327,7 +296,7 @@ def continuous_messages(request):
             "thread_id": thread.id,
             "user_agents": user_agents,
             "default_agent": default_agent,
-            "pending_interactions": pending_interactions,
+            "pending_interactions": get_pending_interactions(thread),
             "Actor": Actor,
             "allow_posting": allow_posting,
             "is_continuous_default_mode": day_label is None,
@@ -344,108 +313,58 @@ def continuous_messages(request):
 def continuous_add_message(request):
     """Append a user message to the continuous thread and start agent execution."""
 
-    new_message = request.POST.get("new_message", "")
-    new_message = new_message if new_message.strip() else ""
-    selected_agent = request.POST.get("selected_agent")
-    response_mode = str(request.POST.get("response_mode") or "auto").strip().lower() or "auto"
-    message_attachments = request.FILES.getlist("message_attachments", [])
-
-    if not new_message.strip() and not message_attachments:
-        return JsonResponse(
-            {"status": "ERROR", "message": "Message or attachment required"},
-            status=400,
-        )
-
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
-    execution_error = get_agent_execution_capability_error(
-        agent_config,
-        thread_mode=Thread.Mode.CONTINUOUS,
-        response_mode=response_mode,
-    )
-    if execution_error:
-        return JsonResponse(
-            {"status": "ERROR", "message": execution_error},
-            status=400,
-        )
-    if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
-        if attachment_error:
-            return JsonResponse(
-                {"status": "ERROR", "message": attachment_error},
-                status=400,
-            )
-
-    thread, msg, seg, day_label, opened_new_day = append_continuous_user_message(request.user, new_message)
-
-    message_attachment_meta = []
-    if message_attachments:
-        attachment_meta, attachment_errors = upload_message_attachments(
-            thread,
+    def prepare_context(message_text: str) -> SubmissionContext:
+        thread, message, segment, day_label, opened_new_day = append_continuous_user_message(
             request.user,
-            msg,
-            message_attachments,
+            message_text,
         )
-        message_attachment_meta = attachment_meta
-        if attachment_errors and not message_attachment_meta:
-            if seg and getattr(seg, "starts_at_message_id", None) == msg.id:
-                seg.delete()
-            msg.delete()
-            return JsonResponse(
-                {"status": "ERROR", "message": "; ".join(attachment_errors)},
-                status=400,
+
+        def before_message_delete(created_message):
+            if segment and getattr(segment, "starts_at_message_id", None) == created_message.id:
+                segment.delete()
+
+        def after_dispatch():
+            enqueue_continuous_followups(
+                user=request.user,
+                thread=thread,
+                day_label=day_label,
+                segment=segment,
+                opened_new_day=opened_new_day,
+                source="continuous_add_message",
             )
 
-    msg.internal_data = {
-        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
-        "response_mode": response_mode,
-    }
-    msg.save(update_fields=["internal_data"])
-    annotate_user_message(msg)
+        return SubmissionContext(
+            thread=thread,
+            message=message,
+            before_message_delete=before_message_delete,
+            after_dispatch=after_dispatch,
+            response_fields={
+                "day_segment_id": segment.id,
+                "day_label": day_label.isoformat(),
+                "opened_new_day": opened_new_day,
+            },
+        )
 
-    # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
-    task = enqueue_message_agent_task(
-        user=request.user,
-        thread=thread,
-        agent_config=agent_config,
-        source_message_id=msg.id,
-        dispatcher_task=run_ai_task_celery,
-    )
+    try:
+        result = submit_user_message(
+            user=request.user,
+            message_text=request.POST.get("new_message", ""),
+            selected_agent=request.POST.get("selected_agent"),
+            response_mode=request.POST.get("response_mode"),
+            thread_mode=Thread.Mode.CONTINUOUS,
+            thread_files=[],
+            message_attachments=request.FILES.getlist("message_attachments"),
+            prepare_context=prepare_context,
+            dispatcher_task=run_ai_task_celery,
+            attachment_uploader=upload_message_attachments,
+        )
+    except MessageSubmissionError as exc:
+        return JsonResponse(
+            {"status": "ERROR", "message": exc.message},
+            status=exc.status_code,
+        )
 
-    enqueue_continuous_followups(
-        user=request.user,
-        thread=thread,
-        day_label=day_label,
-        segment=seg,
-        opened_new_day=opened_new_day,
-        source="continuous_add_message",
-    )
-
-    # Match the JSON contract expected by [`MessageManager.handleFormSubmit()`](nova/static/js/message-manager.js:235)
-    # so Continuous can reuse the same client logic as Threads.
-    message_data = {
-        "id": msg.id,
-        "text": new_message,
-        "actor": msg.actor,
-        "file_count": 0,
-        "internal_data": msg.internal_data or {},
-        "message_attachments": message_attachment_meta,
-        "artifacts": getattr(msg, "message_artifacts", []),
-    }
-
-    return JsonResponse(
-        {
-            "status": "OK",
-            "message": message_data,
-            "thread_id": thread.id,
-            "task_id": task.id,
-            "day_segment_id": seg.id,
-            "day_label": day_label.isoformat(),
-            "opened_new_day": opened_new_day,
-            # Keep response shape compatible with thread mode callers.
-            "threadHtml": None,
-            "uploaded_file_ids": [],
-        }
-    )
+    return JsonResponse(result.as_payload())
 
 
 @csrf_protect

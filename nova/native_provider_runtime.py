@@ -7,7 +7,7 @@ import binascii
 import posixpath
 from typing import Any
 
-from asgiref.sync import sync_to_async, async_to_sync
+from asgiref.sync import sync_to_async
 
 from nova.file_utils import (
     batch_upload_files,

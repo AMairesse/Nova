@@ -9,18 +9,14 @@ from nova.file_utils import (
 from nova.message_artifacts import (
     build_message_artifact_manifest,
     detect_artifact_kind,
-    filter_image_attachment_manifests,
     normalize_message_artifacts,
 )
 from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    build_message_attachment_metadata,
     format_message_attachment_size_label,
     get_message_attachment_max_audio_size_bytes,
     get_message_attachment_max_document_size_bytes,
     get_message_attachment_max_files,
     get_message_attachment_max_image_size_bytes,
-    normalize_message_attachments,
 )
 from nova.models.MessageArtifact import ArtifactDirection, MessageArtifact
 from nova.models.UserFile import UserFile
@@ -81,8 +77,14 @@ def upload_message_attachments(thread, user, message, uploaded_files) -> tuple[l
         allowed_mime_types=["application/pdf"],
         allowed_mime_prefixes=("image/", "audio/"),
     )
-    _create_message_artifacts_for_uploaded_files(message, created_files)
-    return build_message_attachment_metadata(created_files), errors
+    created_artifacts = _create_message_artifacts_for_uploaded_files(
+        message,
+        created_files,
+    )
+    return [
+        build_message_artifact_manifest(artifact)
+        for artifact in created_artifacts
+    ], errors
 
 
 def _create_message_artifacts_for_uploaded_files(message, created_files: list[dict]) -> list[MessageArtifact]:
@@ -133,7 +135,16 @@ def _create_message_artifacts_for_uploaded_files(message, created_files: list[di
             )
         )
 
-    return MessageArtifact.objects.bulk_create(artifacts_to_create)
+    MessageArtifact.objects.bulk_create(artifacts_to_create)
+    return list(
+        MessageArtifact.objects.select_related("user_file")
+        .filter(
+            message=message,
+            direction=ArtifactDirection.INPUT,
+            user_file_id__in=file_ids,
+        )
+        .order_by("order", "created_at", "id")
+    )
 
 
 def annotate_user_message(message) -> None:
@@ -179,27 +190,5 @@ def annotate_user_message(message) -> None:
             except Exception:
                 artifact_manifests = []
 
-    if not artifact_manifests:
-        legacy_attachments = normalize_message_attachments(
-            internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
-        )
-        artifact_manifests = [
-            {
-                "id": attachment["id"],
-                "message_id": getattr(message, "id", None),
-                "user_file_id": attachment["id"],
-                "direction": ArtifactDirection.INPUT,
-                "kind": detect_artifact_kind(attachment.get("mime_type"), attachment.get("filename")),
-                "mime_type": attachment.get("mime_type") or "",
-                "label": attachment.get("filename") or "",
-                "summary_text": "",
-                "size": int(attachment.get("size") or 0),
-                "published_to_file": False,
-                "metadata": {"scope": attachment.get("scope") or "", "legacy": True},
-            }
-            for attachment in legacy_attachments
-        ]
-
     message.message_artifacts = normalize_message_artifacts(artifact_manifests)
-    message.message_attachments = filter_image_attachment_manifests(message.message_artifacts)
     message.message_attachment_count = len(message.message_artifacts)

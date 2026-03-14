@@ -7,12 +7,8 @@ from asgiref.sync import sync_to_async
 from langchain_core.tools import StructuredTool
 
 from nova.file_utils import download_file_content
-from nova.message_artifacts import (
-    build_message_artifact_manifest,
-    publish_artifact_to_files,
-)
-from nova.models.MessageArtifact import ArtifactKind, MessageArtifact
-from nova.models.UserFile import UserFile
+from nova.message_artifacts import publish_artifact_to_files
+from nova.models.MessageArtifact import MessageArtifact
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)

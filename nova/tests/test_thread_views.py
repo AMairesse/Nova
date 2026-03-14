@@ -15,7 +15,6 @@ from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
-from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
 
@@ -363,10 +362,16 @@ class MainViewsTests(TestCase):
         mocked_upload_message_attachments.return_value = (
             [{
                 "id": 201,
-                "filename": "photo.jpg",
+                "message_id": 1,
+                "user_file_id": 201,
+                "direction": "input",
+                "kind": "image",
                 "mime_type": "image/jpeg",
+                "label": "photo.jpg",
+                "summary_text": "",
                 "size": 1024,
-                "scope": UserFile.Scope.MESSAGE_ATTACHMENT,
+                "published_to_file": False,
+                "metadata": {},
             }],
             [],
         )
@@ -384,12 +389,13 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["message_attachments"][0]["filename"], "photo.jpg")
+        self.assertEqual(payload["message"]["artifacts"][0]["label"], "photo.jpg")
         self.assertEqual(payload["message"]["text"], "")
         mocked_publish_update.assert_not_awaited()
 
         message = thread.get_messages().latest("id")
-        self.assertEqual(message.internal_data["message_attachments"][0]["scope"], UserFile.Scope.MESSAGE_ATTACHMENT)
+        self.assertNotIn("message_attachments", message.internal_data)
+        self.assertEqual(message.internal_data["response_mode"], "auto")
 
     @patch("nova.views.thread_views.upload_message_attachments")
     @patch("nova.tasks.tasks.run_ai_task_celery.delay")
@@ -554,6 +560,67 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "ERROR")
 
     @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_rejection_does_not_create_empty_thread(self, mocked_run_ai_task):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-No-Tools-New-Thread",
+            provider_type=ProviderType.OPENROUTER,
+            model="grok-tool-less",
+            api_key="dummy",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Tool Agent New Thread",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        tool = Tool.objects.create(
+            user=self.user,
+            name="Memory 2",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        agent.tools.add(tool)
+
+        existing_thread_ids = set(Thread.objects.filter(user=self.user).values_list("id", flat=True))
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": "None",
+                "new_message": "Hello",
+                "selected_agent": str(agent.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            set(Thread.objects.filter(user=self.user).values_list("id", flat=True)),
+            existing_thread_ids,
+        )
+        mocked_run_ai_task.assert_not_called()
+
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
     def test_add_message_rejects_when_provider_has_no_tools_and_agent_depends_on_tools(
         self,
         mocked_run_ai_task,
@@ -574,7 +641,11 @@ class MainViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
@@ -632,7 +703,11 @@ class MainViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
@@ -722,7 +797,7 @@ class MainViewsTests(TestCase):
 
         request = self.factory.get("/app/messages/", {"thread_id": str(thread.id)})
         request.user = self.user
-        with patch("nova.views.thread_views.markdown_to_html", side_effect=RuntimeError("boom")):
+        with patch("nova.views.thread_views.prepare_messages_for_display", side_effect=RuntimeError("boom")):
             with patch("nova.views.thread_views.render", side_effect=fake_render):
                 with self.assertLogs("nova.views.thread_views", level="ERROR") as logs:
                     response = thread_views.message_list(request)

@@ -14,7 +14,6 @@ from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
-from nova.models.UserFile import UserFile
 from nova.tests.factories import create_agent, create_provider
 
 
@@ -110,10 +109,16 @@ class ContinuousViewsTests(TestCase):
         mocked_upload_message_attachments.return_value = (
             [{
                 "id": 301,
-                "filename": "camera.jpg",
+                "message_id": 1,
+                "user_file_id": 301,
+                "direction": "input",
+                "kind": "image",
                 "mime_type": "image/jpeg",
+                "label": "camera.jpg",
+                "summary_text": "",
                 "size": 2048,
-                "scope": UserFile.Scope.MESSAGE_ATTACHMENT,
+                "published_to_file": False,
+                "metadata": {},
             }],
             [],
         )
@@ -129,7 +134,7 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["message_attachments"][0]["filename"], "camera.jpg")
+        self.assertEqual(payload["message"]["artifacts"][0]["label"], "camera.jpg")
 
     def test_continuous_add_message_rejects_empty_payload(self):
         response = self.client.post(
@@ -164,7 +169,11 @@ class ContinuousViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
@@ -238,7 +247,12 @@ class ContinuousViewsTests(TestCase):
     ):
         mocked_enqueue_followups.return_value = None
 
-        provider = create_provider(self.user, provider_type=ProviderType.OPENAI, name="Stale Vision", model="gpt-4o-mini")
+        provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENAI,
+            name="Stale Vision",
+            model="gpt-4o-mini",
+        )
         provider.api_key = "dummy"
         provider.save(update_fields=["api_key"])
         provider.apply_verification_result(

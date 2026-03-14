@@ -331,6 +331,13 @@ class AgentToolWrapperTests(TransactionTestCase):
 
         self.assertEqual(answer, "ANSWER")
         self.assertEqual(artifact_payload, {})
+        invoke_payload = FakeLLMAgent.instances[-1].invoke_calls[0]
+        self.assertIsInstance(invoke_payload, list)
+        self.assertEqual(invoke_payload[0]["type"], "text")
+        self.assertIn("Attached artifacts:", invoke_payload[0]["text"])
+        self.assertIn("image.png", invoke_payload[0]["text"])
+        self.assertEqual(invoke_payload[1]["type"], "image")
+        self.assertEqual(invoke_payload[1]["filename"], "image.png")
         hidden_message = (
             self.thread.get_messages()
             .filter(actor=Actor.SYSTEM, internal_data__hidden_subagent_trace=True)

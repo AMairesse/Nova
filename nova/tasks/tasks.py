@@ -1,9 +1,7 @@
 # nova/tasks/tasks.py
 import asyncio
-import base64
 import datetime as dt
 import logging
-import posixpath
 import time
 from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
@@ -21,27 +19,29 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
-from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
+from nova.models.MessageArtifact import ArtifactDirection, MessageArtifact
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
-from nova.models.UserFile import UserFile
 from nova.file_utils import download_file_content
 from nova.message_utils import annotate_user_message
+from nova.multimodal_prompts import (
+    PromptInput,
+    build_multimodal_intro_text,
+    build_multimodal_prompt_content,
+)
 from nova.native_provider_runtime import (
     attach_tool_output_artifacts_to_message,
     invoke_native_provider_for_message,
     persist_native_result_artifacts,
     summarize_native_result,
 )
-from nova.message_artifacts import detect_artifact_kind
-from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    normalize_message_attachments,
-)
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
-from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
+from nova.tasks.task_definition_runner import (
+    build_email_prompt_variables,
+    execute_agent_task_definition,
+)
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
 
@@ -57,214 +57,55 @@ THREAD_TITLE_PROMPT = (
 )
 
 
-def _build_message_attachment_text(message_text: str, attachments: list[dict]) -> str:
-    text = (message_text or "").strip()
-    if not text:
-        if len(attachments) == 1:
-            kind = str((attachments[0] or {}).get("kind") or "").strip()
-            if kind == ArtifactKind.IMAGE:
-                text = "Please analyze the attached image."
-            elif kind == ArtifactKind.PDF:
-                text = "Please analyze the attached PDF."
-            elif kind == ArtifactKind.AUDIO:
-                text = "Please analyze the attached audio."
-            else:
-                text = "Please analyze the attached file."
-        else:
-            text = "Please analyze the attached files."
-    if not attachments:
-        return text
-
-    label = "Attached file:" if len(attachments) == 1 else "Attached files:"
-    names = "\n".join(
-        f"- {_get_attachment_display_name(attachment)}"
-        for attachment in attachments
-    )
-    return f"{text}\n\n{label}\n{names}"
-
-
-def _get_attachment_display_name(attachment: dict) -> str:
-    return (
-        str(attachment.get("label") or "").strip()
-        or str(attachment.get("filename") or "").strip()
-        or f"attachment-{attachment.get('id')}"
-    )
-
-
-async def build_source_message_prompt(source_message: Message, *, fallback_prompt: str = ""):
+async def build_source_message_prompt(
+    source_message: Message,
+    *,
+    fallback_prompt: str = "",
+):
     """Build the runtime user turn payload from a stored source message."""
-    internal_data = source_message.internal_data if isinstance(source_message.internal_data, dict) else {}
+    source_message_id = getattr(source_message, "pk", None) or getattr(
+        source_message,
+        "id",
+        None,
+    )
 
     def _load_attachment_files():
-        artifacts = []
-        if getattr(source_message, "pk", None):
-            artifacts = list(
-                MessageArtifact.objects.filter(
-                    user=source_message.user,
-                    thread=source_message.thread,
-                    message=source_message,
-                    direction=ArtifactDirection.INPUT,
-                )
-                .select_related("user_file")
-                .order_by("order", "created_at", "id")
-            )
-        if artifacts:
-            return [
-                (
-                    {
-                        "id": artifact.id,
-                        "message_id": artifact.message_id,
-                        "user_file_id": artifact.user_file_id,
-                        "direction": artifact.direction,
-                        "kind": artifact.kind,
-                        "label": artifact.filename,
-                        "mime_type": artifact.mime_type or "",
-                        "size": int(getattr(artifact.user_file, "size", 0) or 0),
-                        "summary_text": artifact.summary_text or "",
-                        "metadata": artifact.metadata or {},
-                    },
-                    artifact.user_file,
-                )
-                for artifact in artifacts
-            ]
+        if not source_message_id:
+            return []
 
-        attachments = normalize_message_attachments(
-            internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
-        )
-        files = list(
-            UserFile.objects.filter(
+        return [
+            PromptInput.from_artifact(artifact)
+            for artifact in MessageArtifact.objects.filter(
                 user=source_message.user,
                 thread=source_message.thread,
-                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-                source_message=source_message,
-            ).order_by("created_at", "id")
-        )
-        if not attachments:
-            return [
-                (
-                    {
-                        "id": user_file.id,
-                        "message_id": getattr(source_message, "id", None),
-                        "user_file_id": user_file.id,
-                        "direction": ArtifactDirection.INPUT,
-                        "kind": detect_artifact_kind(user_file.mime_type, user_file.original_filename),
-                        "label": posixpath.basename(user_file.original_filename),
-                        "mime_type": user_file.mime_type,
-                        "size": user_file.size,
-                        "summary_text": "",
-                        "metadata": {"scope": user_file.scope},
-                    },
-                    user_file,
-                )
-                for user_file in files
-            ]
-
-        by_id = {user_file.id: user_file for user_file in files}
-        return [
-            (
-                {
-                    "id": attachment["id"],
-                    "message_id": getattr(source_message, "id", None),
-                    "user_file_id": attachment["id"],
-                    "direction": ArtifactDirection.INPUT,
-                    "kind": detect_artifact_kind(attachment.get("mime_type"), attachment.get("filename")),
-                    "label": attachment.get("filename") or posixpath.basename(by_id[attachment["id"]].original_filename) if attachment["id"] in by_id else "",
-                    "mime_type": attachment.get("mime_type") or "",
-                    "size": int(attachment.get("size") or 0),
-                    "summary_text": "",
-                    "metadata": {"scope": attachment.get("scope") or ""},
-                },
-                by_id.get(attachment["id"]),
+                message_id=source_message_id,
+                direction=ArtifactDirection.INPUT,
             )
-            for attachment in attachments
+            .select_related("user_file")
+            .order_by("order", "created_at", "id")
         ]
 
-    ordered_files = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
-    if not ordered_files:
+    prompt_inputs = await sync_to_async(
+        _load_attachment_files,
+        thread_sensitive=True,
+    )()
+    if not prompt_inputs:
         return source_message.text or fallback_prompt or ""
 
-    attachments = [attachment for attachment, _user_file in ordered_files]
-
-    content_parts = [
-        {
-            "type": "text",
-            "text": _build_message_attachment_text(source_message.text or fallback_prompt, attachments),
-        }
-    ]
-
-    for attachment, user_file in ordered_files:
-        if not user_file:
-            logger.warning(
-                "Message attachment missing for message %s (attachment id=%s).",
-                source_message.id,
-                attachment.get("id"),
-            )
-            if attachment.get("summary_text"):
-                content_parts.append(
-                    {
-                        "type": "text",
-                        "text": f"{attachment.get('label') or 'Attachment'}:\n{attachment.get('summary_text')}",
-                    }
-                )
-            continue
-
-        try:
-            content = await download_file_content(user_file)
-        except Exception as exc:
-            logger.warning(
-                "Failed to load message attachment %s for message %s: %s",
-                user_file.id,
-                source_message.id,
-                exc,
-            )
-            continue
-
-        kind = str(attachment.get("kind") or "").strip() or detect_artifact_kind(
-            user_file.mime_type,
-            user_file.original_filename,
-        )
-        base64_content = base64.b64encode(content).decode("utf-8")
-        filename = attachment.get("label") or user_file.original_filename
-        if kind == ArtifactKind.IMAGE:
-            content_parts.append(
-                {
-                    "type": "image",
-                    "source_type": "base64",
-                    "data": base64_content,
-                    "mime_type": user_file.mime_type,
-                    "filename": filename,
-                }
-            )
-        elif kind == ArtifactKind.PDF:
-            content_parts.append(
-                {
-                    "type": "file",
-                    "source_type": "base64",
-                    "data": base64_content,
-                    "mime_type": user_file.mime_type,
-                    "filename": filename,
-                }
-            )
-        elif kind == ArtifactKind.AUDIO:
-            content_parts.append(
-                {
-                    "type": "audio",
-                    "source_type": "base64",
-                    "data": base64_content,
-                    "mime_type": user_file.mime_type,
-                    "filename": filename,
-                }
-            )
-        else:
-            logger.warning(
-                "Skipping unsupported message artifact kind %s for artifact %s.",
-                kind,
-                attachment.get("id"),
-            )
-
-    if len(content_parts) == 1:
-        return content_parts[0]["text"]
-    return content_parts
+    intro_text = build_multimodal_intro_text(
+        source_message.text or fallback_prompt,
+        prompt_inputs,
+        empty_text_style="analysis",
+        singular_heading="Attached file:",
+        plural_heading="Attached files:",
+    )
+    return await build_multimodal_prompt_content(
+        prompt_inputs,
+        intro_text=intro_text,
+        content_downloader=download_file_content,
+        log_subject=f"message {source_message_id}",
+        include_missing_file_summary=True,
+    )
 
 
 def compute_trigger_retry_countdown(retries: int) -> int:
@@ -343,7 +184,7 @@ class AgentTaskExecutor (TaskExecutor):
         return await super()._run_agent()
 
     async def _run_native_provider_if_supported(self):
-        provider = getattr(self.agent_config, "llm_provider", None)
+        provider = await self._get_llm_provider()
         source_message = getattr(self, "_source_message", None)
         if provider is None or source_message is None:
             return None
@@ -367,10 +208,11 @@ class AgentTaskExecutor (TaskExecutor):
 
         native_result = getattr(self, "_native_provider_result", None)
         if native_result:
+            provider = await self._get_llm_provider()
             await persist_native_result_artifacts(
                 message=message,
                 native_result=native_result,
-                provider=self.agent_config.llm_provider,
+                provider=provider,
             )
             await self._sync_native_provider_checkpoint(native_result, final_answer)
         generated_tool_artifact_ids = [
@@ -1070,7 +912,11 @@ def _handle_missing_task_definition(task_definition_id: int, *, runner_name: str
 def run_task_definition_cron(self, task_definition_id: int):
     """Run an agent task definition configured with a cron trigger."""
     try:
-        task_definition = TaskDefinition.objects.select_related("user", "agent").get(id=task_definition_id)
+        task_definition = TaskDefinition.objects.select_related(
+            "user",
+            "agent",
+            "agent__llm_provider",
+        ).get(id=task_definition_id)
         if not task_definition.is_active:
             logger.info("Task definition %s is inactive. Skipping.", task_definition.name)
             return {"status": "skipped", "reason": "inactive"}
@@ -1107,6 +953,7 @@ def poll_task_definition_email(self, task_definition_id: int):
         task_definition = TaskDefinition.objects.select_related(
             "user",
             "agent",
+            "agent__llm_provider",
             "email_tool",
         ).get(id=task_definition_id)
         if not task_definition.is_active:

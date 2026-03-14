@@ -3,8 +3,9 @@ Test-specific Django settings for Nova project.
 This file inherits from the main settings and overrides configurations
 to enable local testing without external Docker services.
 """
-from .settings import *
 import tempfile
+
+from .settings import *  # noqa: F403
 
 # Override database to use SQLite in-memory for fast testing
 DATABASES = {

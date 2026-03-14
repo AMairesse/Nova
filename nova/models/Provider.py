@@ -21,7 +21,6 @@ from nova.provider_capability_profile import (
     CAPABILITY_PROFILE_LABELS,
     CAPABILITY_SOURCE_LABELS,
     PROBED_OPERATION_KEYS,
-    build_capability_profile_summary,
     ensure_capability_profile,
     merge_declared_capabilities,
     merge_verified_operations,

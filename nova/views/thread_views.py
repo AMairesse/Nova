@@ -7,33 +7,31 @@ from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
-from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
-from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
-from nova.models.UserObjects import UserProfile
-from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
-from nova.views.agent_dispatch import (
-    enqueue_message_agent_task,
-    get_agent_execution_capability_error,
-    get_message_attachment_capability_error,
-    resolve_selected_or_default_agent,
+from nova.message_panel import (
+    get_message_panel_agents,
+    get_pending_interactions,
+    get_user_default_agent,
 )
+from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.thread_titles import build_default_thread_subject
-from nova.utils import markdown_to_html
 import logging
 
 from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
-from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    get_message_attachment_template_context,
+from nova.message_attachments import get_message_attachment_template_context
+from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
+from nova.message_submission import (
+    MessageSubmissionError,
+    SubmissionContext,
+    submit_user_message,
 )
-from nova.message_utils import annotate_user_message, upload_message_attachments
+from nova.message_utils import upload_message_attachments
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -121,19 +119,11 @@ def load_more_threads(request):
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
-    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
-    for agent in user_agents:
-        agent.requires_tools_for_current_thread = agent.requires_tools_for_thread_mode(Thread.Mode.THREAD)
-    agent_id = request.GET.get('agent_id')
-    default_agent = None
-    if agent_id:
-        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
-            id=agent_id,
-            user=request.user,
-        ).first()
-    if not default_agent:
-        default_agent = getattr(request.user.userprofile,
-                                "default_agent", None)
+    user_agents, default_agent = get_message_panel_agents(
+        request.user,
+        thread_mode=Thread.Mode.THREAD,
+        selected_agent_id=request.GET.get('agent_id'),
+    )
     selected_thread_id = request.GET.get('thread_id')
     # With browser persistence removed, default to the most recent classic thread.
     if not selected_thread_id:
@@ -149,51 +139,19 @@ def message_list(request):
         try:
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
-            messages = [
-                message for message in selected_thread.get_messages()
-                if not ((message.internal_data or {}).get("hidden_subagent_trace"))
-            ]
+            raw_messages = list(
+                with_message_display_relations(
+                    selected_thread.get_messages().order_by("created_at", "id")
+                )
+            )
+            agent_config = get_user_default_agent(request.user)
 
-            # Get agent config for summarization settings
-            agent_config = None
-            try:
-                agent_config = request.user.userprofile.default_agent
-            except UserProfile.DoesNotExist:
-                pass
-
-            # Determine if compact link should be shown
-            last_agent_message_id = None
-
-            if agent_config:
-                # Show compact link if there are enough messages for compaction
-                # (more messages than preserve_recent setting)
-                if len(messages) > agent_config.preserve_recent:
-                    # Find the last agent message to show the compact link
-                    for m in reversed(messages):
-                        if m.actor == Actor.AGENT:
-                            last_agent_message_id = m.id
-                            break
-
-            # Hide "Compact" link for continuous mode.
-            show_compact = (getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD)
-
-            for m in messages:
-                display_text = m.text
-                if m.actor == Actor.AGENT and m.internal_data:
-                    display_text = m.internal_data.get('display_markdown') or m.text
-                m.rendered_html = markdown_to_html(display_text)
-                annotate_user_message(m)
-                # Process summary from markdown to HTML
-                if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
-                    m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
-                # Mark if this is the last agent message (for compact link)
-                m.is_last_agent_message = bool(show_compact and (m.id == last_agent_message_id))
-
-            # Fetch pending interactions for server-side rendering
-            pending_interactions = Interaction.objects.filter(
-                thread=selected_thread,
-                status=InteractionStatus.PENDING
-            ).select_related('task', 'agent_config')
+            messages = prepare_messages_for_display(
+                raw_messages,
+                show_compact=getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD,
+                compact_preserve_recent=(agent_config.preserve_recent if agent_config else None),
+                render_system_summaries=True,
+            )
 
             # Add pending interactions to context
             context = {
@@ -201,7 +159,7 @@ def message_list(request):
                 'thread_id': selected_thread_id,
                 'user_agents': user_agents,
                 'default_agent': default_agent,
-                'pending_interactions': pending_interactions,
+                'pending_interactions': get_pending_interactions(selected_thread),
             }
             context.update(get_message_attachment_template_context())
             return render(request, 'nova/message_container.html', context)
@@ -268,146 +226,41 @@ def delete_thread(request, thread_id):
 @login_required(login_url='login')
 def add_message(request):
     thread_id = request.POST.get('thread_id')
-    new_message = request.POST.get('new_message', '')
-    new_message = new_message if new_message.strip() else ''
-    selected_agent = request.POST.get('selected_agent')
-    response_mode = str(request.POST.get('response_mode') or 'auto').strip().lower() or 'auto'
-    uploaded_files = request.FILES.getlist('files', [])
-    message_attachments = request.FILES.getlist('message_attachments', [])
 
-    if not new_message.strip() and not uploaded_files and not message_attachments:
+    def prepare_context(message_text: str) -> SubmissionContext:
+        if not thread_id or thread_id == 'None':
+            thread, thread_html = new_thread(request)
+        else:
+            thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+            thread_html = None
+        return SubmissionContext(
+            thread=thread,
+            create_message=lambda text: thread.add_message(text, actor=Actor.USER),
+            thread_html=thread_html,
+        )
+
+    try:
+        result = submit_user_message(
+            user=request.user,
+            message_text=request.POST.get('new_message', ''),
+            selected_agent=request.POST.get('selected_agent'),
+            response_mode=request.POST.get('response_mode'),
+            thread_mode=Thread.Mode.THREAD,
+            thread_files=request.FILES.getlist('files'),
+            message_attachments=request.FILES.getlist('message_attachments'),
+            prepare_context=prepare_context,
+            dispatcher_task=run_ai_task_celery,
+            thread_file_uploader=batch_upload_files,
+            attachment_uploader=upload_message_attachments,
+            file_update_publisher=publish_file_update,
+        )
+    except MessageSubmissionError as exc:
         return JsonResponse(
-            {"status": "ERROR", "message": "Message or attachment required"},
-            status=400,
+            {"status": "ERROR", "message": exc.message},
+            status=exc.status_code,
         )
 
-    if not thread_id or thread_id == 'None':
-        thread, thread_html = new_thread(request)
-    else:
-        thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-        thread_html = None
-
-    uploaded_file_ids = []
-    message_attachment_meta = []
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
-    execution_error = get_agent_execution_capability_error(
-        agent_config,
-        thread_mode=Thread.Mode.THREAD,
-        response_mode=response_mode,
-    )
-    if execution_error:
-        return JsonResponse(
-            {"status": "ERROR", "message": execution_error},
-            status=400,
-        )
-
-    if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
-        if attachment_error:
-            return JsonResponse(
-                {"status": "ERROR", "message": attachment_error},
-                status=400,
-            )
-
-    if uploaded_files:
-        # Prepare data for unified async upload pipeline.
-        # We propose simple top-level paths; batch_upload_files() will:
-        # - sanitize paths
-        # - enforce size and MIME limits
-        # - auto-rename on collision
-        # - upload to MinIO under users/{user_id}/threads/{thread_id}{safe_path}
-        file_data = []
-        for f in uploaded_files:
-            try:
-                content = f.read()
-            except Exception as e:
-                logger.error(f"Failed reading uploaded file {f.name}: {e}")
-                return JsonResponse(
-                    {"status": "ERROR", "message": "File upload failed while reading content"},
-                    status=500,
-                )
-            # Use a simple POSIX path; sanitize_user_path() will normalize.
-            proposed_path = f"/{f.name}"
-            file_data.append({"path": proposed_path, "content": content})
-
-        try:
-            created_files, errors = async_to_sync(batch_upload_files)(thread, request.user, file_data)
-        except Exception as e:
-            logger.error(f"Batch upload failed: {e}")
-            return JsonResponse(
-                {"status": "ERROR", "message": "File upload failed"},
-                status=500,
-            )
-
-        # Collect created ids for message.internal_data and API compatibility.
-        for item in created_files:
-            file_id = item.get("id")
-            if file_id:
-                uploaded_file_ids.append(file_id)
-
-        # Surface validation errors (size, MIME, etc.) in a backward compatible way:
-        # if any error occurred and nothing was uploaded, treat as failure.
-        if errors and not uploaded_file_ids:
-            # Join errors into a single message; details are safe/validation oriented.
-            return JsonResponse(
-                {"status": "ERROR", "message": "; ".join(errors)},
-                status=400,
-            )
-
-    if uploaded_file_ids:
-        async_to_sync(publish_file_update)(thread.id, "attachment_upload")
-
-    message = thread.add_message(new_message, actor=Actor.USER)
-    if message_attachments:
-        attachment_meta, attachment_errors = upload_message_attachments(
-            thread,
-            request.user,
-            message,
-            message_attachments,
-        )
-        message_attachment_meta = attachment_meta
-        if attachment_errors and not message_attachment_meta:
-            message.delete()
-            return JsonResponse(
-                {"status": "ERROR", "message": "; ".join(attachment_errors)},
-                status=400,
-            )
-
-    message.internal_data = {
-        'file_ids': uploaded_file_ids,
-        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
-        'response_mode': response_mode,
-    }
-    message.save()
-    annotate_user_message(message)
-
-    task = enqueue_message_agent_task(
-        user=request.user,
-        thread=thread,
-        agent_config=agent_config,
-        source_message_id=message.id,
-        dispatcher_task=run_ai_task_celery,
-    )
-
-    # Prepare message data for JSON response
-    message_data = {
-        "id": message.id,
-        "text": new_message,  # Return raw text for client-side rendering
-        "actor": message.actor,
-        "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
-        "internal_data": message.internal_data or {},
-        "message_attachments": message_attachment_meta,
-        "artifacts": getattr(message, "message_artifacts", []),
-    }
-
-    return JsonResponse({
-        "status": "OK",
-        "message": message_data,
-        "thread_id": thread.id,
-        "task_id": task.id,
-        "threadHtml": thread_html,
-        "uploaded_file_ids": uploaded_file_ids
-    })
+    return JsonResponse(result.as_payload())
 
 
 @require_POST
@@ -418,7 +271,7 @@ def summarize_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
 
     # Get the agent's summarization config
-    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    agent_config = get_user_default_agent(request.user)
     if not agent_config:
         return JsonResponse({
             "status": "ERROR",
@@ -513,7 +366,7 @@ def confirm_summarize_thread(request, thread_id):
     sub_agent_ids = json.loads(request.POST.get('sub_agent_ids', '[]'))
 
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    agent_config = get_user_default_agent(request.user)
     if not agent_config:
         return JsonResponse({
             "status": "ERROR",
