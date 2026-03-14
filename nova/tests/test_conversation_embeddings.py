@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +18,7 @@ from nova.models.TranscriptChunk import TranscriptChunk
 from nova.tasks.conversation_embedding_tasks import (
     compute_day_segment_embedding_task,
     compute_transcript_chunk_embedding_task,
+    rebuild_user_conversation_embeddings_task,
 )
 from nova.continuous.tools.conversation_tools import _focused_snippet, conversation_get, conversation_search
 
@@ -50,6 +52,83 @@ class ConversationEmbeddingTasksTests(TestCase):
             token_estimate=8,
         )
 
+    def _create_additional_segment_and_chunk(self, suffix: str):
+        start_message = Message.objects.create(
+            user=self.user,
+            thread=self.thread,
+            actor=Actor.USER,
+            text=f"hello {suffix}",
+        )
+        end_message = Message.objects.create(
+            user=self.user,
+            thread=self.thread,
+            actor=Actor.AGENT,
+            text=f"world {suffix}",
+        )
+        segment = DaySegment.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_label=self.seg.day_label + timedelta(days=1),
+            starts_at_message=start_message,
+            summary_markdown=f"Summary {suffix}",
+        )
+        chunk = TranscriptChunk.objects.create(
+            user=self.user,
+            thread=self.thread,
+            day_segment=segment,
+            start_message=start_message,
+            end_message=end_message,
+            content_text=f"User: hello {suffix}\nAgent: world {suffix}",
+            content_hash=TranscriptChunk.compute_hash(
+                f"User: hello {suffix}\nAgent: world {suffix}",
+                start_message.id,
+                end_message.id,
+            ),
+            token_estimate=12,
+        )
+        return segment, chunk
+
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_day_segment_embedding_returns_when_embedding_is_missing(self, mock_provider):
+        compute_day_segment_embedding_task.run(999999)
+
+        mock_provider.assert_not_called()
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_day_segment_embedding_skips_when_provider_is_disabled(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        emb = DaySegmentEmbedding.objects.create(user=self.user, day_segment=self.seg)
+        mock_provider.return_value = None
+
+        compute_day_segment_embedding_task.run(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.PENDING)
+        mock_compute.assert_not_awaited()
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_day_segment_embedding_marks_error_for_empty_summary(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        self.seg.summary_markdown = "   "
+        self.seg.save(update_fields=["summary_markdown"])
+        emb = DaySegmentEmbedding.objects.create(user=self.user, day_segment=self.seg)
+        mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
+
+        compute_day_segment_embedding_task.run(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.ERROR)
+        self.assertEqual(emb.error, "empty_summary")
+        mock_compute.assert_not_awaited()
+
     @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
     def test_compute_day_segment_embedding_marks_ready(self, mock_provider, mock_compute):
@@ -67,6 +146,87 @@ class ConversationEmbeddingTasksTests(TestCase):
 
     @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_day_segment_embedding_marks_error_when_provider_returns_no_vector(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        emb = DaySegmentEmbedding.objects.create(user=self.user, day_segment=self.seg)
+        mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
+        mock_compute.return_value = None
+
+        compute_day_segment_embedding_task.run(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.ERROR)
+        self.assertEqual(emb.error, "embeddings_disabled")
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_day_segment_embedding_retries_after_failure(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        emb = DaySegmentEmbedding.objects.create(user=self.user, day_segment=self.seg)
+        mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
+        mock_compute.side_effect = RuntimeError("boom")
+
+        with patch.object(
+            compute_day_segment_embedding_task,
+            "retry",
+            side_effect=RuntimeError("retry scheduled"),
+        ) as mocked_retry, self.assertRaisesMessage(RuntimeError, "retry scheduled"):
+            compute_day_segment_embedding_task(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.ERROR)
+        self.assertEqual(emb.error, "boom")
+        mocked_retry.assert_called_once()
+
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_transcript_chunk_embedding_returns_when_embedding_is_missing(self, mock_provider):
+        compute_transcript_chunk_embedding_task.run(999999)
+
+        mock_provider.assert_not_called()
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_transcript_chunk_embedding_skips_when_provider_is_disabled(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        emb = TranscriptChunkEmbedding.objects.create(user=self.user, transcript_chunk=self.chunk)
+        mock_provider.return_value = None
+
+        compute_transcript_chunk_embedding_task.run(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.PENDING)
+        mock_compute.assert_not_awaited()
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_transcript_chunk_embedding_marks_error_for_empty_content(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        self.chunk.content_text = "   "
+        self.chunk.save(update_fields=["content_text"])
+        emb = TranscriptChunkEmbedding.objects.create(user=self.user, transcript_chunk=self.chunk)
+        mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
+
+        compute_transcript_chunk_embedding_task.run(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.ERROR)
+        self.assertEqual(emb.error, "empty_content")
+        mock_compute.assert_not_awaited()
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
     def test_compute_transcript_chunk_embedding_marks_ready(self, mock_provider, mock_compute):
         emb = TranscriptChunkEmbedding.objects.create(user=self.user, transcript_chunk=self.chunk)
         mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
@@ -79,6 +239,116 @@ class ConversationEmbeddingTasksTests(TestCase):
         self.assertEqual(emb.model, "e5")
         self.assertEqual(emb.dimensions, 1024)
         self.assertIsNotNone(emb.vector)
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_transcript_chunk_embedding_marks_error_when_provider_returns_no_vector(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        emb = TranscriptChunkEmbedding.objects.create(user=self.user, transcript_chunk=self.chunk)
+        mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
+        mock_compute.return_value = None
+
+        compute_transcript_chunk_embedding_task.run(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.ERROR)
+        self.assertEqual(emb.error, "embeddings_disabled")
+
+    @patch("nova.tasks.conversation_embedding_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_embedding_tasks.get_embeddings_provider")
+    def test_compute_transcript_chunk_embedding_retries_after_failure(
+        self,
+        mock_provider,
+        mock_compute,
+    ):
+        emb = TranscriptChunkEmbedding.objects.create(user=self.user, transcript_chunk=self.chunk)
+        mock_provider.return_value = SimpleNamespace(provider_type="custom_http", model="e5")
+        mock_compute.side_effect = RuntimeError("boom")
+
+        with patch.object(
+            compute_transcript_chunk_embedding_task,
+            "retry",
+            side_effect=RuntimeError("retry scheduled"),
+        ) as mocked_retry, self.assertRaisesMessage(RuntimeError, "retry scheduled"):
+            compute_transcript_chunk_embedding_task(emb.id)
+
+        emb.refresh_from_db()
+        self.assertEqual(emb.state, ConversationEmbeddingState.ERROR)
+        self.assertEqual(emb.error, "boom")
+        mocked_retry.assert_called_once()
+
+    @patch("nova.tasks.conversation_embedding_tasks.rebuild_user_conversation_embeddings_task.delay")
+    @patch("nova.tasks.conversation_embedding_tasks.compute_transcript_chunk_embedding_task.delay")
+    @patch("nova.tasks.conversation_embedding_tasks.compute_day_segment_embedding_task.delay")
+    def test_rebuild_user_conversation_embeddings_creates_rows_and_queues_pending_batches(
+        self,
+        mock_day_delay,
+        mock_chunk_delay,
+        mock_rebuild_delay,
+    ):
+        result = rebuild_user_conversation_embeddings_task.run(self.user.id, batch_size=10)
+
+        day_embedding = DaySegmentEmbedding.objects.get(day_segment=self.seg)
+        chunk_embedding = TranscriptChunkEmbedding.objects.get(transcript_chunk=self.chunk)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["queued_day"], 1)
+        self.assertEqual(result["queued_chunk"], 1)
+        self.assertEqual(day_embedding.state, ConversationEmbeddingState.PENDING)
+        self.assertIsNone(day_embedding.error)
+        self.assertIsNone(day_embedding.vector)
+        self.assertEqual(chunk_embedding.state, ConversationEmbeddingState.PENDING)
+        self.assertIsNone(chunk_embedding.error)
+        self.assertIsNone(chunk_embedding.vector)
+        mock_day_delay.assert_called_once_with(day_embedding.id)
+        mock_chunk_delay.assert_called_once_with(chunk_embedding.id)
+        mock_rebuild_delay.assert_not_called()
+
+    @patch("nova.tasks.conversation_embedding_tasks.rebuild_user_conversation_embeddings_task.delay")
+    @patch("nova.tasks.conversation_embedding_tasks.compute_transcript_chunk_embedding_task.delay")
+    @patch("nova.tasks.conversation_embedding_tasks.compute_day_segment_embedding_task.delay")
+    def test_rebuild_user_conversation_embeddings_reschedules_when_batch_is_full(
+        self,
+        mock_day_delay,
+        mock_chunk_delay,
+        mock_rebuild_delay,
+    ):
+        second_segment, second_chunk = self._create_additional_segment_and_chunk("second")
+        first_day_embedding = DaySegmentEmbedding.objects.create(
+            user=self.user,
+            day_segment=self.seg,
+            state=ConversationEmbeddingState.ERROR,
+            error="stale",
+            vector=[0.1] * 4,
+        )
+        first_chunk_embedding = TranscriptChunkEmbedding.objects.create(
+            user=self.user,
+            transcript_chunk=self.chunk,
+            state=ConversationEmbeddingState.ERROR,
+            error="stale",
+            vector=[0.2] * 4,
+        )
+
+        result = rebuild_user_conversation_embeddings_task.run(self.user.id, batch_size=1)
+
+        first_day_embedding.refresh_from_db()
+        first_chunk_embedding.refresh_from_db()
+        self.assertEqual(result["queued_day"], 1)
+        self.assertEqual(result["queued_chunk"], 1)
+        self.assertEqual(first_day_embedding.state, ConversationEmbeddingState.PENDING)
+        self.assertIsNone(first_day_embedding.error)
+        self.assertIsNone(first_day_embedding.vector)
+        self.assertEqual(first_chunk_embedding.state, ConversationEmbeddingState.PENDING)
+        self.assertIsNone(first_chunk_embedding.error)
+        self.assertIsNone(first_chunk_embedding.vector)
+        self.assertTrue(DaySegmentEmbedding.objects.filter(day_segment=second_segment).exists())
+        self.assertTrue(TranscriptChunkEmbedding.objects.filter(transcript_chunk=second_chunk).exists())
+        mock_day_delay.assert_called_once_with(first_day_embedding.id)
+        mock_chunk_delay.assert_called_once_with(first_chunk_embedding.id)
+        mock_rebuild_delay.assert_called_once_with(self.user.id, batch_size=1)
 
 
 class ConversationSearchFallbackTests(TestCase):
