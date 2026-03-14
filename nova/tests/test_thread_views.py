@@ -779,7 +779,7 @@ class MainViewsTests(TestCase):
 
         request = self.factory.get("/app/messages/", {"thread_id": str(thread.id)})
         request.user = self.user
-        with patch("nova.views.thread_views.markdown_to_html", side_effect=RuntimeError("boom")):
+        with patch("nova.views.thread_views.prepare_messages_for_display", side_effect=RuntimeError("boom")):
             with patch("nova.views.thread_views.render", side_effect=fake_render):
                 with self.assertLogs("nova.views.thread_views", level="ERROR") as logs:
                     response = thread_views.message_list(request)

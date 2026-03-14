@@ -16,7 +16,6 @@ from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.thread_titles import build_default_thread_subject
-from nova.utils import markdown_to_html
 import logging
 
 from asgiref.sync import async_to_sync
@@ -24,12 +23,13 @@ from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
 from nova.message_attachments import get_message_attachment_template_context
+from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
 from nova.message_submission import (
     MessageSubmissionError,
     SubmissionContext,
     submit_user_message,
 )
-from nova.message_utils import annotate_user_message, upload_message_attachments
+from nova.message_utils import upload_message_attachments
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -145,10 +145,7 @@ def message_list(request):
         try:
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
-            messages = [
-                message for message in selected_thread.get_messages()
-                if not ((message.internal_data or {}).get("hidden_subagent_trace"))
-            ]
+            raw_messages = list(with_message_display_relations(selected_thread.get_messages().order_by("created_at", "id")))
 
             # Get agent config for summarization settings
             agent_config = None
@@ -157,33 +154,12 @@ def message_list(request):
             except UserProfile.DoesNotExist:
                 pass
 
-            # Determine if compact link should be shown
-            last_agent_message_id = None
-
-            if agent_config:
-                # Show compact link if there are enough messages for compaction
-                # (more messages than preserve_recent setting)
-                if len(messages) > agent_config.preserve_recent:
-                    # Find the last agent message to show the compact link
-                    for m in reversed(messages):
-                        if m.actor == Actor.AGENT:
-                            last_agent_message_id = m.id
-                            break
-
-            # Hide "Compact" link for continuous mode.
-            show_compact = (getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD)
-
-            for m in messages:
-                display_text = m.text
-                if m.actor == Actor.AGENT and m.internal_data:
-                    display_text = m.internal_data.get('display_markdown') or m.text
-                m.rendered_html = markdown_to_html(display_text)
-                annotate_user_message(m)
-                # Process summary from markdown to HTML
-                if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
-                    m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
-                # Mark if this is the last agent message (for compact link)
-                m.is_last_agent_message = bool(show_compact and (m.id == last_agent_message_id))
+            messages = prepare_messages_for_display(
+                raw_messages,
+                show_compact=getattr(selected_thread, 'mode', Thread.Mode.THREAD) == Thread.Mode.THREAD,
+                compact_preserve_recent=(agent_config.preserve_recent if agent_config else None),
+                render_system_summaries=True,
+            )
 
             # Fetch pending interactions for server-side rendering
             pending_interactions = Interaction.objects.filter(

@@ -28,12 +28,13 @@ from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
 from nova.message_attachments import get_message_attachment_template_context
+from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
 from nova.message_submission import (
     MessageSubmissionError,
     SubmissionContext,
     submit_user_message,
 )
-from nova.message_utils import annotate_user_message, upload_message_attachments
+from nova.message_utils import upload_message_attachments
 
 _YEAR_RE = re.compile(r"^\d{4}$")
 _YEAR_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
@@ -135,22 +136,17 @@ def continuous_home(request):
     # causes each timeline message to render as a top-level UI notification.
     timeline_messages = []
     if day_segment and day_segment.starts_at_message_id:
-        timeline_messages = list(
-            Message.objects.filter(
-                user=request.user,
-                thread=thread,
-                created_at__gte=day_segment.starts_at_message.created_at,
-            ).order_by("created_at", "id")
+        timeline_messages = prepare_messages_for_display(
+            list(
+                with_message_display_relations(
+                    Message.objects.filter(
+                        user=request.user,
+                        thread=thread,
+                        created_at__gte=day_segment.starts_at_message.created_at,
+                    ).order_by("created_at", "id")
+                )
+            )
         )
-        timeline_messages = [
-            message for message in timeline_messages
-            if not ((message.internal_data or {}).get("hidden_subagent_trace"))
-        ]
-        for m in timeline_messages:
-            display_text = m.text
-            if m.actor == Actor.AGENT and m.internal_data:
-                display_text = m.internal_data.get("display_markdown") or m.text
-            m.rendered_html = markdown_to_html(display_text)
 
     return render(
         request,
@@ -274,10 +270,12 @@ def continuous_messages(request):
 
     if day_label is None:
         latest_messages = list(
-            Message.objects.filter(user=request.user, thread=thread)
-            .order_by("-created_at", "-id")[:recent_messages_limit]
+            with_message_display_relations(
+                Message.objects.filter(user=request.user, thread=thread)
+                .order_by("-created_at", "-id")[:recent_messages_limit]
+            )
         )
-        messages = list(reversed(latest_messages))
+        messages = prepare_messages_for_display(list(reversed(latest_messages)))
     else:
         seg = DaySegment.objects.filter(user=request.user, thread=thread, day_label=day_label).first()
         if not seg or not seg.starts_at_message_id:
@@ -293,17 +291,9 @@ def continuous_messages(request):
             qs = Message.objects.filter(user=request.user, thread=thread, created_at__gte=start_dt)
             if end_dt:
                 qs = qs.filter(created_at__lt=end_dt)
-            messages = list(qs.order_by("created_at", "id"))
-    messages = [
-        message for message in messages
-        if not ((message.internal_data or {}).get("hidden_subagent_trace"))
-    ]
-    for m in messages:
-        display_text = m.text
-        if m.actor == Actor.AGENT and m.internal_data:
-            display_text = m.internal_data.get("display_markdown") or m.text
-        m.rendered_html = markdown_to_html(display_text)
-        annotate_user_message(m)
+            messages = prepare_messages_for_display(
+                list(with_message_display_relations(qs.order_by("created_at", "id")))
+            )
 
     pending_interactions = (
         Interaction.objects.filter(
