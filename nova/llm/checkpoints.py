@@ -30,6 +30,7 @@ async def _bootstrap_tables(conn_str: str) -> None:
         async with AsyncConnectionPool(
             conn_str,
             kwargs={"autocommit": True, "row_factory": dict_row},
+            open=False,
         ) as tmp_pool:
             saver = AsyncPostgresSaver(tmp_pool)
             await saver.setup()
@@ -40,7 +41,7 @@ async def get_checkpointer() -> AsyncPostgresSaver:
     conn_str = _make_conn_str()
     await _bootstrap_tables(conn_str)
 
-    runtime_pool = AsyncConnectionPool(conninfo=conn_str, timeout=10)
+    runtime_pool = AsyncConnectionPool(conninfo=conn_str, timeout=10, open=False)
     await runtime_pool.open()
     saver = AsyncPostgresSaver(runtime_pool)
     return saver
