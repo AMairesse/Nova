@@ -544,6 +544,55 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
         self.assertEqual(payload["artifacts"][0]["kind"], ArtifactKind.IMAGE)
         self.assertTrue(payload["artifacts"][0]["content_url"])
 
+    def test_create_llm_agent_loads_uncached_provider_relation_async_safely(self):
+        uncached_agent = self.agent.__class__.objects.get(pk=self.agent.pk)
+        self.assertNotIn("llm_provider", uncached_agent._state.fields_cache)
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=15, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=uncached_agent,
+            prompt="prompt",
+        )
+        fake_llm = SimpleNamespace(_resources={})
+
+        with (
+            patch("nova.tasks.TaskExecutor.provider_tools_explicitly_unavailable", return_value=False),
+            patch(
+                "nova.tasks.TaskExecutor.LLMAgent.create",
+                new_callable=AsyncMock,
+                return_value=fake_llm,
+            ) as mocked_create,
+        ):
+            asyncio.run(executor._create_llm_agent())
+
+        mocked_create.assert_awaited_once()
+        self.assertIs(executor.llm, fake_llm)
+
+    def test_run_native_provider_support_check_loads_uncached_provider_relation_async_safely(self):
+        uncached_agent = self.agent.__class__.objects.get(pk=self.agent.pk)
+        self.assertNotIn("llm_provider", uncached_agent._state.fields_cache)
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=16, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=uncached_agent,
+            prompt="prompt",
+        )
+        executor._source_message = self.thread.add_message("Check this email", actor=Actor.USER)
+
+        with patch(
+            "nova.tasks.tasks.invoke_native_provider_for_message",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mocked_invoke:
+            result = asyncio.run(executor._run_native_provider_if_supported())
+
+        self.assertIsNone(result)
+        mocked_invoke.assert_awaited_once()
+
     def test_collect_hidden_subagent_output_artifact_ids_finds_hidden_outputs(self):
         source_message = self.thread.add_message("Please create an image", actor=Actor.USER)
         hidden_message = self.thread.add_message("hidden trace", actor=Actor.SYSTEM)

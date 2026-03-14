@@ -184,7 +184,7 @@ class AgentTaskExecutor (TaskExecutor):
         return await super()._run_agent()
 
     async def _run_native_provider_if_supported(self):
-        provider = getattr(self.agent_config, "llm_provider", None)
+        provider = await self._get_llm_provider()
         source_message = getattr(self, "_source_message", None)
         if provider is None or source_message is None:
             return None
@@ -208,10 +208,11 @@ class AgentTaskExecutor (TaskExecutor):
 
         native_result = getattr(self, "_native_provider_result", None)
         if native_result:
+            provider = await self._get_llm_provider()
             await persist_native_result_artifacts(
                 message=message,
                 native_result=native_result,
-                provider=self.agent_config.llm_provider,
+                provider=provider,
             )
             await self._sync_native_provider_checkpoint(native_result, final_answer)
         generated_tool_artifact_ids = [
@@ -911,7 +912,11 @@ def _handle_missing_task_definition(task_definition_id: int, *, runner_name: str
 def run_task_definition_cron(self, task_definition_id: int):
     """Run an agent task definition configured with a cron trigger."""
     try:
-        task_definition = TaskDefinition.objects.select_related("user", "agent").get(id=task_definition_id)
+        task_definition = TaskDefinition.objects.select_related(
+            "user",
+            "agent",
+            "agent__llm_provider",
+        ).get(id=task_definition_id)
         if not task_definition.is_active:
             logger.info("Task definition %s is inactive. Skipping.", task_definition.name)
             return {"status": "skipped", "reason": "inactive"}
@@ -948,6 +953,7 @@ def poll_task_definition_email(self, task_definition_id: int):
         task_definition = TaskDefinition.objects.select_related(
             "user",
             "agent",
+            "agent__llm_provider",
             "email_tool",
         ).get(id=task_definition_id)
         if not task_definition.is_active:
