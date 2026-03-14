@@ -75,7 +75,7 @@ class LLMAgent:
     def fetch_agent_data_sync(cls, agent_config, user):
         # Pre-fetch ORM data for load_tools
         if not agent_config:
-            return [], [], [], False, None, None
+            return [], [], [], False, None, None, None
         builtin_tools = list(agent_config.tools.filter(is_active=True,
                                                        tool_type=Tool.ToolType.BUILTIN))
         mcp_tools_data = []
