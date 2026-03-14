@@ -80,11 +80,11 @@ botocore==1.40.61
     #   boto3
     #   nova (pyproject.toml)
     #   s3transfer
-cachetools==7.0.3
+cachetools==7.0.5
     # via py-key-value-aio
 caio==0.9.25
     # via aiofile
-caldav==3.0.0
+caldav==3.0.1
     # via nova (pyproject.toml)
 cbor2==5.8.0
     # via autobahn
@@ -147,7 +147,7 @@ cryptography==46.0.5
     #   pyopenssl
     #   pywebpush
     #   service-identity
-cyclopts==4.7.0
+cyclopts==4.9.0
     # via fastmcp
 daphne==4.2.1
     # via nova (pyproject.toml)
@@ -193,7 +193,7 @@ exceptiongroup==1.3.1
     # via fastmcp
 fastmcp==3.1.0
     # via nova (pyproject.toml)
-filelock==3.25.0
+filelock==3.25.2
     # via huggingface-hub
 frozenlist==1.8.0
     # via
@@ -201,7 +201,7 @@ frozenlist==1.8.0
     #   aiosignal
 fsspec==2026.2.0
     # via huggingface-hub
-googleapis-common-protos==1.72.0
+googleapis-common-protos==1.73.0
     # via opentelemetry-exporter-otlp-proto-http
 greenlet==3.3.2
     # via playwright
@@ -210,7 +210,7 @@ h11==0.16.0
     #   httpcore
     #   urllib3-future
     #   uvicorn
-hf-xet==1.3.2
+hf-xet==1.4.2
     # via huggingface-hub
 http-ece==1.2.1
     # via pywebpush
@@ -233,7 +233,7 @@ httpx-sse==0.4.3
     #   langchain-community
     #   langchain-mistralai
     #   mcp
-huggingface-hub==1.5.0
+huggingface-hub==1.7.1
     # via tokenizers
 hyperlink==21.0.0
     # via
@@ -265,7 +265,7 @@ incremental==24.11.0
     # via twisted
 jaraco-classes==3.4.0
     # via keyring
-jaraco-context==6.1.0
+jaraco-context==6.1.1
     # via keyring
 jaraco-functools==4.4.0
     # via keyring
@@ -294,13 +294,13 @@ keyring==25.7.0
     # via py-key-value-aio
 kombu==5.6.2
     # via celery
-langchain==1.2.10
+langchain==1.2.12
     # via nova (pyproject.toml)
-langchain-classic==1.0.1
+langchain-classic==1.0.3
     # via langchain-community
 langchain-community==0.4.1
     # via nova (pyproject.toml)
-langchain-core==1.2.17
+langchain-core==1.2.19
     # via
     #   langchain
     #   langchain-classic
@@ -313,17 +313,17 @@ langchain-core==1.2.17
     #   langgraph-checkpoint
     #   langgraph-prebuilt
     #   nova (pyproject.toml)
-langchain-mistralai==1.1.1
+langchain-mistralai==1.1.2
     # via nova (pyproject.toml)
 langchain-ollama==1.0.1
     # via nova (pyproject.toml)
-langchain-openai==1.1.10
+langchain-openai==1.1.11
     # via nova (pyproject.toml)
 langchain-text-splitters==1.1.1
     # via langchain-classic
-langfuse==3.14.5
+langfuse==4.0.0
     # via nova (pyproject.toml)
-langgraph==1.0.10
+langgraph==1.1.2
     # via
     #   langchain
     #   nova (pyproject.toml)
@@ -336,9 +336,9 @@ langgraph-checkpoint-postgres==3.0.4
     # via nova (pyproject.toml)
 langgraph-prebuilt==1.0.8
     # via langgraph
-langgraph-sdk==0.3.9
+langgraph-sdk==0.3.11
     # via langgraph
-langsmith==0.7.13
+langsmith==0.7.17
     # via
     #   langchain-classic
     #   langchain-community
@@ -370,15 +370,15 @@ multidict==6.7.1
     #   yarl
 mypy-extensions==1.1.0
     # via typing-inspect
-niquests==3.17.0
+niquests==3.18.2
     # via caldav
-numpy==2.4.2
+numpy==2.4.3
     # via
     #   langchain-community
     #   pgvector
 ollama==0.6.1
     # via langchain-ollama
-openai==2.26.0
+openai==2.28.0
     # via
     #   langchain-openai
     #   langfuse
@@ -487,7 +487,7 @@ pyee==13.0.1
     # via playwright
 pygments==2.19.2
     # via rich
-pyjwt[crypto]==2.11.0
+pyjwt[crypto]==2.12.1
     # via mcp
 pyopenssl==25.3.0
     # via twisted
@@ -532,7 +532,7 @@ recurring-ical-events==3.8.1
     # via
     #   caldav
     #   icalendar-searcher
-redis==7.2.1
+redis==7.3.0
     # via channels-redis
 referencing==0.37.0
     # via
@@ -545,7 +545,6 @@ requests==2.32.5
     # via
     #   langchain-classic
     #   langchain-community
-    #   langfuse
     #   langsmith
     #   opentelemetry-exporter-otlp-proto-http
     #   pywebpush
@@ -643,7 +642,7 @@ tzdata==2025.3
     #   x-wr-timezone
 tzlocal==5.3.1
     # via celery
-ujson==5.11.0
+ujson==5.12.0
     # via autobahn
 uncalled-for==0.2.0
     # via fastmcp
@@ -651,7 +650,7 @@ urllib3==2.6.3
     # via
     #   botocore
     #   requests
-urllib3-future==2.17.900
+urllib3-future==2.17.901
     # via niquests
 uuid-utils==0.14.1
     # via
