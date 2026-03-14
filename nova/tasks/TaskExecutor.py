@@ -1,12 +1,15 @@
 # nova/tasks/TaskExecutor.py
+import asyncio
 import datetime as dt
 import logging
+import time
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from enum import Enum
 from typing import Dict, Any
 from langgraph.types import Command
 
+from nova.agent_execution import provider_tools_explicitly_unavailable, requires_tools_for_run
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
@@ -14,6 +17,7 @@ from nova.models.Task import TaskStatus
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
 logger = logging.getLogger(__name__)
+LLM_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
 class TaskErrorCategory(Enum):
@@ -151,9 +155,23 @@ class TaskExecutor:
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
+        tools_enabled = True
+        provider = getattr(self.agent_config, "llm_provider", None)
+        thread_mode = getattr(self.thread, "mode", None)
+        if provider_tools_explicitly_unavailable(provider):
+            if await sync_to_async(requires_tools_for_run, thread_sensitive=True)(
+                self.agent_config,
+                thread_mode,
+            ):
+                raise ValueError(
+                    "The selected provider does not support tool use, but this agent depends on tools or sub-agents."
+                )
+            tools_enabled = False
+
         self.llm = await LLMAgent.create(
             self.user, self.thread, self.agent_config,
-            callbacks=[self.handler]
+            callbacks=[self.handler],
+            tools_enabled=tools_enabled,
         )
 
         # Expose runtime resources to tools via agent._resources
@@ -300,10 +318,23 @@ class TaskExecutor:
     async def _cleanup(self):
         """Ensure proper cleanup of resources."""
         if self.llm:
+            cleanup_start = time.perf_counter()
             try:
-                await self.llm.cleanup()
+                await asyncio.wait_for(
+                    self.llm.cleanup_runtime(),
+                    timeout=LLM_CLEANUP_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Timed out while cleaning up LLM resources")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup LLM: {cleanup_error}")
+            else:
+                duration_ms = int((time.perf_counter() - cleanup_start) * 1000)
+                logger.debug(
+                    "TaskExecutor cleanup finished for task %s in %sms.",
+                    getattr(self.task, "id", None),
+                    duration_ms,
+                )
 
     async def _process_result(self, result):
         """Process the agent result and update related data."""

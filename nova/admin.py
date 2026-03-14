@@ -8,6 +8,7 @@ from nova.models.ConversationEmbedding import DaySegmentEmbedding, TranscriptChu
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction
 from nova.models.Memory import MemoryTheme, MemoryItem, MemoryItemEmbedding
+from nova.models.MessageArtifact import MessageArtifact
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
 from nova.models.Task import Task
@@ -27,6 +28,12 @@ admin.site.site_header = "Nova Admin"
 class FilesInline(admin.TabularInline):
     model = UserFile
     verbose_name_plural = "files"
+    extra = 0
+
+
+class ArtifactsInline(admin.TabularInline):
+    model = MessageArtifact
+    verbose_name_plural = "artifacts"
     extra = 0
 
 
@@ -79,7 +86,7 @@ class ThreadAdmin(admin.ModelAdmin):
     list_filter = ("mode", "created_at")
     search_fields = ("subject", "user__username", "user__email")
     ordering = ("-created_at",)
-    inlines = [FilesInline, CheckpointLinksInline, DaySegmentsInline, TranscriptChunksInline]
+    inlines = [FilesInline, ArtifactsInline, CheckpointLinksInline, DaySegmentsInline, TranscriptChunksInline]
 
 
 @admin.register(LLMProvider)
@@ -89,14 +96,60 @@ class LLMProviderAdmin(admin.ModelAdmin):
         'provider_type',
         'model',
         'validation_status',
-        'validated_at',
+        'probe_checked_at',
         'user',
         'max_context_tokens',
     )
+    readonly_fields = ('probe_checked_at', 'metadata_checked_at')
     fields = ('name', 'provider_type', 'model', 'api_key', 'base_url',
               'additional_config', 'max_context_tokens', 'validation_status',
-              'validated_at', 'validation_summary', 'validation_capabilities',
-              'validated_fingerprint', 'user')
+              'probe_checked_at', 'metadata_checked_at', 'validated_fingerprint',
+              'capability_profile', 'user')
+
+
+@admin.register(MessageArtifact)
+class MessageArtifactAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "thread",
+        "message",
+        "direction",
+        "kind",
+        "label",
+        "user_file",
+        "published_file",
+        "source_artifact",
+        "is_currently_published_to_file",
+        "created_at",
+    )
+    list_filter = ("direction", "kind", "created_at")
+    search_fields = ("label", "summary_text", "search_text", "message__text", "user_file__original_filename")
+    readonly_fields = ("created_at", "updated_at")
+    fields = (
+        "user",
+        "thread",
+        "message",
+        "direction",
+        "kind",
+        "label",
+        "mime_type",
+        "user_file",
+        "published_file",
+        "source_artifact",
+        "summary_text",
+        "search_text",
+        "provider_type",
+        "model",
+        "provider_fingerprint",
+        "order",
+        "metadata",
+        "created_at",
+        "updated_at",
+    )
+
+    @admin.display(boolean=True, description="Published")
+    def is_currently_published_to_file(self, obj):
+        return obj.is_currently_published_to_file
 
 
 @admin.register(AgentConfig)
@@ -257,6 +310,7 @@ class MessageAdmin(admin.ModelAdmin):
     list_filter = ("actor", "message_type", "created_at")
     search_fields = ("user__username", "thread__subject", "text")
     ordering = ("-created_at",)
+    inlines = [ArtifactsInline]
 
 
 admin.site.unregister(User)

@@ -8,14 +8,8 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 
 from nova.models.Provider import LLMProvider, VALIDATION_CAPABILITY_ORDER
-from nova.providers.base import (
-    ProviderMetadataAuthError,
-    ProviderMetadataTransientError,
-    ProviderModelNotFoundError,
-)
 from nova.providers.registry import (
     create_provider_llm,
-    get_provider_adapter,
     normalize_multimodal_content_for_provider,
 )
 
@@ -29,7 +23,7 @@ SOURCE_METADATA = "metadata"
 SOURCE_UNKNOWN = "unknown"
 
 _VALIDATION_IMAGE_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
+    "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAAD/wAARCAAgACADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3ePn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3ePn6/9sAQwACAgICAgIDAgIDBQMDAwUGBQUFBQYIBgYGBgYICggICAgICAoKCgoKCgoKDAwMDAwMDg4ODg4PDw8PDw8PDw8P/9sAQwECAgIEBAQHBAQHEAsJCxAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ/90ABAAC/9oADAMBAAIRAxEAPwD9/KKKKACiiigD/9D9/KKKKACiiigD/9k="
 )
 
 
@@ -110,7 +104,15 @@ def _classify_capability_failure(capability: str, exc: Exception) -> str:
     message = _format_exception_message(exc).lower()
     unsupported_markers = {
         "streaming": ("stream", "streaming", "not implemented"),
-        "tools": ("tool", "function calling", "structured output", "not implemented"),
+        "tools": (
+            "tool",
+            "tool use",
+            "tool calling",
+            "function calling",
+            "no endpoints found that support tool use",
+            "structured output",
+            "not implemented",
+        ),
         "vision": ("vision", "image", "multimodal", "modalit", "not implemented"),
     }
     markers = unsupported_markers.get(capability, ())
@@ -133,13 +135,7 @@ def _collect_tool_calls(response) -> list:
     return []
 
 
-def _build_capability_summary(
-    capabilities: dict,
-    *,
-    metadata_source_label: str | None = None,
-    metadata_used: bool = False,
-    metadata_fallback_used: bool = False,
-) -> str:
+def _build_capability_summary(capabilities: dict) -> str:
     failures = []
     for capability in VALIDATION_CAPABILITY_ORDER:
         status = (capabilities.get(capability) or {}).get("status")
@@ -151,22 +147,14 @@ def _build_capability_summary(
     else:
         failure_summary = ", ".join(failures)
         summary = f"Validated with partial capabilities ({failure_summary})."
-
-    if metadata_source_label and metadata_used:
-        summary = _append_sentence(summary, f"{metadata_source_label} was used when available.")
-    elif metadata_source_label and metadata_fallback_used:
-        summary = _append_sentence(
-            summary,
-            f"{metadata_source_label} was unavailable, so active probes were used.",
-        )
     return summary
 
 
 def _build_invalid_result(summary: str, error_message: str) -> dict:
     return {
         "validation_status": LLMProvider.ValidationStatus.INVALID,
-        "validation_summary": summary,
-        "validation_capabilities": _failed_capabilities(error_message),
+        "verification_summary": summary,
+        "verified_operations": _failed_capabilities(error_message),
     }
 
 
@@ -246,8 +234,8 @@ async def _probe_vision(llm) -> dict:
             "type": "image",
             "source_type": "base64",
             "data": _VALIDATION_IMAGE_BASE64,
-            "mime_type": "image/png",
-            "filename": "provider-validation.png",
+            "mime_type": "image/jpeg",
+            "filename": "provider-validation.jpg",
         },
     ]
     response = await llm.ainvoke(
@@ -268,39 +256,15 @@ async def _probe_vision(llm) -> dict:
     return _capability_result(STATUS_PASS, message, latency_ms)
 
 
-def _build_declared_capabilities(adapter, declared_capabilities: dict[str, bool | None]) -> dict[str, dict]:
-    capabilities = {}
-    metadata_source_label = adapter.metadata_source_label or "Provider metadata"
-
-    for capability, supported in declared_capabilities.items():
-        if supported is None:
-            continue
-
-        capability_label = {
-            "tools": "tool calling support",
-            "vision": "image input support",
-        }.get(capability, capability)
-
-        capabilities[capability] = _capability_result(
-            STATUS_PASS if supported else STATUS_UNSUPPORTED,
-            (
-                f"{metadata_source_label} declares {capability_label}."
-                if supported
-                else f"{metadata_source_label} does not declare {capability_label}."
-            ),
-            None,
-            source=SOURCE_METADATA,
-        )
-
-    return capabilities
-
-
 async def validate_provider_configuration(provider) -> dict:
     """Validate provider capabilities using provider-specific adapters and shared probes."""
+    if not str(getattr(provider, "model", "") or "").strip():
+        return _build_invalid_result(
+            "Validation requires a selected model.",
+            "Skipped because no model is configured.",
+        )
+
     capabilities = _default_capabilities()
-    metadata_used = False
-    metadata_fallback_used = False
-    adapter = get_provider_adapter(provider)
 
     try:
         llm = create_provider_llm(provider)
@@ -311,23 +275,6 @@ async def validate_provider_configuration(provider) -> dict:
             f"Validation failed during provider creation: {error_message}",
             f"Skipped after provider creation failure: {error_message}",
         )
-
-    declared_capabilities = {}
-    try:
-        declared = await adapter.fetch_declared_capabilities(provider)
-    except (ProviderMetadataAuthError, ProviderModelNotFoundError) as exc:
-        error_message = _format_exception_message(exc)
-        metadata_label = adapter.metadata_source_label or "Provider metadata"
-        metadata_lookup_label = _metadata_lookup_label(metadata_label)
-        return _build_invalid_result(
-            f"Validation failed during {metadata_lookup_label} lookup: {error_message}",
-            f"Skipped after {metadata_lookup_label} failure: {error_message}",
-        )
-    except ProviderMetadataTransientError:
-        metadata_fallback_used = True
-    else:
-        declared_capabilities = _build_declared_capabilities(adapter, declared)
-        metadata_used = bool(declared_capabilities)
 
     try:
         await llm.ainvoke([HumanMessage(content="Reply with OK.")])
@@ -361,8 +308,8 @@ async def validate_provider_configuration(provider) -> dict:
             )
         return {
             "validation_status": LLMProvider.ValidationStatus.INVALID,
-            "validation_summary": f"Validation failed during chat probe: {error_message}",
-            "validation_capabilities": capabilities,
+            "verification_summary": f"Validation failed during chat probe: {error_message}",
+            "verified_operations": capabilities,
         }
 
     for capability, probe in (
@@ -370,10 +317,6 @@ async def validate_provider_configuration(provider) -> dict:
         ("tools", _probe_tools),
         ("vision", _probe_vision),
     ):
-        if capability in declared_capabilities:
-            capabilities[capability] = declared_capabilities[capability]
-            continue
-
         try:
             capabilities[capability] = await probe(llm)
         except Exception as exc:
@@ -389,11 +332,6 @@ async def validate_provider_configuration(provider) -> dict:
 
     return {
         "validation_status": LLMProvider.ValidationStatus.VALID,
-        "validation_summary": _build_capability_summary(
-            capabilities,
-            metadata_source_label=adapter.metadata_source_label if metadata_used or metadata_fallback_used else None,
-            metadata_used=metadata_used,
-            metadata_fallback_used=metadata_fallback_used,
-        ),
-        "validation_capabilities": capabilities,
+        "verification_summary": _build_capability_summary(capabilities),
+        "verified_operations": capabilities,
     }

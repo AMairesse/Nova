@@ -30,6 +30,45 @@ class BootstrapSkillsTests(TestCase):
             python_path="nova.tools.builtins.code_execution",
         )
 
+    def _apply_provider_capabilities(
+        self,
+        provider,
+        *,
+        tools="unknown",
+        image_input="unknown",
+        image_output="unknown",
+        image_generation="unknown",
+    ):
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "Bootstrap test metadata",
+                "inputs": {
+                    "text": "pass",
+                    "image": image_input,
+                    "pdf": "unknown",
+                    "audio": "unknown",
+                },
+                "outputs": {
+                    "text": "pass",
+                    "image": image_output,
+                    "audio": "unknown",
+                },
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": tools,
+                    "vision": "pass" if image_input == "pass" else "unknown",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": image_generation,
+                    "audio_generation": "unknown",
+                },
+                "limits": {"context_tokens": 100000},
+                "model_state": {},
+            }
+        )
+        provider.refresh_from_db()
+
     def _create_email_tool(self, name: str, username: str):
         tool = create_tool(
             self.user,
@@ -146,3 +185,123 @@ class BootstrapSkillsTests(TestCase):
                 name__in=["Calendar Agent", "Email Agent"],
             ).exists()
         )
+
+    def test_bootstrap_creates_and_attaches_image_agent_with_best_image_provider(self):
+        main_provider = self.provider
+        image_provider = create_provider(self.user, name="Image Provider")
+
+        self._apply_provider_capabilities(main_provider, tools="pass")
+        self._apply_provider_capabilities(
+            image_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+
+        summary = bootstrap_default_setup(self.user)
+
+        nova = AgentConfig.objects.get(user=self.user, name="Nova")
+        image_agent = AgentConfig.objects.get(user=self.user, name="Image Agent")
+
+        self.assertEqual(nova.llm_provider, main_provider)
+        self.assertEqual(image_agent.llm_provider, image_provider)
+        self.assertTrue(nova.agent_tools.filter(pk=image_agent.pk).exists())
+        self.assertIn("Image Agent", summary.get("created_agents", []))
+        self.assertIn("Never invent a file_id or artifact_id.", nova.system_prompt)
+        self.assertIn("Use file_ls to discover thread file IDs.", nova.system_prompt)
+        self.assertIn("Use artifact_ls or artifact_search to discover conversation artifact IDs.", nova.system_prompt)
+        self.assertIn("Pass file_ids only for thread file IDs returned by file_ls.", image_agent.tool_description)
+        self.assertIn(
+            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search.",
+            image_agent.tool_description,
+        )
+
+    def test_bootstrap_prefers_image_provider_with_editing_support(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+        generation_only_provider = create_provider(self.user, name="Generation-only Provider")
+        editing_provider = create_provider(self.user, name="Editing Provider")
+
+        self._apply_provider_capabilities(
+            generation_only_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+        self._apply_provider_capabilities(
+            editing_provider,
+            tools="unsupported",
+            image_input="pass",
+            image_output="pass",
+            image_generation="pass",
+        )
+
+        bootstrap_default_setup(self.user)
+
+        image_agent = AgentConfig.objects.get(user=self.user, name="Image Agent")
+        self.assertEqual(image_agent.llm_provider, editing_provider)
+        self.assertIn("creating and modifying images", image_agent.system_prompt)
+
+    def test_bootstrap_skips_image_agent_when_image_capabilities_are_unknown(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+
+        summary = bootstrap_default_setup(self.user)
+
+        self.assertFalse(
+            AgentConfig.objects.filter(user=self.user, name="Image Agent").exists()
+        )
+        self.assertTrue(
+            any(
+                skipped.get("name") == "Image Agent"
+                for skipped in summary.get("skipped_agents", [])
+            )
+        )
+
+    def test_bootstrap_skips_default_agents_when_all_providers_lack_tool_support(self):
+        image_provider = create_provider(self.user, name="Image Provider")
+        self._apply_provider_capabilities(self.provider, tools="unsupported")
+        self._apply_provider_capabilities(
+            image_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+
+        summary = bootstrap_default_setup(self.user)
+
+        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Nova").exists())
+        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Internet Agent").exists())
+        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Code Agent").exists())
+        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Image Agent").exists())
+        skipped_names = {item.get("name") for item in summary.get("skipped_agents", [])}
+        self.assertSetEqual(
+            skipped_names,
+            {"Nova", "Internet Agent", "Code Agent", "Image Agent"},
+        )
+
+    def test_bootstrap_reuses_existing_image_agent_without_reassigning_provider(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+        original_image_provider = create_provider(self.user, name="Original Image Provider")
+        better_image_provider = create_provider(self.user, name="Better Image Provider")
+        existing_image_agent = create_agent(
+            self.user,
+            original_image_provider,
+            name="Image Agent",
+            system_prompt="Existing image prompt",
+            is_tool=True,
+            tool_description="Existing image tool",
+        )
+
+        self._apply_provider_capabilities(
+            better_image_provider,
+            tools="unsupported",
+            image_input="pass",
+            image_output="pass",
+            image_generation="pass",
+        )
+
+        bootstrap_default_setup(self.user)
+
+        existing_image_agent.refresh_from_db()
+        nova = AgentConfig.objects.get(user=self.user, name="Nova")
+        self.assertEqual(existing_image_agent.llm_provider, original_image_provider)
+        self.assertTrue(nova.agent_tools.filter(pk=existing_image_agent.pk).exists())

@@ -57,11 +57,18 @@ def _dedupe_tool_names(tools: list[StructuredTool]) -> list[StructuredTool]:
     return tools
 
 
-async def load_tools(agent) -> List[StructuredTool]:
+async def load_tools(agent, *, enabled: bool = True) -> List[StructuredTool]:
     """
     Load and initialize tools associated with the agent.
     Returns a list of Langchain-ready tools.
     """
+    if not enabled:
+        agent._loaded_builtin_modules = []
+        agent.tool_prompt_hints = []
+        agent.skill_catalog = {}
+        agent.skill_control_tool_names = []
+        return []
+
     tools = []
     loaded_builtin_modules = []
     collected_prompt_hints: list[str] = []
@@ -377,6 +384,7 @@ async def load_tools(agent) -> List[StructuredTool]:
 
     # Load files support tools
     from nova.tools import files
+    from nova.tools import artifacts
 
     files_skill_policy = get_module_skill_policy(files)
     file_tools = await files.get_functions(agent)
@@ -389,6 +397,18 @@ async def load_tools(agent) -> List[StructuredTool]:
             policy=files_skill_policy,
         )
         await _collect_prompt_hints(files, policy=files_skill_policy)
+
+    artifacts_skill_policy = get_module_skill_policy(artifacts)
+    artifact_tools = await artifacts.get_functions(agent)
+    _tag_loaded_tools_as_skill(artifact_tools, artifacts_skill_policy)
+    tools.extend(artifact_tools)
+    if artifact_tools:
+        await _collect_skill_instructions(
+            artifacts,
+            grouped_tools=artifact_tools,
+            policy=artifacts_skill_policy,
+        )
+        await _collect_prompt_hints(artifacts, policy=artifacts_skill_policy)
 
     # Add skill control tools once all skill-capable modules are loaded, including files.
     tools.extend(build_skill_control_tools(skill_catalog))

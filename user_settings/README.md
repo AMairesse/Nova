@@ -2,6 +2,13 @@
 
 This django app is dedicated to the user settings.
 
+It now contains the provider-aware configuration flows for:
+- provider connection setup
+- model discovery/selection
+- capability metadata refresh
+- active verification
+- agent/provider compatibility warnings
+
 ## Project layout
 
 ```
@@ -54,3 +61,30 @@ Nova
 |  ├─ README.md                             # This file
 |  └─ urls.py                               # Django URLs
 ```
+
+## Provider settings behavior
+
+The provider form is now split conceptually into:
+- `Connection`
+- `Model`
+- `Capabilities`
+
+Key behaviors:
+- `LLMProvider` still stores both provider connection and selected model.
+- `model` may be empty, which means `connection only`.
+- `OpenRouter` and `LMStudio` support live model catalogs.
+- `max_context_tokens` is edited in the model section, even though it is still stored on `LLMProvider`.
+- `Refresh metadata` imports declared capabilities.
+- `Run active verification` probes runtime support for key operations.
+
+The capability state shown in the UI comes from `LLMProvider.capability_profile`.
+
+## Agent settings behavior
+
+- Agents now surface compatibility warnings when the selected provider/model is verified without tool support.
+- Simple thread runs may still work in tool-less mode.
+- Continuous mode and agents with tool dependencies require tool-capable providers.
+- Default agent bootstrap is role-aware:
+  - `Nova`, `Internet Agent`, and `Code Agent` use the best available provider with tool support or unknown tool capability
+  - `Image Agent` is bootstrapped separately when a provider has current known image output capability
+  - an existing `Image Agent` is reused rather than silently reassigned to a different provider

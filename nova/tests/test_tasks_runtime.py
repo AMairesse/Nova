@@ -5,22 +5,26 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from langchain_core.messages import AIMessage, HumanMessage
 
 from nova.models.Message import Actor
+from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
+from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.tasks import (
     AgentTaskExecutor,
     ContextConsumptionTracker,
     SummarizationTaskExecutor,
     build_source_message_prompt,
+    create_and_dispatch_agent_task,
     delete_checkpoints,
     generate_thread_title_task,
     resume_ai_task_celery,
     run_ai_task_celery,
     summarize_thread_task,
 )
+from nova.tests.factories import create_agent, create_provider, create_user
 
 
 class ContextConsumptionTrackerTests(IsolatedAsyncioTestCase):
@@ -213,6 +217,43 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             source_message=source_message,
         )
 
+    async def test_build_source_message_prompt_returns_pdf_blocks_for_pdf_artifacts(self):
+        source_message = SimpleNamespace(
+            id=58,
+            text="Summarize this PDF",
+            internal_data={},
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=2),
+        )
+
+        def immediate_sync_to_async(func, thread_sensitive=False):
+            async def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapper
+
+        mocked_queryset = Mock()
+        mocked_queryset.order_by.return_value = [
+            SimpleNamespace(
+                id=12,
+                mime_type="application/pdf",
+                original_filename="/.message_attachments/message_58/report.pdf",
+                size=2048,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            ),
+        ]
+
+        with (
+            patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
+            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset),
+            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"%PDF-1.4"),
+        ):
+            prompt = await build_source_message_prompt(source_message)
+
+        self.assertIsInstance(prompt, list)
+        self.assertIn("report.pdf", prompt[0]["text"])
+        self.assertEqual(prompt[1]["type"], "file")
+        self.assertEqual(prompt[1]["mime_type"], "application/pdf")
+
     async def test_enqueue_thread_title_generation_only_for_default_titles(self):
         task = SimpleNamespace(id=1, progress_logs=[], save=Mock())
         thread = SimpleNamespace(id=42, subject="New thread 42")
@@ -271,7 +312,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             current_response="<p>Interim thought</p>",
             streamed_markdown="Interim thought\n\nAgent answer",
         )
-        message = SimpleNamespace(internal_data={}, save=Mock())
+        message = SimpleNamespace(id=71, internal_data={}, save=Mock())
         thread = SimpleNamespace(subject="thread n°1", add_message=Mock(return_value=message), save=Mock())
         executor = AgentTaskExecutor(
             task=task,
@@ -283,9 +324,19 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         executor.handler = SimpleNamespace(on_context_consumption=AsyncMock())
         executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
 
+        async def persist_message_state(*_args, **kwargs):
+            message.internal_data.update({
+                "real_tokens": 50,
+                "approx_tokens": None,
+                "max_context": 1000,
+                "final_answer": "Agent answer",
+                "display_markdown": "Interim thought\n\nAgent answer",
+            })
+
         with (
             patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(50, None, 1000)),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock) as mocked_enqueue_title,
+            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock, side_effect=persist_message_state),
         ):
             await executor._process_result("Agent answer")
 
@@ -308,7 +359,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             current_response="<p>Agent answer</p>",
             streamed_markdown="Agent answer",
         )
-        message = SimpleNamespace(internal_data={}, save=Mock())
+        message = SimpleNamespace(id=72, internal_data={}, save=Mock())
         thread = SimpleNamespace(subject="thread n°2", add_message=Mock(return_value=message), save=Mock())
         executor = AgentTaskExecutor(
             task=task,
@@ -323,14 +374,261 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         )
         executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
 
+        async def persist_message_state(*_args, **kwargs):
+            message.internal_data.update({
+                "real_tokens": 12,
+                "approx_tokens": None,
+                "max_context": 1000,
+                "final_answer": "Agent answer",
+            })
+
         with (
             patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(12, None, 1000)),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock, side_effect=persist_message_state),
         ):
             await executor._process_result("Agent answer")
 
         self.assertEqual(message.internal_data["final_answer"], "Agent answer")
         self.assertNotIn("display_markdown", message.internal_data)
+
+    async def test_process_result_publishes_reloaded_message_payload(self):
+        task = SimpleNamespace(
+            id=3,
+            progress_logs=[],
+            save=Mock(),
+            result=None,
+            current_response="",
+            streamed_markdown="",
+        )
+        message = SimpleNamespace(id=77, internal_data={}, save=Mock(), text="Agent answer", actor=Actor.AGENT, created_at="now")
+        thread = SimpleNamespace(subject="thread n°3", add_message=Mock(return_value=message), save=Mock())
+        handler = SimpleNamespace(
+            on_context_consumption=AsyncMock(),
+            on_new_message=AsyncMock(),
+            get_streamed_markdown=Mock(return_value=""),
+        )
+        executor = AgentTaskExecutor(
+            task=task,
+            user=SimpleNamespace(id=1),
+            thread=thread,
+            agent_config=SimpleNamespace(llm_provider=SimpleNamespace(max_context_tokens=1000)),
+            prompt="prompt",
+        )
+        executor.handler = handler
+        executor.llm = SimpleNamespace(ainvoke=AsyncMock(return_value="Title"))
+
+        realtime_payload = {
+            "id": 77,
+            "text": "Agent answer",
+            "actor": Actor.AGENT,
+            "internal_data": {"final_answer": "Agent answer"},
+            "created_at": "now",
+            "artifacts": [{"id": 9, "kind": "image", "content_url": "/artifact/9"}],
+        }
+
+        with (
+            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 1000)),
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock),
+            patch.object(executor, "_build_realtime_message_payload", new_callable=AsyncMock, return_value=realtime_payload) as mocked_payload,
+        ):
+            await executor._process_result("Agent answer")
+
+        mocked_payload.assert_awaited_once_with(77)
+        handler.on_new_message.assert_awaited_once_with(realtime_payload, task_id=3)
+
+
+class AgentTaskExecutorArtifactTests(TransactionTestCase):
+    reset_sequences = True
+    def setUp(self):
+        self.user = create_user(username="runtime-user", email="runtime@example.com")
+        self.provider = create_provider(self.user, name="runtime-provider")
+        self.agent = create_agent(self.user, self.provider, name="runtime-agent")
+        self.thread = Thread.objects.create(user=self.user, subject="Runtime thread")
+
+    def test_build_realtime_message_payload_includes_rendered_html(self):
+        source_message = self.thread.add_message("prompt", actor=Actor.USER)
+        message = self.thread.add_message("Final answer", actor=Actor.AGENT)
+        message.internal_data = {"display_markdown": "Intro paragraph\n\n- one\n- two"}
+        message.save(update_fields=["internal_data"])
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=10, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+
+        payload = asyncio.run(executor._build_realtime_message_payload(message.id))
+
+        self.assertIn("<ul>", payload["rendered_html"])
+        self.assertIn("Intro paragraph", payload["rendered_html"])
+
+    def test_build_realtime_message_payload_includes_output_artifacts(self):
+        source_message = self.thread.add_message("prompt", actor=Actor.USER)
+        message = self.thread.add_message("Generated 1 image.", actor=Actor.AGENT)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/generated.png",
+            original_filename="/generated/generated.png",
+            mime_type="image/png",
+            size=16,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=message,
+            user_file=user_file,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated.png",
+            mime_type="image/png",
+        )
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=14, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+
+        payload = asyncio.run(executor._build_realtime_message_payload(message.id))
+
+        self.assertEqual(len(payload["artifacts"]), 1)
+        self.assertEqual(payload["artifacts"][0]["kind"], ArtifactKind.IMAGE)
+        self.assertTrue(payload["artifacts"][0]["content_url"])
+
+    def test_collect_hidden_subagent_output_artifact_ids_finds_hidden_outputs(self):
+        source_message = self.thread.add_message("Please create an image", actor=Actor.USER)
+        hidden_message = self.thread.add_message("hidden trace", actor=Actor.SYSTEM)
+        hidden_message.internal_data = {"hidden_subagent_trace": True}
+        hidden_message.save(update_fields=["internal_data"])
+        artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=hidden_message,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated.png",
+            mime_type="image/png",
+        )
+
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(id=11, progress_logs=[], save=Mock()),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+        executor._source_message = source_message
+
+        artifact_ids = asyncio.run(executor._collect_hidden_subagent_output_artifact_ids())
+
+        self.assertEqual(artifact_ids, [artifact.id])
+
+    def test_process_result_clones_hidden_subagent_output_artifacts(self):
+        source_message = self.thread.add_message("Please create an image", actor=Actor.USER)
+        hidden_message = self.thread.add_message("hidden trace", actor=Actor.SYSTEM)
+        hidden_message.internal_data = {"hidden_subagent_trace": True}
+        hidden_message.save(update_fields=["internal_data"])
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=hidden_message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/generated.png",
+            original_filename="/.message_attachments/generated/generated.png",
+            mime_type="image/png",
+            size=8,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        source_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=hidden_message,
+            user_file=user_file,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.IMAGE,
+            label="generated.png",
+            mime_type="image/png",
+        )
+        task = SimpleNamespace(
+            id=12,
+            progress_logs=[],
+            save=Mock(),
+            result=None,
+            current_response="",
+            streamed_markdown="",
+        )
+        handler = SimpleNamespace(
+            on_context_consumption=AsyncMock(),
+            on_new_message=AsyncMock(),
+            get_streamed_markdown=Mock(return_value=""),
+        )
+        executor = AgentTaskExecutor(
+            task=task,
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt="prompt",
+            source_message_id=source_message.id,
+        )
+        executor._source_message = source_message
+        executor.handler = handler
+        executor.llm = SimpleNamespace(
+            last_generated_tool_artifact_refs=[],
+        )
+
+        with (
+            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 4096)),
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+        ):
+            asyncio.run(executor._process_result("Generated 1 image."))
+
+        final_message = self.thread.get_messages().filter(actor=Actor.AGENT).latest("id")
+        cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
+        self.assertEqual(cloned_artifact.source_artifact_id, source_artifact.id)
+        self.assertEqual(cloned_artifact.user_file_id, user_file.id)
+
+
+class AgentTaskDispatchTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        self.user = create_user(username="dispatch-user", email="dispatch@example.com")
+        self.provider = create_provider(self.user, name="dispatch-provider")
+        self.agent = create_agent(self.user, self.provider, name="dispatch-agent")
+        self.thread = Thread.objects.create(user=self.user, subject="Dispatch thread")
+        self.message = self.thread.add_message("Hello", actor=Actor.USER)
+
+    def test_create_and_dispatch_agent_task_initializes_pending_log(self):
+        dispatcher_task = SimpleNamespace(delay=Mock())
+
+        task = create_and_dispatch_agent_task(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            source_message_id=self.message.id,
+            dispatcher_task=dispatcher_task,
+        )
+
+        self.assertEqual(task.status, "PENDING")
+        self.assertEqual(task.progress_logs[0]["step"], "Task queued for dispatch")
+        dispatcher_task.delay.assert_called_once_with(
+            task.id,
+            self.user.id,
+            self.thread.id,
+            self.agent.id,
+            self.message.id,
+        )
 
 
 class GenerateThreadTitleTaskTests(SimpleTestCase):
@@ -367,7 +665,7 @@ class GenerateThreadTitleTaskTests(SimpleTestCase):
         mocked_thread_filter.return_value.update.return_value = 1
 
         with (
-            patch("nova.tasks.tasks._build_langfuse_invoke_config", return_value=({}, None)),
+            patch("nova.tasks.tasks._build_langfuse_invoke_config", return_value={}),
             patch("nova.tasks.tasks._publish_thread_subject_update") as mocked_publish,
         ):
             result = generate_thread_title_task.run(
@@ -554,7 +852,7 @@ class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
 
     @patch("nova.llm.llm_agent.LLMAgent.create", new_callable=AsyncMock)
     async def test_summarize_single_agent_raises_when_middleware_missing(self, mocked_create_agent):
-        fake_agent = SimpleNamespace(middleware=[], cleanup=AsyncMock())
+        fake_agent = SimpleNamespace(middleware=[], cleanup_runtime=AsyncMock())
         mocked_create_agent.return_value = fake_agent
         executor = SummarizationTaskExecutor(
             task=SimpleNamespace(id=1, progress_logs=[], save=Mock()),
@@ -566,12 +864,12 @@ class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "SummarizationMiddleware not found"):
             await executor._summarize_single_agent(SimpleNamespace(name="sub"))
 
-        fake_agent.cleanup.assert_awaited_once()
+        fake_agent.cleanup_runtime.assert_awaited_once()
 
     @patch("nova.llm.llm_agent.LLMAgent.create", new_callable=AsyncMock)
     async def test_summarize_single_agent_raises_on_failed_summary(self, mocked_create_agent):
         middleware = SimpleNamespace(manual_summarize=AsyncMock(return_value={"status": "error", "message": "boom"}))
-        fake_agent = SimpleNamespace(middleware=[middleware], cleanup=AsyncMock())
+        fake_agent = SimpleNamespace(middleware=[middleware], cleanup_runtime=AsyncMock())
         mocked_create_agent.return_value = fake_agent
         executor = SummarizationTaskExecutor(
             task=SimpleNamespace(id=1, progress_logs=[], save=Mock()),
@@ -583,7 +881,7 @@ class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "Summarization failed"):
             await executor._summarize_single_agent(SimpleNamespace(name="main"))
 
-        fake_agent.cleanup.assert_awaited_once()
+        fake_agent.cleanup_runtime.assert_awaited_once()
 
     @patch("nova.tasks.tasks.get_checkpointer", new_callable=AsyncMock)
     async def test_delete_checkpoints_always_closes_connection(self, mocked_get_checkpointer):

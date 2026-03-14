@@ -13,6 +13,7 @@ class ProviderDefaults:
     default_base_url: str = ""
     default_max_context_tokens: int = 4096
     api_key_required: bool = True
+    supports_model_catalog: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -51,5 +52,20 @@ class BaseProviderAdapter:
     def normalize_multimodal_content(self, content):
         return content
 
+    async def list_models(self, provider) -> list[dict[str, Any]]:
+        return []
+
+    async def resolve_capability_snapshot(self, provider) -> dict[str, Any]:
+        return {}
+
     async def fetch_declared_capabilities(self, provider) -> dict[str, bool | None]:
         return {}
+
+    async def build_native_request(self, provider, invocation_request: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def invoke_native(self, provider, invocation_request: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def parse_native_response(self, provider, raw_response: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError

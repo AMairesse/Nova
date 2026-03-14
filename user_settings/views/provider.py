@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from urllib.parse import urlencode
 
+from asgiref.sync import async_to_sync
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -16,7 +17,12 @@ from django.views.decorators.http import require_GET
 from django.views.generic import ListView
 
 from nova.models.Provider import LLMProvider, check_and_create_system_provider
-from nova.providers import get_provider_defaults_map
+from nova.providers import (
+    get_provider_defaults,
+    get_provider_defaults_map,
+    list_provider_models,
+    resolve_provider_capability_snapshot,
+)
 from nova.tasks.provider_validation_tasks import validate_provider_configuration_task
 from user_settings.forms import LLMProviderForm
 from user_settings.mixins import (
@@ -51,8 +57,9 @@ class ProviderListView(LoginRequiredMixin, ListView):
         ).order_by('user', 'name')
 
 
-class ProviderValidationActionMixin:
+class ProviderVerificationActionMixin:
     test_action_name = "test_provider"
+    refresh_action_name = "refresh_capabilities"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -60,10 +67,15 @@ class ProviderValidationActionMixin:
         context["provider_instance"] = provider
         context["provider_defaults_map"] = get_provider_defaults_map()
         if provider and provider.pk:
-            context["provider_validation_status_url"] = reverse(
+            context["provider_verification_status_url"] = reverse(
                 "user_settings:provider-validation-status",
                 args=[provider.pk],
             )
+            if get_provider_defaults(provider).supports_model_catalog:
+                context["provider_model_catalog_url"] = reverse(
+                    "user_settings:provider-model-catalog",
+                    args=[provider.pk],
+                )
         return context
 
     def _build_edit_url(self, provider: LLMProvider) -> str:
@@ -73,10 +85,14 @@ class ProviderValidationActionMixin:
             return url
         return f"{url}?{urlencode({'from': origin})}"
 
-    def _handle_provider_validation_action(self):
+    def _handle_provider_verification_action(self):
         self.object = self.get_object() if "pk" in self.kwargs else None
         form = self.get_form()
         if not form.is_valid():
+            return self.form_invalid(form)
+
+        if not (form.cleaned_data.get("model") or "").strip():
+            form.add_error("model", _("Select or enter a model before running verification."))
             return self.form_invalid(form)
 
         provider = form.save(commit=False)
@@ -86,9 +102,6 @@ class ProviderValidationActionMixin:
 
         previous_state = {
             "validation_status": provider.validation_status,
-            "validation_summary": provider.validation_summary,
-            "validation_capabilities": provider.validation_capabilities,
-            "validated_at": provider.validated_at,
             "validated_fingerprint": provider.validated_fingerprint,
             "validation_task_id": provider.validation_task_id,
             "validation_requested_fingerprint": provider.validation_requested_fingerprint,
@@ -112,9 +125,6 @@ class ProviderValidationActionMixin:
             provider.save(
                 update_fields=[
                     "validation_status",
-                    "validation_summary",
-                    "validation_capabilities",
-                    "validated_at",
                     "validated_fingerprint",
                     "validation_task_id",
                     "validation_requested_fingerprint",
@@ -123,20 +133,53 @@ class ProviderValidationActionMixin:
             )
             messages.error(
                 self.request,
-                _("Provider validation could not be started: %(error)s")
+                _("Provider verification could not be started: %(error)s")
                 % {"error": str(exc)},
             )
             return redirect(self._build_edit_url(provider))
 
         messages.info(
             self.request,
-            _("Provider validation started in background. You can leave this page."),
+            _("Provider verification started in background. You can leave this page."),
+        )
+        return redirect(self._build_edit_url(provider))
+
+    def _handle_provider_capability_refresh_action(self):
+        self.object = self.get_object() if "pk" in self.kwargs else None
+        form = self.get_form()
+        if not form.is_valid():
+            return self.form_invalid(form)
+
+        if not (form.cleaned_data.get("model") or "").strip():
+            form.add_error("model", _("Select or enter a model before refreshing capabilities."))
+            return self.form_invalid(form)
+
+        provider = form.save(commit=False)
+        if not provider.user_id:
+            provider.user = self.request.user
+        provider.save()
+
+        try:
+            snapshot = async_to_sync(resolve_provider_capability_snapshot)(provider)
+        except Exception as exc:
+            messages.error(
+                self.request,
+                _("Provider metadata refresh failed: %(error)s") % {"error": str(exc)},
+            )
+            return redirect(self._build_edit_url(provider))
+
+        provider.apply_declared_capabilities(snapshot)
+        messages.success(
+            self.request,
+            _("Provider metadata refreshed successfully."),
         )
         return redirect(self._build_edit_url(provider))
 
     def post(self, request, *args, **kwargs):
         if request.POST.get("action") == self.test_action_name:
-            return self._handle_provider_validation_action()
+            return self._handle_provider_verification_action()
+        if request.POST.get("action") == self.refresh_action_name:
+            return self._handle_provider_capability_refresh_action()
         return super().post(request, *args, **kwargs)
 
 
@@ -144,7 +187,7 @@ class ProviderValidationActionMixin:
 #  CRUD                                                                      #
 # ---------------------------------------------------------------------------#
 class ProviderCreateView(
-    ProviderValidationActionMixin, DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView
+    ProviderVerificationActionMixin, DashboardRedirectMixin, LoginRequiredMixin, OwnerCreateView
 ):
     model = LLMProvider
     form_class = LLMProviderForm
@@ -153,7 +196,7 @@ class ProviderCreateView(
 
 
 class ProviderUpdateView(  # type: ignore[misc]
-    ProviderValidationActionMixin,
+    ProviderVerificationActionMixin,
     DashboardRedirectMixin,
     LoginRequiredMixin,
     OwnerUpdateView,
@@ -180,6 +223,32 @@ class ProviderDeleteView(  # type: ignore[misc]
 
 @login_required
 @require_GET
-def provider_validation_status(request, pk: int):
+def provider_verification_status(request, pk: int):
     provider = get_object_or_404(LLMProvider, pk=pk, user=request.user)
-    return JsonResponse(provider.build_validation_status_payload())
+    return JsonResponse(provider.build_verification_status_payload())
+
+
+@login_required
+@require_GET
+def provider_model_catalog(request, pk: int):
+    provider = get_object_or_404(LLMProvider, pk=pk, user=request.user)
+    defaults = get_provider_defaults(provider)
+    if not defaults.supports_model_catalog:
+        return JsonResponse(
+            {"error": _("This provider type does not expose a model catalog.")},
+            status=400,
+        )
+
+    try:
+        models_payload = async_to_sync(list_provider_models)(provider)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(
+        {
+            "provider_id": provider.pk,
+            "provider_type": provider.provider_type,
+            "selected_model": provider.model or "",
+            "models": models_payload,
+        }
+    )

@@ -4,6 +4,7 @@ import base64
 import datetime as dt
 import logging
 import posixpath
+import time
 from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
 from celery import shared_task
@@ -12,6 +13,7 @@ from channels.layers import get_channel_layer
 from django.contrib.auth.models import User
 from django.utils import timezone
 from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.llm_agent import LLMAgent, create_provider_llm
@@ -19,11 +21,20 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
+from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.file_utils import download_file_content
+from nova.message_utils import annotate_user_message
+from nova.native_provider_runtime import (
+    attach_tool_output_artifacts_to_message,
+    invoke_native_provider_for_message,
+    persist_native_result_artifacts,
+    summarize_native_result,
+)
+from nova.message_artifacts import detect_artifact_kind
 from nova.message_attachments import (
     MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
     normalize_message_attachments,
@@ -32,7 +43,7 @@ from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
-from nova.utils import strip_thinking_blocks
+from nova.utils import strip_thinking_blocks, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -49,30 +60,77 @@ THREAD_TITLE_PROMPT = (
 def _build_message_attachment_text(message_text: str, attachments: list[dict]) -> str:
     text = (message_text or "").strip()
     if not text:
-        text = (
-            "Please analyze the attached image."
-            if len(attachments) == 1
-            else "Please analyze the attached images."
-        )
+        if len(attachments) == 1:
+            kind = str((attachments[0] or {}).get("kind") or "").strip()
+            if kind == ArtifactKind.IMAGE:
+                text = "Please analyze the attached image."
+            elif kind == ArtifactKind.PDF:
+                text = "Please analyze the attached PDF."
+            elif kind == ArtifactKind.AUDIO:
+                text = "Please analyze the attached audio."
+            else:
+                text = "Please analyze the attached file."
+        else:
+            text = "Please analyze the attached files."
     if not attachments:
         return text
 
-    label = "Attached image:" if len(attachments) == 1 else "Attached images:"
+    label = "Attached file:" if len(attachments) == 1 else "Attached files:"
     names = "\n".join(
-        f"- {attachment.get('filename') or f'image-{attachment.get('id')}'}"
+        f"- {_get_attachment_display_name(attachment)}"
         for attachment in attachments
     )
     return f"{text}\n\n{label}\n{names}"
 
 
+def _get_attachment_display_name(attachment: dict) -> str:
+    return (
+        str(attachment.get("label") or "").strip()
+        or str(attachment.get("filename") or "").strip()
+        or f"attachment-{attachment.get('id')}"
+    )
+
+
 async def build_source_message_prompt(source_message: Message, *, fallback_prompt: str = ""):
     """Build the runtime user turn payload from a stored source message."""
     internal_data = source_message.internal_data if isinstance(source_message.internal_data, dict) else {}
-    attachments = normalize_message_attachments(
-        internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
-    )
 
     def _load_attachment_files():
+        artifacts = []
+        if getattr(source_message, "pk", None):
+            artifacts = list(
+                MessageArtifact.objects.filter(
+                    user=source_message.user,
+                    thread=source_message.thread,
+                    message=source_message,
+                    direction=ArtifactDirection.INPUT,
+                )
+                .select_related("user_file")
+                .order_by("order", "created_at", "id")
+            )
+        if artifacts:
+            return [
+                (
+                    {
+                        "id": artifact.id,
+                        "message_id": artifact.message_id,
+                        "user_file_id": artifact.user_file_id,
+                        "direction": artifact.direction,
+                        "kind": artifact.kind,
+                        "label": artifact.filename,
+                        "mime_type": artifact.mime_type or "",
+                        "size": int(getattr(artifact.user_file, "size", 0) or 0),
+                        "summary_text": artifact.summary_text or "",
+                        "metadata": artifact.metadata or {},
+                    },
+                    artifact.user_file,
+                )
+                for artifact in artifacts
+            ]
+
+        attachments = normalize_message_attachments(
+            internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
+        )
         files = list(
             UserFile.objects.filter(
                 user=source_message.user,
@@ -86,10 +144,15 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
                 (
                     {
                         "id": user_file.id,
-                        "filename": posixpath.basename(user_file.original_filename),
+                        "message_id": getattr(source_message, "id", None),
+                        "user_file_id": user_file.id,
+                        "direction": ArtifactDirection.INPUT,
+                        "kind": detect_artifact_kind(user_file.mime_type, user_file.original_filename),
+                        "label": posixpath.basename(user_file.original_filename),
                         "mime_type": user_file.mime_type,
                         "size": user_file.size,
-                        "scope": user_file.scope,
+                        "summary_text": "",
+                        "metadata": {"scope": user_file.scope},
                     },
                     user_file,
                 )
@@ -97,14 +160,30 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
             ]
 
         by_id = {user_file.id: user_file for user_file in files}
-        return [(attachment, by_id.get(attachment["id"])) for attachment in attachments]
+        return [
+            (
+                {
+                    "id": attachment["id"],
+                    "message_id": getattr(source_message, "id", None),
+                    "user_file_id": attachment["id"],
+                    "direction": ArtifactDirection.INPUT,
+                    "kind": detect_artifact_kind(attachment.get("mime_type"), attachment.get("filename")),
+                    "label": attachment.get("filename") or posixpath.basename(by_id[attachment["id"]].original_filename) if attachment["id"] in by_id else "",
+                    "mime_type": attachment.get("mime_type") or "",
+                    "size": int(attachment.get("size") or 0),
+                    "summary_text": "",
+                    "metadata": {"scope": attachment.get("scope") or ""},
+                },
+                by_id.get(attachment["id"]),
+            )
+            for attachment in attachments
+        ]
 
     ordered_files = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
     if not ordered_files:
         return source_message.text or fallback_prompt or ""
 
-    if not attachments:
-        attachments = [attachment for attachment, _user_file in ordered_files]
+    attachments = [attachment for attachment, _user_file in ordered_files]
 
     content_parts = [
         {
@@ -120,13 +199,13 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
                 source_message.id,
                 attachment.get("id"),
             )
-            continue
-        if not str(user_file.mime_type or "").startswith("image/"):
-            logger.warning(
-                "Skipping non-image message attachment %s for message %s.",
-                user_file.id,
-                source_message.id,
-            )
+            if attachment.get("summary_text"):
+                content_parts.append(
+                    {
+                        "type": "text",
+                        "text": f"{attachment.get('label') or 'Attachment'}:\n{attachment.get('summary_text')}",
+                    }
+                )
             continue
 
         try:
@@ -140,15 +219,48 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
             )
             continue
 
-        content_parts.append(
-            {
-                "type": "image",
-                "source_type": "base64",
-                "data": base64.b64encode(content).decode("utf-8"),
-                "mime_type": user_file.mime_type,
-                "filename": attachment.get("filename") or user_file.original_filename,
-            }
+        kind = str(attachment.get("kind") or "").strip() or detect_artifact_kind(
+            user_file.mime_type,
+            user_file.original_filename,
         )
+        base64_content = base64.b64encode(content).decode("utf-8")
+        filename = attachment.get("label") or user_file.original_filename
+        if kind == ArtifactKind.IMAGE:
+            content_parts.append(
+                {
+                    "type": "image",
+                    "source_type": "base64",
+                    "data": base64_content,
+                    "mime_type": user_file.mime_type,
+                    "filename": filename,
+                }
+            )
+        elif kind == ArtifactKind.PDF:
+            content_parts.append(
+                {
+                    "type": "file",
+                    "source_type": "base64",
+                    "data": base64_content,
+                    "mime_type": user_file.mime_type,
+                    "filename": filename,
+                }
+            )
+        elif kind == ArtifactKind.AUDIO:
+            content_parts.append(
+                {
+                    "type": "audio",
+                    "source_type": "base64",
+                    "data": base64_content,
+                    "mime_type": user_file.mime_type,
+                    "filename": filename,
+                }
+            )
+        else:
+            logger.warning(
+                "Skipping unsupported message artifact kind %s for artifact %s.",
+                kind,
+                attachment.get("id"),
+            )
 
     if len(content_parts) == 1:
         return content_parts[0]["text"]
@@ -220,7 +332,28 @@ class AgentTaskExecutor (TaskExecutor):
         except Message.DoesNotExist:
             return self.prompt
 
+        self._source_message = source_message
         return await build_source_message_prompt(source_message, fallback_prompt=self.prompt or "")
+
+    async def _run_agent(self):
+        native_result = await self._run_native_provider_if_supported()
+        if native_result is not None:
+            self._native_provider_result = native_result
+            return summarize_native_result(native_result)
+        return await super()._run_agent()
+
+    async def _run_native_provider_if_supported(self):
+        provider = getattr(self.agent_config, "llm_provider", None)
+        source_message = getattr(self, "_source_message", None)
+        if provider is None or source_message is None:
+            return None
+        return await invoke_native_provider_for_message(
+            provider,
+            thread=self.thread,
+            user=self.user,
+            source_message=source_message,
+            fallback_prompt=self.prompt or "",
+        )
 
     async def _process_result(self, result):
         await super()._process_result(result)
@@ -231,6 +364,36 @@ class AgentTaskExecutor (TaskExecutor):
         message = await sync_to_async(
             self.thread.add_message, thread_sensitive=False
         )(final_answer, actor=Actor.AGENT)
+
+        native_result = getattr(self, "_native_provider_result", None)
+        if native_result:
+            await persist_native_result_artifacts(
+                message=message,
+                native_result=native_result,
+                provider=self.agent_config.llm_provider,
+            )
+            await self._sync_native_provider_checkpoint(native_result, final_answer)
+        generated_tool_artifact_ids = [
+            int(artifact_ref["artifact_id"])
+            for artifact_ref in list(getattr(self.llm, "last_generated_tool_artifact_refs", []) or [])
+            if artifact_ref.get("artifact_id")
+        ]
+        hidden_subagent_artifact_ids = await self._collect_hidden_subagent_output_artifact_ids()
+        if hidden_subagent_artifact_ids:
+            seen_artifact_ids = set(generated_tool_artifact_ids)
+            generated_tool_artifact_ids.extend(
+                artifact_id
+                for artifact_id in hidden_subagent_artifact_ids
+                if artifact_id not in seen_artifact_ids
+            )
+        if generated_tool_artifact_ids:
+            await sync_to_async(
+                attach_tool_output_artifacts_to_message,
+                thread_sensitive=True,
+            )(
+                message=message,
+                artifact_ids=generated_tool_artifact_ids,
+            )
 
         # Calculate and store context consumption
         real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
@@ -252,17 +415,22 @@ class AgentTaskExecutor (TaskExecutor):
         # Publish context consumption
         await self.handler.on_context_consumption(real_tokens, approx_tokens, max_context)
 
-        # Store in message
-        message.internal_data.update({
-            'real_tokens': real_tokens,
-            'approx_tokens': approx_tokens,
-            'max_context': max_context,
-            'final_answer': final_answer,
-        })
         display_markdown = self._get_display_markdown(final_answer)
-        if display_markdown:
-            message.internal_data['display_markdown'] = display_markdown
-        await sync_to_async(message.save, thread_sensitive=False)()
+        await self._persist_agent_message_state(
+            message.id,
+            final_answer=final_answer,
+            real_tokens=real_tokens,
+            approx_tokens=approx_tokens,
+            max_context=max_context,
+            display_markdown=display_markdown,
+        )
+
+        if self.handler and hasattr(self.handler, "on_new_message"):
+            realtime_payload = await self._build_realtime_message_payload(message.id)
+            await self.handler.on_new_message(
+                realtime_payload,
+                task_id=self.task.id,
+            )
 
         # Clear transient stream state now that durable message persistence is complete.
         self.task.current_response = None
@@ -271,18 +439,156 @@ class AgentTaskExecutor (TaskExecutor):
         # Trigger title generation asynchronously when the thread still has its default title.
         await self._enqueue_thread_title_generation()
 
+    async def _persist_agent_message_state(
+        self,
+        message_id: int,
+        *,
+        final_answer: str,
+        real_tokens: int | None,
+        approx_tokens: int | None,
+        max_context: int | None,
+        display_markdown: str,
+    ) -> None:
+        def _persist_message_state() -> None:
+            fresh_message = (
+                Message.objects.select_related("thread", "user")
+                .prefetch_related(
+                    "artifacts__user_file",
+                    "artifacts__published_file",
+                )
+                .get(
+                    id=message_id,
+                    thread=self.thread,
+                    user=self.user,
+                )
+            )
+            annotate_user_message(fresh_message)
+            internal_data = (
+                fresh_message.internal_data
+                if isinstance(fresh_message.internal_data, dict)
+                else {}
+            )
+            internal_data.update({
+                "real_tokens": real_tokens,
+                "approx_tokens": approx_tokens,
+                "max_context": max_context,
+                "final_answer": final_answer,
+            })
+            if display_markdown:
+                internal_data["display_markdown"] = display_markdown
+            else:
+                internal_data.pop("display_markdown", None)
+            fresh_message.internal_data = internal_data
+            fresh_message.save(update_fields=["internal_data"])
+
+        await sync_to_async(_persist_message_state, thread_sensitive=True)()
+
+    async def _build_realtime_message_payload(self, message_id: int) -> dict:
+        def _load_message():
+            fresh_message = (
+                Message.objects.select_related("thread", "user")
+                .prefetch_related(
+                    "artifacts__user_file",
+                    "artifacts__published_file",
+                )
+                .get(
+                    id=message_id,
+                    thread=self.thread,
+                    user=self.user,
+                )
+            )
+            annotate_user_message(fresh_message)
+            display_text = ""
+            if isinstance(fresh_message.internal_data, dict):
+                display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
+            if not display_text:
+                display_text = fresh_message.text or ""
+            return {
+                "id": fresh_message.id,
+                "text": fresh_message.text,
+                "actor": fresh_message.actor,
+                "internal_data": fresh_message.internal_data,
+                "created_at": str(fresh_message.created_at),
+                "rendered_html": markdown_to_html(display_text),
+                "artifacts": getattr(fresh_message, "message_artifacts", []),
+            }
+
+        return await sync_to_async(_load_message, thread_sensitive=True)()
+
+    async def _collect_hidden_subagent_output_artifact_ids(self) -> list[int]:
+        source_message = getattr(self, "_source_message", None)
+        if source_message is None or not getattr(source_message, "id", None):
+            return []
+
+        def _load_artifact_ids():
+            hidden_message_ids = list(
+                Message.objects.filter(
+                    thread=self.thread,
+                    user=self.user,
+                    actor=Actor.SYSTEM,
+                    id__gt=source_message.id,
+                    internal_data__hidden_subagent_trace=True,
+                ).values_list("id", flat=True)
+            )
+            if not hidden_message_ids:
+                return []
+            return list(
+                MessageArtifact.objects.filter(
+                    thread=self.thread,
+                    user=self.user,
+                    message_id__in=hidden_message_ids,
+                    direction=ArtifactDirection.OUTPUT,
+                )
+                .order_by("created_at", "id")
+                .values_list("id", flat=True)
+            )
+
+        return await sync_to_async(_load_artifact_ids, thread_sensitive=True)()
+
+    async def _sync_native_provider_checkpoint(self, native_result: dict, final_answer: str) -> None:
+        if not self.llm or not getattr(self.llm, "langchain_agent", None):
+            return
+
+        source_message_id = native_result.get("source_message_id")
+        artifact_refs = list(native_result.get("source_artifact_ids") or [])
+        prompt_surrogate = str(native_result.get("prompt_surrogate") or "").strip()
+        if not prompt_surrogate:
+            prompt_surrogate = "User provided multimodal artifacts."
+
+        user_message = HumanMessage(
+            content=prompt_surrogate,
+            additional_kwargs={
+                "native_run": True,
+                "source_message_id": source_message_id,
+                "artifact_refs": artifact_refs,
+            },
+        )
+        agent_message = AIMessage(content=final_answer or "")
+        await self.llm.langchain_agent.aupdate_state(
+            self.llm.config.copy(),
+            {"messages": [user_message, agent_message]},
+        )
+
     async def _enqueue_thread_title_generation(self):
         """Schedule thread title generation asynchronously for default subjects."""
         if not self.thread or not self.agent_config:
             return
         if not is_default_thread_subject(self.thread.subject):
             return
+        enqueue_start = time.perf_counter()
         try:
             await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
                 thread_id=self.thread.id,
                 user_id=self.user.id,
                 agent_config_id=self.agent_config.id,
                 source_task_id=self.task.id,
+            )
+            duration_ms = int((time.perf_counter() - enqueue_start) * 1000)
+            logger.debug(
+                "Enqueued thread title generation (thread_id=%s, task_id=%s) in %sms.",
+                getattr(self.thread, "id", None),
+                getattr(self.task, "id", None),
+                duration_ms,
             )
         except Exception as exc:
             logger.warning(
@@ -380,9 +686,9 @@ def _build_langfuse_invoke_config(user, *, session_id: str):
             "Could not load Langfuse user parameters for user %s. Continuing without tracing.",
             getattr(user, "id", "unknown"),
         )
-        return {}, None
+        return {}
     if not (allow_langfuse and langfuse_public_key and langfuse_secret_key):
-        return {}, None
+        return {}
 
     try:
         from langfuse import Langfuse
@@ -405,13 +711,13 @@ def _build_langfuse_invoke_config(user, *, session_id: str):
                 "langfuse_session_id": session_id,
             },
         }
-        return invoke_config, client
+        return invoke_config
     except Exception:
         logger.exception(
             "Failed to initialize Langfuse callback for direct LLM call (user_id=%s).",
             getattr(user, "id", "unknown"),
         )
-        return {}, None
+        return {}
 
 
 def _build_thread_title_prompt(messages: list[Message]) -> str:
@@ -476,6 +782,13 @@ def create_and_dispatch_agent_task(
         thread=thread,
         agent_config=agent_config,
         status=TaskStatus.PENDING,
+        progress_logs=[
+            {
+                "step": "Task queued for dispatch",
+                "timestamp": str(dt.datetime.now(dt.timezone.utc)),
+                "severity": "info",
+            }
+        ],
     )
 
     dispatcher_task.delay(
@@ -498,6 +811,7 @@ def generate_thread_title_task(
     source_task_id: int | None = None,
 ):
     """Generate a short thread title asynchronously without touching agent checkpoints."""
+    title_task_start = time.perf_counter()
     try:
         thread = Thread.objects.select_related("user").get(id=thread_id, user_id=user_id)
         if not is_default_thread_subject(thread.subject):
@@ -513,24 +827,16 @@ def generate_thread_title_task(
         agent_config = AgentConfig.objects.select_related("llm_provider").get(id=agent_config_id, user_id=user_id)
         llm = create_provider_llm(agent_config.llm_provider)
 
-        invoke_config, langfuse_client = _build_langfuse_invoke_config(
+        invoke_config = _build_langfuse_invoke_config(
             thread.user,
             session_id=f"thread_title_{thread_id}",
         )
-        try:
-            response = asyncio.run(
-                llm.ainvoke(
-                    [HumanMessage(content=_build_thread_title_prompt(messages))],
-                    config=invoke_config or None,
-                )
+        response = asyncio.run(
+            llm.ainvoke(
+                [HumanMessage(content=_build_thread_title_prompt(messages))],
+                config=invoke_config or None,
             )
-        finally:
-            if langfuse_client is not None:
-                try:
-                    langfuse_client.flush()
-                    langfuse_client.shutdown()
-                except Exception:
-                    logger.warning("Failed to cleanup Langfuse client for thread title generation.")
+        )
 
         raw_title = strip_thinking_blocks(getattr(response, "content", None) or str(response))
         normalized_title = normalize_generated_thread_title(raw_title)
@@ -547,6 +853,13 @@ def generate_thread_title_task(
             return {"status": "skipped", "reason": "subject_changed_during_generation"}
 
         _publish_thread_subject_update(source_task_id, thread_id, normalized_title)
+        duration_ms = int((time.perf_counter() - title_task_start) * 1000)
+        logger.debug(
+            "Thread title generation completed (thread_id=%s, source_task_id=%s, duration=%sms).",
+            thread_id,
+            source_task_id,
+            duration_ms,
+        )
         return {"status": "ok", "thread_id": thread_id, "thread_subject": normalized_title}
     except Exception as e:
         logger.error("Thread title generation failed for thread %s: %s", thread_id, e, exc_info=True)
@@ -716,7 +1029,7 @@ class SummarizationTaskExecutor(TaskExecutor):
                 raise ValueError(f"Summarization failed for {agent_config.name}: {result['message']}")
 
         finally:
-            await agent.cleanup()
+            await agent.cleanup_runtime()
 
 
 def _mark_task_definition_success(task_definition: TaskDefinition):

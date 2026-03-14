@@ -17,6 +17,7 @@ from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.views.agent_dispatch import (
     enqueue_message_agent_task,
+    get_agent_execution_capability_error,
     get_message_attachment_capability_error,
     resolve_selected_or_default_agent,
 )
@@ -121,6 +122,8 @@ def load_more_threads(request):
 @login_required(login_url='login')
 def message_list(request):
     user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
+    for agent in user_agents:
+        agent.requires_tools_for_current_thread = agent.requires_tools_for_thread_mode(Thread.Mode.THREAD)
     agent_id = request.GET.get('agent_id')
     default_agent = None
     if agent_id:
@@ -146,7 +149,10 @@ def message_list(request):
         try:
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
-            messages = selected_thread.get_messages()
+            messages = [
+                message for message in selected_thread.get_messages()
+                if not ((message.internal_data or {}).get("hidden_subagent_trace"))
+            ]
 
             # Get agent config for summarization settings
             agent_config = None
@@ -176,9 +182,7 @@ def message_list(request):
                 if m.actor == Actor.AGENT and m.internal_data:
                     display_text = m.internal_data.get('display_markdown') or m.text
                 m.rendered_html = markdown_to_html(display_text)
-                # Add info about files used
-                if m.actor == Actor.USER:
-                    annotate_user_message(m)
+                annotate_user_message(m)
                 # Process summary from markdown to HTML
                 if m.actor == Actor.SYSTEM and m.internal_data and 'summary' in m.internal_data:
                     m.internal_data['summary'] = markdown_to_html(m.internal_data['summary'])
@@ -267,12 +271,13 @@ def add_message(request):
     new_message = request.POST.get('new_message', '')
     new_message = new_message if new_message.strip() else ''
     selected_agent = request.POST.get('selected_agent')
+    response_mode = str(request.POST.get('response_mode') or 'auto').strip().lower() or 'auto'
     uploaded_files = request.FILES.getlist('files', [])
     message_attachments = request.FILES.getlist('message_attachments', [])
 
     if not new_message.strip() and not uploaded_files and not message_attachments:
         return JsonResponse(
-            {"status": "ERROR", "message": "Message or image attachment required"},
+            {"status": "ERROR", "message": "Message or attachment required"},
             status=400,
         )
 
@@ -285,9 +290,19 @@ def add_message(request):
     uploaded_file_ids = []
     message_attachment_meta = []
     agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
+    execution_error = get_agent_execution_capability_error(
+        agent_config,
+        thread_mode=Thread.Mode.THREAD,
+        response_mode=response_mode,
+    )
+    if execution_error:
+        return JsonResponse(
+            {"status": "ERROR", "message": execution_error},
+            status=400,
+        )
 
     if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config)
+        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
         if attachment_error:
             return JsonResponse(
                 {"status": "ERROR", "message": attachment_error},
@@ -361,8 +376,10 @@ def add_message(request):
     message.internal_data = {
         'file_ids': uploaded_file_ids,
         MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
+        'response_mode': response_mode,
     }
     message.save()
+    annotate_user_message(message)
 
     task = enqueue_message_agent_task(
         user=request.user,
@@ -380,6 +397,7 @@ def add_message(request):
         "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
         "internal_data": message.internal_data or {},
         "message_attachments": message_attachment_meta,
+        "artifacts": getattr(message, "message_artifacts", []),
     }
 
     return JsonResponse({

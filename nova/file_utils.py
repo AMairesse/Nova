@@ -107,6 +107,11 @@ def build_message_attachment_path(message_id: int, filename: str) -> str:
     return f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_{int(message_id)}/{safe_name}"
 
 
+def build_message_artifact_output_path(message_id: int, filename: str) -> str:
+    safe_name = posixpath.basename(sanitize_user_path(filename or "artifact").rstrip("/")) or "artifact"
+    return f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/generated_{int(message_id)}/{safe_name}"
+
+
 async def auto_rename_path(
     thread: Thread,
     proposed_path: str,
@@ -193,6 +198,7 @@ async def batch_upload_files(thread: Thread, user,
 
             proposed_path = item['path']
             content = item['content']
+            explicit_mime = str(item.get('mime_type') or '').strip().lower()
 
             if not content or len(content) == 0:
                 errors.append(f"Empty content for {proposed_path}")
@@ -203,6 +209,13 @@ async def batch_upload_files(thread: Thread, user,
                 continue
 
             mime = detect_mime(content)
+            mime_is_allowed = mime in allowed_types or any(mime.startswith(prefix) for prefix in allowed_mime_prefixes)
+            explicit_mime_is_allowed = (
+                explicit_mime in allowed_types
+                or any(explicit_mime.startswith(prefix) for prefix in allowed_mime_prefixes)
+            )
+            if explicit_mime and explicit_mime_is_allowed and (mime == 'application/octet-stream' or not mime_is_allowed):
+                mime = explicit_mime
             if mime not in allowed_types and not any(mime.startswith(prefix) for prefix in allowed_mime_prefixes):
                 errors.append(f"Unsupported MIME {mime} for {proposed_path}")
                 continue

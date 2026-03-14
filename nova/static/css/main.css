@@ -671,6 +671,15 @@ body {
     border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.composer-attachment-thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bs-light);
+    color: var(--bs-secondary-color);
+    font-size: 1.2rem;
+}
+
 .composer-attachment-meta {
     min-width: 0;
 }
@@ -691,6 +700,62 @@ body {
 
 .composer-attachment-summary {
     margin-top: 0.25rem;
+}
+
+.artifact-inline-list {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.artifact-inline-card {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.75rem;
+    background: var(--bs-body-bg);
+    padding: 0.75rem;
+}
+
+.artifact-inline-card-image {
+    padding: 0.5rem;
+    overflow: hidden;
+}
+
+.artifact-inline-image {
+    display: block;
+    max-height: 24rem;
+    width: 100%;
+    object-fit: contain;
+    background: var(--bs-light-bg-subtle);
+}
+
+.artifact-inline-card-audio audio {
+    display: block;
+}
+
+.artifact-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.artifact-summary-state,
+.artifact-publish-btn {
+    font-size: 0.78rem;
+    line-height: 1.2;
+}
+
+.artifact-publish-btn {
+    text-decoration: none;
+}
+
+.artifact-publish-btn:hover,
+.artifact-publish-btn:focus {
+    text-decoration: underline;
+}
+
+.message .card.border-primary .artifact-publish-btn,
+.message .card.border-primary .artifact-summary-state {
+    color: rgba(255, 255, 255, 0.88) !important;
 }
 
 /* Progress Indicators */

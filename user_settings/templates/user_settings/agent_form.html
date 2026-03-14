@@ -16,6 +16,12 @@
   <form method="post" novalidate>
     {% csrf_token %}
     <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
+    {{ form.provider_capability_map|json_script:"agent-provider-capabilities" }}
+    <div id="agent-provider-tool-warning" class="alert alert-warning small{% if not form.provider_tool_warning %} d-none{% endif %}">
+      {% if form.provider_tool_warning %}
+        {{ form.provider_tool_warning }}
+      {% endif %}
+    </div>
     {% crispy form %}
 
     {# Add header for summarization section if present #}

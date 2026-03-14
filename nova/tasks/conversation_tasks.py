@@ -14,11 +14,13 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Count
 
 from nova.llm.llm_agent import LLMAgent
 from nova.models.ConversationEmbedding import DaySegmentEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
+from nova.models.MessageArtifact import MessageArtifact
 from nova.models.UserObjects import UserProfile
 from nova.tasks.conversation_embedding_tasks import compute_day_segment_embedding_task
 from nova.tasks.notification_tasks import send_task_webpush_notification
@@ -95,10 +97,44 @@ def _build_day_summary_prompt(day_label: str, transcript: str) -> str:
     return _build_day_summary_prompt_with_context(day_label, transcript)
 
 
+def _format_artifacts_for_summary(
+    artifact_counts: List[dict],
+    recent_artifacts: List[MessageArtifact],
+) -> str:
+    if not artifact_counts and not recent_artifacts:
+        return ""
+
+    lines: List[str] = []
+    if artifact_counts:
+        count_summary = ", ".join(
+            [
+                f"{item['kind']} ({item['total']})"
+                for item in artifact_counts
+                if item.get("kind")
+            ]
+        )
+        if count_summary:
+            lines.append(f"Artifact counts: {count_summary}")
+
+    if recent_artifacts:
+        lines.append("Most relevant artifacts:")
+        for artifact in recent_artifacts[:3]:
+            summary = (artifact.summary_text or "").strip()
+            if len(summary) > 180:
+                summary = summary[:180] + "…"
+            descriptor = f"- {artifact.filename} ({artifact.kind}, {artifact.direction})"
+            if summary:
+                descriptor = f"{descriptor}: {summary}"
+            lines.append(descriptor)
+
+    return "\n".join(lines)
+
+
 def _build_day_summary_prompt_with_context(
     day_label: str,
     transcript: str,
     *,
+    key_artifacts: str = "",
     previous_summaries: List[tuple[str, str]] | None = None,
     current_summary: str = "",
     delta_mode: bool = False,
@@ -115,6 +151,8 @@ def _build_day_summary_prompt_with_context(
     current_summary = (current_summary or "").strip()
     if not current_summary:
         current_summary = "(none)"
+
+    key_artifacts = (key_artifacts or "").strip() or "(none)"
 
     transcript_label = (
         "New messages since the previous summary for this day"
@@ -136,6 +174,8 @@ def _build_day_summary_prompt_with_context(
         "- ...\n\n"
         "## Decisions\n"
         "- ...\n\n"
+        "## Key artifacts\n"
+        "- ...\n\n"
         "## Open loops\n"
         "- ...\n\n"
         "## Next steps\n"
@@ -147,6 +187,8 @@ def _build_day_summary_prompt_with_context(
         f"{previous_block}\n\n"
         f"Current summary for {day_label} (if any):\n"
         f"{current_summary}\n\n"
+        f"Key artifacts for {day_label}:\n"
+        f"{key_artifacts}\n\n"
         f"{transcript_label}:\n"
         f"{transcript}\n\n"
         "Markdown Summary:\n"
@@ -159,16 +201,16 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
     force_full_refresh = (mode or "").strip().lower() == "manual"
 
     async def _fetch_segment_and_messages() -> Tuple[
-        Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool
+        Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool, str
     ]:
-        def _impl() -> Tuple[Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool]:
+        def _impl() -> Tuple[Optional[DaySegment], List[Message], str, List[tuple[str, str]], bool, str]:
             segment = (
                 DaySegment.objects.select_related("thread", "user", "starts_at_message")
                 .filter(id=day_segment_id)
                 .first()
             )
             if not segment:
-                return None, [], "", [], False
+                return None, [], "", [], False, ""
 
             # Bound the day segment using the next segment start.
             next_seg = (
@@ -210,7 +252,27 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                 for seg in prev_segments[:2]
                 if (seg.summary_markdown or "").strip()
             ]
-            return segment, msgs, current_summary, previous_summaries, delta_mode
+            artifact_counts = list(
+                MessageArtifact.objects.filter(
+                    user=segment.user,
+                    thread=segment.thread,
+                    message_id__in=[message.id for message in msgs],
+                )
+                .values("kind")
+                .annotate(total=Count("id"))
+                .order_by("kind")
+            )
+            recent_artifacts = list(
+                MessageArtifact.objects.filter(
+                    user=segment.user,
+                    thread=segment.thread,
+                    message_id__in=[message.id for message in msgs],
+                )
+                .select_related("user_file")
+                .order_by("-created_at", "-id")[:3]
+            )
+            key_artifacts = _format_artifacts_for_summary(artifact_counts, recent_artifacts)
+            return segment, msgs, current_summary, previous_summaries, delta_mode, key_artifacts
 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
@@ -224,7 +286,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
         return await sync_to_async(_impl, thread_sensitive=True)()
 
     await _publish_task_update(task_id, "progress_update", {"progress_log": "Preparing day summary..."})
-    segment, messages, current_summary, previous_summaries, delta_mode = await _fetch_segment_and_messages()
+    segment, messages, current_summary, previous_summaries, delta_mode, key_artifacts = await _fetch_segment_and_messages()
     if not segment:
         await _publish_task_update(task_id, "task_error", {"message": "Day segment not found", "category": "summary"})
         return {"status": "not_found", "day_segment_id": day_segment_id}
@@ -247,7 +309,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
         return {"status": "error", "error": "no_default_agent", "day_segment_id": day_segment_id}
 
     transcript = _format_messages_for_summary(messages)
-    if not transcript.strip():
+    if not transcript.strip() and not key_artifacts.strip():
         await _publish_task_update(
             task_id,
             "continuous_summary_ready",
@@ -278,6 +340,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
     prompt = _build_day_summary_prompt_with_context(
         str(segment.day_label),
         transcript,
+        key_artifacts=key_artifacts,
         previous_summaries=previous_summaries,
         current_summary=current_summary,
         delta_mode=delta_mode,
@@ -374,7 +437,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                     "[summarize_day_segment] failed cleanup for ephemeral checkpoint_id=%s",
                     ephemeral_thread_id,
                 )
-        await agent.cleanup()
+        await agent.cleanup_runtime()
 
 
 @shared_task(bind=True, name="summarize_day_segment")

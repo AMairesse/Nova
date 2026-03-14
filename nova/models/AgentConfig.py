@@ -5,6 +5,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.UserObjects import UserProfile
+from nova.models.Thread import Thread
 
 
 class AgentConfig(models.Model):
@@ -117,6 +118,21 @@ class AgentConfig(models.Model):
             if profile.default_agent == self:
                 profile.default_agent = None
                 profile.save()
+
+    def has_explicit_tool_dependencies(self) -> bool:
+        """Return True when this agent explicitly depends on configured tools."""
+        if not self.pk:
+            return False
+        return (
+            self.tools.filter(is_active=True).exists()
+            or self.agent_tools.filter(is_tool=True).exists()
+        )
+
+    def requires_tools_for_thread_mode(self, thread_mode: str | None) -> bool:
+        """Return True when this agent cannot run meaningfully without tools."""
+        if self.has_explicit_tool_dependencies():
+            return True
+        return bool(thread_mode == Thread.Mode.CONTINUOUS and not self.is_tool)
 
     # -----------------------------------------------------------------
     # Internal cycle detector (DFS with recursion stack)

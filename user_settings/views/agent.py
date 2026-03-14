@@ -58,7 +58,7 @@ class AgentListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         # Check if user has access to any providers (including system providers)
         has_providers = LLMProvider.objects.filter(
             Q(user=self.request.user) | Q(user__isnull=True)
-        ).exists()
+        ).exclude(model="").exists()
         ctx["has_providers"] = has_providers
 
         # Flag used by the template to enable/disable the bootstrap button

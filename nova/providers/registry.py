@@ -57,3 +57,23 @@ def get_provider_defaults_map() -> dict[str, dict]:
         str(provider_type): adapter.get_defaults().as_dict()
         for provider_type, adapter in _PROVIDER_ADAPTERS.items()
     }
+
+
+async def list_provider_models(provider) -> list[dict]:
+    return await get_provider_adapter(provider).list_models(provider)
+
+
+async def resolve_provider_capability_snapshot(provider) -> dict:
+    return await get_provider_adapter(provider).resolve_capability_snapshot(provider)
+
+
+async def build_native_provider_request(provider, invocation_request: dict) -> dict:
+    return await get_provider_adapter(provider).build_native_request(provider, invocation_request)
+
+
+async def invoke_native_provider(provider, invocation_request: dict) -> dict:
+    return await get_provider_adapter(provider).invoke_native(provider, invocation_request)
+
+
+async def parse_native_provider_response(provider, raw_response: dict) -> dict:
+    return await get_provider_adapter(provider).parse_native_response(provider, raw_response)

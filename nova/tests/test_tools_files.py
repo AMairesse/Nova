@@ -19,6 +19,8 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
         instructions = self.files_tools.get_skill_instructions()
         self.assertIsInstance(instructions, list)
         self.assertTrue(any(str(i).strip() for i in instructions))
+        self.assertIn("Always call file_ls before using file_ids.", instructions)
+        self.assertIn("Never guess file_ids.", instructions)
 
     async def test_list_files_returns_no_files_message(self):
         fake_thread = SimpleNamespace(id=1)
@@ -131,6 +133,52 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
         self.assertIn("not an image", message.lower())
         self.assertIsNone(artifact)
 
+    async def test_file_attach_returns_file_reference_for_supported_multimodal_files(self):
+        fake_user = SimpleNamespace(id=1)
+        fake_agent = SimpleNamespace(thread=SimpleNamespace(id=100), user=fake_user)
+        fake_file = SimpleNamespace(
+            id=7,
+            thread=SimpleNamespace(id=100),
+            user=fake_user,
+            mime_type="application/pdf",
+            original_filename="/docs/report.pdf",
+        )
+
+        with patch("nova.tools.files.async_get_object_or_404", new_callable=AsyncMock, return_value=fake_file):
+            with patch(
+                "nova.tools.files.async_get_threadid_and_user",
+                new_callable=AsyncMock,
+                side_effect=[(100, fake_user), (100, fake_user)],
+            ):
+                message, artifact = await self.files_tools.file_attach(fake_agent, file_id=7)
+
+        self.assertIn("report.pdf", message)
+        self.assertEqual(artifact["file_id"], 7)
+        self.assertEqual(artifact["kind"], "pdf")
+        self.assertEqual(artifact["mime_type"], "application/pdf")
+
+    async def test_file_attach_rejects_unsupported_file_types(self):
+        fake_user = SimpleNamespace(id=1)
+        fake_agent = SimpleNamespace(thread=SimpleNamespace(id=100), user=fake_user)
+        fake_file = SimpleNamespace(
+            id=8,
+            thread=SimpleNamespace(id=100),
+            user=fake_user,
+            mime_type="text/plain",
+            original_filename="/notes/todo.txt",
+        )
+
+        with patch("nova.tools.files.async_get_object_or_404", new_callable=AsyncMock, return_value=fake_file):
+            with patch(
+                "nova.tools.files.async_get_threadid_and_user",
+                new_callable=AsyncMock,
+                side_effect=[(100, fake_user), (100, fake_user)],
+            ):
+                message, artifact = await self.files_tools.file_attach(fake_agent, file_id=8)
+
+        self.assertIn("cannot be attached multimodally", message.lower())
+        self.assertIsNone(artifact)
+
     async def test_get_functions_returns_empty_when_no_thread_context(self):
         fake_agent = SimpleNamespace(thread=None, user=SimpleNamespace(id=1))
         with patch("nova.tools.files.async_get_threadid_and_user", new_callable=AsyncMock, return_value=(None, fake_agent.user)):
@@ -146,5 +194,5 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
         names = {tool.name for tool in tools}
         self.assertEqual(
             names,
-            {"file_ls", "file_get_url", "file_read_chunk", "file_create", "file_delete", "file_read_image"},
+            {"file_ls", "file_get_url", "file_read_chunk", "file_create", "file_delete", "file_read_image", "file_attach"},
         )

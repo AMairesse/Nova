@@ -1,17 +1,22 @@
 # nova/llm/llm_agent.py
 import uuid
 import logging
+import time
 from typing import Any, List
 from django.conf import settings
 
 from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
+from nova.models.MessageArtifact import ArtifactKind, MessageArtifact
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
+from nova.models.UserFile import UserFile
+from nova.file_utils import download_file_content
 from nova.llm.checkpoints import get_checkpointer
 from nova.llm.prompts import nova_system_prompt
 from nova.llm.skill_tool_filter import apply_skill_tool_filter
@@ -21,11 +26,13 @@ from nova.providers import (
     create_provider_llm as provider_create_provider_llm,
     normalize_multimodal_content_for_provider as provider_normalize_multimodal_content_for_provider,
 )
+from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 from nova.models.Thread import Thread as ThreadModel
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +95,9 @@ class LLMAgent:
     @classmethod
     async def create(cls, user: settings.AUTH_USER_MODEL, thread: Thread,
                      agent_config: AgentConfig, parent_config=None,
-                     callbacks: List[BaseCallbackHandler] = None):
+                     callbacks: List[BaseCallbackHandler] = None,
+                     *,
+                     tools_enabled: bool = True):
         """
         Async factory to create an LLMAgent instance (an agent) with
         async-safe ORM accesses.
@@ -133,7 +142,8 @@ class LLMAgent:
             has_agent_tools=has_agent_tools,
             system_prompt=system_prompt,
             recursion_limit=recursion_limit,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
+            tools_enabled=tools_enabled,
         )
 
         # Keep reference for continuous checkpoint context rebuild.
@@ -143,7 +153,7 @@ class LLMAgent:
         agent.checkpointer = checkpointer
 
         # Load tools async after init (extracted to llm_tools.py)
-        tools = await load_tools(agent)
+        tools = await load_tools(agent, enabled=tools_enabled)
 
         llm = agent.create_llm_agent()
 
@@ -192,7 +202,8 @@ class LLMAgent:
                  has_agent_tools=False,
                  system_prompt=None,
                  recursion_limit=None,
-                 llm_provider=None):
+                 llm_provider=None,
+                 tools_enabled: bool = True):
         if callbacks is None:
             callbacks = []  # Default to empty list for custom callbacks
         self.user = user
@@ -212,10 +223,7 @@ class LLMAgent:
                     secret_key=langfuse_secret_key,
                     host=langfuse_host,
                 )
-                # Store client reference for cleanup
-                self._langfuse_client = langfuse
                 langfuse_handler = CallbackHandler(public_key=langfuse_public_key)
-                self._langfuse_handler = langfuse_handler
 
                 if not langfuse.auth_check():
                     logger.warning(
@@ -260,6 +268,7 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self.recursion_limit = recursion_limit
         self._llm_provider = llm_provider
+        self.tools_enabled = tools_enabled
 
         # Initialize resources and loaded modules tracker
         self._resources = {}
@@ -268,6 +277,8 @@ class LLMAgent:
         self.middleware = []  # Agent middleware list
         self.skill_catalog = {}
         self.skill_control_tool_names = []
+        self.last_tool_artifact_refs = []
+        self.last_generated_tool_artifact_refs = []
 
         # Add summarization middleware if configured
         # NOTE: In continuous mode we use day summaries + explicit checkpoint rebuild,
@@ -278,27 +289,33 @@ class LLMAgent:
         ):
             self.middleware.append(SummarizationMiddleware(self.agent_config, self))
 
-    async def cleanup(self):
-        """Async cleanup method to close resources for loaded builtin modules, Langfuse client, and checkpointer."""
-        # Cleanup Langfuse client
-        if hasattr(self, '_langfuse_client') and self._langfuse_client:
-            try:
-                self._langfuse_client.flush()
-                self._langfuse_client.shutdown()
-            except Exception as e:
-                logger.warning(f"Failed to cleanup Langfuse client: {e}")
+    async def cleanup_runtime(self):
+        """Close per-run Nova resources without touching process-scoped telemetry."""
+        cleanup_start = time.perf_counter()
 
-        # Cleanup checkpointer
         if self.checkpointer:
             try:
                 await self.checkpointer.conn.close()
             except Exception as e:
                 logger.warning(f"Failed to cleanup checkpointer: {e}")
 
-        # Cleanup builtin modules
         for module in self._loaded_builtin_modules:
             if hasattr(module, 'close'):
                 await module.close(self)
+
+        duration_ms = int((time.perf_counter() - cleanup_start) * 1000)
+        if duration_ms >= 1000:
+            logger.warning(
+                "LLM runtime cleanup was slow (thread_id=%s, duration=%sms).",
+                self.config.get("configurable", {}).get("thread_id"),
+                duration_ms,
+            )
+        else:
+            logger.debug(
+                "LLM runtime cleanup completed (thread_id=%s, duration=%sms).",
+                self.config.get("configurable", {}).get("thread_id"),
+                duration_ms,
+            )
 
     def create_llm_agent(self):
         if not self._llm_provider:
@@ -326,6 +343,8 @@ class LLMAgent:
         return runtime
 
     async def ainvoke(self, question, silent_mode=False, thread_id_override: str | None = None):
+        self.last_tool_artifact_refs = []
+        self.last_generated_tool_artifact_refs = []
         config = self._build_runtime_config(
             silent_mode=silent_mode,
             thread_id_override=thread_id_override,
@@ -375,61 +394,303 @@ class LLMAgent:
             messages = result.get('messages', [])
             last_message = messages[-1]
 
-            # If the result is the specific "read_image" tool then we need to add an image
-            # message. The agent can call the tool multiple times in one turn so we need
-            # to loop through the last messages
-            if isinstance(last_message, ToolMessage) and last_message.name == "read_image":
-                # Loop through messages in reverse order to find all "read_image" tool calls
-                # since the last HumanMessage
-                image_artifacts = []
-                for msg in reversed(messages):
-                    if isinstance(msg, HumanMessage):
-                        # Found the last HumanMessage, stop looking
-                        break
-                    elif isinstance(msg, ToolMessage) and msg.name == "read_image":
-                        # Collect all "read_image" tool artifacts
-                        artifact = msg.artifact
-                        if artifact and "base64" in artifact and "mime_type" in artifact:
-                            image_artifacts.append(artifact)
+            self.last_tool_artifact_refs = self._collect_tool_artifact_refs(messages)
+            self.last_generated_tool_artifact_refs = [
+                artifact_ref
+                for artifact_ref in self.last_tool_artifact_refs
+                if artifact_ref.get("tool_output")
+            ]
 
-                # If we found any image artifacts, create a multimodal message with all images
-                if image_artifacts:
-                    # Reverse the order of the images to match the order of the tool calls
-                    image_artifacts = image_artifacts[::-1]
+            followup_message = await self._build_tool_artifact_followup_message(messages)
+            if followup_message is not None:
+                message = followup_message
+                continue
 
-                    # List all images in order to help the agent because not all LLM can read the
-                    # file name in the image type response
-                    text_response = "Here are the images:\n"
-                    text_response += "".join(
-                        [artifact["filename"] + "\n" for artifact in image_artifacts]
-                    )
-                    content_parts = [{"type": "text", "text": text_response}]
+            # Agent has finished, extract final answer
+            final_msg = extract_final_answer(result)
+            return final_msg
 
-                    # Add all images to the content
-                    for artifact in image_artifacts:
-                        content_parts.append({
-                            "type": "image",
-                            "source_type": "base64",
-                            "data": artifact["base64"],
-                            "mime_type": artifact["mime_type"],
-                            "filename": artifact["filename"],
-                        })
+    async def _build_tool_artifact_followup_message(self, messages):
+        if not messages:
+            return None
 
-                    # Generate a new multimodal message with all images
-                    message = HumanMessage(
-                        content=normalize_multimodal_content_for_provider(
-                            self._llm_provider,
-                            content_parts,
-                        )
-                    )
-                else:
-                    # No valid image artifacts found, continue with normal flow
-                    final_msg = extract_final_answer(result)
-                    return final_msg
-            else:
-                # Agent has finished, extract final answer
-                final_msg = extract_final_answer(result)
-                return final_msg
+        last_message = messages[-1]
+        if not isinstance(last_message, ToolMessage):
+            return None
+
+        legacy_images, artifact_refs = self._split_tool_artifact_refs(messages)
+
+        if not legacy_images and not artifact_refs:
+            return None
+
+        content_parts = []
+        labels: list[str] = []
+
+        if legacy_images:
+            for artifact in legacy_images[::-1]:
+                label = str(artifact.get("filename") or "image").strip()
+                labels.append(label)
+                if not content_parts:
+                    content_parts.append({"type": "text", "text": ""})
+                content_parts.append(
+                    {
+                        "type": "image",
+                        "source_type": "base64",
+                        "data": artifact["base64"],
+                        "mime_type": artifact["mime_type"],
+                        "filename": label,
+                    }
+                )
+
+        if artifact_refs:
+            for artifact_ref in artifact_refs[::-1]:
+                label, parts = await self._hydrate_tool_ref(artifact_ref)
+                if label:
+                    labels.append(label)
+                content_parts.extend(parts)
+
+        if not content_parts:
+            return None
+
+        preamble = "Attached artifacts:\n" + "".join([f"- {label}\n" for label in labels]) if labels else ""
+        if content_parts and content_parts[0].get("type") == "text":
+            content_parts[0]["text"] = preamble + ("\n" + content_parts[0]["text"] if content_parts[0]["text"] else "")
+        else:
+            content_parts.insert(0, {"type": "text", "text": preamble or "Attached artifacts:"})
+
+        if len(content_parts) == 1 and content_parts[0].get("type") == "text":
+            return HumanMessage(content=content_parts[0]["text"])
+        return HumanMessage(
+            content=normalize_multimodal_content_for_provider(
+                self._llm_provider,
+                content_parts,
+            )
+        )
+
+    def _split_tool_artifact_refs(self, messages) -> tuple[list[dict], list[dict]]:
+        legacy_images: list[dict] = []
+        artifact_refs: list[dict] = []
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                break
+            if not isinstance(msg, ToolMessage):
+                continue
+            artifact = getattr(msg, "artifact", None)
+            if msg.name == "read_image" and isinstance(artifact, dict):
+                if artifact.get("base64") and artifact.get("mime_type"):
+                    legacy_images.append(artifact)
+                continue
+            if isinstance(artifact, dict):
+                artifact_refs.extend(self._normalize_tool_artifact_payload(artifact))
+        return legacy_images, artifact_refs
+
+    def _collect_tool_artifact_refs(self, messages) -> list[dict]:
+        _legacy_images, artifact_refs = self._split_tool_artifact_refs(messages)
+        return artifact_refs
+
+    def _normalize_tool_artifact_payload(self, artifact: dict) -> list[dict]:
+        refs: list[dict] = []
+        artifact_ids = artifact.get("artifact_ids")
+        if isinstance(artifact_ids, list):
+            for artifact_id in artifact_ids:
+                try:
+                    normalized_id = int(artifact_id)
+                except (TypeError, ValueError):
+                    continue
+                refs.append(
+                    {
+                        "ref_type": "artifact",
+                        "artifact_id": normalized_id,
+                        "kind": artifact.get("kind") or "",
+                        "label": artifact.get("label") or "",
+                        "mime_type": artifact.get("mime_type") or "",
+                        "tool_output": bool(artifact.get("tool_output")),
+                    }
+                )
+            return refs
+
+        file_ids = artifact.get("file_ids")
+        if isinstance(file_ids, list):
+            for file_id in file_ids:
+                try:
+                    normalized_id = int(file_id)
+                except (TypeError, ValueError):
+                    continue
+                refs.append(
+                    {
+                        "ref_type": "file",
+                        "file_id": normalized_id,
+                        "kind": artifact.get("kind") or "",
+                        "label": artifact.get("label") or "",
+                        "mime_type": artifact.get("mime_type") or "",
+                        "tool_output": bool(artifact.get("tool_output")),
+                    }
+                )
+            return refs
+
+        try:
+            artifact_id = int(artifact.get("artifact_id"))
+        except (TypeError, ValueError):
+            artifact_id = None
+
+        if artifact_id is not None:
+            refs.append(
+                {
+                    "ref_type": "artifact",
+                    "artifact_id": artifact_id,
+                    "kind": artifact.get("kind") or "",
+                    "label": artifact.get("label") or "",
+                    "mime_type": artifact.get("mime_type") or "",
+                    "tool_output": bool(artifact.get("tool_output")),
+                }
+            )
+            return refs
+
+        try:
+            file_id = int(artifact.get("file_id"))
+        except (TypeError, ValueError):
+            return refs
+
+        refs.append(
+            {
+                "ref_type": "file",
+                "file_id": file_id,
+                "kind": artifact.get("kind") or "",
+                "label": artifact.get("label") or "",
+                "mime_type": artifact.get("mime_type") or "",
+                "tool_output": bool(artifact.get("tool_output")),
+            }
+        )
+        return refs
+
+    async def _hydrate_tool_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
+        if artifact_ref.get("ref_type") == "file" or artifact_ref.get("file_id"):
+            return await self._hydrate_file_ref(artifact_ref)
+        return await self._hydrate_artifact_ref(artifact_ref)
+
+    async def _hydrate_artifact_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
+        artifact_id = artifact_ref.get("artifact_id")
+
+        def _load_artifact():
+            return MessageArtifact.objects.select_related("user_file").get(
+                id=artifact_id,
+                thread=self.thread,
+                user=self.user,
+            )
+
+        try:
+            artifact = await sync_to_async(_load_artifact, thread_sensitive=True)()
+        except MessageArtifact.DoesNotExist:
+            logger.warning("Artifact %s could not be loaded for follow-up attach.", artifact_id)
+            return "", []
+
+        label = artifact.filename
+        if artifact.kind in {ArtifactKind.TEXT, ArtifactKind.ANNOTATION}:
+            text_content = artifact.summary_text or ""
+            if not text_content and artifact.user_file_id and artifact.mime_type.startswith("text/"):
+                try:
+                    text_content = (await download_file_content(artifact.user_file)).decode("utf-8", errors="ignore")
+                except Exception as exc:
+                    logger.warning("Could not load text artifact %s: %s", artifact.id, exc)
+            if not text_content:
+                return label, []
+            return label, [{"type": "text", "text": f"{label}:\n{text_content}"}]
+
+        if not artifact.user_file_id:
+            return label, []
+
+        try:
+            raw_content = await download_file_content(artifact.user_file)
+        except Exception as exc:
+            logger.warning("Could not load artifact %s content: %s", artifact.id, exc)
+            return label, []
+
+        base64_content = base64.b64encode(raw_content).decode("utf-8")
+        if artifact.kind == ArtifactKind.IMAGE:
+            return label, [{
+                "type": "image",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": artifact.mime_type,
+                "filename": label,
+            }]
+        if artifact.kind == ArtifactKind.PDF:
+            return label, [{
+                "type": "file",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": artifact.mime_type or "application/pdf",
+                "filename": label,
+            }]
+        if artifact.kind == ArtifactKind.AUDIO:
+            return label, [{
+                "type": "audio",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": artifact.mime_type,
+                "filename": label,
+            }]
+        return label, []
+
+    async def _hydrate_file_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
+        file_id = artifact_ref.get("file_id")
+
+        def _load_file():
+            return UserFile.objects.get(
+                id=file_id,
+                thread=self.thread,
+                user=self.user,
+                scope=UserFile.Scope.THREAD_SHARED,
+            )
+
+        try:
+            user_file = await sync_to_async(_load_file, thread_sensitive=True)()
+        except UserFile.DoesNotExist:
+            logger.warning("File %s could not be loaded for follow-up attach.", file_id)
+            return "", []
+
+        label = str(artifact_ref.get("label") or "").strip() or build_artifact_label(
+            user_file,
+            fallback=f"file-{user_file.id}",
+        )
+        kind = str(artifact_ref.get("kind") or "").strip() or detect_artifact_kind(
+            user_file.mime_type,
+            user_file.original_filename,
+        )
+
+        if kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
+            return label, []
+
+        try:
+            raw_content = await download_file_content(user_file)
+        except Exception as exc:
+            logger.warning("Could not load file %s content for follow-up attach: %s", user_file.id, exc)
+            return label, []
+
+        base64_content = base64.b64encode(raw_content).decode("utf-8")
+        if kind == ArtifactKind.IMAGE:
+            return label, [{
+                "type": "image",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": user_file.mime_type,
+                "filename": label,
+            }]
+        if kind == ArtifactKind.PDF:
+            return label, [{
+                "type": "file",
+                "source_type": "base64",
+                "data": base64_content,
+                "mime_type": user_file.mime_type or "application/pdf",
+                "filename": label,
+            }]
+        return label, [{
+            "type": "audio",
+            "source_type": "base64",
+            "data": base64_content,
+            "mime_type": user_file.mime_type,
+            "filename": label,
+        }]
 
     async def aresume(self, command, silent_mode=False, thread_id_override: str | None = None):
         config = self._build_runtime_config(

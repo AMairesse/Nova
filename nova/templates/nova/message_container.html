@@ -83,17 +83,66 @@
             {% if message.text %}
             <div class="user-message-text text-primary">{{ message.text|linebreaksbr }}</div>
             {% endif %}
-            {% if message.message_attachments %}
+            {% if message.message_artifacts %}
+              <div class="{% if message.text %}mt-3 {% endif %}artifact-inline-list">
+                {% for attachment in message.message_artifacts %}
+                  {% if attachment.content_url %}
+                    {% if attachment.kind == 'image' %}
+                      <div class="artifact-inline-card artifact-inline-card-image">
+                        <img src="{{ attachment.content_url }}" alt="{{ attachment.label }}" class="artifact-inline-image img-fluid rounded border" />
+                      </div>
+                    {% elif attachment.kind == 'audio' %}
+                      <div class="artifact-inline-card artifact-inline-card-audio">
+                        <div class="small fw-semibold mb-2">{{ attachment.label }}</div>
+                        <audio controls preload="metadata" class="w-100" src="{{ attachment.content_url }}"></audio>
+                      </div>
+                    {% elif attachment.kind == 'pdf' %}
+                      <div class="artifact-inline-card artifact-inline-card-pdf">
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                          <div class="d-flex align-items-center gap-2">
+                            <i class="bi bi-file-earmark-pdf fs-4 text-danger"></i>
+                            <div>
+                              <div class="fw-semibold">{{ attachment.label }}</div>
+                              <div class="small text-muted">{% trans "PDF document" %}</div>
+                            </div>
+                          </div>
+                          <a href="{{ attachment.content_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary">
+                            {% trans "Open" %}
+                          </a>
+                        </div>
+                      </div>
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+              </div>
               <div class="{% if message.text %}mt-2 {% endif %}small text-muted">
                 {% blocktrans count attachment_count=message.message_attachment_count %}
-                  {{ attachment_count }} image was attached to this message.
+                  {{ attachment_count }} artifact was attached to this message.
                 {% plural %}
-                  {{ attachment_count }} images were attached to this message.
+                  {{ attachment_count }} artifacts were attached to this message.
                 {% endblocktrans %}
               </div>
               <div class="composer-attachment-summary">
-                {% for attachment in message.message_attachments %}
-                  <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.filename }}</span>
+                {% for attachment in message.message_artifacts %}
+                  <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
+                    <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
+                    {% if attachment.id and not attachment.metadata.legacy %}
+                      {% if attachment.user_file_id or attachment.summary_text %}
+                        <button
+                          type="button"
+                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
+                          data-artifact-id="{{ attachment.id }}"
+                          aria-label="{% trans 'Add artifact to Files' %}"
+                        >
+                          {% if attachment.published_to_file %}
+                            {% trans "Added to Files" %}
+                          {% else %}
+                            {% trans "Add to Files" %}
+                          {% endif %}
+                        </button>
+                      {% endif %}
+                    {% endif %}
+                  </div>
                 {% endfor %}
               </div>
             {% endif %}
@@ -112,6 +161,62 @@
         <div class="card border-secondary">
           <div class="card-body py-2">
             <div class="assistant-markdown">{{ message.rendered_html }}</div>
+            {% if message.message_artifacts %}
+              <div class="mt-3 artifact-inline-list">
+                {% for attachment in message.message_artifacts %}
+                  {% if attachment.content_url %}
+                    {% if attachment.kind == 'image' %}
+                      <div class="artifact-inline-card artifact-inline-card-image">
+                        <img src="{{ attachment.content_url }}" alt="{{ attachment.label }}" class="artifact-inline-image img-fluid rounded border" />
+                      </div>
+                    {% elif attachment.kind == 'audio' %}
+                      <div class="artifact-inline-card artifact-inline-card-audio">
+                        <div class="small fw-semibold mb-2">{{ attachment.label }}</div>
+                        <audio controls preload="metadata" class="w-100" src="{{ attachment.content_url }}"></audio>
+                      </div>
+                    {% elif attachment.kind == 'pdf' %}
+                      <div class="artifact-inline-card artifact-inline-card-pdf">
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                          <div class="d-flex align-items-center gap-2">
+                            <i class="bi bi-file-earmark-pdf fs-4 text-danger"></i>
+                            <div>
+                              <div class="fw-semibold">{{ attachment.label }}</div>
+                              <div class="small text-muted">{% trans "PDF document" %}</div>
+                            </div>
+                          </div>
+                          <a href="{{ attachment.content_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary">
+                            {% trans "Open" %}
+                          </a>
+                        </div>
+                      </div>
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+              </div>
+              <div class="mt-3 composer-attachment-summary">
+                {% for attachment in message.message_artifacts %}
+                  <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
+                    <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
+                    {% if attachment.id and not attachment.metadata.legacy %}
+                      {% if attachment.user_file_id or attachment.summary_text %}
+                        <button
+                          type="button"
+                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
+                          data-artifact-id="{{ attachment.id }}"
+                          aria-label="{% trans 'Add artifact to Files' %}"
+                        >
+                          {% if attachment.published_to_file %}
+                            {% trans "Added to Files" %}
+                          {% else %}
+                            {% trans "Add to Files" %}
+                          {% endif %}
+                        </button>
+                      {% endif %}
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
+            {% endif %}
           </div>
           <!-- Context indication -->
           {% if message.internal_data.max_context %}
@@ -206,6 +311,9 @@
       enctype="multipart/form-data"
       data-message-attachment-max-files="{{ message_attachment_max_files }}"
       data-message-attachment-max-bytes="{{ message_attachment_max_image_size_bytes }}"
+      data-message-attachment-max-image-bytes="{{ message_attachment_max_image_size_bytes }}"
+      data-message-attachment-max-document-bytes="{{ message_attachment_max_document_size_bytes }}"
+      data-message-attachment-max-audio-bytes="{{ message_attachment_max_audio_size_bytes }}"
       data-message-attachment-max-size-label="{{ message_attachment_max_image_size_label }}"
     >
       {% csrf_token %}
@@ -238,8 +346,16 @@
                   class="dropdown-item agent-dropdown-item"
                   href="#"
                   data-value="{{ agent.id }}"
-                  data-provider-validation-status="{{ agent.llm_provider.validation_status }}"
+                  data-provider-verification-status="{{ agent.llm_provider.validation_status }}"
+                  data-provider-type="{{ agent.llm_provider.provider_type }}"
+                  data-provider-tools-status="{{ agent.llm_provider.known_tools_capability_status }}"
                   data-provider-vision-status="{{ agent.llm_provider.known_vision_capability_status }}"
+                  data-provider-image-status="{{ agent.llm_provider.known_image_input_status }}"
+                  data-provider-pdf-status="{{ agent.llm_provider.known_pdf_input_status }}"
+                  data-provider-audio-status="{{ agent.llm_provider.known_audio_input_status }}"
+                  data-provider-image-output-status="{{ agent.llm_provider.known_image_output_status }}"
+                  data-provider-audio-output-status="{{ agent.llm_provider.known_audio_output_status }}"
+                  data-agent-requires-tools="{% if agent.requires_tools_for_current_thread %}true{% else %}false{% endif %}"
                 >
                   <i class="bi bi-robot me-2"></i>{{ agent.name }}
                 </a>
@@ -263,6 +379,12 @@
           id="selectedAgentInput"
           value="{% if default_agent %}{{ default_agent.id }}{% endif %}"
         />
+        <input
+          type="hidden"
+          name="response_mode"
+          id="responseModeInput"
+          value="auto"
+        />
 
         <textarea class="form-control auto-resize-textarea"
                   name="new_message"
@@ -274,11 +396,11 @@
           type="button"
           id="attach-image-btn"
           class="btn btn-outline-secondary"
-          title="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each){% endblocktrans %}"
-          aria-label="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each){% endblocktrans %}"
+          title="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label document_size=message_attachment_max_document_size_label audio_size=message_attachment_max_audio_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each). PDFs: {{ document_size }}, audio: {{ audio_size }}.{% endblocktrans %}"
+          aria-label="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label document_size=message_attachment_max_document_size_label audio_size=message_attachment_max_audio_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each). PDFs: {{ document_size }}, audio: {{ audio_size }}.{% endblocktrans %}"
         >
           <i class="bi bi-paperclip"></i>
-          <span class="visually-hidden">{% trans "Attach image" %}</span>
+          <span class="visually-hidden">{% trans "Attach file" %}</span>
         </button>
         <button
           type="button"
@@ -309,7 +431,7 @@
           <span class="visually-hidden">{% trans "Send" %}</span>
         </button>
       </div>
-      <input type="file" id="message-attachment-input" accept="image/*" multiple class="d-none" />
+      <input type="file" id="message-attachment-input" accept="image/*,application/pdf,audio/*" multiple class="d-none" />
       <input type="file" id="message-camera-input" accept="image/*" capture="environment" class="d-none" />
       <div id="composer-attachments" class="composer-attachments d-none" aria-live="polite"></div>
       <div id="composer-provider-capability-note" class="alert py-2 px-3 small mt-2 d-none" aria-live="polite"></div>

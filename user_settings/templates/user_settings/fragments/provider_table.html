@@ -10,20 +10,29 @@
 <div class="table-responsive">
   <table class="table table-hover align-middle">
     <thead class="table-light">
-      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Model" %}</th><th>{% trans "Validation" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
+      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Model" %}</th><th>{% trans "Verification" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
     </thead>
     <tbody>
       {% for provider in providers %}
         <tr>
           <td>{{ provider.name }}</td>
           <td>{{ provider.get_provider_type_display }}</td>
-          <td>{{ provider.model }}</td>
           <td>
-            <span class="badge {{ provider.validation_status_badge_class }}">
-              {{ provider.get_validation_status_display }}
+            {% if provider.has_model_configured %}
+              {{ provider.model }}
+            {% else %}
+              <span class="badge text-bg-secondary">{% trans "Connection only" %}</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge {{ provider.verification_status_badge_class }}">
+              {{ provider.verification_status_label }}
             </span>
-            {% if provider.validated_at %}
-              <div class="small text-muted mt-1">{{ provider.validated_at|date:"SHORT_DATETIME_FORMAT" }}</div>
+            {% if provider.probe_checked_at %}
+              <div class="small text-muted mt-1">{{ provider.probe_checked_at|date:"SHORT_DATETIME_FORMAT" }}</div>
+            {% endif %}
+            {% if provider.capability_profile_summary %}
+              <div class="small text-muted mt-1">{{ provider.capability_profile_summary }}</div>
             {% endif %}
           </td>
           <td class="text-end">

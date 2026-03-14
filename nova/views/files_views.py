@@ -2,7 +2,7 @@ import asyncio
 from channels.layers import get_channel_layer
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse, HttpResponseRedirect
 from django.shortcuts import render, get_object_or_404
 from django.views import View
 from django.views.decorators.http import require_POST, require_GET
@@ -10,6 +10,8 @@ from django.views.decorators.csrf import csrf_protect
 from asgiref.sync import sync_to_async, async_to_sync
 import logging
 
+from nova.message_artifacts import publish_artifact_to_files
+from nova.models.MessageArtifact import MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.file_utils import (
@@ -148,3 +150,79 @@ class FileDeleteView(LoginRequiredMixin, View):
         if file.scope == UserFile.Scope.THREAD_SHARED:
             async_to_sync(publish_file_update)(thread_id, "file_delete")
         return JsonResponse({'success': True})
+
+
+@csrf_protect
+@require_POST
+@login_required(login_url='login')
+async def artifact_publish(request, artifact_id):
+    def _get_artifact():
+        return (
+            MessageArtifact.objects.select_related("thread", "message", "user_file", "published_file")
+            .filter(id=artifact_id, user=request.user)
+            .first()
+        )
+
+    artifact = await sync_to_async(_get_artifact, thread_sensitive=True)()
+    if not artifact:
+        return JsonResponse({'error': 'Artifact not found or unauthorized'}, status=403)
+
+    if artifact.published_file_id:
+        return JsonResponse(
+            {
+                'success': True,
+                'artifact_id': artifact.id,
+                'thread_id': artifact.thread_id,
+                'already_published': True,
+            }
+        )
+
+    filename = (request.POST.get('filename') or '').strip()
+    try:
+        file_id, errors = await publish_artifact_to_files(artifact, filename=filename)
+    except Exception:
+        logger.exception("Artifact publish failed for artifact %s", artifact.id)
+        return JsonResponse({'success': False, 'error': 'Artifact publish failed.'}, status=500)
+    if errors and not file_id:
+        return JsonResponse({'success': False, 'error': '; '.join(errors)}, status=400)
+
+    try:
+        await publish_file_update(artifact.thread_id, "artifact_publish")
+    except Exception:
+        logger.exception("Artifact publish sidebar refresh failed for artifact %s", artifact.id)
+    return JsonResponse(
+        {
+            'success': True,
+            'artifact_id': artifact.id,
+            'file_id': file_id,
+            'thread_id': artifact.thread_id,
+        }
+    )
+
+
+@csrf_protect
+@require_GET
+@login_required(login_url='login')
+def artifact_content(request, artifact_id):
+    artifact = get_object_or_404(
+        MessageArtifact.objects.select_related("user_file"),
+        id=artifact_id,
+        user=request.user,
+    )
+
+    if artifact.user_file_id:
+        try:
+            url = artifact.user_file.get_download_url(expires_in=3600)
+        except ValueError as exc:
+            return JsonResponse({'error': str(exc)}, status=410)
+        if not url:
+            return JsonResponse({'error': 'Failed to generate URL'}, status=500)
+        return HttpResponseRedirect(url)
+
+    if artifact.summary_text:
+        return HttpResponse(
+            artifact.summary_text,
+            content_type=artifact.mime_type or "text/plain; charset=utf-8",
+        )
+
+    return JsonResponse({'error': 'Artifact has no downloadable content'}, status=404)

@@ -17,3 +17,9 @@ class ProviderRegistryTests(SimpleTestCase):
         self.assertEqual(defaults.default_base_url, "https://openrouter.ai/api/v1")
         self.assertEqual(defaults.default_max_context_tokens, 100000)
         self.assertTrue(defaults.api_key_required)
+        self.assertTrue(defaults.supports_model_catalog)
+
+    def test_registry_marks_openai_as_manual_model_provider(self):
+        defaults = get_provider_defaults(ProviderType.OPENAI)
+
+        self.assertFalse(defaults.supports_model_catalog)

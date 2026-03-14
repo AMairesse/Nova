@@ -9,6 +9,7 @@ from celery import shared_task
 
 from nova.llm.provider_validation import validate_provider_configuration
 from nova.models.Provider import LLMProvider
+from nova.providers import resolve_provider_capability_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,26 @@ def _build_validation_failure_result(exc: Exception) -> dict:
     message = " ".join(str(exc).split()) or exc.__class__.__name__
     return {
         "validation_status": LLMProvider.ValidationStatus.INVALID,
-        "validation_summary": f"Validation failed unexpectedly: {message}",
-        "validation_capabilities": {},
+        "verification_summary": f"Validation failed unexpectedly: {message}",
+        "verified_operations": {
+            capability: {"status": "fail", "message": message, "latency_ms": None}
+            for capability in ("chat", "streaming", "tools", "vision")
+        },
     }
+
+
+def _resolve_declared_metadata_snapshot(provider: LLMProvider) -> dict:
+    try:
+        snapshot = async_to_sync(resolve_provider_capability_snapshot)(provider)
+    except Exception as exc:
+        logger.info(
+            "Skipping provider metadata enrichment for provider %s during verification: %s",
+            provider.pk,
+            exc,
+        )
+        return {}
+
+    return snapshot if isinstance(snapshot, dict) else {}
 
 
 @shared_task(bind=True, name="validate_provider_configuration_task")
@@ -56,9 +74,11 @@ def validate_provider_configuration_task(self, provider_pk: int, expected_finger
         return
 
     try:
+        declared_snapshot = _resolve_declared_metadata_snapshot(provider)
         result = async_to_sync(validate_provider_configuration)(provider)
     except Exception as exc:
         logger.exception("Provider validation task %s failed for provider %s.", task_id, provider_pk)
+        declared_snapshot = {}
         result = _build_validation_failure_result(exc)
 
     provider.refresh_from_db()
@@ -74,4 +94,6 @@ def validate_provider_configuration_task(self, provider_pk: int, expected_finger
         )
         return
 
-    provider.apply_validation_result(result)
+    if declared_snapshot:
+        provider.apply_declared_capabilities(declared_snapshot, save=False)
+    provider.apply_verification_result(result)
