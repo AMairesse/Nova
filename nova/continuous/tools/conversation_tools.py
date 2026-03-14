@@ -307,8 +307,6 @@ async def conversation_get(
                 "truncated": len(msgs) >= limit_i,
             }
 
-        return {"error": "invalid_request"}
-
     return await sync_to_async(_impl, thread_sensitive=True)()
 
 
