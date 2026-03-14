@@ -16,6 +16,19 @@ from nova.views import thread_views
 
 User = get_user_model()
 
+_TOUCH_ENABLED_INIT_SCRIPT = """
+(() => {
+  try {
+    Object.defineProperty(window, "ontouchstart", {
+      configurable: true,
+      value: null,
+    });
+  } catch (_error) {
+    window.ontouchstart = null;
+  }
+})();
+"""
+
 
 class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
     def setUp(self):
@@ -192,3 +205,105 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self._wait_for_selected_thread(original_thread.id)
 
         self.assertFalse(Thread.objects.filter(pk=new_thread.id).exists())
+
+    def test_voice_input_can_submit_a_message(self):
+        thread = Thread.objects.create(user=self.user, subject="Voice thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#voice-btn")
+
+        voice_button = self.page.locator("#voice-btn")
+        voice_button.click()
+        self.page.wait_for_function(
+            """
+            () => {
+              const button = document.getElementById('voice-btn');
+              return button && button.classList.contains('btn-danger');
+            }
+            """
+        )
+
+        self.assertTrue(self.push_speech_result("Dictated from browser"))
+        self.assertTrue(self.end_speech())
+
+        self.page.wait_for_function(
+            """
+            (expectedText) => {
+              return Array.from(document.querySelectorAll('#messages-list .user-message-text'))
+                .some((element) => element.textContent.includes(expectedText));
+            }
+            """,
+            arg="Dictated from browser",
+        )
+
+        task = Task.objects.get()
+        self.assertTrue(
+            self.push_task_event(
+                task.id,
+                {
+                    "type": "task_complete",
+                    "thread_id": thread.id,
+                    "thread_subject": thread.subject,
+                },
+            )
+        )
+        self.page.wait_for_function(
+            """
+            () => {
+              const button = document.getElementById('voice-btn');
+              return button && !button.classList.contains('btn-danger');
+            }
+            """
+        )
+
+    def test_mobile_context_menu_can_copy_message_text(self):
+        thread = Thread.objects.create(user=self.user, subject="Touch thread")
+        message = thread.add_message("Copy this exact message", actor=Actor.USER)
+
+        self.recreate_browser_context(
+            viewport={"width": 390, "height": 844},
+            has_touch=True,
+            is_mobile=True,
+            extra_init_scripts=[_TOUCH_ENABLED_INIT_SCRIPT],
+        )
+        self.login_to_browser(self.user)
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector(f"#message-{message.id}")
+        self.page.evaluate(
+            """
+            () => {
+              const manager = window.NovaApp.messageManager;
+              if (!manager.contextMenuOffcanvas) {
+                manager.contextMenuOffcanvas = {
+                  hide() {},
+                  show() {},
+                };
+              }
+            }
+            """
+        )
+
+        self.page.evaluate(
+            """
+            (messageId) => {
+              const card = document.querySelector(`#message-${messageId} .card`);
+              window.NovaApp.messageManager.showMessageContextMenu(card);
+            }
+            """,
+            message.id,
+        )
+        self.page.wait_for_function(
+            """
+            (expectedText) => {
+              return window.NovaApp.messageManager.currentMessageText === expectedText;
+            }
+            """,
+            arg="Copy this exact message",
+        )
+        self.page.evaluate(
+            "() => window.NovaApp.messageManager.copyMessageToClipboard()"
+        )
+        self.assertEqual(self.get_clipboard_text(), "Copy this exact message")
