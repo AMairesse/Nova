@@ -179,6 +179,7 @@ class MemorySettingsView(
         form = self.form_class(data=request.POST, instance=obj)
         if not form.is_valid():
             # Render errors in-place (HTMX will refresh the whole tab anyway).
+            self.object = obj
             return self.form_invalid(form)
 
         new_data = form.cleaned_data
