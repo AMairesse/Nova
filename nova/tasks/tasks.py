@@ -1,6 +1,5 @@
 # nova/tasks/tasks.py
 import asyncio
-import base64
 import datetime as dt
 import logging
 import posixpath
@@ -21,13 +20,18 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
-from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
+from nova.models.MessageArtifact import ArtifactDirection, MessageArtifact
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.file_utils import download_file_content
 from nova.message_utils import annotate_user_message
+from nova.multimodal_prompts import (
+    PromptInput,
+    build_multimodal_intro_text,
+    build_multimodal_prompt_content,
+)
 from nova.native_provider_runtime import (
     attach_tool_output_artifacts_to_message,
     invoke_native_provider_for_message,
@@ -57,43 +61,17 @@ THREAD_TITLE_PROMPT = (
 )
 
 
-def _build_message_attachment_text(message_text: str, attachments: list[dict]) -> str:
-    text = (message_text or "").strip()
-    if not text:
-        if len(attachments) == 1:
-            kind = str((attachments[0] or {}).get("kind") or "").strip()
-            if kind == ArtifactKind.IMAGE:
-                text = "Please analyze the attached image."
-            elif kind == ArtifactKind.PDF:
-                text = "Please analyze the attached PDF."
-            elif kind == ArtifactKind.AUDIO:
-                text = "Please analyze the attached audio."
-            else:
-                text = "Please analyze the attached file."
-        else:
-            text = "Please analyze the attached files."
-    if not attachments:
-        return text
-
-    label = "Attached file:" if len(attachments) == 1 else "Attached files:"
-    names = "\n".join(
-        f"- {_get_attachment_display_name(attachment)}"
-        for attachment in attachments
-    )
-    return f"{text}\n\n{label}\n{names}"
-
-
-def _get_attachment_display_name(attachment: dict) -> str:
-    return (
-        str(attachment.get("label") or "").strip()
-        or str(attachment.get("filename") or "").strip()
-        or f"attachment-{attachment.get('id')}"
-    )
-
-
-async def build_source_message_prompt(source_message: Message, *, fallback_prompt: str = ""):
+async def build_source_message_prompt(
+    source_message: Message,
+    *,
+    fallback_prompt: str = "",
+):
     """Build the runtime user turn payload from a stored source message."""
-    internal_data = source_message.internal_data if isinstance(source_message.internal_data, dict) else {}
+    internal_data = (
+        source_message.internal_data
+        if isinstance(source_message.internal_data, dict)
+        else {}
+    )
 
     def _load_attachment_files():
         artifacts = []
@@ -110,7 +88,7 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
             )
         if artifacts:
             return [
-                (
+                PromptInput.from_attachment(
                     {
                         "id": artifact.id,
                         "message_id": artifact.message_id,
@@ -141,13 +119,16 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
         )
         if not attachments:
             return [
-                (
+                PromptInput.from_attachment(
                     {
                         "id": user_file.id,
                         "message_id": getattr(source_message, "id", None),
                         "user_file_id": user_file.id,
                         "direction": ArtifactDirection.INPUT,
-                        "kind": detect_artifact_kind(user_file.mime_type, user_file.original_filename),
+                        "kind": detect_artifact_kind(
+                            user_file.mime_type,
+                            user_file.original_filename,
+                        ),
                         "label": posixpath.basename(user_file.original_filename),
                         "mime_type": user_file.mime_type,
                         "size": user_file.size,
@@ -161,14 +142,22 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
 
         by_id = {user_file.id: user_file for user_file in files}
         return [
-            (
+            PromptInput.from_attachment(
                 {
                     "id": attachment["id"],
                     "message_id": getattr(source_message, "id", None),
                     "user_file_id": attachment["id"],
                     "direction": ArtifactDirection.INPUT,
-                    "kind": detect_artifact_kind(attachment.get("mime_type"), attachment.get("filename")),
-                    "label": attachment.get("filename") or posixpath.basename(by_id[attachment["id"]].original_filename) if attachment["id"] in by_id else "",
+                    "kind": detect_artifact_kind(
+                        attachment.get("mime_type"),
+                        attachment.get("filename"),
+                    ),
+                    "label": (
+                        attachment.get("filename")
+                        or posixpath.basename(by_id[attachment["id"]].original_filename)
+                        if attachment["id"] in by_id
+                        else ""
+                    ),
                     "mime_type": attachment.get("mime_type") or "",
                     "size": int(attachment.get("size") or 0),
                     "summary_text": "",
@@ -179,92 +168,24 @@ async def build_source_message_prompt(source_message: Message, *, fallback_promp
             for attachment in attachments
         ]
 
-    ordered_files = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
-    if not ordered_files:
+    prompt_inputs = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
+    if not prompt_inputs:
         return source_message.text or fallback_prompt or ""
 
-    attachments = [attachment for attachment, _user_file in ordered_files]
-
-    content_parts = [
-        {
-            "type": "text",
-            "text": _build_message_attachment_text(source_message.text or fallback_prompt, attachments),
-        }
-    ]
-
-    for attachment, user_file in ordered_files:
-        if not user_file:
-            logger.warning(
-                "Message attachment missing for message %s (attachment id=%s).",
-                source_message.id,
-                attachment.get("id"),
-            )
-            if attachment.get("summary_text"):
-                content_parts.append(
-                    {
-                        "type": "text",
-                        "text": f"{attachment.get('label') or 'Attachment'}:\n{attachment.get('summary_text')}",
-                    }
-                )
-            continue
-
-        try:
-            content = await download_file_content(user_file)
-        except Exception as exc:
-            logger.warning(
-                "Failed to load message attachment %s for message %s: %s",
-                user_file.id,
-                source_message.id,
-                exc,
-            )
-            continue
-
-        kind = str(attachment.get("kind") or "").strip() or detect_artifact_kind(
-            user_file.mime_type,
-            user_file.original_filename,
-        )
-        base64_content = base64.b64encode(content).decode("utf-8")
-        filename = attachment.get("label") or user_file.original_filename
-        if kind == ArtifactKind.IMAGE:
-            content_parts.append(
-                {
-                    "type": "image",
-                    "source_type": "base64",
-                    "data": base64_content,
-                    "mime_type": user_file.mime_type,
-                    "filename": filename,
-                }
-            )
-        elif kind == ArtifactKind.PDF:
-            content_parts.append(
-                {
-                    "type": "file",
-                    "source_type": "base64",
-                    "data": base64_content,
-                    "mime_type": user_file.mime_type,
-                    "filename": filename,
-                }
-            )
-        elif kind == ArtifactKind.AUDIO:
-            content_parts.append(
-                {
-                    "type": "audio",
-                    "source_type": "base64",
-                    "data": base64_content,
-                    "mime_type": user_file.mime_type,
-                    "filename": filename,
-                }
-            )
-        else:
-            logger.warning(
-                "Skipping unsupported message artifact kind %s for artifact %s.",
-                kind,
-                attachment.get("id"),
-            )
-
-    if len(content_parts) == 1:
-        return content_parts[0]["text"]
-    return content_parts
+    intro_text = build_multimodal_intro_text(
+        source_message.text or fallback_prompt,
+        prompt_inputs,
+        empty_text_style="analysis",
+        singular_heading="Attached file:",
+        plural_heading="Attached files:",
+    )
+    return await build_multimodal_prompt_content(
+        prompt_inputs,
+        intro_text=intro_text,
+        content_downloader=download_file_content,
+        log_subject=f"message {source_message.id}",
+        include_missing_file_summary=True,
+    )
 
 
 def compute_trigger_retry_countdown(retries: int) -> int:
