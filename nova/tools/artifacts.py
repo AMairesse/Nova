@@ -6,6 +6,7 @@ from typing import Any, Tuple
 from asgiref.sync import sync_to_async
 from langchain_core.tools import StructuredTool
 
+from nova.file_utils import download_file_content
 from nova.message_artifacts import (
     build_message_artifact_manifest,
     publish_artifact_to_files,

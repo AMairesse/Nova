@@ -13,6 +13,7 @@ from nova.tests.base import BaseTestCase
 from nova.tools.artifacts import (
     artifact_attach,
     artifact_ls,
+    artifact_read_text,
     artifact_publish_to_files,
     get_skill_instructions,
 )
@@ -64,6 +65,36 @@ class ArtifactToolsTests(BaseTestCase):
         self.assertIn("diagram.png", message)
         self.assertEqual(payload["artifact_id"], artifact.id)
         self.assertEqual(payload["kind"], ArtifactKind.IMAGE)
+
+    @patch("nova.tools.artifacts.download_file_content", new_callable=AsyncMock)
+    def test_artifact_read_text_loads_text_from_storage_when_summary_missing(self, mocked_download):
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=self.message,
+            key="users/1/threads/1/note.txt",
+            original_filename="/note.txt",
+            mime_type="text/plain",
+            size=11,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.message,
+            user_file=user_file,
+            direction=ArtifactDirection.INPUT,
+            kind=ArtifactKind.TEXT,
+            label="note.txt",
+            mime_type="text/plain",
+            summary_text="",
+        )
+        mocked_download.return_value = b"hello world"
+
+        result = async_to_sync(artifact_read_text)(self.agent, artifact.id)
+
+        self.assertEqual(result, "hello world")
+        mocked_download.assert_awaited_once_with(user_file)
 
     @patch("nova.tools.artifacts.publish_file_update", new_callable=AsyncMock)
     @patch("nova.tools.artifacts.publish_artifact_to_files", new_callable=AsyncMock)
