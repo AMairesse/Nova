@@ -257,6 +257,56 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             """
         )
 
+    def test_task_error_reenables_input_and_surfaces_error_message(self):
+        thread = Thread.objects.create(user=self.user, subject="Error thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        textarea = self.page.locator('#message-container textarea[name="new_message"]')
+        textarea.fill("This will fail")
+        self.page.locator("#send-btn").click()
+        self.page.wait_for_function(
+            """
+            (expectedText) => {
+              return Array.from(document.querySelectorAll('#messages-list .user-message-text'))
+                .some((element) => element.textContent.includes(expectedText));
+            }
+            """,
+            arg="This will fail",
+        )
+
+        task = Task.objects.get()
+        self.page.wait_for_function(
+            """
+            (taskId) => window.__novaTest.getSocketUrls()
+              .some((url) => String(url).includes(`/ws/task/${taskId}/`))
+            """,
+            arg=task.id,
+        )
+        self.assertTrue(
+            self.push_task_event(
+                task.id,
+                {
+                    "type": "task_error",
+                    "message": "Simulated task failure",
+                },
+            )
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+              const sendBtn = document.getElementById('send-btn');
+              const logs = document.getElementById('progress-logs');
+              return textarea && sendBtn && logs && !textarea.disabled && !sendBtn.disabled
+                && logs.textContent.includes('Simulated task failure');
+            }
+            """
+        )
+
     def test_mobile_context_menu_can_copy_message_text(self):
         thread = Thread.objects.create(user=self.user, subject="Touch thread")
         message = thread.add_message("Copy this exact message", actor=Actor.USER)

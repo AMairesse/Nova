@@ -300,3 +300,37 @@ class ProviderPageFrontendTests(PlaywrightLiveServerTestCase):
         catalog_text = self.page.locator("#provider-model-catalog").inner_text()
         self.assertIn("Loaded Model", catalog_text)
         self.assertNotIn("Not Loaded Model", catalog_text)
+
+    def test_catalog_load_error_updates_status_message(self):
+        provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Broken Catalog Provider",
+            model="",
+        )
+        catalog_url = (
+            f"{self.live_server_url}"
+            f"{reverse('user_settings:provider-model-catalog', args=[provider.pk])}"
+        )
+
+        self.page.route(
+            catalog_url,
+            lambda route: route.fulfill(
+                status=500,
+                content_type="application/json",
+                body=json.dumps({"error": "Catalog unavailable"}),
+            ),
+        )
+
+        self._open_provider_edit_page(provider)
+        self.page.locator("#load-provider-models-btn").click()
+        self.page.wait_for_function(
+            """
+            () => {
+              const status = document.getElementById('provider-model-catalog-status');
+              return status
+                && status.textContent.includes('Catalog unavailable')
+                && status.classList.contains('text-danger');
+            }
+            """
+        )

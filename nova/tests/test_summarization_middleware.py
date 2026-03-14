@@ -5,6 +5,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
 
+import nova.llm.llm_agent as llm_agent_mod
 from nova.llm.summarization_middleware import SummarizationMiddleware, SummarizerAgent, TokenCounter
 from nova.llm.agent_middleware import AgentContext
 from nova.tests.base import BaseTestCase
@@ -154,6 +155,58 @@ class SummarizerAgentTest(BaseTestCase):
         self.assertIn("2 user messages", result)
         self.assertIn("2 AI responses", result)
 
+    def test_create_llm_prefers_agent_llm_and_custom_factory(self):
+        direct_llm = object()
+        self.summarizer.agent_llm = direct_llm
+        self.assertIs(self.summarizer._create_llm(), direct_llm)
+
+        class FakeProvider:
+            def __init__(
+                self,
+                name,
+                provider_type,
+                model,
+                api_key,
+                base_url,
+                additional_config,
+                max_context_tokens,
+                user,
+            ):
+                self.name = name
+                self.provider_type = provider_type
+                self.model = model
+                self.api_key = api_key
+                self.base_url = base_url
+                self.additional_config = additional_config
+                self.max_context_tokens = max_context_tokens
+                self.user = user
+
+        provider = FakeProvider(
+            name="Provider",
+            provider_type="openai",
+            model="gpt-4o",
+            api_key="key",
+            base_url="https://example.com",
+            additional_config={},
+            max_context_tokens=4096,
+            user=self.user,
+        )
+        custom_summarizer = SummarizerAgent(model_name="summary-model", agent=SimpleNamespace(_llm_provider=provider))
+
+        with patch.object(
+            llm_agent_mod,
+            "_provider_factories",
+            {"openai": lambda provider_copy: provider_copy},
+            create=True,
+        ):
+            llm = custom_summarizer._create_llm()
+
+        self.assertEqual(llm.model, "summary-model")
+
+    def test_create_llm_returns_none_without_factory_or_provider(self):
+        summarizer = SummarizerAgent(model_name="summary-model", agent=SimpleNamespace(_llm_provider=None))
+        self.assertIsNone(summarizer._create_llm())
+
     async def test_summarize_conversation_with_llm(self):
         """Test summarization using LLM."""
         # Setup mock LLM
@@ -196,6 +249,37 @@ class SummarizerAgentTest(BaseTestCase):
         self.assertIn("LLM failed", result)
         self.assertTrue(any("LLM summarization failed: LLM error" in line for line in logs.output))
 
+    async def test_summarize_conversation_dispatches_strategies(self):
+        with patch.object(self.summarizer, "_summarize_by_topic", AsyncMock(return_value="topic")), patch.object(
+            self.summarizer,
+            "_summarize_temporal",
+            AsyncMock(return_value="temporal"),
+        ), patch.object(
+            self.summarizer,
+            "_summarize_hybrid",
+            AsyncMock(return_value="hybrid"),
+        ), patch.object(
+            self.summarizer,
+            "_summarize_conversation",
+            AsyncMock(return_value="conversation"),
+        ):
+            self.assertEqual(
+                await self.summarizer.summarize_conversation([], "topic", 50, 2),
+                "topic",
+            )
+            self.assertEqual(
+                await self.summarizer.summarize_conversation([], "temporal", 50, 2),
+                "temporal",
+            )
+            self.assertEqual(
+                await self.summarizer.summarize_conversation([], "hybrid", 50, 2),
+                "hybrid",
+            )
+            self.assertEqual(
+                await self.summarizer.summarize_conversation([], "unknown", 50, 2),
+                "conversation",
+            )
+
 
 class SummarizationMiddlewareAsyncTests(IsolatedAsyncioTestCase):
     def setUp(self):
@@ -221,6 +305,24 @@ class SummarizationMiddlewareAsyncTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(count, 0)
         fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_token_counter_counts_messages_when_checkpoint_exists(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {
+            "channel_values": {
+                "messages": [HumanMessage(content="hello"), AIMessage(content="hi")],
+            }
+        }
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = fake_checkpoint
+        fake_checkpointer.conn.close = AsyncMock()
+        self.agent.count_tokens = AsyncMock(return_value=23)
+
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer):
+            count = await TokenCounter.count_context_tokens(self.agent)
+
+        self.assertEqual(count, 23)
+        self.agent.count_tokens.assert_awaited_once()
 
     async def test_manual_summarize_no_history_closes_connection(self):
         fake_checkpointer = AsyncMock()
@@ -276,6 +378,33 @@ class SummarizationMiddlewareAsyncTests(IsolatedAsyncioTestCase):
         mocked_perform.assert_awaited_once_with(context)
         fake_checkpointer.conn.close.assert_awaited_once()
 
+    async def test_manual_summarize_returns_error_when_perform_raises(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {
+            "channel_values": {
+                "messages": [
+                    HumanMessage(content="m1"),
+                    AIMessage(content="m2"),
+                    HumanMessage(content="m3"),
+                ]
+            }
+        }
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = fake_checkpoint
+        fake_checkpointer.conn.close = AsyncMock()
+        context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
+
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer), patch.object(
+            self.middleware,
+            "_perform_summarization",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            result = await self.middleware.manual_summarize(context)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Summarization failed: boom", result["message"])
+        fake_checkpointer.conn.close.assert_awaited_once()
+
     async def test_should_summarize_uses_max_context_cap(self):
         # max_context_tokens=120 => threshold capped at 96 (80%)
         context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
@@ -298,3 +427,115 @@ class SummarizationMiddlewareAsyncTests(IsolatedAsyncioTestCase):
             await self.middleware._perform_summarization(context)
 
         fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_after_message_only_summarizes_when_threshold_is_reached(self):
+        context = AgentContext(agent_config=self.agent_config, user=MagicMock(), thread=MagicMock())
+
+        with patch.object(self.middleware, "_should_summarize", AsyncMock(return_value=False)), patch.object(
+            self.middleware,
+            "_perform_summarization",
+            AsyncMock(),
+        ) as mocked_perform:
+            await self.middleware.after_message(context, {"messages": []})
+
+        mocked_perform.assert_not_awaited()
+
+        with patch.object(self.middleware, "_should_summarize", AsyncMock(return_value=True)), patch.object(
+            self.middleware,
+            "_perform_summarization",
+            AsyncMock(),
+        ) as mocked_perform:
+            await self.middleware.after_message(context, {"messages": []})
+
+        mocked_perform.assert_awaited_once_with(context)
+
+    async def test_perform_summarization_success_notifies_progress_and_completion(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {
+            "channel_values": {
+                "messages": [
+                    HumanMessage(content="m1"),
+                    AIMessage(content="m2"),
+                    HumanMessage(content="m3"),
+                    AIMessage(content="m4"),
+                ]
+            }
+        }
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = fake_checkpoint
+        fake_checkpointer.conn.close = AsyncMock()
+        progress_handler = AsyncMock()
+        context = AgentContext(
+            agent_config=SimpleNamespace(name="Summarizer Agent"),
+            user=MagicMock(),
+            thread=MagicMock(),
+            progress_handler=progress_handler,
+        )
+        self.agent.count_tokens = AsyncMock(return_value=120)
+
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer), patch.object(
+            self.middleware.summarizer,
+            "summarize_conversation",
+            AsyncMock(return_value="short summary"),
+        ), patch.object(
+            self.middleware,
+            "_inject_summary_into_checkpoint",
+            AsyncMock(),
+        ) as mocked_inject:
+            await self.middleware._perform_summarization(context)
+
+        progress_handler.on_progress.assert_awaited_once()
+        progress_handler.on_summarization_complete.assert_awaited_once()
+        mocked_inject.assert_awaited_once()
+        fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_perform_summarization_reports_failure_to_progress_handler(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {
+            "channel_values": {
+                "messages": [
+                    HumanMessage(content="m1"),
+                    AIMessage(content="m2"),
+                    HumanMessage(content="m3"),
+                ]
+            }
+        }
+        fake_checkpointer = AsyncMock()
+        fake_checkpointer.aget_tuple.return_value = fake_checkpoint
+        fake_checkpointer.conn.close = AsyncMock()
+        progress_handler = AsyncMock()
+        context = AgentContext(
+            agent_config=SimpleNamespace(name="Broken Summarizer"),
+            user=MagicMock(),
+            thread=MagicMock(),
+            progress_handler=progress_handler,
+        )
+        self.agent.count_tokens = AsyncMock(return_value=90)
+
+        with patch("nova.llm.summarization_middleware.get_checkpointer", return_value=fake_checkpointer), patch.object(
+            self.middleware.summarizer,
+            "summarize_conversation",
+            AsyncMock(side_effect=RuntimeError("summary failed")),
+        ):
+            await self.middleware._perform_summarization(context)
+
+        progress_handler.on_progress.assert_any_await(
+            "Summarization failed, continuing with full context"
+        )
+        fake_checkpointer.conn.close.assert_awaited_once()
+
+    async def test_inject_summary_into_checkpoint_reraises_failures(self):
+        fake_checkpoint = MagicMock()
+        fake_checkpoint.checkpoint = {"channel_values": {"messages": []}}
+        fake_checkpoint.config = {"configurable": {"thread_id": "thread-1"}}
+        fake_checkpointer = AsyncMock()
+        self.agent.langchain_agent = AsyncMock()
+        self.agent.langchain_agent.aupdate_state.side_effect = RuntimeError("boom")
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            await self.middleware._inject_summary_into_checkpoint(
+                "summary",
+                [],
+                fake_checkpoint,
+                fake_checkpointer,
+            )
