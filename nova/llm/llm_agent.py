@@ -2,11 +2,10 @@
 import uuid
 import logging
 import time
-from typing import Any, List
+from typing import List
 from django.conf import settings
 
 from langchain_core.messages import HumanMessage, ToolMessage
-from langchain_core.messages import AIMessage
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from nova.models.AgentConfig import AgentConfig
@@ -35,6 +34,13 @@ from nova.models.Thread import Thread as ThreadModel
 import base64
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "LLMAgent",
+    "ProviderType",
+    "create_provider_llm",
+    "normalize_multimodal_content_for_provider",
+]
 
 
 def create_provider_llm(provider: LLMProvider):
@@ -392,7 +398,6 @@ class LLMAgent:
                 return result
 
             messages = result.get('messages', [])
-            last_message = messages[-1]
 
             self.last_tool_artifact_refs = self._collect_tool_artifact_refs(messages)
             self.last_generated_tool_artifact_refs = [

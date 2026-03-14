@@ -14,7 +14,6 @@ from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
-from nova.models.UserFile import UserFile
 from nova.tests.factories import create_agent, create_provider
 
 
@@ -170,7 +169,11 @@ class ContinuousViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
@@ -244,7 +247,12 @@ class ContinuousViewsTests(TestCase):
     ):
         mocked_enqueue_followups.return_value = None
 
-        provider = create_provider(self.user, provider_type=ProviderType.OPENAI, name="Stale Vision", model="gpt-4o-mini")
+        provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENAI,
+            name="Stale Vision",
+            model="gpt-4o-mini",
+        )
         provider.api_key = "dummy"
         provider.save(update_fields=["api_key"])
         provider.apply_verification_result(

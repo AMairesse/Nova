@@ -8,4 +8,4 @@ class NovaConfig(AppConfig):
 
     def ready(self):
         # Connect signals
-        import nova.signals
+        import nova.signals  # noqa: F401

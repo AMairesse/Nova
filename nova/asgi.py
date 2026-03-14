@@ -7,6 +7,7 @@ For more information on this file, see
 https://docs.djangoproject.com/en/5.1/howto/deployment/asgi/
 """
 
+import importlib
 import os
 
 from channels.auth import AuthMiddlewareStack
@@ -19,14 +20,14 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'nova.settings')
 # is populated before importing code that may import ORM models.
 django_asgi_app = get_asgi_application()
 
-# Import routing
-import nova.routing
+# Load routing after Django initialization so consumers can import models safely.
+routing = importlib.import_module("nova.routing")
 
 application = ProtocolTypeRouter({
     "http": django_asgi_app,
     "websocket": AuthMiddlewareStack(  # Auth for WS
         URLRouter(
-            nova.routing.websocket_urlpatterns
+            routing.websocket_urlpatterns
         )
     ),
 })

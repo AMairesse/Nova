@@ -160,8 +160,15 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
 
         with (
             patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
-            patch("nova.tasks.tasks.MessageArtifact.objects.filter", return_value=mocked_queryset) as mocked_filter,
-            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, side_effect=RuntimeError("storage down")),
+            patch(
+                "nova.tasks.tasks.MessageArtifact.objects.filter",
+                return_value=mocked_queryset,
+            ) as mocked_filter,
+            patch(
+                "nova.tasks.tasks.download_file_content",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("storage down"),
+            ),
         ):
             prompt = await build_source_message_prompt(source_message)
 
@@ -326,9 +333,22 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             })
 
         with (
-            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(50, None, 1000)),
-            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock) as mocked_enqueue_title,
-            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock, side_effect=persist_message_state),
+            patch(
+                "nova.tasks.tasks.ContextConsumptionTracker.calculate",
+                new_callable=AsyncMock,
+                return_value=(50, None, 1000),
+            ),
+            patch.object(
+                executor,
+                "_enqueue_thread_title_generation",
+                new_callable=AsyncMock,
+            ) as mocked_enqueue_title,
+            patch.object(
+                executor,
+                "_persist_agent_message_state",
+                new_callable=AsyncMock,
+                side_effect=persist_message_state,
+            ),
         ):
             await executor._process_result("Agent answer")
 
@@ -375,9 +395,18 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             })
 
         with (
-            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(12, None, 1000)),
+            patch(
+                "nova.tasks.tasks.ContextConsumptionTracker.calculate",
+                new_callable=AsyncMock,
+                return_value=(12, None, 1000),
+            ),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
-            patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock, side_effect=persist_message_state),
+            patch.object(
+                executor,
+                "_persist_agent_message_state",
+                new_callable=AsyncMock,
+                side_effect=persist_message_state,
+            ),
         ):
             await executor._process_result("Agent answer")
 
@@ -393,7 +422,14 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             current_response="",
             streamed_markdown="",
         )
-        message = SimpleNamespace(id=77, internal_data={}, save=Mock(), text="Agent answer", actor=Actor.AGENT, created_at="now")
+        message = SimpleNamespace(
+            id=77,
+            internal_data={},
+            save=Mock(),
+            text="Agent answer",
+            actor=Actor.AGENT,
+            created_at="now",
+        )
         thread = SimpleNamespace(subject="thread n°3", add_message=Mock(return_value=message), save=Mock())
         handler = SimpleNamespace(
             on_context_consumption=AsyncMock(),
@@ -420,10 +456,19 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         }
 
         with (
-            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 1000)),
+            patch(
+                "nova.tasks.tasks.ContextConsumptionTracker.calculate",
+                new_callable=AsyncMock,
+                return_value=(5, None, 1000),
+            ),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
             patch.object(executor, "_persist_agent_message_state", new_callable=AsyncMock),
-            patch.object(executor, "_build_realtime_message_payload", new_callable=AsyncMock, return_value=realtime_payload) as mocked_payload,
+            patch.object(
+                executor,
+                "_build_realtime_message_payload",
+                new_callable=AsyncMock,
+                return_value=realtime_payload,
+            ) as mocked_payload,
         ):
             await executor._process_result("Agent answer")
 
@@ -433,6 +478,7 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
 
 class AgentTaskExecutorArtifactTests(TransactionTestCase):
     reset_sequences = True
+
     def setUp(self):
         self.user = create_user(username="runtime-user", email="runtime@example.com")
         self.provider = create_provider(self.user, name="runtime-provider")
@@ -580,7 +626,11 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
         )
 
         with (
-            patch("nova.tasks.tasks.ContextConsumptionTracker.calculate", new_callable=AsyncMock, return_value=(5, None, 4096)),
+            patch(
+                "nova.tasks.tasks.ContextConsumptionTracker.calculate",
+                new_callable=AsyncMock,
+                return_value=(5, None, 4096),
+            ),
             patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
         ):
             asyncio.run(executor._process_result("Generated 1 image."))

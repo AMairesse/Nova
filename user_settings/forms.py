@@ -17,7 +17,7 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Field
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.Provider import ProviderType, LLMProvider
+from nova.models.Provider import LLMProvider
 from nova.providers import get_provider_defaults
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserParameters

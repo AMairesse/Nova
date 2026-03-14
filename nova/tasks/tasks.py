@@ -23,7 +23,6 @@ from nova.models.MessageArtifact import ArtifactDirection, MessageArtifact
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
-from nova.models.UserFile import UserFile
 from nova.file_utils import download_file_content
 from nova.message_utils import annotate_user_message
 from nova.multimodal_prompts import (
@@ -39,7 +38,10 @@ from nova.native_provider_runtime import (
 )
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
-from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
+from nova.tasks.task_definition_runner import (
+    build_email_prompt_variables,
+    execute_agent_task_definition,
+)
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
 

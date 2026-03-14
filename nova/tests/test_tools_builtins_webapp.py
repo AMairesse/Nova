@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, call, patch
 
 from django.test import TestCase
 

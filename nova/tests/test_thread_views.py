@@ -15,7 +15,6 @@ from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
-from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
 
@@ -578,7 +577,11 @@ class MainViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
@@ -638,7 +641,11 @@ class MainViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
@@ -696,7 +703,11 @@ class MainViewsTests(TestCase):
                 "verified_operations": {
                     "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
                     "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
-                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "tools": {
+                        "status": "unsupported",
+                        "message": "No endpoints found that support tool use.",
+                        "latency_ms": 12,
+                    },
                     "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
                 },
             }
