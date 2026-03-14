@@ -368,7 +368,7 @@ class NativeProviderRuntimeTests(BaseTestCase):
 
         self.assertEqual(prompt, "Fallback request")
 
-    def test_should_use_native_provider_for_message_checks_provider_type_and_pdf_fallback(self):
+    def test_should_use_native_provider_for_message_only_uses_native_path_for_media_outputs(self):
         source_message = self.thread.add_message("Summarize this PDF", actor=Actor.USER)
         self._create_message_attachment(
             message=source_message,
@@ -383,10 +383,27 @@ class NativeProviderRuntimeTests(BaseTestCase):
                 source_message,
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             async_to_sync(should_use_native_provider_for_message)(
                 self.provider,
                 source_message,
+            )
+        )
+
+        image_request = self.thread.add_message("Create an image from this reference", actor=Actor.USER)
+        image_request.internal_data = {"response_mode": "auto"}
+        image_request.save(update_fields=["internal_data"])
+        self._create_message_attachment(
+            message=image_request,
+            kind=ArtifactKind.IMAGE,
+            filename="reference.png",
+            mime_type="image/png",
+        )
+
+        self.assertTrue(
+            async_to_sync(should_use_native_provider_for_message)(
+                self.provider,
+                image_request,
             )
         )
 
@@ -452,9 +469,9 @@ class NativeProviderRuntimeTests(BaseTestCase):
         mocked_invoke.assert_awaited_once()
         invoke_payload = mocked_invoke.await_args.args[1]
         self.assertEqual(invoke_payload["response_mode"], "image")
-        self.assertEqual(len(invoke_payload["artifacts"]), 1)
-        self.assertEqual(invoke_payload["artifacts"][0]["artifact_id"], file_artifact.id)
-        self.assertEqual(invoke_payload["artifacts"][0]["mime_type"], "image/png")
+        self.assertIn("content", invoke_payload)
+        self.assertEqual(invoke_payload["content"][1]["type"], "image")
+        self.assertEqual(invoke_payload["content"][1]["filename"], "source.png")
         self.assertIn("Current request:", invoke_payload["prompt"])
 
     @patch("nova.native_provider_runtime.batch_upload_files", new_callable=AsyncMock)

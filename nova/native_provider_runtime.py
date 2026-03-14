@@ -18,7 +18,12 @@ from nova.message_artifacts import clone_artifact_for_message
 from nova.models.Message import Actor, Message
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.UserFile import UserFile
-from nova.providers import invoke_native_provider, parse_native_provider_response
+from nova.providers import (
+    invoke_native_provider,
+    parse_native_provider_response,
+    prepare_turn_content_for_provider,
+)
+from nova.turn_inputs import ResolvedTurnInput
 
 
 AUTO_RESPONSE_MODE = "auto"
@@ -272,7 +277,7 @@ async def should_use_native_provider_for_message(
         attachments=artifacts,
     ) in {IMAGE_RESPONSE_MODE, AUDIO_RESPONSE_MODE}:
         return True
-    return any(artifact.kind == ArtifactKind.PDF for artifact in artifacts)
+    return False
 
 
 async def invoke_native_provider_for_message(
@@ -297,33 +302,29 @@ async def invoke_native_provider_for_message(
         fallback_prompt=fallback_prompt,
         attachments=artifacts,
     )
-    payload_artifacts: list[dict[str, Any]] = []
-    for artifact in artifacts:
-        if not artifact.user_file_id:
-            continue
-        raw_content = await download_file_content(artifact.user_file)
-        payload_artifacts.append(
-            {
-                "artifact_id": artifact.id,
-                "kind": artifact.kind,
-                "label": artifact.filename,
-                "filename": artifact.filename,
-                "mime_type": artifact.mime_type or "application/octet-stream",
-                "data": base64.b64encode(raw_content).decode("utf-8"),
-            }
-        )
-
     native_prompt = await build_native_provider_prompt(
         thread,
         user,
         source_message,
         fallback_prompt=fallback_prompt,
     )
+    resolved_inputs = [
+        ResolvedTurnInput.from_artifact(artifact)
+        for artifact in artifacts
+    ]
+    native_content = await prepare_turn_content_for_provider(
+        provider,
+        native_prompt,
+        resolved_inputs,
+        content_downloader=download_file_content,
+        log_subject=f"native message {getattr(source_message, 'id', None)}",
+        include_missing_file_summary=True,
+    )
     raw_response = await invoke_native_provider(
         provider,
         {
             "prompt": native_prompt,
-            "artifacts": payload_artifacts,
+            "content": native_content,
             "response_mode": response_mode,
         },
     )

@@ -157,6 +157,72 @@ class FilesToolsTests(IsolatedAsyncioTestCase):
         self.assertEqual(artifact["kind"], "pdf")
         self.assertEqual(artifact["mime_type"], "application/pdf")
 
+    async def test_file_attach_warns_when_pdf_will_use_text_fallback(self):
+        fake_user = SimpleNamespace(id=1)
+        provider = SimpleNamespace(
+            get_known_snapshot_status=lambda section, key: "unknown",
+            is_input_modality_explicitly_unavailable=lambda modality: False,
+            is_capability_explicitly_unavailable=lambda capability: False,
+        )
+        fake_agent = SimpleNamespace(
+            thread=SimpleNamespace(id=100),
+            user=fake_user,
+            llm_provider=provider,
+        )
+        fake_file = SimpleNamespace(
+            id=9,
+            thread=SimpleNamespace(id=100),
+            user=fake_user,
+            mime_type="application/pdf",
+            original_filename="/docs/report.pdf",
+            scope="thread_shared",
+        )
+
+        with patch("nova.tools.files.async_get_object_or_404", new_callable=AsyncMock, return_value=fake_file):
+            with patch(
+                "nova.tools.files.async_get_threadid_and_user",
+                new_callable=AsyncMock,
+                side_effect=[(100, fake_user), (100, fake_user)],
+            ):
+                message, artifact = await self.files_tools.file_attach(fake_agent, file_id=9)
+
+        self.assertIn("extracted PDF text", message)
+        self.assertEqual(artifact["provider_delivery"], "text_fallback")
+
+    async def test_file_attach_rejects_pdf_when_provider_marks_it_unsupported(self):
+        fake_user = SimpleNamespace(id=1)
+        provider = SimpleNamespace(
+            get_known_snapshot_status=lambda section, key: (
+                "unsupported" if section == "inputs" and key == "pdf" else "unknown"
+            ),
+            is_input_modality_explicitly_unavailable=lambda modality: False,
+            is_capability_explicitly_unavailable=lambda capability: False,
+        )
+        fake_agent = SimpleNamespace(
+            thread=SimpleNamespace(id=100),
+            user=fake_user,
+            llm_provider=provider,
+        )
+        fake_file = SimpleNamespace(
+            id=10,
+            thread=SimpleNamespace(id=100),
+            user=fake_user,
+            mime_type="application/pdf",
+            original_filename="/docs/report.pdf",
+            scope="thread_shared",
+        )
+
+        with patch("nova.tools.files.async_get_object_or_404", new_callable=AsyncMock, return_value=fake_file):
+            with patch(
+                "nova.tools.files.async_get_threadid_and_user",
+                new_callable=AsyncMock,
+                side_effect=[(100, fake_user), (100, fake_user)],
+            ):
+                message, artifact = await self.files_tools.file_attach(fake_agent, file_id=10)
+
+        self.assertIn("does not support PDF attachments", message)
+        self.assertIsNone(artifact)
+
     async def test_file_attach_rejects_unsupported_file_types(self):
         fake_user = SimpleNamespace(id=1)
         fake_agent = SimpleNamespace(thread=SimpleNamespace(id=100), user=fake_user)

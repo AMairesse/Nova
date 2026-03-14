@@ -26,7 +26,6 @@ from nova.models.Thread import Thread
 from nova.file_utils import download_file_content
 from nova.message_utils import annotate_user_message
 from nova.multimodal_prompts import (
-    PromptInput,
     build_multimodal_intro_text,
     build_multimodal_prompt_content,
 )
@@ -36,6 +35,7 @@ from nova.native_provider_runtime import (
     persist_native_result_artifacts,
     summarize_native_result,
 )
+from nova.turn_inputs import load_message_turn_inputs
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import (
@@ -61,35 +61,12 @@ THREAD_TITLE_PROMPT = (
 async def build_source_message_prompt(
     source_message: Message,
     *,
+    provider=None,
     fallback_prompt: str = "",
 ):
     """Build the runtime user turn payload from a stored source message."""
-    source_message_id = getattr(source_message, "pk", None) or getattr(
-        source_message,
-        "id",
-        None,
-    )
-
-    def _load_attachment_files():
-        if not source_message_id:
-            return []
-
-        return [
-            PromptInput.from_artifact(artifact)
-            for artifact in MessageArtifact.objects.filter(
-                user=source_message.user,
-                thread=source_message.thread,
-                message_id=source_message_id,
-                direction=ArtifactDirection.INPUT,
-            )
-            .select_related("user_file")
-            .order_by("order", "created_at", "id")
-        ]
-
-    prompt_inputs = await sync_to_async(
-        _load_attachment_files,
-        thread_sensitive=True,
-    )()
+    source_message_id = getattr(source_message, "pk", None) or getattr(source_message, "id", None)
+    prompt_inputs = await load_message_turn_inputs(source_message)
     if not prompt_inputs:
         return source_message.text or fallback_prompt or ""
 
@@ -103,6 +80,7 @@ async def build_source_message_prompt(
     return await build_multimodal_prompt_content(
         prompt_inputs,
         intro_text=intro_text,
+        provider=provider,
         content_downloader=download_file_content,
         log_subject=f"message {source_message_id}",
         include_missing_file_summary=True,
@@ -166,6 +144,7 @@ class AgentTaskExecutor (TaskExecutor):
         if not self.source_message_id:
             return self.prompt
 
+        provider = await self._get_llm_provider()
         try:
             source_message = await sync_to_async(
                 Message.objects.select_related("thread", "user").get,
@@ -175,7 +154,11 @@ class AgentTaskExecutor (TaskExecutor):
             return self.prompt
 
         self._source_message = source_message
-        return await build_source_message_prompt(source_message, fallback_prompt=self.prompt or "")
+        return await build_source_message_prompt(
+            source_message,
+            provider=provider,
+            fallback_prompt=self.prompt or "",
+        )
 
     async def _run_agent(self):
         native_result = await self._run_native_provider_if_supported()

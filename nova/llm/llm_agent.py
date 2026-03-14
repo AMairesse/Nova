@@ -24,15 +24,19 @@ from nova.llm.agent_middleware import AgentContext
 from nova.providers import (
     create_provider_llm as provider_create_provider_llm,
     normalize_multimodal_content_for_provider as provider_normalize_multimodal_content_for_provider,
+    prepare_turn_content_for_provider as provider_prepare_turn_content_for_provider,
 )
 from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.llm.summarization_middleware import SummarizationMiddleware
 from nova.telemetry.langfuse import create_langfuse_callback_handler
+from nova.turn_inputs import (
+    ResolvedTurnInput,
+    strip_intro_text_part,
+)
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
 from nova.models.Thread import Thread as ThreadModel
-import base64
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ __all__ = [
     "ProviderType",
     "create_provider_llm",
     "normalize_multimodal_content_for_provider",
+    "prepare_turn_content_for_provider",
 ]
 
 
@@ -52,6 +57,16 @@ def create_provider_llm(provider: LLMProvider):
 def normalize_multimodal_content_for_provider(provider, content):
     """Compatibility wrapper around the provider registry."""
     return provider_normalize_multimodal_content_for_provider(provider, content)
+
+
+async def prepare_turn_content_for_provider(provider, intro_text, resolved_inputs, **kwargs):
+    """Compatibility wrapper around the provider registry."""
+    return await provider_prepare_turn_content_for_provider(
+        provider,
+        intro_text,
+        resolved_inputs,
+        **kwargs,
+    )
 
 
 class LLMAgent:
@@ -592,52 +607,16 @@ class LLMAgent:
             return "", []
 
         label = artifact.filename
-        if artifact.kind in {ArtifactKind.TEXT, ArtifactKind.ANNOTATION}:
-            text_content = artifact.summary_text or ""
-            if not text_content and artifact.user_file_id and artifact.mime_type.startswith("text/"):
-                try:
-                    text_content = (await download_file_content(artifact.user_file)).decode("utf-8", errors="ignore")
-                except Exception as exc:
-                    logger.warning("Could not load text artifact %s: %s", artifact.id, exc)
-            if not text_content:
-                return label, []
-            return label, [{"type": "text", "text": f"{label}:\n{text_content}"}]
+        content = await prepare_turn_content_for_provider(
+            self._llm_provider,
+            "",
+            [ResolvedTurnInput.from_artifact(artifact)],
+            content_downloader=download_file_content,
+            log_subject=f"artifact {artifact.id}",
+            include_missing_file_summary=True,
+        )
 
-        if not artifact.user_file_id:
-            return label, []
-
-        try:
-            raw_content = await download_file_content(artifact.user_file)
-        except Exception as exc:
-            logger.warning("Could not load artifact %s content: %s", artifact.id, exc)
-            return label, []
-
-        base64_content = base64.b64encode(raw_content).decode("utf-8")
-        if artifact.kind == ArtifactKind.IMAGE:
-            return label, [{
-                "type": "image",
-                "source_type": "base64",
-                "data": base64_content,
-                "mime_type": artifact.mime_type,
-                "filename": label,
-            }]
-        if artifact.kind == ArtifactKind.PDF:
-            return label, [{
-                "type": "file",
-                "source_type": "base64",
-                "data": base64_content,
-                "mime_type": artifact.mime_type or "application/pdf",
-                "filename": label,
-            }]
-        if artifact.kind == ArtifactKind.AUDIO:
-            return label, [{
-                "type": "audio",
-                "source_type": "base64",
-                "data": base64_content,
-                "mime_type": artifact.mime_type,
-                "filename": label,
-            }]
-        return label, []
+        return label, strip_intro_text_part(content)
 
     async def _hydrate_file_ref(self, artifact_ref: dict) -> tuple[str, list[dict]]:
         file_id = artifact_ref.get("file_id")
@@ -668,36 +647,20 @@ class LLMAgent:
         if kind not in {ArtifactKind.IMAGE, ArtifactKind.PDF, ArtifactKind.AUDIO}:
             return label, []
 
-        try:
-            raw_content = await download_file_content(user_file)
-        except Exception as exc:
-            logger.warning("Could not load file %s content for follow-up attach: %s", user_file.id, exc)
-            return label, []
+        content = await prepare_turn_content_for_provider(
+            self._llm_provider,
+            "",
+            [
+                ResolvedTurnInput.from_user_file(
+                    user_file,
+                    label=label,
+                )
+            ],
+            content_downloader=download_file_content,
+            log_subject=f"file {user_file.id}",
+        )
 
-        base64_content = base64.b64encode(raw_content).decode("utf-8")
-        if kind == ArtifactKind.IMAGE:
-            return label, [{
-                "type": "image",
-                "source_type": "base64",
-                "data": base64_content,
-                "mime_type": user_file.mime_type,
-                "filename": label,
-            }]
-        if kind == ArtifactKind.PDF:
-            return label, [{
-                "type": "file",
-                "source_type": "base64",
-                "data": base64_content,
-                "mime_type": user_file.mime_type or "application/pdf",
-                "filename": label,
-            }]
-        return label, [{
-            "type": "audio",
-            "source_type": "base64",
-            "data": base64_content,
-            "mime_type": user_file.mime_type,
-            "filename": label,
-        }]
+        return label, strip_intro_text_part(content)
 
     async def aresume(self, command, silent_mode=False, thread_id_override: str | None = None):
         config = self._build_runtime_config(

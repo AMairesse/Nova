@@ -69,6 +69,10 @@ class MessageArtifactsTests(TestCase):
             mocked_batch_upload.await_args.kwargs["allowed_mime_prefixes"],
             ("image/", "audio/"),
         )
+        self.assertIn(
+            "application/pdf",
+            mocked_batch_upload.await_args.kwargs["allowed_mime_types"],
+        )
 
     @patch("nova.message_artifacts.httpx.AsyncClient")
     @patch("nova.message_artifacts.download_file_content", new_callable=AsyncMock)

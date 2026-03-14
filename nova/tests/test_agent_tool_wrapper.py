@@ -477,6 +477,73 @@ class AgentToolWrapperTests(TransactionTestCase):
         self.assertIn("use artifact_ls or artifact_search and pass artifact_ids instead", result)
         self.assertEqual(artifact_payload, {})
 
+    def test_execute_agent_rejects_unsupported_pdf_inputs_for_subagent(self):
+        class FakeLLMAgent:
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                raise AssertionError("LLMAgent.create should not be called when PDF input is unsupported")
+
+        provider = create_provider(self.user, name="unsupported-pdf-provider")
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "unsupported", "audio": "pass"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "pass",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
+        )
+        agent = create_agent(
+            self.user,
+            provider,
+            name="PDF sub-agent",
+            is_tool=True,
+            tool_description="Summarize PDFs",
+        )
+        shared_pdf = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/files/report.pdf",
+            original_filename="/files/report.pdf",
+            mime_type="application/pdf",
+            size=128,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            tool = wrapper.create_langchain_tool()
+            result, artifact_payload = asyncio.run(
+                tool["coroutine"](
+                    "Please summarize this PDF.",
+                    file_ids=[shared_pdf.id],
+                )
+            )
+
+        self.assertIn("does not support PDF attachments", result)
+        self.assertEqual(artifact_payload, {})
+
     def test_execute_agent_failure_returns_formatted_error_and_cleans_up(self):
         """
         When the delegated LLMAgent fails:

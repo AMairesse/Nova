@@ -52,6 +52,37 @@ class BaseProviderAdapter:
     def normalize_multimodal_content(self, content):
         return content
 
+    async def prepare_turn_content(self, provider, intro_text, resolved_inputs, **kwargs):
+        from nova.turn_inputs import prepare_turn_content
+
+        return await prepare_turn_content(
+            provider,
+            intro_text,
+            resolved_inputs,
+            **kwargs,
+        )
+
+    def supports_active_pdf_input_probe(self, provider) -> bool:
+        return False
+
+    def build_validation_pdf_content(self, provider, *, pdf_base64: str):
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "Confirm that you can access the attached PDF. "
+                    "Reply in one short sentence."
+                ),
+            },
+            {
+                "type": "file",
+                "source_type": "base64",
+                "data": pdf_base64,
+                "mime_type": "application/pdf",
+                "filename": "provider-validation.pdf",
+            },
+        ]
+
     async def list_models(self, provider) -> list[dict[str, Any]]:
         return []
 

@@ -23,7 +23,7 @@ from nova.provider_capability_profile import (
     PROBED_OPERATION_KEYS,
     ensure_capability_profile,
     merge_declared_capabilities,
-    merge_verified_operations,
+    merge_verified_capabilities,
 )
 from nova.utils import validate_relaxed_url
 
@@ -392,9 +392,12 @@ class LLMProvider(models.Model):
 
     def apply_verification_result(self, result: dict, *, save: bool = True) -> None:
         summary_override = str(result.get("verification_summary") or "")
-        profile = merge_verified_operations(
+        profile = merge_verified_capabilities(
             self.capability_profile,
-            result.get("verified_operations") or {},
+            {
+                "verified_operations": result.get("verified_operations") or {},
+                "verified_inputs": result.get("verified_inputs") or {},
+            },
             fingerprint=self.compute_validation_fingerprint(),
             checked_at_iso=timezone.now().isoformat(),
         )

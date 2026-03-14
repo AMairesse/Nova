@@ -27,3 +27,6 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
 
     def normalize_multimodal_content(self, content):
         return normalize_openai_compatible_multimodal_content(content)
+
+    def supports_active_pdf_input_probe(self, provider) -> bool:
+        return True

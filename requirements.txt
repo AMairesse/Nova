@@ -147,7 +147,7 @@ cryptography==46.0.5
     #   pyopenssl
     #   pywebpush
     #   service-identity
-cyclopts==4.9.0
+cyclopts==4.10.0
     # via fastmcp
 daphne==4.2.1
     # via nova (pyproject.toml)
@@ -491,6 +491,8 @@ pyjwt[crypto]==2.12.1
     # via mcp
 pyopenssl==25.3.0
     # via twisted
+pypdf==6.8.0
+    # via nova (pyproject.toml)
 pyperclip==1.11.0
     # via fastmcp
 python-crontab==3.3.0

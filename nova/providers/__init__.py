@@ -10,6 +10,7 @@ from nova.providers.registry import (
     list_provider_models,
     normalize_multimodal_content_for_provider,
     parse_native_provider_response,
+    prepare_turn_content_for_provider,
     resolve_provider_capability_snapshot,
 )
 from nova.providers.validation import validate_provider_configuration
@@ -24,6 +25,7 @@ __all__ = [
     "list_provider_models",
     "normalize_multimodal_content_for_provider",
     "parse_native_provider_response",
+    "prepare_turn_content_for_provider",
     "resolve_provider_capability_snapshot",
     "validate_provider_configuration",
 ]

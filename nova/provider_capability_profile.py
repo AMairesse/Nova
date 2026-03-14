@@ -26,6 +26,7 @@ CAPABILITY_PROFILE_GROUPS: dict[str, tuple[str, ...]] = {
 }
 
 PROBED_OPERATION_KEYS = ("chat", "streaming", "tools", "vision")
+PROBED_INPUT_KEYS = ("pdf",)
 
 CAPABILITY_PROFILE_LABELS: dict[str, dict[str, object]] = {
     "inputs": {
@@ -397,12 +398,33 @@ def merge_verified_operations(
     fingerprint: str,
     checked_at_iso: str,
 ) -> dict:
+    return merge_verified_capabilities(
+        existing_profile,
+        {"verified_operations": verified_operations or {}},
+        fingerprint=fingerprint,
+        checked_at_iso=checked_at_iso,
+    )
+
+
+def merge_verified_capabilities(
+    existing_profile: dict | None,
+    verification_fragment: dict | None,
+    *,
+    fingerprint: str,
+    checked_at_iso: str,
+) -> dict:
     profile = ensure_capability_profile(
         existing_profile
         if isinstance(existing_profile, dict) and existing_profile.get("fingerprint") == fingerprint
         else {}
     )
+    verification_fragment = (
+        verification_fragment if isinstance(verification_fragment, dict) else {}
+    )
+    verified_operations = verification_fragment.get("verified_operations")
     verified_operations = verified_operations if isinstance(verified_operations, dict) else {}
+    verified_inputs = verification_fragment.get("verified_inputs")
+    verified_inputs = verified_inputs if isinstance(verified_inputs, dict) else {}
 
     profile["fingerprint"] = fingerprint
     profile["schema_version"] = CAPABILITY_PROFILE_SCHEMA_VERSION
@@ -412,6 +434,15 @@ def merge_verified_operations(
         raw_entry = verified_operations.get(capability_key)
         raw_entry = raw_entry if isinstance(raw_entry, dict) else {}
         entry = profile["operations"][capability_key]
+        entry["verified_status"] = _normalize_verified_status(raw_entry.get("status"))
+        entry["verified_message"] = str(raw_entry.get("message") or "")
+        latency = raw_entry.get("latency_ms")
+        entry["verified_latency_ms"] = latency if isinstance(latency, int) else None
+
+    for capability_key in PROBED_INPUT_KEYS:
+        raw_entry = verified_inputs.get(capability_key)
+        raw_entry = raw_entry if isinstance(raw_entry, dict) else {}
+        entry = profile["inputs"][capability_key]
         entry["verified_status"] = _normalize_verified_status(raw_entry.get("status"))
         entry["verified_message"] = str(raw_entry.get("message") or "")
         latency = raw_entry.get("latency_ms")

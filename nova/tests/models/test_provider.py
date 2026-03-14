@@ -212,6 +212,37 @@ class ProviderModelsTest(BaseTestCase):
         self.assertEqual(provider.get_capability_result("vision")["source"], "verified")
         self.assertEqual(provider.capability_profile_schema_version, 1)
 
+    def test_verified_pdf_input_updates_effective_input_status(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Verified PDF Provider",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="secret-a",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated successfully for chat, streaming, tools, vision, and PDF input.",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
+                    "tools": {"status": "pass", "message": "ok", "latency_ms": 14},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 16},
+                },
+                "verified_inputs": {
+                    "pdf": {"status": "pass", "message": "pdf ok", "latency_ms": 18},
+                },
+            }
+        )
+
+        self.assertEqual(provider.known_pdf_input_status, "pass")
+        pdf_input_item = next(
+            item for item in provider.capability_input_items if item["key"] == "pdf"
+        )
+        self.assertEqual(pdf_input_item["status"], "pass")
+        self.assertEqual(pdf_input_item["source"], "verified")
+
     def test_effective_capabilities_are_unknown_when_profile_fingerprint_is_stale(self):
         provider = LLMProvider.objects.create(
             user=self.user,

@@ -23,7 +23,6 @@ from nova.file_utils import download_file_content
 from nova.llm.llm_agent import LLMAgent
 from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.multimodal_prompts import (
-    PromptInput,
     build_multimodal_intro_text,
     build_multimodal_prompt_content,
 )
@@ -41,6 +40,12 @@ from nova.models.MessageArtifact import (
 )
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
+from nova.turn_inputs import (
+    ResolvedTurnInput,
+    TURN_INPUT_SOURCE_THREAD_FILE,
+    get_turn_input_capability_error,
+    load_message_turn_inputs,
+)
 
 import logging
 
@@ -104,12 +109,19 @@ class AgentToolWrapper:
 
             agent_llm = None
             try:
-                if artifact_ids:
-                    await self._attach_input_artifacts(source_message, artifact_ids)
-                if file_ids:
-                    await self._attach_input_files(source_message, file_ids)
-
                 provider = await self._load_provider()
+                if artifact_ids:
+                    await self._attach_input_artifacts(
+                        source_message,
+                        artifact_ids,
+                        provider=provider,
+                    )
+                if file_ids:
+                    await self._attach_input_files(
+                        source_message,
+                        file_ids,
+                        provider=provider,
+                    )
                 if provider_tools_explicitly_unavailable(
                     provider
                 ) and await sync_to_async(
@@ -131,6 +143,7 @@ class AgentToolWrapper:
                 )
                 prompt = await self._build_source_message_prompt(
                     source_message,
+                    provider=provider,
                     fallback_prompt=question,
                 )
                 native_result = await invoke_native_provider_for_message(
@@ -278,6 +291,8 @@ class AgentToolWrapper:
         self,
         source_message,
         artifact_ids: list[int],
+        *,
+        provider=None,
     ) -> None:
         unique_ids = []
         seen_ids: set[int] = set()
@@ -313,6 +328,23 @@ class AgentToolWrapper:
             thread_sensitive=True,
         )()
         for index, artifact in enumerate(source_artifacts):
+            capability_error = get_turn_input_capability_error(
+                provider,
+                artifact.kind,
+            )
+            if capability_error:
+                raise ValueError(capability_error)
+
+            artifact_metadata = dict(getattr(artifact, "metadata", {}) or {})
+            artifact_metadata.update(
+                {
+                    "subagent_input": True,
+                    "source": (
+                        artifact_metadata.get("source")
+                        or ResolvedTurnInput.from_artifact(artifact).source
+                    ),
+                }
+            )
             await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
                 user=self.user,
                 thread=self.thread,
@@ -329,10 +361,16 @@ class AgentToolWrapper:
                 model=artifact.model or "",
                 provider_fingerprint=artifact.provider_fingerprint or "",
                 order=index,
-                metadata={"subagent_input": True},
+                metadata=artifact_metadata,
             )
 
-    async def _attach_input_files(self, source_message, file_ids: list[int]) -> None:
+    async def _attach_input_files(
+        self,
+        source_message,
+        file_ids: list[int],
+        *,
+        provider=None,
+    ) -> None:
         unique_ids = []
         seen_ids: set[int] = set()
         for file_id in file_ids:
@@ -417,6 +455,13 @@ class AgentToolWrapper:
                     }
                 )
 
+            capability_error = get_turn_input_capability_error(
+                provider,
+                artifact_kind,
+            )
+            if capability_error:
+                raise ValueError(capability_error)
+
             file_label = build_artifact_label(
                 user_file,
                 fallback=f"file-{user_file.id}",
@@ -433,7 +478,10 @@ class AgentToolWrapper:
                 summary_text="",
                 search_text=file_label,
                 order=order_offset + index,
-                metadata={"subagent_input": True, "source": "thread_file"},
+                metadata={
+                    "subagent_input": True,
+                    "source": TURN_INPUT_SOURCE_THREAD_FILE,
+                },
             )
 
     async def _attach_missing_file_ids_as_artifacts(
@@ -515,28 +563,13 @@ class AgentToolWrapper:
         self,
         source_message,
         *,
+        provider=None,
         fallback_prompt: str = "",
     ):
-        thread_id = getattr(self.thread, "id", None)
-        user_id = getattr(self.user, "id", None)
-
-        def _load_artifacts():
-            return list(
-                MessageArtifact.objects.filter(
-                    message=source_message,
-                    thread_id=thread_id,
-                    user_id=user_id,
-                    direction=ArtifactDirection.INPUT,
-                )
-                .select_related("user_file")
-                .order_by("order", "created_at", "id")
-            )
-
-        artifacts = await sync_to_async(_load_artifacts, thread_sensitive=True)()
-        if not artifacts:
+        prompt_inputs = await load_message_turn_inputs(source_message)
+        if not prompt_inputs:
             return source_message.text or fallback_prompt or ""
 
-        prompt_inputs = [PromptInput.from_artifact(artifact) for artifact in artifacts]
         intro_text = build_multimodal_intro_text(
             source_message.text or fallback_prompt,
             prompt_inputs,
@@ -546,6 +579,7 @@ class AgentToolWrapper:
         return await build_multimodal_prompt_content(
             prompt_inputs,
             intro_text=intro_text,
+            provider=provider,
             content_downloader=download_file_content,
             log_subject=(
                 f"sub-agent message {getattr(source_message, 'id', None)}"

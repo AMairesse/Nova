@@ -23,6 +23,25 @@ class LLMAgentHelperTests(TestCase):
     def setUp(self):
         self.user = create_user(username="agent-helper", email="agent-helper@example.com")
         self.provider = create_provider(self.user, name="Agent Helper Provider")
+        self.provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "pass", "audio": "pass"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "pass",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
+        )
         self.thread = Thread.objects.create(user=self.user, subject="Agent Helper Thread")
 
     def _make_agent(self, **kwargs):
@@ -549,9 +568,11 @@ class LLMAgentHelperTests(TestCase):
             mime_type="",
         )
 
-        with patch.object(llm_agent_mod, "build_artifact_label", return_value="derived.pdf") as mocked_label, patch.object(
-            llm_agent_mod,
-            "detect_artifact_kind",
+        with patch.object(llm_agent_mod, "build_artifact_label", return_value="derived.pdf") as mocked_label, patch(
+            "nova.llm.llm_agent.detect_artifact_kind",
+            return_value=ArtifactKind.PDF,
+        ) as mocked_runtime_kind, patch(
+            "nova.turn_inputs.detect_artifact_kind",
             return_value=ArtifactKind.PDF,
         ) as mocked_kind, patch.object(
             llm_agent_mod,
@@ -563,6 +584,7 @@ class LLMAgentHelperTests(TestCase):
         self.assertEqual(label, "derived.pdf")
         self.assertEqual(parts[0]["type"], "file")
         mocked_label.assert_called_once()
+        mocked_runtime_kind.assert_called_once_with(user_file.mime_type, user_file.original_filename)
         mocked_kind.assert_called_once_with(user_file.mime_type, user_file.original_filename)
 
     def test_hydrate_file_ref_handles_download_errors(self):
@@ -579,6 +601,50 @@ class LLMAgentHelperTests(TestCase):
                 async_to_sync(agent._hydrate_file_ref)({"file_id": image_file.id, "kind": "image"}),
                 ("photo.png", []),
             )
+
+    def test_hydrate_artifact_ref_falls_back_to_pdf_text_when_native_pdf_is_unknown(self):
+        fallback_provider = create_provider(self.user, name="Fallback PDF Provider")
+        fallback_provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "unknown", "audio": "pass"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "pass",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
+        )
+        agent = self._make_agent(llm_provider=fallback_provider)
+        source_message = self.thread.add_message("source", actor=Actor.USER)
+        pdf_artifact = self._create_artifact(
+            message=source_message,
+            kind=ArtifactKind.PDF,
+            filename="report.pdf",
+            mime_type="application/pdf",
+        )
+
+        with patch.object(
+            llm_agent_mod,
+            "download_file_content",
+            AsyncMock(return_value=b"%PDF-1.4"),
+        ), patch(
+            "nova.turn_inputs._extract_text_from_pdf_bytes",
+            return_value="Extracted fallback text",
+        ):
+            label, parts = async_to_sync(agent._hydrate_artifact_ref)({"artifact_id": pdf_artifact.id})
+
+        self.assertEqual(label, "report.pdf")
+        self.assertEqual(parts[0]["type"], "text")
+        self.assertIn("Extracted fallback text", parts[0]["text"])
 
     def test_count_tokens_uses_async_sync_and_fallback_estimates(self):
         agent = self._make_agent()

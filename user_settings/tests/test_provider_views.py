@@ -222,6 +222,22 @@ class ProviderViewsTests(TestCase):
             r'id="test-provider-btn"[^>]*disabled',
         )
 
+    def test_edit_page_for_mistral_provider_exposes_model_catalog_controls(self):
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Mistral Provider",
+            provider_type=ProviderType.MISTRAL,
+            model="",
+            api_key="dummy-secret",
+            max_context_tokens=4096,
+        )
+
+        response = self.client.get(reverse("user_settings:provider-edit", args=[provider.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="load-provider-models-btn"')
+        self.assertContains(response, 'data-model-catalog-url=')
+
     def test_capabilities_card_only_shows_verified_badge_for_verified_capabilities(self):
         provider = LLMProvider.objects.create(
             user=self.user,

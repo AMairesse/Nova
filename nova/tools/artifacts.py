@@ -10,6 +10,13 @@ from nova.file_utils import download_file_content
 from nova.message_artifacts import publish_artifact_to_files
 from nova.models.MessageArtifact import MessageArtifact
 from nova.realtime.sidebar_updates import publish_file_update
+from nova.turn_inputs import (
+    PROVIDER_DELIVERY_NATIVE_BINARY,
+    PROVIDER_DELIVERY_TEXT_FALLBACK,
+    get_turn_input_capability_error,
+    resolve_runtime_provider,
+    should_use_pdf_text_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,13 +143,29 @@ async def artifact_read_text(agent, artifact_id: int) -> str:
 
 async def artifact_attach(agent, artifact_id: int) -> Tuple[str, Any]:
     artifact = await _load_thread_artifact(agent, artifact_id)
+    provider = resolve_runtime_provider(agent)
+    capability_error = get_turn_input_capability_error(provider, artifact.kind)
+    if capability_error:
+        return capability_error, None
+
+    provider_delivery = PROVIDER_DELIVERY_NATIVE_BINARY
+    message = (
+        f"Artifact attached: {artifact.filename}. Continue your reasoning with this artifact included."
+    )
+    if artifact.kind == "pdf" and should_use_pdf_text_fallback(provider):
+        provider_delivery = PROVIDER_DELIVERY_TEXT_FALLBACK
+        message = (
+            f"Artifact attached: {artifact.filename}. Native PDF input is not verified "
+            "for this model, so Nova will use extracted PDF text for this turn."
+        )
     return (
-        f"Artifact attached: {artifact.filename}. Continue your reasoning with this artifact included.",
+        message,
         {
             "artifact_id": artifact.id,
             "kind": artifact.kind,
             "label": artifact.filename,
             "mime_type": artifact.mime_type,
+            "provider_delivery": provider_delivery,
         },
     )
 

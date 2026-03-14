@@ -409,6 +409,9 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
     def normalize_multimodal_content(self, content):
         return normalize_openai_compatible_multimodal_content(content)
 
+    def supports_active_pdf_input_probe(self, provider) -> bool:
+        return True
+
     async def list_models(self, provider) -> list[dict]:
         models = await fetch_openrouter_model_catalog(provider.api_key or "", provider.base_url)
         return [
@@ -437,50 +440,56 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
         prompt = str(invocation_request.get("prompt") or "").strip()
         response_mode = str(invocation_request.get("response_mode") or "text").strip().lower()
         additional_config = provider.additional_config if isinstance(provider.additional_config, dict) else {}
-        content = []
-        if prompt:
-            content.append({"type": "text", "text": prompt})
+        content = invocation_request.get("content")
+        if not isinstance(content, list):
+            content = []
+            if prompt:
+                content.append({"type": "text", "text": prompt})
 
-        for artifact in list(invocation_request.get("artifacts") or []):
-            if not isinstance(artifact, dict):
-                continue
-            kind = str(artifact.get("kind") or "").strip()
-            mime_type = str(artifact.get("mime_type") or "application/octet-stream").strip()
-            filename = str(artifact.get("filename") or artifact.get("label") or "attachment").strip()
-            data = str(artifact.get("data") or "").strip()
-            if not data:
-                continue
+            for artifact in list(invocation_request.get("artifacts") or []):
+                if not isinstance(artifact, dict):
+                    continue
+                kind = str(artifact.get("kind") or "").strip()
+                mime_type = str(
+                    artifact.get("mime_type") or "application/octet-stream"
+                ).strip()
+                filename = str(
+                    artifact.get("filename") or artifact.get("label") or "attachment"
+                ).strip()
+                data = str(artifact.get("data") or "").strip()
+                if not data:
+                    continue
 
-            if kind == "image":
-                content.append(
-                    {
-                        "type": "image",
-                        "source_type": "base64",
-                        "data": data,
-                        "mime_type": mime_type,
-                        "filename": filename,
-                    }
-                )
-            elif kind == "pdf":
-                content.append(
-                    {
-                        "type": "file",
-                        "source_type": "base64",
-                        "data": data,
-                        "mime_type": mime_type,
-                        "filename": filename,
-                    }
-                )
-            elif kind == "audio":
-                content.append(
-                    {
-                        "type": "audio",
-                        "source_type": "base64",
-                        "data": data,
-                        "mime_type": mime_type,
-                        "filename": filename,
-                    }
-                )
+                if kind == "image":
+                    content.append(
+                        {
+                            "type": "image",
+                            "source_type": "base64",
+                            "data": data,
+                            "mime_type": mime_type,
+                            "filename": filename,
+                        }
+                    )
+                elif kind == "pdf":
+                    content.append(
+                        {
+                            "type": "file",
+                            "source_type": "base64",
+                            "data": data,
+                            "mime_type": mime_type,
+                            "filename": filename,
+                        }
+                    )
+                elif kind == "audio":
+                    content.append(
+                        {
+                            "type": "audio",
+                            "source_type": "base64",
+                            "data": data,
+                            "mime_type": mime_type,
+                            "filename": filename,
+                        }
+                    )
 
         normalized_content = self.normalize_multimodal_content(content)
         payload = {

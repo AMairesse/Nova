@@ -9,6 +9,7 @@ from nova.providers.validation import (
     STATUS_PASS,
     STATUS_UNSUPPORTED,
     _VALIDATION_IMAGE_BASE64,
+    _VALIDATION_PDF_BASE64,
     validate_provider_configuration,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "STATUS_PASS",
     "STATUS_UNSUPPORTED",
     "_VALIDATION_IMAGE_BASE64",
+    "_VALIDATION_PDF_BASE64",
     "validate_provider_configuration",
 ]

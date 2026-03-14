@@ -10,12 +10,15 @@ from nova.tests.base import BaseTestCase
 def _validation_result() -> dict:
     return {
         "validation_status": LLMProvider.ValidationStatus.VALID,
-        "verification_summary": "Validated successfully for chat, streaming, tools, and vision.",
+        "verification_summary": "Validated successfully for chat, streaming, tools, vision, and PDF input.",
         "verified_operations": {
             "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
             "streaming": {"status": "pass", "message": "ok", "latency_ms": 12},
             "tools": {"status": "pass", "message": "ok", "latency_ms": 14},
             "vision": {"status": "pass", "message": "ok", "latency_ms": 16},
+        },
+        "verified_inputs": {
+            "pdf": {"status": "pass", "message": "ok", "latency_ms": 18},
         },
     }
 
@@ -59,6 +62,7 @@ class ProviderValidationTaskTests(BaseTestCase):
         self.assertEqual(provider.validation_task_id, "")
         self.assertEqual(provider.validation_requested_fingerprint, "")
         self.assertEqual(provider.known_image_input_status, "pass")
+        self.assertEqual(provider.known_pdf_input_status, "pass")
         self.assertIn("Metadata: OpenRouter models API.", provider.capability_profile_summary)
 
     def test_validation_task_is_skipped_when_provider_configuration_changed(self):
@@ -120,3 +124,4 @@ class ProviderValidationTaskTests(BaseTestCase):
         provider.refresh_from_db()
         self.assertEqual(provider.validation_status, LLMProvider.ValidationStatus.VALID)
         self.assertEqual(provider.known_image_input_status, "pass")
+        self.assertEqual(provider.known_pdf_input_status, "pass")

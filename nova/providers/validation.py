@@ -10,6 +10,7 @@ from langchain_core.tools import StructuredTool
 from nova.models.Provider import LLMProvider, VALIDATION_CAPABILITY_ORDER
 from nova.providers.registry import (
     create_provider_llm,
+    get_provider_adapter,
     normalize_multimodal_content_for_provider,
 )
 
@@ -24,6 +25,9 @@ SOURCE_UNKNOWN = "unknown"
 
 _VALIDATION_IMAGE_BASE64 = (
     "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAAD/wAARCAAgACADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3ePn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3ePn6/9sAQwACAgICAgIDAgIDBQMDAwUGBQUFBQYIBgYGBgYICggICAgICAoKCgoKCgoKDAwMDAwMDg4ODg4PDw8PDw8PDw8P/9sAQwECAgIEBAQHBAQHEAsJCxAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ/90ABAAC/9oADAMBAAIRAxEAPwD9/KKKKACiiigD/9D9/KKKKACiiigD/9k="
+)
+_VALIDATION_PDF_BASE64 = (
+    "JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgKHB5cGRmKQo+PgplbmRvYmoKMiAwIG9iago8PAovVHlwZSAvUGFnZXMKL0NvdW50IDEKL0tpZHMgWyA0IDAgUiBdCj4+CmVuZG9iagozIDAgb2JqCjw8Ci9UeXBlIC9DYXRhbG9nCi9QYWdlcyAyIDAgUgo+PgplbmRvYmoKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUmVzb3VyY2VzIDw8Cj4+Ci9NZWRpYUJveCBbIDAuMCAwLjAgMjAwIDIwMCBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2JqCnhyZWYKMCA1CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAwMDAwMCBuIAowMDAwMDAwMDU0IDAwMDAwIG4gCjAwMDAwMDAxMTMgMDAwMDAgbiAKMDAwMDAwMDE2MiAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9TaXplIDUKL1Jvb3QgMyAwIFIKL0luZm8gMSAwIFIKPj4Kc3RhcnR4cmVmCjI1NgolJUVPRgo="
 )
 
 
@@ -114,6 +118,13 @@ def _classify_capability_failure(capability: str, exc: Exception) -> str:
             "not implemented",
         ),
         "vision": ("vision", "image", "multimodal", "modalit", "not implemented"),
+        "pdf": (
+            "pdf",
+            "document",
+            "file input",
+            "file upload",
+            "not implemented",
+        ),
     }
     markers = unsupported_markers.get(capability, ())
     if any(marker in message for marker in markers):
@@ -136,14 +147,28 @@ def _collect_tool_calls(response) -> list:
 
 
 def _build_capability_summary(capabilities: dict) -> str:
+    return _build_validation_summary(capabilities, {})
+
+
+def _build_validation_summary(
+    verified_operations: dict,
+    verified_inputs: dict,
+) -> str:
     failures = []
     for capability in VALIDATION_CAPABILITY_ORDER:
-        status = (capabilities.get(capability) or {}).get("status")
+        status = (verified_operations.get(capability) or {}).get("status")
         if status not in {STATUS_PASS, STATUS_NOT_RUN}:
             failures.append(f"{capability}: {status}")
 
+    pdf_status = (verified_inputs.get("pdf") or {}).get("status")
+    if pdf_status not in {None, STATUS_PASS, STATUS_NOT_RUN}:
+        failures.append(f"pdf input: {pdf_status}")
+
     if not failures:
-        summary = "Validated successfully for chat, streaming, tools, and vision."
+        if pdf_status == STATUS_PASS:
+            summary = "Validated successfully for chat, streaming, tools, vision, and PDF input."
+        else:
+            summary = "Validated successfully for chat, streaming, tools, and vision."
     else:
         failure_summary = ", ".join(failures)
         summary = f"Validated with partial capabilities ({failure_summary})."
@@ -256,6 +281,55 @@ async def _probe_vision(llm) -> dict:
     return _capability_result(STATUS_PASS, message, latency_ms)
 
 
+def _default_verified_inputs() -> dict:
+    return {
+        "pdf": _capability_result(
+            STATUS_NOT_RUN,
+            "",
+            None,
+            source=SOURCE_UNKNOWN,
+            metadata_status=STATUS_NOT_RUN,
+            probe_status=STATUS_NOT_RUN,
+        )
+    }
+
+
+async def _probe_pdf(provider, llm) -> dict:
+    started = time.perf_counter()
+    adapter = get_provider_adapter(provider)
+    if not adapter.supports_active_pdf_input_probe(provider):
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return _capability_result(
+            STATUS_NOT_RUN,
+            "Active PDF probe is not enabled for this provider type.",
+            latency_ms,
+            source=SOURCE_PROBE,
+            metadata_status=STATUS_NOT_RUN,
+            probe_status=STATUS_NOT_RUN,
+        )
+
+    payload = adapter.build_validation_pdf_content(
+        provider,
+        pdf_base64=_VALIDATION_PDF_BASE64,
+    )
+    response = await llm.ainvoke(
+        [
+            HumanMessage(
+                content=normalize_multimodal_content_for_provider(
+                    provider,
+                    payload,
+                )
+            )
+        ]
+    )
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    content = getattr(response, "content", None)
+    message = "PDF input payload accepted."
+    if content:
+        message = f"PDF input payload accepted: {str(content)[:80]}"
+    return _capability_result(STATUS_PASS, message, latency_ms)
+
+
 async def validate_provider_configuration(provider) -> dict:
     """Validate provider capabilities using provider-specific adapters and shared probes."""
     if not str(getattr(provider, "model", "") or "").strip():
@@ -265,6 +339,7 @@ async def validate_provider_configuration(provider) -> dict:
         )
 
     capabilities = _default_capabilities()
+    verified_inputs = _default_verified_inputs()
 
     try:
         llm = create_provider_llm(provider)
@@ -310,6 +385,7 @@ async def validate_provider_configuration(provider) -> dict:
             "validation_status": LLMProvider.ValidationStatus.INVALID,
             "verification_summary": f"Validation failed during chat probe: {error_message}",
             "verified_operations": capabilities,
+            "verified_inputs": verified_inputs,
         }
 
     for capability, probe in (
@@ -330,8 +406,25 @@ async def validate_provider_configuration(provider) -> dict:
                 probe_status=status,
             )
 
+    try:
+        verified_inputs["pdf"] = await _probe_pdf(provider, llm)
+    except Exception as exc:
+        status = _classify_capability_failure("pdf", exc)
+        verified_inputs["pdf"] = _capability_result(
+            status,
+            _format_exception_message(exc),
+            None,
+            source=SOURCE_PROBE,
+            metadata_status=STATUS_NOT_RUN,
+            probe_status=status,
+        )
+
     return {
         "validation_status": LLMProvider.ValidationStatus.VALID,
-        "verification_summary": _build_capability_summary(capabilities),
+        "verification_summary": _build_validation_summary(
+            capabilities,
+            verified_inputs,
+        ),
         "verified_operations": capabilities,
+        "verified_inputs": verified_inputs,
     }

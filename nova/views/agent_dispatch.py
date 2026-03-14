@@ -7,6 +7,7 @@ from nova.message_artifacts import detect_artifact_kind
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Thread import Thread
 from nova.tasks.tasks import create_and_dispatch_agent_task
+from nova.turn_inputs import is_modality_explicitly_unavailable
 
 
 def resolve_selected_or_default_agent(user, selected_agent: str | None):
@@ -35,10 +36,7 @@ def get_message_attachment_capability_error(agent_config, uploaded_files=None) -
         attachment_kinds = {"image"}
 
     if "image" in attachment_kinds:
-        image_unavailable = (
-            provider.is_input_modality_explicitly_unavailable("image")
-            or provider.is_capability_explicitly_unavailable("vision")
-        )
+        image_unavailable = is_modality_explicitly_unavailable(provider, "image")
         if image_unavailable:
             vision_result = provider.get_capability_result("vision")
             detail = vision_result.get("message") or _("This provider was validated without image support.")
@@ -46,10 +44,10 @@ def get_message_attachment_capability_error(agent_config, uploaded_files=None) -
                 "detail": detail,
             }
 
-    if "pdf" in attachment_kinds and provider.is_input_modality_explicitly_unavailable("pdf"):
+    if "pdf" in attachment_kinds and is_modality_explicitly_unavailable(provider, "pdf"):
         return _("The selected provider does not support PDF attachments for message input.")
 
-    if "audio" in attachment_kinds and provider.is_input_modality_explicitly_unavailable("audio"):
+    if "audio" in attachment_kinds and is_modality_explicitly_unavailable(provider, "audio"):
         return _("The selected provider does not support audio attachments for message input.")
 
     return None

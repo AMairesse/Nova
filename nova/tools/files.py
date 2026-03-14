@@ -17,6 +17,13 @@ from nova.file_utils import batch_upload_files, download_file_content
 from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.models.MessageArtifact import ArtifactKind
 from nova.realtime.sidebar_updates import publish_file_update
+from nova.turn_inputs import (
+    PROVIDER_DELIVERY_NATIVE_BINARY,
+    PROVIDER_DELIVERY_TEXT_FALLBACK,
+    get_turn_input_capability_error,
+    resolve_runtime_provider,
+    should_use_pdf_text_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -244,14 +251,31 @@ async def file_attach(agent: LLMAgent, file_id: int) -> Tuple[str, Any]:
             None,
         )
 
+    provider = resolve_runtime_provider(agent)
+    capability_error = get_turn_input_capability_error(provider, artifact_kind)
+    if capability_error:
+        return capability_error, None
+
     label = build_artifact_label(file, fallback=f"file-{file.id}")
+    provider_delivery = PROVIDER_DELIVERY_NATIVE_BINARY
+    attachment_message = (
+        f"File attached: {label}. Continue your reasoning with this file included."
+    )
+    if artifact_kind == ArtifactKind.PDF and should_use_pdf_text_fallback(provider):
+        provider_delivery = PROVIDER_DELIVERY_TEXT_FALLBACK
+        attachment_message = (
+            f"File attached: {label}. Native PDF input is not verified for this model, "
+            "so Nova will use extracted PDF text for this turn."
+        )
+
     return (
-        f"File attached: {label}. Continue your reasoning with this file included.",
+        attachment_message,
         {
             "file_id": file.id,
             "kind": artifact_kind,
             "label": label,
             "mime_type": file.mime_type or "",
+            "provider_delivery": provider_delivery,
         },
     )
 

@@ -46,6 +46,16 @@ def normalize_multimodal_content_for_provider(provider, content):
     return get_provider_adapter(provider).normalize_multimodal_content(content)
 
 
+async def prepare_turn_content_for_provider(provider, intro_text, resolved_inputs, **kwargs):
+    """Prepare Nova turn inputs using provider-aware multimodal delivery rules."""
+    return await get_provider_adapter(provider).prepare_turn_content(
+        provider,
+        intro_text,
+        resolved_inputs,
+        **kwargs,
+    )
+
+
 def get_provider_defaults(provider_or_type) -> ProviderDefaults:
     """Return provider defaults used by forms and runtime."""
     return get_provider_adapter(provider_or_type).get_defaults()

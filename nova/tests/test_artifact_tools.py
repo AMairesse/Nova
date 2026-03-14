@@ -10,6 +10,7 @@ from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, Message
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tests.base import BaseTestCase
+from nova.tests.factories import create_provider
 from nova.tools.artifacts import (
     artifact_attach,
     artifact_ls,
@@ -65,6 +66,80 @@ class ArtifactToolsTests(BaseTestCase):
         self.assertIn("diagram.png", message)
         self.assertEqual(payload["artifact_id"], artifact.id)
         self.assertEqual(payload["kind"], ArtifactKind.IMAGE)
+
+    def test_artifact_attach_warns_when_pdf_will_use_text_fallback(self):
+        provider = create_provider(self.user, name="Fallback PDF Provider")
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "unknown", "audio": "pass"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "pass",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
+        )
+        self.agent.llm_provider = provider
+        artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.message,
+            direction=ArtifactDirection.INPUT,
+            kind=ArtifactKind.PDF,
+            label="report.pdf",
+            mime_type="application/pdf",
+        )
+
+        message, payload = async_to_sync(artifact_attach)(self.agent, artifact.id)
+
+        self.assertIn("extracted PDF text", message)
+        self.assertEqual(payload["provider_delivery"], "text_fallback")
+
+    def test_artifact_attach_rejects_pdf_when_provider_marks_it_unsupported(self):
+        provider = create_provider(self.user, name="Unsupported PDF Provider")
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "unsupported", "audio": "pass"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "pass",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
+        )
+        self.agent.llm_provider = provider
+        artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.message,
+            direction=ArtifactDirection.INPUT,
+            kind=ArtifactKind.PDF,
+            label="report.pdf",
+            mime_type="application/pdf",
+        )
+
+        message, payload = async_to_sync(artifact_attach)(self.agent, artifact.id)
+
+        self.assertIn("does not support PDF attachments", message)
+        self.assertIsNone(payload)
 
     @patch("nova.tools.artifacts.download_file_content", new_callable=AsyncMock)
     def test_artifact_read_text_loads_text_from_storage_when_summary_missing(self, mocked_download):

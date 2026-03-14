@@ -44,6 +44,7 @@ dependencies = [
     "playwright",
     "psycopg",
     "psycopg_pool",
+    "pypdf",
     "python-dotenv",
     "python_magic",
     "pywebpush",
