@@ -554,6 +554,63 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "ERROR")
 
     @patch("nova.tasks.tasks.run_ai_task_celery.delay")
+    def test_add_message_rejection_does_not_create_empty_thread(self, mocked_run_ai_task):
+        self.client.login(username="alice", password="pass")
+
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov-No-Tools-New-Thread",
+            provider_type=ProviderType.OPENROUTER,
+            model="grok-tool-less",
+            api_key="dummy",
+        )
+        provider.apply_verification_result(
+            {
+                "validation_status": LLMProvider.ValidationStatus.VALID,
+                "verification_summary": "Validated with partial capabilities (tools: unsupported).",
+                "verified_operations": {
+                    "chat": {"status": "pass", "message": "ok", "latency_ms": 10},
+                    "streaming": {"status": "pass", "message": "ok", "latency_ms": 11},
+                    "tools": {"status": "unsupported", "message": "No endpoints found that support tool use.", "latency_ms": 12},
+                    "vision": {"status": "pass", "message": "ok", "latency_ms": 13},
+                },
+            }
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Tool Agent New Thread",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+        )
+        tool = Tool.objects.create(
+            user=self.user,
+            name="Memory 2",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        agent.tools.add(tool)
+
+        existing_thread_ids = set(Thread.objects.filter(user=self.user).values_list("id", flat=True))
+        response = self.client.post(
+            reverse("add_message"),
+            data={
+                "thread_id": "None",
+                "new_message": "Hello",
+                "selected_agent": str(agent.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            set(Thread.objects.filter(user=self.user).values_list("id", flat=True)),
+            existing_thread_ids,
+        )
+        mocked_run_ai_task.assert_not_called()
+
+    @patch("nova.tasks.tasks.run_ai_task_celery.delay")
     def test_add_message_rejects_when_provider_has_no_tools_and_agent_depends_on_tools(
         self,
         mocked_run_ai_task,

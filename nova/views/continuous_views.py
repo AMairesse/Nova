@@ -26,16 +26,12 @@ from nova.models.Thread import Thread
 from nova.models.UserObjects import UserParameters
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
-from nova.views.agent_dispatch import (
-    enqueue_message_agent_task,
-    get_agent_execution_capability_error,
-    get_message_attachment_capability_error,
-    resolve_selected_or_default_agent,
-)
 from nova.utils import markdown_to_html
-from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    get_message_attachment_template_context,
+from nova.message_attachments import get_message_attachment_template_context
+from nova.message_submission import (
+    MessageSubmissionError,
+    SubmissionContext,
+    submit_user_message,
 )
 from nova.message_utils import annotate_user_message, upload_message_attachments
 
@@ -344,108 +340,58 @@ def continuous_messages(request):
 def continuous_add_message(request):
     """Append a user message to the continuous thread and start agent execution."""
 
-    new_message = request.POST.get("new_message", "")
-    new_message = new_message if new_message.strip() else ""
-    selected_agent = request.POST.get("selected_agent")
-    response_mode = str(request.POST.get("response_mode") or "auto").strip().lower() or "auto"
-    message_attachments = request.FILES.getlist("message_attachments", [])
-
-    if not new_message.strip() and not message_attachments:
-        return JsonResponse(
-            {"status": "ERROR", "message": "Message or attachment required"},
-            status=400,
-        )
-
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
-    execution_error = get_agent_execution_capability_error(
-        agent_config,
-        thread_mode=Thread.Mode.CONTINUOUS,
-        response_mode=response_mode,
-    )
-    if execution_error:
-        return JsonResponse(
-            {"status": "ERROR", "message": execution_error},
-            status=400,
-        )
-    if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
-        if attachment_error:
-            return JsonResponse(
-                {"status": "ERROR", "message": attachment_error},
-                status=400,
-            )
-
-    thread, msg, seg, day_label, opened_new_day = append_continuous_user_message(request.user, new_message)
-
-    message_attachment_meta = []
-    if message_attachments:
-        attachment_meta, attachment_errors = upload_message_attachments(
-            thread,
+    def prepare_context(message_text: str) -> SubmissionContext:
+        thread, message, segment, day_label, opened_new_day = append_continuous_user_message(
             request.user,
-            msg,
-            message_attachments,
+            message_text,
         )
-        message_attachment_meta = attachment_meta
-        if attachment_errors and not message_attachment_meta:
-            if seg and getattr(seg, "starts_at_message_id", None) == msg.id:
-                seg.delete()
-            msg.delete()
-            return JsonResponse(
-                {"status": "ERROR", "message": "; ".join(attachment_errors)},
-                status=400,
+
+        def before_message_delete(created_message):
+            if segment and getattr(segment, "starts_at_message_id", None) == created_message.id:
+                segment.delete()
+
+        def after_dispatch():
+            enqueue_continuous_followups(
+                user=request.user,
+                thread=thread,
+                day_label=day_label,
+                segment=segment,
+                opened_new_day=opened_new_day,
+                source="continuous_add_message",
             )
 
-    msg.internal_data = {
-        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
-        "response_mode": response_mode,
-    }
-    msg.save(update_fields=["internal_data"])
-    annotate_user_message(msg)
+        return SubmissionContext(
+            thread=thread,
+            message=message,
+            before_message_delete=before_message_delete,
+            after_dispatch=after_dispatch,
+            response_fields={
+                "day_segment_id": segment.id,
+                "day_label": day_label.isoformat(),
+                "opened_new_day": opened_new_day,
+            },
+        )
 
-    # Resolve agent (no dropdown in V1 continuous UI, but keep compatibility for now)
-    task = enqueue_message_agent_task(
-        user=request.user,
-        thread=thread,
-        agent_config=agent_config,
-        source_message_id=msg.id,
-        dispatcher_task=run_ai_task_celery,
-    )
+    try:
+        result = submit_user_message(
+            user=request.user,
+            message_text=request.POST.get("new_message", ""),
+            selected_agent=request.POST.get("selected_agent"),
+            response_mode=request.POST.get("response_mode"),
+            thread_mode=Thread.Mode.CONTINUOUS,
+            thread_files=[],
+            message_attachments=request.FILES.getlist("message_attachments"),
+            prepare_context=prepare_context,
+            dispatcher_task=run_ai_task_celery,
+            attachment_uploader=upload_message_attachments,
+        )
+    except MessageSubmissionError as exc:
+        return JsonResponse(
+            {"status": "ERROR", "message": exc.message},
+            status=exc.status_code,
+        )
 
-    enqueue_continuous_followups(
-        user=request.user,
-        thread=thread,
-        day_label=day_label,
-        segment=seg,
-        opened_new_day=opened_new_day,
-        source="continuous_add_message",
-    )
-
-    # Match the JSON contract expected by [`MessageManager.handleFormSubmit()`](nova/static/js/message-manager.js:235)
-    # so Continuous can reuse the same client logic as Threads.
-    message_data = {
-        "id": msg.id,
-        "text": new_message,
-        "actor": msg.actor,
-        "file_count": 0,
-        "internal_data": msg.internal_data or {},
-        "message_attachments": message_attachment_meta,
-        "artifacts": getattr(msg, "message_artifacts", []),
-    }
-
-    return JsonResponse(
-        {
-            "status": "OK",
-            "message": message_data,
-            "thread_id": thread.id,
-            "task_id": task.id,
-            "day_segment_id": seg.id,
-            "day_label": day_label.isoformat(),
-            "opened_new_day": opened_new_day,
-            # Keep response shape compatible with thread mode callers.
-            "threadHtml": None,
-            "uploaded_file_ids": [],
-        }
-    )
+    return JsonResponse(result.as_payload())
 
 
 @csrf_protect

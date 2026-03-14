@@ -15,12 +15,6 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
-from nova.views.agent_dispatch import (
-    enqueue_message_agent_task,
-    get_agent_execution_capability_error,
-    get_message_attachment_capability_error,
-    resolve_selected_or_default_agent,
-)
 from nova.thread_titles import build_default_thread_subject
 from nova.utils import markdown_to_html
 import logging
@@ -29,9 +23,11 @@ from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
-from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    get_message_attachment_template_context,
+from nova.message_attachments import get_message_attachment_template_context
+from nova.message_submission import (
+    MessageSubmissionError,
+    SubmissionContext,
+    submit_user_message,
 )
 from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.realtime.sidebar_updates import publish_file_update
@@ -268,146 +264,41 @@ def delete_thread(request, thread_id):
 @login_required(login_url='login')
 def add_message(request):
     thread_id = request.POST.get('thread_id')
-    new_message = request.POST.get('new_message', '')
-    new_message = new_message if new_message.strip() else ''
-    selected_agent = request.POST.get('selected_agent')
-    response_mode = str(request.POST.get('response_mode') or 'auto').strip().lower() or 'auto'
-    uploaded_files = request.FILES.getlist('files', [])
-    message_attachments = request.FILES.getlist('message_attachments', [])
 
-    if not new_message.strip() and not uploaded_files and not message_attachments:
+    def prepare_context(message_text: str) -> SubmissionContext:
+        if not thread_id or thread_id == 'None':
+            thread, thread_html = new_thread(request)
+        else:
+            thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+            thread_html = None
+        return SubmissionContext(
+            thread=thread,
+            create_message=lambda text: thread.add_message(text, actor=Actor.USER),
+            thread_html=thread_html,
+        )
+
+    try:
+        result = submit_user_message(
+            user=request.user,
+            message_text=request.POST.get('new_message', ''),
+            selected_agent=request.POST.get('selected_agent'),
+            response_mode=request.POST.get('response_mode'),
+            thread_mode=Thread.Mode.THREAD,
+            thread_files=request.FILES.getlist('files'),
+            message_attachments=request.FILES.getlist('message_attachments'),
+            prepare_context=prepare_context,
+            dispatcher_task=run_ai_task_celery,
+            thread_file_uploader=batch_upload_files,
+            attachment_uploader=upload_message_attachments,
+            file_update_publisher=publish_file_update,
+        )
+    except MessageSubmissionError as exc:
         return JsonResponse(
-            {"status": "ERROR", "message": "Message or attachment required"},
-            status=400,
+            {"status": "ERROR", "message": exc.message},
+            status=exc.status_code,
         )
 
-    if not thread_id or thread_id == 'None':
-        thread, thread_html = new_thread(request)
-    else:
-        thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-        thread_html = None
-
-    uploaded_file_ids = []
-    message_attachment_meta = []
-    agent_config = resolve_selected_or_default_agent(request.user, selected_agent)
-    execution_error = get_agent_execution_capability_error(
-        agent_config,
-        thread_mode=Thread.Mode.THREAD,
-        response_mode=response_mode,
-    )
-    if execution_error:
-        return JsonResponse(
-            {"status": "ERROR", "message": execution_error},
-            status=400,
-        )
-
-    if message_attachments:
-        attachment_error = get_message_attachment_capability_error(agent_config, message_attachments)
-        if attachment_error:
-            return JsonResponse(
-                {"status": "ERROR", "message": attachment_error},
-                status=400,
-            )
-
-    if uploaded_files:
-        # Prepare data for unified async upload pipeline.
-        # We propose simple top-level paths; batch_upload_files() will:
-        # - sanitize paths
-        # - enforce size and MIME limits
-        # - auto-rename on collision
-        # - upload to MinIO under users/{user_id}/threads/{thread_id}{safe_path}
-        file_data = []
-        for f in uploaded_files:
-            try:
-                content = f.read()
-            except Exception as e:
-                logger.error(f"Failed reading uploaded file {f.name}: {e}")
-                return JsonResponse(
-                    {"status": "ERROR", "message": "File upload failed while reading content"},
-                    status=500,
-                )
-            # Use a simple POSIX path; sanitize_user_path() will normalize.
-            proposed_path = f"/{f.name}"
-            file_data.append({"path": proposed_path, "content": content})
-
-        try:
-            created_files, errors = async_to_sync(batch_upload_files)(thread, request.user, file_data)
-        except Exception as e:
-            logger.error(f"Batch upload failed: {e}")
-            return JsonResponse(
-                {"status": "ERROR", "message": "File upload failed"},
-                status=500,
-            )
-
-        # Collect created ids for message.internal_data and API compatibility.
-        for item in created_files:
-            file_id = item.get("id")
-            if file_id:
-                uploaded_file_ids.append(file_id)
-
-        # Surface validation errors (size, MIME, etc.) in a backward compatible way:
-        # if any error occurred and nothing was uploaded, treat as failure.
-        if errors and not uploaded_file_ids:
-            # Join errors into a single message; details are safe/validation oriented.
-            return JsonResponse(
-                {"status": "ERROR", "message": "; ".join(errors)},
-                status=400,
-            )
-
-    if uploaded_file_ids:
-        async_to_sync(publish_file_update)(thread.id, "attachment_upload")
-
-    message = thread.add_message(new_message, actor=Actor.USER)
-    if message_attachments:
-        attachment_meta, attachment_errors = upload_message_attachments(
-            thread,
-            request.user,
-            message,
-            message_attachments,
-        )
-        message_attachment_meta = attachment_meta
-        if attachment_errors and not message_attachment_meta:
-            message.delete()
-            return JsonResponse(
-                {"status": "ERROR", "message": "; ".join(attachment_errors)},
-                status=400,
-            )
-
-    message.internal_data = {
-        'file_ids': uploaded_file_ids,
-        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
-        'response_mode': response_mode,
-    }
-    message.save()
-    annotate_user_message(message)
-
-    task = enqueue_message_agent_task(
-        user=request.user,
-        thread=thread,
-        agent_config=agent_config,
-        source_message_id=message.id,
-        dispatcher_task=run_ai_task_celery,
-    )
-
-    # Prepare message data for JSON response
-    message_data = {
-        "id": message.id,
-        "text": new_message,  # Return raw text for client-side rendering
-        "actor": message.actor,
-        "file_count": len(uploaded_file_ids) if uploaded_file_ids else 0,
-        "internal_data": message.internal_data or {},
-        "message_attachments": message_attachment_meta,
-        "artifacts": getattr(message, "message_artifacts", []),
-    }
-
-    return JsonResponse({
-        "status": "OK",
-        "message": message_data,
-        "thread_id": thread.id,
-        "task_id": task.id,
-        "threadHtml": thread_html,
-        "uploaded_file_ids": uploaded_file_ids
-    })
+    return JsonResponse(result.as_payload())
 
 
 @require_POST
