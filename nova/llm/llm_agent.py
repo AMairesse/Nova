@@ -27,6 +27,7 @@ from nova.providers import (
 )
 from nova.message_artifacts import build_artifact_label, detect_artifact_kind
 from nova.llm.summarization_middleware import SummarizationMiddleware
+from nova.telemetry.langfuse import create_langfuse_callback_handler
 from nova.utils import extract_final_answer
 from .llm_tools import load_tools
 from asgiref.sync import sync_to_async
@@ -221,7 +222,6 @@ class LLMAgent:
         if allow_langfuse and langfuse_public_key and langfuse_secret_key:
             try:
                 from langfuse import Langfuse
-                from langfuse.langchain import CallbackHandler
 
                 # Create/Configure Langfuse client (once at startup)
                 langfuse = Langfuse(
@@ -229,7 +229,9 @@ class LLMAgent:
                     secret_key=langfuse_secret_key,
                     host=langfuse_host,
                 )
-                langfuse_handler = CallbackHandler(public_key=langfuse_public_key)
+                langfuse_handler = create_langfuse_callback_handler(
+                    public_key=langfuse_public_key,
+                )
 
                 if not langfuse.auth_check():
                     logger.warning(

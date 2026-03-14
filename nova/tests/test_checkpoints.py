@@ -2,6 +2,7 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 from django.test import TestCase
+from psycopg.rows import dict_row
 
 from nova.llm.checkpoints import _make_conn_str, _bootstrap_tables, get_checkpointer
 
@@ -44,6 +45,11 @@ class CheckpointsTest(TestCase):
         # Verify setup was called
         mock_saver.assert_called_once_with(mock_pool_instance)
         mock_saver_instance.setup.assert_called_once()
+        mock_pool.assert_called_once_with(
+            "postgresql://test",
+            kwargs={"autocommit": True, "row_factory": dict_row},
+            open=False,
+        )
 
         # Verify global state
         from nova.llm import checkpoints
@@ -146,7 +152,7 @@ class CheckpointsTest(TestCase):
         mock_pool_instance.open.assert_called_once()
 
         # Verify new saver was created
-        mock_pool.assert_called_once_with(conninfo="postgresql://test", timeout=10)
+        mock_pool.assert_called_once_with(conninfo="postgresql://test", timeout=10, open=False)
         mock_saver.assert_called_once_with(mock_pool_instance)
 
         # Verify result

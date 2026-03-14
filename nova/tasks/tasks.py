@@ -42,6 +42,7 @@ from nova.tasks.task_definition_runner import (
     build_email_prompt_variables,
     execute_agent_task_definition,
 )
+from nova.telemetry.langfuse import create_langfuse_callback_handler
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
 
@@ -534,7 +535,6 @@ def _build_langfuse_invoke_config(user, *, session_id: str):
 
     try:
         from langfuse import Langfuse
-        from langfuse.langchain import CallbackHandler
 
         client = Langfuse(
             public_key=langfuse_public_key,
@@ -548,7 +548,9 @@ def _build_langfuse_invoke_config(user, *, session_id: str):
             )
 
         invoke_config = {
-            "callbacks": [CallbackHandler(public_key=langfuse_public_key)],
+            "callbacks": [
+                create_langfuse_callback_handler(public_key=langfuse_public_key)
+            ],
             "metadata": {
                 "langfuse_session_id": session_id,
             },
