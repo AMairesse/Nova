@@ -363,10 +363,16 @@ class MainViewsTests(TestCase):
         mocked_upload_message_attachments.return_value = (
             [{
                 "id": 201,
-                "filename": "photo.jpg",
+                "message_id": 1,
+                "user_file_id": 201,
+                "direction": "input",
+                "kind": "image",
                 "mime_type": "image/jpeg",
+                "label": "photo.jpg",
+                "summary_text": "",
                 "size": 1024,
-                "scope": UserFile.Scope.MESSAGE_ATTACHMENT,
+                "published_to_file": False,
+                "metadata": {},
             }],
             [],
         )
@@ -384,12 +390,13 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["message_attachments"][0]["filename"], "photo.jpg")
+        self.assertEqual(payload["message"]["artifacts"][0]["label"], "photo.jpg")
         self.assertEqual(payload["message"]["text"], "")
         mocked_publish_update.assert_not_awaited()
 
         message = thread.get_messages().latest("id")
-        self.assertEqual(message.internal_data["message_attachments"][0]["scope"], UserFile.Scope.MESSAGE_ATTACHMENT)
+        self.assertNotIn("message_attachments", message.internal_data)
+        self.assertEqual(message.internal_data["response_mode"], "auto")
 
     @patch("nova.views.thread_views.upload_message_attachments")
     @patch("nova.tasks.tasks.run_ai_task_celery.delay")

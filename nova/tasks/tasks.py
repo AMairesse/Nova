@@ -2,7 +2,6 @@
 import asyncio
 import datetime as dt
 import logging
-import posixpath
 import time
 from asgiref.sync import sync_to_async, async_to_sync
 from celery import current_app
@@ -38,11 +37,6 @@ from nova.native_provider_runtime import (
     persist_native_result_artifacts,
     summarize_native_result,
 )
-from nova.message_artifacts import detect_artifact_kind
-from nova.message_attachments import (
-    MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY,
-    normalize_message_attachments,
-)
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import build_email_prompt_variables, execute_agent_task_definition
@@ -67,108 +61,32 @@ async def build_source_message_prompt(
     fallback_prompt: str = "",
 ):
     """Build the runtime user turn payload from a stored source message."""
-    internal_data = (
-        source_message.internal_data
-        if isinstance(source_message.internal_data, dict)
-        else {}
+    source_message_id = getattr(source_message, "pk", None) or getattr(
+        source_message,
+        "id",
+        None,
     )
 
     def _load_attachment_files():
-        artifacts = []
-        if getattr(source_message, "pk", None):
-            artifacts = list(
-                MessageArtifact.objects.filter(
-                    user=source_message.user,
-                    thread=source_message.thread,
-                    message=source_message,
-                    direction=ArtifactDirection.INPUT,
-                )
-                .select_related("user_file")
-                .order_by("order", "created_at", "id")
-            )
-        if artifacts:
-            return [
-                PromptInput.from_attachment(
-                    {
-                        "id": artifact.id,
-                        "message_id": artifact.message_id,
-                        "user_file_id": artifact.user_file_id,
-                        "direction": artifact.direction,
-                        "kind": artifact.kind,
-                        "label": artifact.filename,
-                        "mime_type": artifact.mime_type or "",
-                        "size": int(getattr(artifact.user_file, "size", 0) or 0),
-                        "summary_text": artifact.summary_text or "",
-                        "metadata": artifact.metadata or {},
-                    },
-                    artifact.user_file,
-                )
-                for artifact in artifacts
-            ]
+        if not source_message_id:
+            return []
 
-        attachments = normalize_message_attachments(
-            internal_data.get(MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY)
-        )
-        files = list(
-            UserFile.objects.filter(
+        return [
+            PromptInput.from_artifact(artifact)
+            for artifact in MessageArtifact.objects.filter(
                 user=source_message.user,
                 thread=source_message.thread,
-                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-                source_message=source_message,
-            ).order_by("created_at", "id")
-        )
-        if not attachments:
-            return [
-                PromptInput.from_attachment(
-                    {
-                        "id": user_file.id,
-                        "message_id": getattr(source_message, "id", None),
-                        "user_file_id": user_file.id,
-                        "direction": ArtifactDirection.INPUT,
-                        "kind": detect_artifact_kind(
-                            user_file.mime_type,
-                            user_file.original_filename,
-                        ),
-                        "label": posixpath.basename(user_file.original_filename),
-                        "mime_type": user_file.mime_type,
-                        "size": user_file.size,
-                        "summary_text": "",
-                        "metadata": {"scope": user_file.scope},
-                    },
-                    user_file,
-                )
-                for user_file in files
-            ]
-
-        by_id = {user_file.id: user_file for user_file in files}
-        return [
-            PromptInput.from_attachment(
-                {
-                    "id": attachment["id"],
-                    "message_id": getattr(source_message, "id", None),
-                    "user_file_id": attachment["id"],
-                    "direction": ArtifactDirection.INPUT,
-                    "kind": detect_artifact_kind(
-                        attachment.get("mime_type"),
-                        attachment.get("filename"),
-                    ),
-                    "label": (
-                        attachment.get("filename")
-                        or posixpath.basename(by_id[attachment["id"]].original_filename)
-                        if attachment["id"] in by_id
-                        else ""
-                    ),
-                    "mime_type": attachment.get("mime_type") or "",
-                    "size": int(attachment.get("size") or 0),
-                    "summary_text": "",
-                    "metadata": {"scope": attachment.get("scope") or ""},
-                },
-                by_id.get(attachment["id"]),
+                message_id=source_message_id,
+                direction=ArtifactDirection.INPUT,
             )
-            for attachment in attachments
+            .select_related("user_file")
+            .order_by("order", "created_at", "id")
         ]
 
-    prompt_inputs = await sync_to_async(_load_attachment_files, thread_sensitive=True)()
+    prompt_inputs = await sync_to_async(
+        _load_attachment_files,
+        thread_sensitive=True,
+    )()
     if not prompt_inputs:
         return source_message.text or fallback_prompt or ""
 
@@ -183,7 +101,7 @@ async def build_source_message_prompt(
         prompt_inputs,
         intro_text=intro_text,
         content_downloader=download_file_content,
-        log_subject=f"message {source_message.id}",
+        log_subject=f"message {source_message_id}",
         include_missing_file_summary=True,
     )
 

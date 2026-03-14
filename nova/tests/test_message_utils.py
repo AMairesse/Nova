@@ -19,6 +19,20 @@ class MessageUtilsTests(BaseTestCase):
     def test_upload_message_attachments_passes_source_message_and_limits(self, mocked_batch_upload):
         thread = Thread.objects.create(user=self.user, subject="Attachments")
         message = thread.add_message("Look at this", actor=Actor.USER)
+        UserFile.objects.create(
+            id=301,
+            user=self.user,
+            thread=thread,
+            source_message=message,
+            key=(
+                f"users/{self.user.id}/threads/{thread.id}"
+                f"/.message_attachments/message_{message.id}/photo.png"
+            ),
+            original_filename=f"/.message_attachments/message_{message.id}/photo.png",
+            mime_type="image/png",
+            size=128,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
         mocked_batch_upload.return_value = (
             [{
                 "id": 301,
@@ -38,7 +52,9 @@ class MessageUtilsTests(BaseTestCase):
         )
 
         self.assertEqual(errors, [])
-        self.assertEqual(metadata[0]["filename"], "photo.png")
+        self.assertEqual(metadata[0]["label"], "photo.png")
+        self.assertEqual(metadata[0]["kind"], "image")
+        self.assertEqual(metadata[0]["message_id"], message.id)
         mocked_batch_upload.assert_called_once()
         _, kwargs = mocked_batch_upload.call_args
         self.assertEqual(kwargs["scope"], UserFile.Scope.MESSAGE_ATTACHMENT)

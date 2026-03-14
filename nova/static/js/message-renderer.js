@@ -21,12 +21,6 @@
             if (Array.isArray(messageData?.message_artifacts)) {
                 return messageData.message_artifacts;
             }
-            if (Array.isArray(messageData?.message_attachments)) {
-                return messageData.message_attachments;
-            }
-            if (Array.isArray(messageData?.internal_data?.message_attachments)) {
-                return messageData.internal_data.message_attachments;
-            }
             return [];
         }
 

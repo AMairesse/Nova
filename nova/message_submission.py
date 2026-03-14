@@ -8,7 +8,7 @@ from asgiref.sync import async_to_sync
 from django.core.files.uploadedfile import UploadedFile
 
 from nova.file_utils import batch_upload_files
-from nova.message_attachments import MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY
+from nova.message_artifacts import normalize_message_artifacts
 from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.models.Message import Message
 from nova.models.Task import Task
@@ -47,7 +47,6 @@ class SubmissionResult:
     thread: Thread
     message: Message
     task: Task
-    message_attachment_meta: list[dict]
     uploaded_file_ids: list[int]
     thread_html: str | None = None
     response_fields: dict[str, Any] = field(default_factory=dict)
@@ -59,7 +58,6 @@ class SubmissionResult:
             "actor": self.message.actor,
             "file_count": len(self.uploaded_file_ids),
             "internal_data": self.message.internal_data or {},
-            "message_attachments": self.message_attachment_meta,
             "artifacts": getattr(self.message, "message_artifacts", []),
         }
         payload = {
@@ -184,7 +182,7 @@ def submit_user_message(
         message = context.create_message(normalized_text)
         context.message = message
 
-    message_attachment_meta: list[dict] = []
+    message_attachment_artifacts: list[dict] = []
     if uploaded_message_attachments:
         attachment_meta, attachment_errors = attachment_uploader(
             context.thread,
@@ -192,8 +190,8 @@ def submit_user_message(
             message,
             uploaded_message_attachments,
         )
-        message_attachment_meta = list(attachment_meta or [])
-        if attachment_errors and not message_attachment_meta:
+        message_attachment_artifacts = list(attachment_meta or [])
+        if attachment_errors and not message_attachment_artifacts:
             if context.before_message_delete is not None:
                 context.before_message_delete(message)
             message.delete()
@@ -201,11 +199,15 @@ def submit_user_message(
 
     message.internal_data = {
         "file_ids": uploaded_file_ids,
-        MESSAGE_ATTACHMENT_INTERNAL_DATA_KEY: message_attachment_meta,
         "response_mode": normalized_response_mode,
     }
     message.save(update_fields=["internal_data"])
     annotate_user_message(message)
+    if message_attachment_artifacts and not getattr(message, "message_artifacts", None):
+        message.message_artifacts = normalize_message_artifacts(
+            message_attachment_artifacts
+        )
+        message.message_attachment_count = len(message.message_artifacts)
 
     task = enqueue_message_agent_task(
         user=user,
@@ -222,7 +224,6 @@ def submit_user_message(
         thread=context.thread,
         message=message,
         task=task,
-        message_attachment_meta=message_attachment_meta,
         uploaded_file_ids=uploaded_file_ids,
         thread_html=context.thread_html,
         response_fields=dict(context.response_fields),

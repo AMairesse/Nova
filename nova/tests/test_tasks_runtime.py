@@ -85,17 +85,6 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         source_message = SimpleNamespace(
             id=55,
             text="What do you see?",
-            internal_data={
-                "message_attachments": [
-                    {
-                        "id": 9,
-                        "filename": "photo.jpg",
-                        "mime_type": "image/jpeg",
-                        "size": 1200,
-                        "scope": "message_attachment",
-                    }
-                ]
-            },
             user=SimpleNamespace(id=1),
             thread=SimpleNamespace(id=2),
         )
@@ -106,13 +95,24 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             return wrapper
 
         mocked_queryset = Mock()
-        mocked_queryset.order_by.return_value = [
-            SimpleNamespace(id=9, mime_type="image/jpeg", original_filename="/.message_attachments/message_55/photo.jpg"),
+        mocked_queryset.select_related.return_value.order_by.return_value = [
+            SimpleNamespace(
+                id=9,
+                kind="image",
+                mime_type="image/jpeg",
+                filename="photo.jpg",
+                summary_text="",
+                user_file=SimpleNamespace(
+                    id=9,
+                    mime_type="image/jpeg",
+                    original_filename="/.message_attachments/message_55/photo.jpg",
+                ),
+            ),
         ]
 
         with (
             patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
-            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset) as mocked_filter,
+            patch("nova.tasks.tasks.MessageArtifact.objects.filter", return_value=mocked_queryset) as mocked_filter,
             patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"image-bytes"),
         ):
             prompt = await build_source_message_prompt(source_message)
@@ -125,25 +125,14 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         mocked_filter.assert_called_once_with(
             user=source_message.user,
             thread=source_message.thread,
-            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-            source_message=source_message,
+            message_id=source_message.id,
+            direction=ArtifactDirection.INPUT,
         )
 
     async def test_build_source_message_prompt_keeps_attachment_text_when_image_load_fails(self):
         source_message = SimpleNamespace(
             id=56,
             text="",
-            internal_data={
-                "message_attachments": [
-                    {
-                        "id": 10,
-                        "filename": "broken.jpg",
-                        "mime_type": "image/jpeg",
-                        "size": 1200,
-                        "scope": "message_attachment",
-                    }
-                ]
-            },
             user=SimpleNamespace(id=1),
             thread=SimpleNamespace(id=2),
         )
@@ -154,13 +143,24 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             return wrapper
 
         mocked_queryset = Mock()
-        mocked_queryset.order_by.return_value = [
-            SimpleNamespace(id=10, mime_type="image/jpeg", original_filename="/.message_attachments/message_56/broken.jpg"),
+        mocked_queryset.select_related.return_value.order_by.return_value = [
+            SimpleNamespace(
+                id=10,
+                kind="image",
+                mime_type="image/jpeg",
+                filename="broken.jpg",
+                summary_text="",
+                user_file=SimpleNamespace(
+                    id=10,
+                    mime_type="image/jpeg",
+                    original_filename="/.message_attachments/message_56/broken.jpg",
+                ),
+            ),
         ]
 
         with (
             patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
-            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset) as mocked_filter,
+            patch("nova.tasks.tasks.MessageArtifact.objects.filter", return_value=mocked_queryset) as mocked_filter,
             patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, side_effect=RuntimeError("storage down")),
         ):
             prompt = await build_source_message_prompt(source_message)
@@ -171,15 +171,14 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         mocked_filter.assert_called_once_with(
             user=source_message.user,
             thread=source_message.thread,
-            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-            source_message=source_message,
+            message_id=source_message.id,
+            direction=ArtifactDirection.INPUT,
         )
 
-    async def test_build_source_message_prompt_falls_back_to_source_message_relation(self):
+    async def test_build_source_message_prompt_returns_source_text_without_artifacts(self):
         source_message = SimpleNamespace(
             id=57,
             text="Describe this",
-            internal_data={},
             user=SimpleNamespace(id=1),
             thread=SimpleNamespace(id=2),
         )
@@ -190,38 +189,26 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             return wrapper
 
         mocked_queryset = Mock()
-        mocked_queryset.order_by.return_value = [
-            SimpleNamespace(
-                id=11,
-                mime_type="image/png",
-                original_filename="/.message_attachments/message_57/diagram.png",
-                size=128,
-                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-            ),
-        ]
+        mocked_queryset.select_related.return_value.order_by.return_value = []
 
         with (
             patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
-            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset) as mocked_filter,
-            patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"png-bytes"),
+            patch("nova.tasks.tasks.MessageArtifact.objects.filter", return_value=mocked_queryset) as mocked_filter,
         ):
             prompt = await build_source_message_prompt(source_message)
 
-        self.assertIsInstance(prompt, list)
-        self.assertIn("diagram.png", prompt[0]["text"])
-        self.assertEqual(prompt[1]["filename"], "diagram.png")
+        self.assertEqual(prompt, "Describe this")
         mocked_filter.assert_called_once_with(
             user=source_message.user,
             thread=source_message.thread,
-            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-            source_message=source_message,
+            message_id=source_message.id,
+            direction=ArtifactDirection.INPUT,
         )
 
     async def test_build_source_message_prompt_returns_pdf_blocks_for_pdf_artifacts(self):
         source_message = SimpleNamespace(
             id=58,
             text="Summarize this PDF",
-            internal_data={},
             user=SimpleNamespace(id=1),
             thread=SimpleNamespace(id=2),
         )
@@ -232,19 +219,24 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             return wrapper
 
         mocked_queryset = Mock()
-        mocked_queryset.order_by.return_value = [
+        mocked_queryset.select_related.return_value.order_by.return_value = [
             SimpleNamespace(
                 id=12,
+                kind="pdf",
                 mime_type="application/pdf",
-                original_filename="/.message_attachments/message_58/report.pdf",
-                size=2048,
-                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                filename="report.pdf",
+                summary_text="",
+                user_file=SimpleNamespace(
+                    id=12,
+                    mime_type="application/pdf",
+                    original_filename="/.message_attachments/message_58/report.pdf",
+                ),
             ),
         ]
 
         with (
             patch("nova.tasks.tasks.sync_to_async", side_effect=immediate_sync_to_async),
-            patch("nova.tasks.tasks.UserFile.objects.filter", return_value=mocked_queryset),
+            patch("nova.tasks.tasks.MessageArtifact.objects.filter", return_value=mocked_queryset),
             patch("nova.tasks.tasks.download_file_content", new_callable=AsyncMock, return_value=b"%PDF-1.4"),
         ):
             prompt = await build_source_message_prompt(source_message)
