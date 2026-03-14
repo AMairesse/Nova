@@ -7,13 +7,15 @@ from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
-from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
-from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
-from nova.models.UserObjects import UserProfile
+from nova.message_panel import (
+    get_message_panel_agents,
+    get_pending_interactions,
+    get_user_default_agent,
+)
 from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.thread_titles import build_default_thread_subject
 import logging
@@ -117,19 +119,11 @@ def load_more_threads(request):
 @csrf_protect
 @login_required(login_url='login')
 def message_list(request):
-    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
-    for agent in user_agents:
-        agent.requires_tools_for_current_thread = agent.requires_tools_for_thread_mode(Thread.Mode.THREAD)
-    agent_id = request.GET.get('agent_id')
-    default_agent = None
-    if agent_id:
-        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
-            id=agent_id,
-            user=request.user,
-        ).first()
-    if not default_agent:
-        default_agent = getattr(request.user.userprofile,
-                                "default_agent", None)
+    user_agents, default_agent = get_message_panel_agents(
+        request.user,
+        thread_mode=Thread.Mode.THREAD,
+        selected_agent_id=request.GET.get('agent_id'),
+    )
     selected_thread_id = request.GET.get('thread_id')
     # With browser persistence removed, default to the most recent classic thread.
     if not selected_thread_id:
@@ -145,14 +139,12 @@ def message_list(request):
         try:
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
-            raw_messages = list(with_message_display_relations(selected_thread.get_messages().order_by("created_at", "id")))
-
-            # Get agent config for summarization settings
-            agent_config = None
-            try:
-                agent_config = request.user.userprofile.default_agent
-            except UserProfile.DoesNotExist:
-                pass
+            raw_messages = list(
+                with_message_display_relations(
+                    selected_thread.get_messages().order_by("created_at", "id")
+                )
+            )
+            agent_config = get_user_default_agent(request.user)
 
             messages = prepare_messages_for_display(
                 raw_messages,
@@ -161,19 +153,13 @@ def message_list(request):
                 render_system_summaries=True,
             )
 
-            # Fetch pending interactions for server-side rendering
-            pending_interactions = Interaction.objects.filter(
-                thread=selected_thread,
-                status=InteractionStatus.PENDING
-            ).select_related('task', 'agent_config')
-
             # Add pending interactions to context
             context = {
                 'messages': messages,
                 'thread_id': selected_thread_id,
                 'user_agents': user_agents,
                 'default_agent': default_agent,
-                'pending_interactions': pending_interactions,
+                'pending_interactions': get_pending_interactions(selected_thread),
             }
             context.update(get_message_attachment_template_context())
             return render(request, 'nova/message_container.html', context)
@@ -285,7 +271,7 @@ def summarize_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
 
     # Get the agent's summarization config
-    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    agent_config = get_user_default_agent(request.user)
     if not agent_config:
         return JsonResponse({
             "status": "ERROR",
@@ -380,7 +366,7 @@ def confirm_summarize_thread(request, thread_id):
     sub_agent_ids = json.loads(request.POST.get('sub_agent_ids', '[]'))
 
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-    agent_config = getattr(request.user.userprofile, "default_agent", None)
+    agent_config = get_user_default_agent(request.user)
     if not agent_config:
         return JsonResponse({
             "status": "ERROR",

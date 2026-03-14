@@ -2,6 +2,7 @@ from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 
 from nova.agent_execution import requires_tools_for_run
+from nova.message_panel import get_user_default_agent
 from nova.message_artifacts import detect_artifact_kind
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Thread import Thread
@@ -15,7 +16,7 @@ def resolve_selected_or_default_agent(user, selected_agent: str | None):
             id=selected_agent,
             user=user,
         )
-    return getattr(getattr(user, "userprofile", None), "default_agent", None)
+    return get_user_default_agent(user)
 
 
 def get_message_attachment_capability_error(agent_config, uploaded_files=None) -> str | None:

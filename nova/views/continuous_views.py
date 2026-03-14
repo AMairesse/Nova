@@ -18,12 +18,11 @@ from nova.continuous.utils import (
     ensure_continuous_thread,
     get_day_label_for_user,
 )
-from nova.models.AgentConfig import AgentConfig
 from nova.models.DaySegment import DaySegment
-from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserParameters
+from nova.message_panel import get_message_panel_agents, get_pending_interactions
 from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
@@ -255,18 +254,11 @@ def continuous_messages(request):
     # If the user is browsing a past day, the UI should be read-only.
     allow_posting = day_label is None or day_label == today_label
 
-    user_agents = AgentConfig.objects.select_related("llm_provider").filter(user=request.user, is_tool=False)
-    for agent in user_agents:
-        agent.requires_tools_for_current_thread = agent.requires_tools_for_thread_mode(Thread.Mode.CONTINUOUS)
-    agent_id = request.GET.get("agent_id")
-    default_agent = None
-    if agent_id:
-        default_agent = AgentConfig.objects.select_related("llm_provider").filter(
-            id=agent_id,
-            user=request.user,
-        ).first()
-    if not default_agent:
-        default_agent = getattr(getattr(request.user, "userprofile", None), "default_agent", None)
+    user_agents, default_agent = get_message_panel_agents(
+        request.user,
+        thread_mode=Thread.Mode.CONTINUOUS,
+        selected_agent_id=request.GET.get("agent_id"),
+    )
 
     if day_label is None:
         latest_messages = list(
@@ -295,15 +287,6 @@ def continuous_messages(request):
                 list(with_message_display_relations(qs.order_by("created_at", "id")))
             )
 
-    pending_interactions = (
-        Interaction.objects.filter(
-            thread=thread,
-            status=InteractionStatus.PENDING,
-        )
-        .select_related("task", "agent_config")
-        .order_by("created_at", "id")
-    )
-
     # Keep template contract consistent with thread mode.
     return render(
         request,
@@ -313,7 +296,7 @@ def continuous_messages(request):
             "thread_id": thread.id,
             "user_agents": user_agents,
             "default_agent": default_agent,
-            "pending_interactions": pending_interactions,
+            "pending_interactions": get_pending_interactions(thread),
             "Actor": Actor,
             "allow_posting": allow_posting,
             "is_continuous_default_mode": day_label is None,
