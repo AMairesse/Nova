@@ -307,6 +307,7 @@
   <div class="message-input-area p-2 p-sm-3">
     <form
       id="message-form"
+      class="composer-dropzone"
       method="post"
       enctype="multipart/form-data"
       data-message-attachment-max-files="{{ message_attachment_max_files }}"
@@ -439,6 +440,9 @@
       <div id="composer-thread-files" class="composer-thread-files d-none" aria-live="polite"></div>
       <div id="composer-status-line" class="composer-status-line small text-muted mt-2 d-none" aria-live="polite"></div>
       <div id="composer-provider-capability-note" class="alert py-2 px-3 small mt-2 d-none" aria-live="polite"></div>
+      <div id="composer-dropzone-hint" class="composer-dropzone-hint d-none" aria-live="polite">
+        <i class="bi bi-cloud-arrow-down me-2"></i>{% trans "Drop an image, PDF, or text file here" %}
+      </div>
     </form>
   </div>
   {% endif %} {% endwith %}

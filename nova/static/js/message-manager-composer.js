@@ -178,6 +178,7 @@
                 textarea.maxLength = this.maxComposerHardTextLimit;
                 this.resizeComposerTextarea(textarea);
             }
+            this.resetComposerDropzoneState();
             this.syncComposerTextStatus(textarea);
         },
 
@@ -303,6 +304,138 @@
             }
         },
 
+        getComposerDropzoneElement() {
+            return document.getElementById('message-form');
+        },
+
+        resetComposerDropzoneState() {
+            this.composerDragDepth = 0;
+            this.setComposerDropzoneActive(false);
+        },
+
+        setComposerDropzoneActive(active) {
+            const dropzone = this.getComposerDropzoneElement();
+            const hint = document.getElementById('composer-dropzone-hint');
+            if (dropzone) {
+                dropzone.classList.toggle('composer-dropzone-active', Boolean(active));
+            }
+            if (hint) {
+                hint.classList.toggle('d-none', !active);
+            }
+        },
+
+        eventHasComposerFiles(event) {
+            const dataTransfer = event?.dataTransfer || event?.clipboardData;
+            if (!dataTransfer) return false;
+            if ((dataTransfer.files?.length || 0) > 0) return true;
+
+            const types = Array.from(dataTransfer.types || []);
+            return types.includes('Files');
+        },
+
+        isComposerTextFile(file) {
+            const mimeType = `${file?.type || ''}`.trim().toLowerCase();
+            const fileName = `${file?.name || ''}`.trim().toLowerCase();
+
+            if (mimeType.startsWith('text/')) {
+                return true;
+            }
+            if (
+                [
+                    'application/json',
+                    'application/ld+json',
+                    'application/xml',
+                    'application/x-yaml',
+                    'application/yaml',
+                    'application/toml',
+                    'application/javascript',
+                    'application/x-javascript',
+                ].includes(mimeType)
+            ) {
+                return true;
+            }
+
+            return [
+                '.txt',
+                '.log',
+                '.md',
+                '.markdown',
+                '.json',
+                '.jsonl',
+                '.yaml',
+                '.yml',
+                '.csv',
+                '.tsv',
+                '.xml',
+                '.html',
+                '.htm',
+                '.js',
+                '.ts',
+                '.py',
+                '.rb',
+                '.java',
+                '.c',
+                '.cpp',
+                '.h',
+                '.hpp',
+                '.sh',
+                '.toml',
+                '.ini',
+                '.cfg',
+            ].some((extension) => fileName.endsWith(extension));
+        },
+
+        handleComposerDragEnter(event) {
+            const dropzone = this.getComposerDropzoneElement();
+            if (!dropzone || !dropzone.contains(event.target)) return;
+
+            event.preventDefault();
+            this.composerDragDepth += 1;
+            this.setComposerDropzoneActive(true);
+        },
+
+        handleComposerDragOver(event) {
+            const dropzone = this.getComposerDropzoneElement();
+            if (!dropzone || !dropzone.contains(event.target)) return;
+
+            event.preventDefault();
+            if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = 'copy';
+            }
+            if (this.composerDragDepth <= 0) {
+                this.composerDragDepth = 1;
+            }
+            this.setComposerDropzoneActive(true);
+        },
+
+        handleComposerDragLeave(event) {
+            const dropzone = this.getComposerDropzoneElement();
+            if (!dropzone || !dropzone.contains(event.target)) return;
+
+            event.preventDefault();
+            this.composerDragDepth = Math.max(0, this.composerDragDepth - 1);
+            if (this.composerDragDepth === 0) {
+                this.setComposerDropzoneActive(false);
+            }
+        },
+
+        async handleComposerDrop(event) {
+            const dropzone = this.getComposerDropzoneElement();
+            if (!dropzone || !dropzone.contains(event.target)) return;
+
+            event.preventDefault();
+            this.resetComposerDropzoneState();
+
+            const files = Array.from(event?.dataTransfer?.files || []);
+            if (!files.length) return;
+
+            const textarea = dropzone.querySelector('textarea[name="new_message"]');
+            await this.processComposerDroppedFiles(files, textarea);
+            if (textarea) {
+                textarea.focus();
+            }
+        },
+
         async handleComposerPaste(event) {
             const textarea = event?.target;
             const clipboardData = event?.clipboardData;
@@ -381,34 +514,10 @@
                 return;
             }
 
-            let decision = 'keep';
-            if (projectedLength > this.maxComposerHardTextLimit) {
-                decision = await this.openComposerPasteDecisionModal({
-                    projectedLength,
-                    pastedLength: textPayload.length,
-                    forceFile: true,
-                });
-            } else if (projectedLength >= this.maxComposerSoftTextLimit) {
-                decision = await this.openComposerPasteDecisionModal({
-                    projectedLength,
-                    pastedLength: textPayload.length,
-                    forceFile: false,
-                });
-            }
-
-            if (decision === 'cancel') {
-                textarea.focus();
-                this.syncComposerTextStatus(textarea);
-                return;
-            }
-            if (decision === 'file') {
-                await this.queueComposerThreadFileFromText(textPayload);
-                textarea.focus();
-                this.syncComposerTextStatus(textarea);
-                return;
-            }
-
-            this.insertComposerText(textarea, textPayload);
+            await this.processComposerTextInput({
+                textarea,
+                textPayload,
+            });
         },
 
         async addComposerAttachments(files) {
@@ -585,6 +694,21 @@
             return candidate;
         },
 
+        async queueComposerThreadFile(file) {
+            if (!file) return;
+
+            const stableFile = await this.cloneComposerFile(file);
+            this.composerThreadFiles.push({
+                id:
+                    window.crypto &&
+                    typeof window.crypto.randomUUID === 'function'
+                        ? window.crypto.randomUUID()
+                        : `${Date.now()}-${Math.random()}`,
+                file: stableFile,
+            });
+            this.renderComposerThreadFiles();
+        },
+
         async queueComposerThreadFileFromText(text) {
             if (typeof File === 'undefined') {
                 this.showToast(
@@ -605,16 +729,171 @@
                     lastModified: Date.now(),
                 }
             );
-            const stableFile = await this.cloneComposerFile(rawFile);
-            this.composerThreadFiles.push({
-                id:
-                    window.crypto &&
-                    typeof window.crypto.randomUUID === 'function'
-                        ? window.crypto.randomUUID()
-                        : `${Date.now()}-${Math.random()}`,
-                file: stableFile,
-            });
-            this.renderComposerThreadFiles();
+            await this.queueComposerThreadFile(rawFile);
+        },
+
+        async processComposerTextInput({
+            textarea,
+            textPayload,
+            fileForFilesFallback = null,
+        } = {}) {
+            if (!textarea) return 'cancel';
+
+            const normalizedText = `${textPayload || ''}`;
+            if (!normalizedText) {
+                textarea.focus();
+                return 'cancel';
+            }
+
+            const selectionStart =
+                typeof textarea.selectionStart === 'number'
+                    ? textarea.selectionStart
+                    : textarea.value.length;
+            const selectionEnd =
+                typeof textarea.selectionEnd === 'number'
+                    ? textarea.selectionEnd
+                    : selectionStart;
+            const projectedLength =
+                textarea.value.length -
+                Math.max(0, selectionEnd - selectionStart) +
+                normalizedText.length;
+
+            let decision = 'keep';
+            if (projectedLength > this.maxComposerHardTextLimit) {
+                decision = await this.openComposerPasteDecisionModal({
+                    projectedLength,
+                    pastedLength: normalizedText.length,
+                    forceFile: true,
+                });
+            } else if (projectedLength >= this.maxComposerSoftTextLimit) {
+                decision = await this.openComposerPasteDecisionModal({
+                    projectedLength,
+                    pastedLength: normalizedText.length,
+                    forceFile: false,
+                });
+            }
+
+            if (decision === 'cancel') {
+                textarea.focus();
+                this.syncComposerTextStatus(textarea);
+                return 'cancel';
+            }
+            if (decision === 'file') {
+                if (fileForFilesFallback) {
+                    await this.queueComposerThreadFile(fileForFilesFallback);
+                } else {
+                    await this.queueComposerThreadFileFromText(normalizedText);
+                }
+                textarea.focus();
+                this.syncComposerTextStatus(textarea);
+                return 'file';
+            }
+
+            this.insertComposerText(textarea, normalizedText);
+            return 'keep';
+        },
+
+        async processComposerDroppedFiles(files, textarea) {
+            const attachmentFiles = [];
+            const textFiles = [];
+            const unsupportedFiles = [];
+
+            for (const file of files) {
+                const normalizedType = `${file?.type || ''}`.toLowerCase();
+                const normalizedName = `${file?.name || ''}`.toLowerCase();
+                if (
+                    normalizedType.startsWith('image/') ||
+                    normalizedType === 'application/pdf' ||
+                    normalizedName.endsWith('.pdf')
+                ) {
+                    attachmentFiles.push(file);
+                } else if (this.isComposerTextFile(file)) {
+                    textFiles.push(file);
+                } else {
+                    unsupportedFiles.push(file);
+                }
+            }
+
+            if (attachmentFiles.length) {
+                try {
+                    await this.addComposerAttachments(attachmentFiles);
+                } catch (error) {
+                    console.error('Error preparing dropped attachment:', error);
+                    this.showToast(
+                        gettext('Failed to prepare one of the dropped files.'),
+                        'danger'
+                    );
+                }
+            }
+
+            if (unsupportedFiles.length) {
+                this.showToast(
+                    gettext(
+                        'This file type is not supported in the message composer. Drop it into Files instead.'
+                    ),
+                    'warning'
+                );
+            }
+
+            if (!textFiles.length) {
+                return;
+            }
+
+            if (
+                textFiles.length === 1 &&
+                textFiles[0].size <= this.maxComposerDroppedTextReadBytes
+            ) {
+                const textFile = textFiles[0];
+                try {
+                    const textPayload = await textFile.text();
+                    if (!textPayload) {
+                        await this.queueComposerThreadFile(textFile);
+                        this.showToast(
+                            gettext(
+                                'The dropped text file is empty, so it will be added to Files.'
+                            ),
+                            'info'
+                        );
+                        return;
+                    }
+                    await this.processComposerTextInput({
+                        textarea,
+                        textPayload,
+                        fileForFilesFallback: textFile,
+                    });
+                    return;
+                } catch (error) {
+                    console.error('Error reading dropped text file:', error);
+                    await this.queueComposerThreadFile(textFile);
+                    this.showToast(
+                        gettext(
+                            'Nova could not read the dropped text file, so it will be added to Files.'
+                        ),
+                        'warning'
+                    );
+                    return;
+                }
+            }
+
+            for (const file of textFiles) {
+                await this.queueComposerThreadFile(file);
+            }
+
+            if (textFiles.length > 1) {
+                this.showToast(
+                    gettext(
+                        'Multiple text files were dropped, so they will be added to Files instead of being inserted into the message.'
+                    ),
+                    'info'
+                );
+            } else {
+                this.showToast(
+                    gettext(
+                        'This text file is too large to insert directly, so it will be added to Files.'
+                    ),
+                    'info'
+                );
+            }
         },
 
         async cloneComposerFile(file) {

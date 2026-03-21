@@ -116,6 +116,31 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             {"name": name, "mimeType": mime_type, "content": content},
         )
 
+    def _dispatch_file_drop(self, files: list[dict[str, str | int]]):
+        self.page.evaluate(
+            """
+            (payload) => {
+              const target = document.getElementById('message-form');
+              const files = payload.map((item) => {
+                const content = Object.prototype.hasOwnProperty.call(item, 'content')
+                  ? item.content
+                  : 'x'.repeat(item.size || 0);
+                return new File([content], item.name, { type: item.mimeType });
+              });
+              const dropEvent = new Event('drop', { bubbles: true, cancelable: true });
+              Object.defineProperty(dropEvent, 'dataTransfer', {
+                configurable: true,
+                value: {
+                  files,
+                  types: ['Files'],
+                },
+              });
+              target.dispatchEvent(dropEvent);
+            }
+            """,
+            files,
+        )
+
     def test_initial_load_selects_latest_thread_and_renders_messages(self):
         older_thread = Thread.objects.create(user=self.user, subject="Older thread")
         older_message = older_thread.add_message(
@@ -424,6 +449,165 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self.assertEqual(
             self.page.locator('#message-container textarea[name="new_message"]').input_value(),
             "",
+        )
+
+    def test_image_file_drop_adds_attachment_chip(self):
+        thread = Thread.objects.create(user=self.user, subject="Drop image thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_drop(
+            [{"name": "dropped.png", "mimeType": "image/png", "content": "png-bytes"}]
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-attachments .composer-attachment-chip');
+              return chips.length === 1 && chips[0].textContent.includes('dropped.png');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+
+    def test_pdf_file_drop_adds_attachment_chip(self):
+        thread = Thread.objects.create(user=self.user, subject="Drop pdf thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_drop(
+            [{"name": "dropped.pdf", "mimeType": "application/pdf", "content": "%PDF-1.4"}]
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-attachments .composer-attachment-chip');
+              return chips.length === 1 && chips[0].textContent.includes('dropped.pdf');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+
+    def test_short_text_file_drop_inserts_text_into_textarea(self):
+        thread = Thread.objects.create(user=self.user, subject="Drop short text thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_drop(
+            [{"name": "error.log", "mimeType": "text/plain", "content": "line 1\nline 2"}]
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+              return textarea && textarea.value.includes('line 1') && textarea.value.includes('line 2');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator("#composer-thread-files .composer-thread-file-chip").count(),
+            0,
+        )
+
+    def test_large_text_file_drop_can_queue_original_file_in_files(self):
+        thread = Thread.objects.create(user=self.user, subject="Drop large text thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_drop(
+            [{"name": "server.log", "mimeType": "text/plain", "content": "x" * 13000}]
+        )
+
+        self.page.wait_for_selector("#composerPasteDecisionModal.show")
+        self.page.locator("#composer-paste-decision-file").click()
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-thread-files .composer-thread-file-chip');
+              return chips.length === 1 && chips[0].textContent.includes('server.log');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+
+    def test_multiple_text_file_drop_adds_files_instead_of_inserting_text(self):
+        thread = Thread.objects.create(user=self.user, subject="Drop multiple text thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_drop(
+            [
+                {"name": "first.log", "mimeType": "text/plain", "content": "alpha"},
+                {"name": "second.log", "mimeType": "text/plain", "content": "beta"},
+            ]
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-thread-files .composer-thread-file-chip');
+              return chips.length === 2
+                && Array.from(chips).some((chip) => chip.textContent.includes('first.log'))
+                && Array.from(chips).some((chip) => chip.textContent.includes('second.log'));
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+
+    def test_unsupported_file_drop_shows_warning_without_inserting_text(self):
+        thread = Thread.objects.create(user=self.user, subject="Drop unsupported thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_drop(
+            [{"name": "archive.zip", "mimeType": "application/zip", "content": "zip-bytes"}]
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const alerts = Array.from(document.querySelectorAll('body .alert-warning'));
+              return alerts.some((alert) => alert.textContent.includes('Drop it into Files instead.'));
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+        self.assertEqual(
+            self.page.locator("#composer-attachments .composer-attachment-chip").count(),
+            0,
+        )
+        self.assertEqual(
+            self.page.locator("#composer-thread-files .composer-thread-file-chip").count(),
+            0,
         )
 
     def test_mobile_context_menu_can_copy_message_text(self):

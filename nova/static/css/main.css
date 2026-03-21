@@ -638,6 +638,38 @@ body {
 }
 
 /* Form Controls */
+.composer-dropzone {
+    position: relative;
+    border-radius: 0.9rem;
+    transition: box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.composer-dropzone.composer-dropzone-active {
+    background-color: rgba(13, 110, 253, 0.05);
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.18);
+}
+
+.composer-dropzone.composer-dropzone-active .input-group {
+    position: relative;
+    z-index: 1;
+}
+
+.composer-dropzone-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    border: 2px dashed rgba(13, 110, 253, 0.35);
+    border-radius: 0.9rem;
+    background: rgba(255, 255, 255, 0.85);
+    color: var(--bs-primary);
+    font-weight: 500;
+    pointer-events: none;
+    z-index: 2;
+}
+
 .auto-resize-textarea {
     min-height: 38px;
     max-height: min(40vh, 24rem);

@@ -18,11 +18,18 @@
         'openComposerAttachmentPicker',
         'handleComposerAttachmentInputChange',
         'handleComposerPaste',
+        'handleComposerDragEnter',
+        'handleComposerDragOver',
+        'handleComposerDragLeave',
+        'handleComposerDrop',
         'addComposerAttachments',
         'insertComposerText',
         'openComposerPasteDecisionModal',
         'buildComposerThreadFileName',
+        'queueComposerThreadFile',
         'queueComposerThreadFileFromText',
+        'processComposerTextInput',
+        'processComposerDroppedFiles',
         'cloneComposerFile',
         'removeComposerAttachment',
         'resetComposerAttachments',
@@ -32,6 +39,11 @@
         'renderComposerThreadFiles',
         'buildComposerSubmissionMessage',
         'resolveComposerPasteDecision',
+        'getComposerDropzoneElement',
+        'resetComposerDropzoneState',
+        'setComposerDropzoneActive',
+        'eventHasComposerFiles',
+        'isComposerTextFile',
         'getSelectedAgentCapabilityState',
         'getSelectedResponseMode',
         'updateResponseModeButton',
@@ -123,8 +135,10 @@
             this.composerAttachmentSizeLabel = '4 MB';
             this.maxComposerSoftTextLimit = 8_000;
             this.maxComposerHardTextLimit = 12_000;
+            this.maxComposerDroppedTextReadBytes = 1024 * 1024;
             this.isComposerSubmitting = false;
             this.pendingComposerPasteDecision = null;
+            this.composerDragDepth = 0;
 
             this.streamingManager = new window.StreamingManager();
 
@@ -336,6 +350,30 @@
             document.addEventListener('paste', (e) => {
                 if (e.target.matches('#message-container textarea[name="new_message"]')) {
                     void this.handleComposerPaste(e);
+                }
+            });
+
+            document.addEventListener('dragenter', (e) => {
+                if (this.eventHasComposerFiles(e)) {
+                    this.handleComposerDragEnter(e);
+                }
+            });
+
+            document.addEventListener('dragover', (e) => {
+                if (this.eventHasComposerFiles(e)) {
+                    this.handleComposerDragOver(e);
+                }
+            });
+
+            document.addEventListener('dragleave', (e) => {
+                if (this.eventHasComposerFiles(e)) {
+                    this.handleComposerDragLeave(e);
+                }
+            });
+
+            document.addEventListener('drop', (e) => {
+                if (this.eventHasComposerFiles(e)) {
+                    void this.handleComposerDrop(e);
                 }
             });
 
