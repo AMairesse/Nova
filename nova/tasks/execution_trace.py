@@ -29,11 +29,41 @@ _REDACT_KEYS = {
     "refresh_token",
 }
 _BLOB_PATTERN = re.compile(r"^[A-Za-z0-9+/=]{160,}$")
+DELEGATED_AGENT_TOOL_MARKER = "_nova_delegated_agent_tool"
 
 
 def build_agent_tool_safe_name(agent_name: str) -> str:
     normalized_name = str(agent_name or "").strip().lower() or "agent"
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", f"agent_{normalized_name}")[:64]
+
+
+def mark_delegated_agent_tool(tool: Any) -> Any:
+    if isinstance(tool, dict):
+        tool[DELEGATED_AGENT_TOOL_MARKER] = True
+        return tool
+    try:
+        setattr(tool, DELEGATED_AGENT_TOOL_MARKER, True)
+    except Exception:
+        pass
+    return tool
+
+
+def is_delegated_agent_tool(tool: Any) -> bool:
+    if isinstance(tool, dict):
+        return bool(tool.get(DELEGATED_AGENT_TOOL_MARKER))
+    return bool(getattr(tool, DELEGATED_AGENT_TOOL_MARKER, False))
+
+
+def collect_delegated_agent_tool_names(tools: Any) -> set[str]:
+    names: set[str] = set()
+    for tool in list(tools or []):
+        if not is_delegated_agent_tool(tool):
+            continue
+        raw_name = tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")
+        name = str(raw_name or "").strip()
+        if name:
+            names.add(name)
+    return names
 
 
 def _utc_now_iso() -> str:
@@ -197,6 +227,16 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             parent_node_id=parent_node_id,
             ignored_tool_names=ignored_tool_names,
             shared_state=self._state,
+        )
+
+    def add_ignored_tool_names(
+        self,
+        names: set[str] | list[str] | tuple[str, ...] | None,
+    ) -> None:
+        self.ignored_tool_names.update(
+            str(name or "").strip()
+            for name in (names or [])
+            if str(name or "").strip()
         )
 
     def _build_default_trace(self) -> dict[str, Any]:

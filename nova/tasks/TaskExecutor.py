@@ -16,7 +16,7 @@ from nova.models.Message import MessageType, Actor
 from nova.models.Task import TaskStatus
 from nova.tasks.execution_trace import (
     TaskExecutionTraceHandler,
-    build_agent_tool_safe_name,
+    collect_delegated_agent_tool_names,
 )
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
@@ -215,6 +215,10 @@ class TaskExecutor:
             callbacks=[callback for callback in [self.handler, trace_handler] if callback],
             tools_enabled=tools_enabled,
         )
+        if trace_handler:
+            trace_handler.add_ignored_tool_names(
+                collect_delegated_agent_tool_names(getattr(self.llm, "tools", []))
+            )
 
         # Expose runtime resources to tools via agent._resources
         # Allows built-in tools to emit progress/events over existing WS channels
@@ -408,36 +412,9 @@ class TaskExecutor:
         # Save result
         self.task.result = result
 
-    async def _load_agent_tool_safe_names(self) -> set[str]:
-        if not self.agent_config:
-            return set()
-
-        def _load_names():
-            related_manager = getattr(self.agent_config, "agent_tools", None)
-            if related_manager is None:
-                return []
-            try:
-                raw_names = related_manager.filter(is_tool=True).values_list("name", flat=True)
-            except Exception:
-                return []
-            return [
-                build_agent_tool_safe_name(agent_name)
-                for agent_name in raw_names
-            ]
-
-        names = await sync_to_async(_load_names, thread_sensitive=True)()
-        return {
-            str(name or "").strip()
-            for name in names
-            if str(name or "").strip()
-        }
-
     async def _ensure_trace_handler(self, *, resumed: bool = False):
         if self.trace_handler is None:
-            self.trace_handler = TaskExecutionTraceHandler(
-                self.task,
-                ignored_tool_names=await self._load_agent_tool_safe_names(),
-            )
+            self.trace_handler = TaskExecutionTraceHandler(self.task)
         await self.trace_handler.ensure_root_run(
             label=getattr(self.agent_config, "name", "") or "Agent run",
             source_message_id=self.source_message_id,

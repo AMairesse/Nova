@@ -181,6 +181,17 @@
             return summary ? `${this.t('Context consumption')}: ${summary}` : '';
         }
 
+        static renderContextFooterChipContent(internalData) {
+            const summary = this.buildContextSummary(internalData);
+            if (!summary) {
+                return '';
+            }
+            return `
+                <span class="agent-footer-chip-heading">${this.t('Context')}</span>
+                <span class="agent-footer-chip-detail">${summary}</span>
+            `;
+        }
+
         static setAgentMessageMetadata(messageEl, messageData) {
             if (!messageEl) {
                 return;
@@ -223,6 +234,7 @@
             const traceSummaryText = this.buildExecutionSummary(traceSummary);
             const contextSummaryText = this.buildContextSummary(internalData);
             const hasContext = Boolean(contextSummaryText);
+            const contextChipContent = this.renderContextFooterChipContent(internalData);
             const compactLinkHtml = isContinuousPage ? '' : `
               <a href="#" class="agent-footer-chip agent-footer-chip-action compact-thread-link text-decoration-none d-none" title="${this.t('Summarize conversation to save context space')}" aria-label="${this.t('Summarize conversation to save context space')}">
                 <span class="agent-footer-chip-heading">
@@ -243,12 +255,11 @@
                 ${traceSummaryText ? `<span class="agent-footer-chip-detail execution-trace-summary">${window.DOMUtils.escapeHTML(traceSummaryText)}</span>` : ''}
               </a>
             ` : '';
-            const contextHtml = hasContext ? `
-              <div class="agent-footer-chip agent-footer-chip-info card-footer-consumption">
-                <span class="agent-footer-chip-heading">${this.t('Context')}</span>
-                <span class="agent-footer-chip-detail">${contextSummaryText}</span>
+            const contextHtml = `
+              <div class="agent-footer-chip agent-footer-chip-info card-footer-consumption${hasContext ? '' : ' d-none'}">
+                ${contextChipContent}
               </div>
-            ` : '';
+            `;
             const shouldHideFooter = !hasContext && !hasTrace;
 
             return `

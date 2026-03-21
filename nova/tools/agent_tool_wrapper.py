@@ -42,7 +42,9 @@ from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.execution_trace import (
     build_agent_tool_safe_name,
+    collect_delegated_agent_tool_names,
     extract_artifact_refs,
+    mark_delegated_agent_tool,
 )
 from nova.turn_inputs import (
     ResolvedTurnInput,
@@ -129,7 +131,6 @@ class AgentToolWrapper:
                     )
                     child_trace_handler = self.trace_handler.clone_for_parent(
                         parent_node_id=subagent_trace_id,
-                        ignored_tool_names=await self._load_agent_tool_safe_names(),
                     )
                 if artifact_ids:
                     await self._attach_input_artifacts(
@@ -169,6 +170,12 @@ class AgentToolWrapper:
                     callbacks=[child_trace_handler] if child_trace_handler else None,
                     tools_enabled=tools_enabled,
                 )
+                if child_trace_handler:
+                    child_trace_handler.add_ignored_tool_names(
+                        collect_delegated_agent_tool_names(
+                            getattr(agent_llm, "tools", [])
+                        )
+                    )
                 prompt = await self._build_source_message_prompt(
                     source_message,
                     provider=provider,
@@ -315,7 +322,7 @@ class AgentToolWrapper:
         # ------------------ Tool description --------------------------- #
         tool_description = self.agent_config.tool_description
 
-        return StructuredTool.from_function(
+        tool = StructuredTool.from_function(
             func=None,  # No sync func needed (async preferred)
             coroutine=execute_agent_wrapper,  # Set as coroutine for async invocation
             name=safe_name,
@@ -324,25 +331,7 @@ class AgentToolWrapper:
             return_direct=True,
             response_format="content_and_artifact",
         )
-
-    async def _load_agent_tool_safe_names(self) -> set[str]:
-        related_manager = getattr(self.agent_config, "agent_tools", None)
-        if related_manager is None:
-            return set()
-
-        def _load_names():
-            try:
-                raw_names = related_manager.filter(is_tool=True).values_list("name", flat=True)
-            except Exception:
-                return []
-            return [build_agent_tool_safe_name(agent_name) for agent_name in raw_names]
-
-        names = await sync_to_async(_load_names, thread_sensitive=True)()
-        return {
-            str(name or "").strip()
-            for name in names
-            if str(name or "").strip()
-        }
+        return mark_delegated_agent_tool(tool)
 
     async def _attach_input_artifacts(
         self,
