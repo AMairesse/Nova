@@ -13,6 +13,7 @@ from nova.models.Provider import ProviderType
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.tasks.TaskExecutor import TaskErrorCategory, TaskExecutor
+from nova.tasks.execution_trace import mark_delegated_agent_tool
 from nova.tests.factories import create_agent, create_provider, create_user
 
 
@@ -230,6 +231,22 @@ class TaskExecutorTests(TransactionTestCase):
         self.assertIsNotNone(executor.llm._resources["channel_layer"])
 
     @patch("nova.tasks.TaskExecutor.LLMAgent.create", new_callable=AsyncMock)
+    def test_create_llm_agent_ignores_post_deduped_delegated_tool_names(self, mocked_create):
+        executor = self._make_executor()
+        fake_llm = AsyncMock()
+        fake_llm._resources = {}
+        fake_llm.tools = [
+            mark_delegated_agent_tool(SimpleNamespace(name="agent_research__dup2")),
+            SimpleNamespace(name="web_search"),
+        ]
+        mocked_create.return_value = fake_llm
+
+        asyncio.run(executor._create_llm_agent())
+
+        self.assertIn("agent_research__dup2", executor.trace_handler.ignored_tool_names)
+        self.assertNotIn("web_search", executor.trace_handler.ignored_tool_names)
+
+    @patch("nova.tasks.TaskExecutor.LLMAgent.create", new_callable=AsyncMock)
     def test_create_llm_agent_ignores_resource_injection_failures(self, mocked_create):
         executor = self._make_executor()
         fake_llm = AsyncMock()
@@ -329,11 +346,14 @@ class TaskExecutorTests(TransactionTestCase):
             ]
         }
 
+        asyncio.run(executor._ensure_trace_handler())
         asyncio.run(executor._process_interuption(payload))
 
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, TaskStatus.AWAITING_INPUT)
         executor.handler.on_interrupt.assert_awaited_once_with(99, "Continue?", {"type": "object"}, "Planner")
+        self.assertEqual(self.task.execution_trace["summary"]["interaction_count"], 1)
+        self.assertEqual(self.task.execution_trace["root"]["status"], "awaiting_input")
 
     @patch("nova.continuous.checkpoint_state.ensure_continuous_checkpoint_state", new_callable=AsyncMock)
     def test_run_agent_rebuilds_continuous_checkpoint_when_needed(self, mocked_rebuild):
@@ -415,11 +435,14 @@ class TaskExecutorTests(TransactionTestCase):
         executor = self._make_executor()
         executor.handler.on_error.side_effect = RuntimeError("ws down")
 
+        asyncio.run(executor._ensure_trace_handler())
         asyncio.run(executor._handle_execution_error(RuntimeError("network timeout")))
 
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, TaskStatus.FAILED)
         self.assertIn("network_error", self.task.result)
+        self.assertEqual(self.task.execution_trace["summary"]["error_count"], 1)
+        self.assertEqual(self.task.execution_trace["root"]["status"], "failed")
 
     def test_cleanup_logs_when_llm_cleanup_fails(self):
         executor = self._make_executor()

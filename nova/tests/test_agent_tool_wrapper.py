@@ -3,6 +3,7 @@ import types
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import UUID
 
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
@@ -11,6 +12,7 @@ from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
+from nova.tasks.execution_trace import TaskExecutionTraceHandler, mark_delegated_agent_tool
 from nova.tests.factories import create_agent, create_provider
 
 
@@ -655,3 +657,158 @@ class AgentToolWrapperTests(TransactionTestCase):
         self.assertEqual(artifact_payload, {})
         self.assertTrue(FakeLLMAgent.instances[-1].cleanup_called)
         self.assertTrue(FakeLLMAgent.instances[-1].invoke_calls)
+
+    def test_execute_agent_populates_nested_execution_trace(self):
+        class FakeLLMAgent:
+            instances = []
+
+            def __init__(self, result="OK"):
+                self.result = result
+                self.cleanup_called = False
+                self.invoke_calls = []
+                self.last_generated_tool_artifact_refs = []
+                self._callbacks = []
+
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                inst = cls(result="ANSWER")
+                inst._callbacks = list(callbacks or [])
+                cls.instances.append(inst)
+                return inst
+
+            async def ainvoke(self, question):
+                self.invoke_calls.append(question)
+                for callback in self._callbacks:
+                    await callback.on_tool_start({"name": "web_fetch"}, '{"url": "https://example.com"}', run_id=UUID(int=11))
+                    await callback.on_tool_end({"artifact_ids": [15], "tool_output": True}, run_id=UUID(int=11))
+                self.last_generated_tool_artifact_refs = [{"artifact_id": 15}]
+                return self.result
+
+            async def cleanup_runtime(self):
+                self.cleanup_called = True
+
+        provider = create_provider(self.user, name="trace-provider")
+        agent = create_agent(
+            self.user,
+            provider,
+            name="Trace sub-agent",
+            is_tool=True,
+            tool_description="Trace helper",
+        )
+        trace_task = SimpleNamespace(id=777, execution_trace={})
+        trace_handler = TaskExecutionTraceHandler(trace_task)
+        asyncio.run(trace_handler.ensure_root_run(label="Parent"))
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+            trace_handler=trace_handler,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            with patch(
+                "nova.tools.agent_tool_wrapper.invoke_native_provider_for_message",
+                return_value=None,
+            ):
+                tool = wrapper.create_langchain_tool()
+                answer, artifact_payload = asyncio.run(tool["coroutine"]("Inspect trace"))
+
+        self.assertEqual(answer, "ANSWER")
+        self.assertEqual(artifact_payload, {"artifact_ids": [15], "tool_output": True})
+        trace = trace_task.execution_trace
+        self.assertEqual(trace["summary"]["subagent_calls"], 1)
+        self.assertEqual(trace["summary"]["tool_calls"], 1)
+        self.assertEqual(trace["root"]["children"][0]["type"], "subagent")
+        self.assertEqual(trace["root"]["children"][0]["children"][0]["type"], "tool")
+
+    def test_execute_agent_ignores_post_deduped_nested_agent_tool_names_in_trace(self):
+        class FakeLLMAgent:
+            instances = []
+
+            def __init__(self, result="OK"):
+                self.result = result
+                self.cleanup_called = False
+                self.invoke_calls = []
+                self.last_generated_tool_artifact_refs = []
+                self._callbacks = []
+                self.tools = [
+                    mark_delegated_agent_tool(SimpleNamespace(name="agent_research__dup2")),
+                    SimpleNamespace(name="web_fetch"),
+                ]
+
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                inst = cls(result="ANSWER")
+                inst._callbacks = list(callbacks or [])
+                cls.instances.append(inst)
+                return inst
+
+            async def ainvoke(self, question):
+                self.invoke_calls.append(question)
+                for callback in self._callbacks:
+                    await callback.on_tool_start(
+                        {"name": "agent_research__dup2"},
+                        '{"question": "Nested delegate"}',
+                        run_id=UUID(int=21),
+                    )
+                    await callback.on_tool_end("delegated", run_id=UUID(int=21))
+                    await callback.on_tool_start(
+                        {"name": "web_fetch"},
+                        '{"url": "https://example.com"}',
+                        run_id=UUID(int=22),
+                    )
+                    await callback.on_tool_end("done", run_id=UUID(int=22))
+                return self.result
+
+            async def cleanup_runtime(self):
+                self.cleanup_called = True
+
+        provider = create_provider(self.user, name="nested-trace-provider")
+        agent = create_agent(
+            self.user,
+            provider,
+            name="Nested trace sub-agent",
+            is_tool=True,
+            tool_description="Nested trace helper",
+        )
+        trace_task = SimpleNamespace(id=778, execution_trace={})
+        trace_handler = TaskExecutionTraceHandler(trace_task)
+        asyncio.run(trace_handler.ensure_root_run(label="Parent"))
+        wrapper = self.AgentToolWrapper(
+            agent_config=agent,
+            thread=self.thread,
+            user=self.user,
+            trace_handler=trace_handler,
+        )
+
+        with patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent):
+            with patch(
+                "nova.tools.agent_tool_wrapper.invoke_native_provider_for_message",
+                return_value=None,
+            ):
+                tool = wrapper.create_langchain_tool()
+                answer, artifact_payload = asyncio.run(tool["coroutine"]("Inspect nested trace"))
+
+        self.assertEqual(answer, "ANSWER")
+        self.assertEqual(artifact_payload, {})
+        trace = trace_task.execution_trace
+        self.assertEqual(trace["summary"]["subagent_calls"], 1)
+        self.assertEqual(trace["summary"]["tool_calls"], 1)
+        self.assertEqual(len(trace["root"]["children"]), 1)
+        self.assertEqual(trace["root"]["children"][0]["type"], "subagent")
+        self.assertEqual(len(trace["root"]["children"][0]["children"]), 1)
+        self.assertEqual(trace["root"]["children"][0]["children"][0]["label"], "web_fetch")

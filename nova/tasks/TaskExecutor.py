@@ -14,6 +14,10 @@ from nova.llm.llm_agent import LLMAgent
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
 from nova.models.Task import TaskStatus
+from nova.tasks.execution_trace import (
+    TaskExecutionTraceHandler,
+    collect_delegated_agent_tool_names,
+)
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
 logger = logging.getLogger(__name__)
@@ -72,6 +76,7 @@ class TaskExecutor:
             initial_streamed_markdown=getattr(self.task, "streamed_markdown", "") or "",
             push_notifications_enabled=push_notifications_enabled,
         )
+        self.trace_handler = None
         self._llm_provider = _UNSET
 
     async def _get_llm_provider(self):
@@ -99,7 +104,8 @@ class TaskExecutor:
     async def execute_or_resume(self, interruption_response=None):
         """Main execution method with comprehensive error handling."""
         try:
-            await self._initialize_task()
+            await self._initialize_task(interruption_response=interruption_response)
+            await self._ensure_trace_handler(resumed=bool(interruption_response))
             await self._create_llm_agent()
 
             if interruption_response:
@@ -189,6 +195,7 @@ class TaskExecutor:
         self.task.progress_logs.append({"step": "Creating LLM agent",
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
+        trace_handler = await self._ensure_trace_handler()
 
         tools_enabled = True
         provider = await self._get_llm_provider()
@@ -205,9 +212,13 @@ class TaskExecutor:
 
         self.llm = await LLMAgent.create(
             self.user, self.thread, self.agent_config,
-            callbacks=[self.handler],
+            callbacks=[callback for callback in [self.handler, trace_handler] if callback],
             tools_enabled=tools_enabled,
         )
+        if trace_handler:
+            trace_handler.add_ignored_tool_names(
+                collect_delegated_agent_tool_names(getattr(self.llm, "tools", []))
+            )
 
         # Expose runtime resources to tools via agent._resources
         # Allows built-in tools to emit progress/events over existing WS channels
@@ -259,6 +270,14 @@ class TaskExecutor:
 
         # Create/Update Interaction
         interaction = await self._create_interaction(question, schema, agent_name)
+
+        if self.trace_handler:
+            await self.trace_handler.record_interaction(
+                question=question,
+                schema=schema,
+                agent_name=agent_name,
+            )
+            await self.trace_handler.mark_root_awaiting_input()
 
         # Mark task awaiting input
         self.task.progress_logs.append({"step": f"Waiting for user input: {question[:120]}",
@@ -327,6 +346,16 @@ class TaskExecutor:
         self.task.progress_logs.append(error_log)
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
+        try:
+            trace_handler = await self._ensure_trace_handler()
+            if trace_handler:
+                await trace_handler.fail_root_run(
+                    str(error),
+                    category=error_category.value,
+                )
+        except Exception:
+            logger.exception("Failed to persist execution trace error for task %s", getattr(self.task, "id", None))
+
         # Publish error update
         if self.handler:
             try:
@@ -382,3 +411,14 @@ class TaskExecutor:
 
         # Save result
         self.task.result = result
+
+    async def _ensure_trace_handler(self, *, resumed: bool = False):
+        if self.trace_handler is None:
+            self.trace_handler = TaskExecutionTraceHandler(self.task)
+        await self.trace_handler.ensure_root_run(
+            label=getattr(self.agent_config, "name", "") or "Agent run",
+            source_message_id=self.source_message_id,
+            agent_id=getattr(self.agent_config, "id", None),
+            resumed=resumed,
+        )
+        return self.trace_handler

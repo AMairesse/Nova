@@ -373,11 +373,18 @@ async def load_tools(agent, *, enabled: bool = True) -> List[StructuredTool]:
     if agent.has_agent_tools:
         from nova.tools.agent_tool_wrapper import AgentToolWrapper
 
+        execution_trace_handler = None
+        for callback in list(getattr(agent, "config", {}).get("callbacks", []) or []):
+            if hasattr(callback, "start_subagent") and hasattr(callback, "clone_for_parent"):
+                execution_trace_handler = callback
+                break
+
         for agent_config in agent.agent_tools:
             wrapper = AgentToolWrapper(
                 agent_config=agent_config,
                 thread=agent.thread,
                 user=agent.user,
+                trace_handler=execution_trace_handler,
             )
             langchain_tool = wrapper.create_langchain_tool()
             tools.append(langchain_tool)

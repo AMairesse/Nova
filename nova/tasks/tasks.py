@@ -226,29 +226,36 @@ class AgentTaskExecutor (TaskExecutor):
             self.agent_config, self.llm
         )
 
-        # Update progress logs with consumption info
-        self.task.progress_logs.append({
-            "step": f"Context consumption: {real_tokens or approx_tokens} tokens",
-            "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-            "severity": "info",
-            "context_info": {
-                "real_tokens": real_tokens,
-                "approx_tokens": approx_tokens,
-                "max_context": max_context
-            }
-        })
-
         # Publish context consumption
         await self.handler.on_context_consumption(real_tokens, approx_tokens, max_context)
+
+        trace_summary = {
+            "has_trace": False,
+            "tool_calls": 0,
+            "subagent_calls": 0,
+            "interaction_count": 0,
+            "error_count": 0,
+            "artifact_count": 0,
+            "duration_ms": None,
+        }
+        if self.trace_handler:
+            await self.trace_handler.set_context_consumption(
+                real_tokens=real_tokens,
+                approx_tokens=approx_tokens,
+                max_context=max_context,
+            )
+            await self.trace_handler.complete_root_run(final_answer)
+            trace_summary = await self.trace_handler.get_message_trace_summary()
 
         display_markdown = self._get_display_markdown(final_answer)
         await self._persist_agent_message_state(
             message.id,
-            final_answer=final_answer,
             real_tokens=real_tokens,
             approx_tokens=approx_tokens,
             max_context=max_context,
             display_markdown=display_markdown,
+            trace_task_id=getattr(self.task, "id", None),
+            trace_summary=trace_summary,
         )
 
         if self.handler and hasattr(self.handler, "on_new_message"):
@@ -269,11 +276,12 @@ class AgentTaskExecutor (TaskExecutor):
         self,
         message_id: int,
         *,
-        final_answer: str,
         real_tokens: int | None,
         approx_tokens: int | None,
         max_context: int | None,
         display_markdown: str,
+        trace_task_id: int | None,
+        trace_summary: dict | None,
     ) -> None:
         def _persist_message_state() -> None:
             fresh_message = (
@@ -298,8 +306,11 @@ class AgentTaskExecutor (TaskExecutor):
                 "real_tokens": real_tokens,
                 "approx_tokens": approx_tokens,
                 "max_context": max_context,
-                "final_answer": final_answer,
             })
+            if trace_task_id is not None:
+                internal_data["trace_task_id"] = trace_task_id
+            if isinstance(trace_summary, dict):
+                internal_data["trace_summary"] = trace_summary
             if display_markdown:
                 internal_data["display_markdown"] = display_markdown
             else:

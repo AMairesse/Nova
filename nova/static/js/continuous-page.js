@@ -20,6 +20,7 @@
         addMessage: root.dataset.urlAddMessage,
         messageList: root.dataset.urlMessageList,
         runningTasksBase: root.dataset.urlRunningTasksBase,
+        taskExecutionTrace: root.dataset.urlTaskTrace,
         loadDays: root.dataset.urlLoadDays,
         regenerateSummary: root.dataset.urlRegenerateSummary,
         fileList: root.dataset.urlFileList,

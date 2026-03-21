@@ -74,6 +74,16 @@ class WebAppViewsTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertTrue(WebApp.objects.filter(id=app.id).exists())
 
+    def test_preview_webapp_includes_mobile_message_context_menu(self):
+        app = self._create_webapp(name="Preview app")
+
+        response = self.client.get(reverse("preview_webapp", args=[self.thread.id, app.slug]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="messageContextMenu"')
+        self.assertContains(response, 'id="context-menu-execution-details"')
+        self.assertContains(response, 'id="context-menu-compact"')
+
     def test_deleted_webapp_is_not_served_anymore(self):
         app = self._create_webapp(name="Temporary app")
         self.assertEqual(self.client.get(reverse("serve_webapp_root", args=[app.slug])).status_code, 200)

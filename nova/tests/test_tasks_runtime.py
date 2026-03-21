@@ -384,8 +384,17 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
                 "real_tokens": 50,
                 "approx_tokens": None,
                 "max_context": 1000,
-                "final_answer": "Agent answer",
                 "display_markdown": "Interim thought\n\nAgent answer",
+                "trace_task_id": 1,
+                "trace_summary": {
+                    "has_trace": True,
+                    "tool_calls": 0,
+                    "subagent_calls": 0,
+                    "interaction_count": 0,
+                    "error_count": 0,
+                    "artifact_count": 0,
+                    "duration_ms": None,
+                },
             })
 
         with (
@@ -411,7 +420,9 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         self.assertEqual(task.result, "Agent answer")
         thread.add_message.assert_called_once_with("Agent answer", actor=Actor.AGENT)
         self.assertEqual(message.internal_data["real_tokens"], 50)
-        self.assertEqual(message.internal_data["final_answer"], "Agent answer")
+        self.assertEqual(message.internal_data["trace_task_id"], 1)
+        self.assertTrue(message.internal_data["trace_summary"]["has_trace"])
+        self.assertNotIn("final_answer", message.internal_data)
         self.assertEqual(message.internal_data["display_markdown"], "Interim thought\n\nAgent answer")
         self.assertIsNone(task.current_response)
         self.assertEqual(task.streamed_markdown, "")
@@ -447,7 +458,8 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
                 "real_tokens": 12,
                 "approx_tokens": None,
                 "max_context": 1000,
-                "final_answer": "Agent answer",
+                "trace_task_id": 2,
+                "trace_summary": {"has_trace": True},
             })
 
         with (
@@ -466,7 +478,9 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
         ):
             await executor._process_result("Agent answer")
 
-        self.assertEqual(message.internal_data["final_answer"], "Agent answer")
+        self.assertEqual(message.internal_data["trace_task_id"], 2)
+        self.assertTrue(message.internal_data["trace_summary"]["has_trace"])
+        self.assertNotIn("final_answer", message.internal_data)
         self.assertNotIn("display_markdown", message.internal_data)
 
     async def test_process_result_publishes_reloaded_message_payload(self):
@@ -506,7 +520,10 @@ class AgentTaskExecutorUnitTests(IsolatedAsyncioTestCase):
             "id": 77,
             "text": "Agent answer",
             "actor": Actor.AGENT,
-            "internal_data": {"final_answer": "Agent answer"},
+            "internal_data": {
+                "trace_task_id": 3,
+                "trace_summary": {"has_trace": True},
+            },
             "created_at": "now",
             "artifacts": [{"id": 9, "kind": "image", "content_url": "/artifact/9"}],
         }

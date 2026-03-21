@@ -26,3 +26,18 @@ def running_tasks(request, thread_id):
         })
 
     return JsonResponse({'running_tasks': tasks_data})
+
+
+@login_required
+def execution_trace(request, task_id):
+    task = get_object_or_404(
+        Task.objects.only("id", "execution_trace"),
+        id=task_id,
+        user=request.user,
+    )
+    return JsonResponse(
+        {
+            "status": "OK",
+            "execution_trace": task.execution_trace if isinstance(task.execution_trace, dict) else {},
+        }
+    )

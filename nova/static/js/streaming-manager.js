@@ -167,15 +167,33 @@
                     if (!stream) return;
                     // Get the footer in the card
                     const streamingFooter = stream.element.querySelector('.card-footer-consumption');
-                    if (streamingFooter && data.max_context) {
-                        // Add the context consumption data
-                        if (data.real_tokens !== null) {
-                            streamingFooter.innerHTML = `Context consumption: ${data.real_tokens}/${data.max_context} (real)`;
-                        } else {
-                            streamingFooter.innerHTML = `Context consumption: ${data.approx_tokens}/${data.max_context} (approximated)`;
+                    const streamingFooterWrapper = stream.element.querySelector('.agent-message-footer');
+                    if (streamingFooter) {
+                        const contextPayload = {
+                            real_tokens: data.real_tokens,
+                            approx_tokens: data.approx_tokens,
+                            max_context: data.max_context,
+                        };
+                        streamingFooter.innerHTML = window.MessageRenderer.renderContextFooterChipContent(contextPayload);
+                        streamingFooter.classList.toggle('d-none', !streamingFooter.textContent.trim());
+                        if (stream.element?.dataset) {
+                            stream.element.dataset.contextRealTokens =
+                                data.real_tokens !== null && data.real_tokens !== undefined
+                                    ? String(data.real_tokens)
+                                    : '';
+                            stream.element.dataset.contextApproxTokens =
+                                data.approx_tokens !== null && data.approx_tokens !== undefined
+                                    ? String(data.approx_tokens)
+                                    : '';
+                            stream.element.dataset.contextMaxContext =
+                                data.max_context !== null && data.max_context !== undefined
+                                    ? String(data.max_context)
+                                    : '';
+                            stream.element.dataset.contextLegacyTokens = '';
                         }
-                        // Display the footer
-                        streamingFooter.parentElement.classList.remove('d-none');
+                        if (streamingFooter.textContent.trim() && streamingFooterWrapper) {
+                            streamingFooterWrapper.classList.remove('d-none');
+                        }
                     }
                 },
 
@@ -339,6 +357,9 @@
                 if (stream?.element?.parentNode) {
                     stream.element.replaceWith(messageElement);
                     stream.element = messageElement;
+                    if (this.messageManager) {
+                        this.messageManager.updateCompactLinkVisibility();
+                    }
                     return;
                 }
             }

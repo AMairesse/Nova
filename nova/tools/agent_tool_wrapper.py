@@ -40,6 +40,12 @@ from nova.models.MessageArtifact import (
 )
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
+from nova.tasks.execution_trace import (
+    build_agent_tool_safe_name,
+    collect_delegated_agent_tool_names,
+    extract_artifact_refs,
+    mark_delegated_agent_tool,
+)
 from nova.turn_inputs import (
     ResolvedTurnInput,
     TURN_INPUT_SOURCE_THREAD_FILE,
@@ -64,10 +70,12 @@ class AgentToolWrapper:
         agent_config: AgentConfig,
         thread: Thread,
         user: settings.AUTH_USER_MODEL,
+        trace_handler=None,
     ) -> None:
         self.agent_config = agent_config
         self.thread = thread
         self.user = user
+        self.trace_handler = trace_handler
 
     # ------------------------------------------------------------------ #
     #  Public API                                                        #
@@ -100,7 +108,6 @@ class AgentToolWrapper:
             )
             source_message.internal_data = {
                 "hidden_subagent_trace": True,
-                "subagent_trace_agent_id": self.agent_config.id,
                 "response_mode": normalized_output_mode,
             }
             await sync_to_async(source_message.save, thread_sensitive=True)(
@@ -108,8 +115,23 @@ class AgentToolWrapper:
             )
 
             agent_llm = None
+            subagent_trace_id = None
+            child_trace_handler = None
             try:
                 provider = await self._load_provider()
+                if self.trace_handler:
+                    subagent_trace_id = await self.trace_handler.start_subagent(
+                        label=getattr(self.agent_config, "name", "") or _("Sub-agent"),
+                        input_preview=question,
+                        meta={
+                            "agent_id": getattr(self.agent_config, "id", None),
+                            "output_mode": normalized_output_mode,
+                            "source_message_id": getattr(source_message, "id", None),
+                        },
+                    )
+                    child_trace_handler = self.trace_handler.clone_for_parent(
+                        parent_node_id=subagent_trace_id,
+                    )
                 if artifact_ids:
                     await self._attach_input_artifacts(
                         source_message,
@@ -132,6 +154,12 @@ class AgentToolWrapper:
                         "Error in sub-agent %(name)s: this model does not "
                         "support tool use for this delegated run."
                     ) % {"name": self.agent_config.name}
+                    if self.trace_handler and subagent_trace_id:
+                        await self.trace_handler.fail_subagent(
+                            subagent_trace_id,
+                            error=error_msg,
+                            meta={"provider_tools_unavailable": True},
+                        )
                     return error_msg, {}
 
                 tools_enabled = not provider_tools_explicitly_unavailable(provider)
@@ -139,8 +167,15 @@ class AgentToolWrapper:
                     self.user,
                     self.thread,
                     self.agent_config,
+                    callbacks=[child_trace_handler] if child_trace_handler else None,
                     tools_enabled=tools_enabled,
                 )
+                if child_trace_handler:
+                    child_trace_handler.add_ignored_tool_names(
+                        collect_delegated_agent_tool_names(
+                            getattr(agent_llm, "tools", [])
+                        )
+                    )
                 prompt = await self._build_source_message_prompt(
                     source_message,
                     provider=provider,
@@ -190,6 +225,13 @@ class AgentToolWrapper:
                     if output_artifact_ids
                     else {}
                 )
+                if self.trace_handler and subagent_trace_id:
+                    await self.trace_handler.complete_subagent(
+                        subagent_trace_id,
+                        output_preview=str(result),
+                        artifact_refs=extract_artifact_refs(artifact_payload),
+                        meta={"output_mode": normalized_output_mode},
+                    )
                 return str(result), artifact_payload
             except Exception as e:
                 # Return a readable error string including agent name and message
@@ -197,6 +239,11 @@ class AgentToolWrapper:
                     "name": self.agent_config.name,
                     "error": str(e)
                 }
+                if self.trace_handler and subagent_trace_id:
+                    await self.trace_handler.fail_subagent(
+                        subagent_trace_id,
+                        error=error_msg,
+                    )
                 return error_msg + _(" Check connections or config."), {}
             finally:
                 if agent_llm is not None:
@@ -270,14 +317,12 @@ class AgentToolWrapper:
         }
 
         # ------------------------ Safe name ----------------------------- #
-        safe_name = re.sub(
-            r"[^a-zA-Z0-9_-]+", "_", f"agent_{self.agent_config.name.lower()}"
-        )[:64]
+        safe_name = build_agent_tool_safe_name(self.agent_config.name)
 
         # ------------------ Tool description --------------------------- #
         tool_description = self.agent_config.tool_description
 
-        return StructuredTool.from_function(
+        tool = StructuredTool.from_function(
             func=None,  # No sync func needed (async preferred)
             coroutine=execute_agent_wrapper,  # Set as coroutine for async invocation
             name=safe_name,
@@ -286,6 +331,7 @@ class AgentToolWrapper:
             return_direct=True,
             response_format="content_and_artifact",
         )
+        return mark_delegated_agent_tool(tool)
 
     async def _attach_input_artifacts(
         self,
