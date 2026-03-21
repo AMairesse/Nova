@@ -41,6 +41,8 @@ class Task(models.Model):
     current_response = models.TextField(blank=True, null=True)
     # Canonical streamed markdown transcript, used to persist intermediate agent text.
     streamed_markdown = models.TextField(blank=True, default="")
+    # Structured, user-safe execution trace for agent runs and nested sub-agents.
+    execution_trace = models.JSONField(default=dict, blank=True)
     # Final output or error message
     result = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

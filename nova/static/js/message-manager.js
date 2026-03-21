@@ -89,6 +89,9 @@
         'handleTouchMove',
         'handleTouchCancel',
         'cancelLongPress',
+        'getMessageTraceTaskId',
+        'getMessageContextSummary',
+        'getMessageExecutionSummary',
         'showMessageContextMenu',
         'initContextMenuActions',
         'copyMessageToClipboard',
@@ -311,6 +314,13 @@
                 '.compact-thread-link': (e, target) => {
                     e.preventDefault();
                     this.summarizeCurrentThread();
+                },
+                '.execution-trace-link': (e, target) => {
+                    e.preventDefault();
+                    const link = target.closest('.execution-trace-link');
+                    if (link) {
+                        void this.openExecutionTrace(link);
+                    }
                 }
             };
 
@@ -453,13 +463,20 @@
 
             // Get all messages and agent messages
             const allMessages = messagesList.querySelectorAll('.message');
-            const agentMessages = messagesList.querySelectorAll('.message .card.border-secondary');
+            const agentMessages = messagesList.querySelectorAll('.message[data-message-actor="agent"]');
 
             // Hide compact link on all agent messages first
-            agentMessages.forEach(card => {
-                const compactLink = card.querySelector('.compact-thread-link');
+            agentMessages.forEach(messageEl => {
+                const compactLink = messageEl.querySelector('.compact-thread-link');
+                const footer = messageEl.querySelector('.agent-message-footer');
+                const hasContext = Boolean(this.getMessageContextSummary(messageEl));
+                const hasTrace = Boolean(this.getMessageTraceTaskId(messageEl));
+                messageEl.dataset.canCompact = 'false';
                 if (compactLink) {
                     compactLink.classList.add('d-none');
+                }
+                if (footer && !hasContext && !hasTrace) {
+                    footer.classList.add('d-none');
                 }
             });
             if (isContinuousPage) {
@@ -469,11 +486,242 @@
             // Show compact link only on the last agent message if there are enough messages for compaction
             // (more messages than preserve_recent setting - we assume default of 2 for client-side)
             if (allMessages.length > 2 && agentMessages.length > 0) {  // Need more than preserve_recent messages
-                const lastAgentCard = agentMessages[agentMessages.length - 1];
-                const compactLink = lastAgentCard.querySelector('.compact-thread-link');
+                const lastAgentMessage = agentMessages[agentMessages.length - 1];
+                const compactLink = lastAgentMessage.querySelector('.compact-thread-link');
+                const footer = lastAgentMessage.querySelector('.agent-message-footer');
                 if (compactLink) {
                     compactLink.classList.remove('d-none');
                 }
+                lastAgentMessage.dataset.canCompact = 'true';
+                if (footer) {
+                    footer.classList.remove('d-none');
+                }
+            }
+        }
+
+        buildExecutionTraceUrl(taskId) {
+            const template = window.NovaApp?.urls?.taskExecutionTrace || '';
+            if (!template || !taskId) {
+                return '';
+            }
+            return template.replace('/0/', `/${encodeURIComponent(String(taskId))}/`);
+        }
+
+        formatExecutionDuration(durationMs) {
+            const duration = Number(durationMs || 0);
+            if (!duration) {
+                return '';
+            }
+            if (duration < 1000) {
+                return `${duration} ms`;
+            }
+            const seconds = duration / 1000;
+            if (seconds < 60) {
+                return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
+            }
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = Math.round(seconds % 60);
+            return `${minutes} min ${remainingSeconds}s`;
+        }
+
+        getExecutionNodeTypeLabel(nodeType) {
+            const mapping = {
+                agent_run: gettext('Agent'),
+                tool: gettext('Tool'),
+                subagent: gettext('Sub-agent'),
+                interaction: gettext('Interaction'),
+                error: gettext('Error'),
+                artifact: gettext('Artifact'),
+            };
+            return mapping[nodeType] || gettext('Step');
+        }
+
+        getExecutionStatusBadge(status) {
+            const normalized = `${status || ''}`.trim().toLowerCase();
+            const mapping = {
+                completed: { label: gettext('Completed'), className: 'text-bg-success' },
+                failed: { label: gettext('Failed'), className: 'text-bg-danger' },
+                awaiting_input: { label: gettext('Awaiting input'), className: 'text-bg-warning' },
+                running: { label: gettext('Running'), className: 'text-bg-primary' },
+            };
+            return mapping[normalized] || { label: normalized || gettext('Unknown'), className: 'text-bg-secondary' };
+        }
+
+        buildExecutionSummaryLine(summary) {
+            const data = (summary && typeof summary === 'object') ? summary : {};
+            const parts = [];
+            const traceSummaryText = window.MessageRenderer.buildExecutionSummary(data);
+            if (traceSummaryText) {
+                parts.push(traceSummaryText);
+            }
+            if (Number(data.error_count || 0) > 0) {
+                parts.push(`${data.error_count} ${gettext(Number(data.error_count) === 1 ? 'error' : 'errors')}`);
+            }
+            if (Number(data.artifact_count || 0) > 0) {
+                parts.push(`${data.artifact_count} ${gettext(Number(data.artifact_count) === 1 ? 'artifact' : 'artifacts')}`);
+            }
+            const durationLabel = this.formatExecutionDuration(data.duration_ms);
+            if (durationLabel) {
+                parts.push(durationLabel);
+            }
+            const context = (data.context && typeof data.context === 'object') ? data.context : {};
+            if (context.max_context && (context.real_tokens !== null && context.real_tokens !== undefined || context.approx_tokens)) {
+                const consumed = context.real_tokens !== null && context.real_tokens !== undefined
+                    ? context.real_tokens
+                    : context.approx_tokens;
+                const mode = context.real_tokens !== null && context.real_tokens !== undefined
+                    ? gettext('real')
+                    : gettext('approximated');
+                parts.push(`${gettext('Context')}: ${consumed} / ${context.max_context} (${mode})`);
+            }
+            return parts.join(' • ');
+        }
+
+        renderExecutionArtifactRefs(artifactRefs) {
+            const refs = Array.isArray(artifactRefs) ? artifactRefs : [];
+            if (!refs.length) {
+                return '';
+            }
+            return `
+                <div class="execution-node-section">
+                    <div class="execution-node-section-label">${window.DOMUtils.escapeHTML(gettext('Artifacts'))}</div>
+                    <div class="execution-node-artifacts">
+                        ${refs.map((artifactRef) => {
+                            const artifactId = artifactRef?.artifact_id;
+                            const label = `${artifactRef?.label || gettext('Artifact')} #${artifactId || ''}`.trim();
+                            return `<span class="badge rounded-pill text-bg-light border">${window.DOMUtils.escapeHTML(label)}</span>`;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        renderExecutionPreviewSection(label, value) {
+            const text = `${value || ''}`.trim();
+            if (!text) {
+                return '';
+            }
+            return `
+                <div class="execution-node-section">
+                    <div class="execution-node-section-label">${window.DOMUtils.escapeHTML(label)}</div>
+                    <pre class="execution-node-preview mb-0"><code>${window.DOMUtils.escapeHTML(text)}</code></pre>
+                </div>
+            `;
+        }
+
+        renderExecutionTraceNode(node, { isRoot = false } = {}) {
+            if (!node || typeof node !== 'object') {
+                return '';
+            }
+            const children = Array.isArray(node.children) ? node.children : [];
+            const typeLabel = this.getExecutionNodeTypeLabel(node.type);
+            const status = this.getExecutionStatusBadge(node.status);
+            const durationLabel = this.formatExecutionDuration(node.duration_ms);
+            const startedAt = node.started_at ? new Date(node.started_at).toLocaleString() : '';
+            const outputPreview = this.renderExecutionPreviewSection(gettext('Output'), node.output_preview);
+            const inputPreview = this.renderExecutionPreviewSection(gettext('Input'), node.input_preview);
+            const artifactsHtml = this.renderExecutionArtifactRefs(node.artifact_refs);
+            const metaHtml = startedAt
+                ? `<div class="execution-node-meta text-muted">${window.DOMUtils.escapeHTML(startedAt)}</div>`
+                : '';
+            const contentHtml = `
+                ${metaHtml}
+                ${inputPreview}
+                ${outputPreview}
+                ${artifactsHtml}
+                ${children.length ? `<div class="execution-node-children">${children.map((child) => this.renderExecutionTraceNode(child)).join('')}</div>` : ''}
+            `;
+
+            if (children.length || isRoot) {
+                return `
+                    <details class="execution-trace-node" ${isRoot ? 'open' : ''}>
+                        <summary class="execution-trace-node-summary">
+                            <div class="execution-node-title-row">
+                                <span class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</span>
+                                <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
+                                <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
+                                ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                            </div>
+                        </summary>
+                        <div class="execution-trace-node-body">
+                            ${contentHtml}
+                        </div>
+                    </details>
+                `;
+            }
+
+            return `
+                <div class="execution-trace-node execution-trace-node-leaf">
+                    <div class="execution-trace-node-summary">
+                        <div class="execution-node-title-row">
+                            <span class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</span>
+                            <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
+                            <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
+                            ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="execution-trace-node-body">
+                        ${contentHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        async openExecutionTrace(triggerOrTaskId) {
+            const taskId = typeof triggerOrTaskId === 'string' || typeof triggerOrTaskId === 'number'
+                ? String(triggerOrTaskId)
+                : triggerOrTaskId?.dataset?.taskId;
+            const url = this.buildExecutionTraceUrl(taskId);
+            const modalEl = document.getElementById('execution-trace-modal');
+            if (!url || !modalEl || !window.bootstrap?.Modal) {
+                this.showToast(gettext('Execution trace is not available on this page.'), 'warning');
+                return;
+            }
+
+            const summaryEl = document.getElementById('execution-trace-modal-summary');
+            const loadingEl = document.getElementById('execution-trace-modal-loading');
+            const emptyEl = document.getElementById('execution-trace-modal-empty');
+            const treeEl = document.getElementById('execution-trace-modal-tree');
+            const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+
+            if (summaryEl) summaryEl.textContent = '';
+            if (treeEl) treeEl.innerHTML = '';
+            if (emptyEl) emptyEl.classList.add('d-none');
+            if (loadingEl) loadingEl.classList.remove('d-none');
+            modal.show();
+
+            try {
+                const response = await fetch(url, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!response.ok) {
+                    throw new Error(`trace_fetch_failed_${response.status}`);
+                }
+                const payload = await response.json();
+                const trace = (payload && typeof payload.execution_trace === 'object') ? payload.execution_trace : {};
+                const summary = (trace.summary && typeof trace.summary === 'object') ? trace.summary : {};
+                const root = (trace.root && typeof trace.root === 'object') ? trace.root : null;
+
+                if (summaryEl) {
+                    summaryEl.textContent = this.buildExecutionSummaryLine(summary);
+                }
+
+                if (!root) {
+                    if (emptyEl) emptyEl.classList.remove('d-none');
+                    return;
+                }
+
+                if (treeEl) {
+                    treeEl.innerHTML = this.renderExecutionTraceNode(root, { isRoot: true });
+                }
+            } catch (error) {
+                console.error('Error loading execution trace:', error);
+                if (emptyEl) {
+                    emptyEl.textContent = gettext('Could not load execution details for this message.');
+                    emptyEl.classList.remove('d-none');
+                }
+            } finally {
+                if (loadingEl) loadingEl.classList.add('d-none');
             }
         }
 

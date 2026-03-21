@@ -33,7 +33,28 @@
       </div>
       {% endifchanged %}
       {% endif %}
-      <div id="message-{{ message.id }}" class="message mb-3" data-message-id="{{ message.id }}">
+      {% with trace_summary=message.internal_data.trace_summary %}
+      <div
+        id="message-{{ message.id }}"
+        class="message mb-3"
+        data-message-id="{{ message.id }}"
+        data-message-actor="{% if message.actor == Actor.AGENT %}agent{% elif message.actor == Actor.USER %}user{% else %}other{% endif %}"
+        {% if message.actor == Actor.AGENT %}
+          data-trace-task-id="{{ message.internal_data.trace_task_id|default:'' }}"
+          data-trace-tool-calls="{{ trace_summary.tool_calls|default_if_none:'' }}"
+          data-trace-subagent-calls="{{ trace_summary.subagent_calls|default_if_none:'' }}"
+          data-trace-interaction-count="{{ trace_summary.interaction_count|default_if_none:'' }}"
+          data-trace-error-count="{{ trace_summary.error_count|default_if_none:'' }}"
+          data-trace-artifact-count="{{ trace_summary.artifact_count|default_if_none:'' }}"
+          data-trace-duration-ms="{{ trace_summary.duration_ms|default_if_none:'' }}"
+          data-context-real-tokens="{{ message.internal_data.real_tokens|default_if_none:'' }}"
+          data-context-approx-tokens="{{ message.internal_data.approx_tokens|default_if_none:'' }}"
+          data-context-legacy-tokens="{{ message.internal_data.context_tokens|default_if_none:'' }}"
+          data-context-max-context="{{ message.internal_data.max_context|default_if_none:'' }}"
+          data-is-last-agent-message="{% if message.is_last_agent_message %}true{% else %}false{% endif %}"
+          data-can-compact="false"
+        {% endif %}
+      >
         {% if message.message_type == 'interaction_question' %}
         <!-- Interaction question message -->
         <!-- Only display the question message if it is not PENDING 
@@ -219,27 +240,66 @@
             {% endif %}
           </div>
           <!-- Context indication -->
-          {% if message.internal_data.max_context %}
-          <div class="card-footer py-1 text-muted small d-flex justify-content-end align-items-center">
+          {% if message.is_last_agent_message or message.internal_data.trace_task_id or message.internal_data.max_context %}
+          <div class="card-footer agent-message-footer py-1 text-muted small{% if not message.internal_data.trace_task_id and not message.internal_data.max_context %} d-none{% endif %}">
+            <div class="agent-footer-chip-row">
             {% if message.is_last_agent_message %}
-            <a href="#" class="compact-thread-link text-decoration-none small me-2" title="{% trans 'Summarize conversation to save context space' %}" aria-label="{% trans 'Summarize conversation to save context space' %}">
-              <i class="bi bi-compress me-1"></i>{% trans "Compact" %}
+            <a href="#" class="agent-footer-chip agent-footer-chip-action compact-thread-link text-decoration-none d-none" title="{% trans 'Summarize conversation to save context space' %}" aria-label="{% trans 'Summarize conversation to save context space' %}">
+              <span class="agent-footer-chip-heading">
+                <i class="bi bi-compress"></i>{% trans "Compact" %}
+              </span>
             </a>
             {% endif %}
-            <div class="card-footer-consumption">
-              {% if message.internal_data.real_tokens is not None %}
-                {% trans "Context consumption" %}: {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
-              {% elif message.internal_data.approx_tokens %}
-                {% trans "Context consumption" %}: {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
-              {% elif message.internal_data.context_tokens %}
-                {% trans "Context consumption" %}: {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+            {% if message.internal_data.trace_task_id %}
+            <a
+              href="#"
+              class="agent-footer-chip agent-footer-chip-action execution-trace-link text-decoration-none"
+              data-task-id="{{ message.internal_data.trace_task_id }}"
+              aria-label="{% trans 'Inspect execution details' %}"
+            >
+              <span class="agent-footer-chip-heading">
+                <i class="bi bi-list-check"></i>{% trans "Execution" %}
+              </span>
+              {% if trace_summary.tool_calls or trace_summary.subagent_calls or trace_summary.interaction_count or trace_summary.error_count %}
+              <span class="agent-footer-chip-detail execution-trace-summary">
+                {% if trace_summary.tool_calls %}
+                  {{ trace_summary.tool_calls }} {% trans "tools" %}
+                {% endif %}
+                {% if trace_summary.subagent_calls %}
+                  {% if trace_summary.tool_calls %}•{% endif %}
+                  {{ trace_summary.subagent_calls }} {% trans "sub-agents" %}
+                {% elif not trace_summary.tool_calls and trace_summary.interaction_count %}
+                  {{ trace_summary.interaction_count }} {% trans "interaction" %}
+                {% elif not trace_summary.tool_calls and trace_summary.error_count %}
+                  {{ trace_summary.error_count }} {% trans "errors" %}
+                {% endif %}
+              </span>
               {% endif %}
+            </a>
+            {% endif %}
+            {% if message.internal_data.max_context %}
+            {% if message.internal_data.real_tokens is not None or message.internal_data.approx_tokens or message.internal_data.context_tokens %}
+            <div class="agent-footer-chip agent-footer-chip-info card-footer-consumption">
+              <span class="agent-footer-chip-heading">{% trans "Context" %}</span>
+              <span class="agent-footer-chip-detail">
+              {% if message.internal_data.real_tokens is not None %}
+                {{ message.internal_data.real_tokens }} / {{ message.internal_data.max_context }} ({% trans "real" %})
+              {% elif message.internal_data.approx_tokens %}
+                {{ message.internal_data.approx_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+              {% elif message.internal_data.context_tokens %}
+                {{ message.internal_data.context_tokens }} / {{ message.internal_data.max_context }} ({% trans "approximated" %})
+              {% endif %}
+              </span>
+            </div>
+            {% endif %}
+            {% endif %}
             </div>
           </div>
           {% endif %}
         </div>
         {% endif %}
       </div>
+      {% endwith %}
       {% endfor %}
 
       <!-- Render pending interactions as interactive cards -->
@@ -291,6 +351,27 @@
         <small id="progress-logs" class="text-muted"></small>
       </div>
       <div id="task-status"></div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="execution-trace-modal" tabindex="-1" aria-labelledby="execution-trace-modal-label" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-fullscreen-md-down">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h5 class="modal-title" id="execution-trace-modal-label">{% trans "Execution details" %}</h5>
+            <div id="execution-trace-modal-summary" class="small text-muted"></div>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+        </div>
+        <div class="modal-body">
+          <div id="execution-trace-modal-loading" class="small text-muted d-none">{% trans "Loading execution trace…" %}</div>
+          <div id="execution-trace-modal-empty" class="alert alert-light border d-none mb-0">
+            {% trans "No execution details are available for this message." %}
+          </div>
+          <div id="execution-trace-modal-tree"></div>
+        </div>
+      </div>
     </div>
   </div>
 

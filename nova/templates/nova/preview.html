@@ -81,6 +81,8 @@
   </div>
 </div>
 
+{% include 'nova/partials/_message_context_menu.html' %}
+
 <!-- Configure URLs for the JavaScript modules -->
 <script>
   window.NovaApp = window.NovaApp || {};
@@ -92,6 +94,7 @@
     createThread: "{% url 'create_thread' %}",
     deleteThread: "{% url 'delete_thread' 0 %}",
     loadMoreThreads: "{% url 'load_more_threads' %}",
+    taskExecutionTrace: "{% url 'task_execution_trace' 0 %}",
     fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",

@@ -14,6 +14,10 @@ from nova.llm.llm_agent import LLMAgent
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
 from nova.models.Task import TaskStatus
+from nova.tasks.execution_trace import (
+    TaskExecutionTraceHandler,
+    build_agent_tool_safe_name,
+)
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
 logger = logging.getLogger(__name__)
@@ -72,6 +76,7 @@ class TaskExecutor:
             initial_streamed_markdown=getattr(self.task, "streamed_markdown", "") or "",
             push_notifications_enabled=push_notifications_enabled,
         )
+        self.trace_handler = None
         self._llm_provider = _UNSET
 
     async def _get_llm_provider(self):
@@ -99,7 +104,8 @@ class TaskExecutor:
     async def execute_or_resume(self, interruption_response=None):
         """Main execution method with comprehensive error handling."""
         try:
-            await self._initialize_task()
+            await self._initialize_task(interruption_response=interruption_response)
+            await self._ensure_trace_handler(resumed=bool(interruption_response))
             await self._create_llm_agent()
 
             if interruption_response:
@@ -189,6 +195,7 @@ class TaskExecutor:
         self.task.progress_logs.append({"step": "Creating LLM agent",
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
         await sync_to_async(self.task.save, thread_sensitive=False)()
+        trace_handler = await self._ensure_trace_handler()
 
         tools_enabled = True
         provider = await self._get_llm_provider()
@@ -205,7 +212,7 @@ class TaskExecutor:
 
         self.llm = await LLMAgent.create(
             self.user, self.thread, self.agent_config,
-            callbacks=[self.handler],
+            callbacks=[callback for callback in [self.handler, trace_handler] if callback],
             tools_enabled=tools_enabled,
         )
 
@@ -259,6 +266,14 @@ class TaskExecutor:
 
         # Create/Update Interaction
         interaction = await self._create_interaction(question, schema, agent_name)
+
+        if self.trace_handler:
+            await self.trace_handler.record_interaction(
+                question=question,
+                schema=schema,
+                agent_name=agent_name,
+            )
+            await self.trace_handler.mark_root_awaiting_input()
 
         # Mark task awaiting input
         self.task.progress_logs.append({"step": f"Waiting for user input: {question[:120]}",
@@ -327,6 +342,16 @@ class TaskExecutor:
         self.task.progress_logs.append(error_log)
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
+        try:
+            trace_handler = await self._ensure_trace_handler()
+            if trace_handler:
+                await trace_handler.fail_root_run(
+                    str(error),
+                    category=error_category.value,
+                )
+        except Exception:
+            logger.exception("Failed to persist execution trace error for task %s", getattr(self.task, "id", None))
+
         # Publish error update
         if self.handler:
             try:
@@ -382,3 +407,41 @@ class TaskExecutor:
 
         # Save result
         self.task.result = result
+
+    async def _load_agent_tool_safe_names(self) -> set[str]:
+        if not self.agent_config:
+            return set()
+
+        def _load_names():
+            related_manager = getattr(self.agent_config, "agent_tools", None)
+            if related_manager is None:
+                return []
+            try:
+                raw_names = related_manager.filter(is_tool=True).values_list("name", flat=True)
+            except Exception:
+                return []
+            return [
+                build_agent_tool_safe_name(agent_name)
+                for agent_name in raw_names
+            ]
+
+        names = await sync_to_async(_load_names, thread_sensitive=True)()
+        return {
+            str(name or "").strip()
+            for name in names
+            if str(name or "").strip()
+        }
+
+    async def _ensure_trace_handler(self, *, resumed: bool = False):
+        if self.trace_handler is None:
+            self.trace_handler = TaskExecutionTraceHandler(
+                self.task,
+                ignored_tool_names=await self._load_agent_tool_safe_names(),
+            )
+        await self.trace_handler.ensure_root_run(
+            label=getattr(self.agent_config, "name", "") or "Agent run",
+            source_message_id=self.source_message_id,
+            agent_id=getattr(self.agent_config, "id", None),
+            resumed=resumed,
+        )
+        return self.trace_handler

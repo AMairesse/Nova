@@ -75,6 +75,9 @@ class MainViewsTests(TestCase):
         self.assertContains(response, 'desktop-view-mode-link-active')
         self.assertNotContains(response, 'id="desktop-mode-badge"')
         self.assertNotContains(response, 'id="continuous-days-toggle-btn"')
+        self.assertContains(response, 'id="messageContextMenu"')
+        self.assertContains(response, 'id="context-menu-execution-details"')
+        self.assertContains(response, 'id="context-menu-compact"')
 
     # ------------ message_list ------------------------------------------
 
@@ -771,6 +774,102 @@ class MainViewsTests(TestCase):
         resp = self.client.get(reverse("running_tasks",
                                        args=[foreign_thread.id]))
         self.assertEqual(resp.status_code, 404)
+
+    def test_execution_trace_endpoint_requires_task_ownership(self):
+        thread = Thread.objects.create(user=self.user, subject="Trace thread")
+        foreign_thread = Thread.objects.create(user=self.other, subject="Foreign trace")
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            status=TaskStatus.COMPLETED,
+            execution_trace={
+                "version": 1,
+                "summary": {"has_trace": True, "tool_calls": 1},
+                "root": {"id": "agent_run_root", "type": "agent_run", "children": []},
+            },
+        )
+        foreign_task = Task.objects.create(
+            user=self.other,
+            thread=foreign_thread,
+            status=TaskStatus.COMPLETED,
+            execution_trace={"version": 1},
+        )
+
+        self.client.login(username="alice", password="pass")
+        response = self.client.get(reverse("task_execution_trace", args=[task.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["execution_trace"]["summary"]["tool_calls"], 1)
+
+        response = self.client.get(reverse("task_execution_trace", args=[foreign_task.id]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_message_list_renders_execution_link_when_trace_summary_exists(self):
+        thread = Thread.objects.create(user=self.user, subject="Execution footer")
+        message = thread.add_message("Final answer", actor=Actor.AGENT)
+        message.internal_data = {
+            "trace_task_id": 42,
+            "trace_summary": {
+                "has_trace": True,
+                "tool_calls": 3,
+                "subagent_calls": 1,
+                "interaction_count": 0,
+                "error_count": 0,
+            },
+            "real_tokens": 120,
+            "max_context": 1000,
+        }
+        message.save(update_fields=["internal_data"])
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'execution-trace-link')
+        self.assertContains(response, 'data-task-id="42"')
+        self.assertContains(response, 'data-trace-task-id="42"')
+        self.assertContains(response, 'data-context-real-tokens="120"')
+        self.assertContains(response, 'data-context-max-context="1000"')
+        self.assertContains(response, 'agent-footer-chip agent-footer-chip-info card-footer-consumption')
+        self.assertContains(response, "3 tools")
+        self.assertContains(response, "1 sub-agents")
+
+    def test_message_list_renders_execution_link_when_trace_task_exists_even_if_legacy_summary_says_false(self):
+        thread = Thread.objects.create(user=self.user, subject="Execution footer compat")
+        message = thread.add_message("Final answer", actor=Actor.AGENT)
+        message.internal_data = {
+            "trace_task_id": 84,
+            "trace_summary": {
+                "has_trace": False,
+                "tool_calls": 0,
+                "subagent_calls": 0,
+                "interaction_count": 0,
+                "error_count": 0,
+            },
+        }
+        message.save(update_fields=["internal_data"])
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'execution-trace-link')
+        self.assertContains(response, 'data-task-id="84"')
+
+    def test_message_list_omits_execution_link_for_legacy_agent_message(self):
+        thread = Thread.objects.create(user=self.user, subject="Legacy footer")
+        message = thread.add_message("Legacy answer", actor=Actor.AGENT)
+        message.internal_data = {
+            "real_tokens": 50,
+            "max_context": 1000,
+        }
+        message.save(update_fields=["internal_data"])
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("message_list"), {"thread_id": thread.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'class="execution-trace-link')
 
     def test_message_list_returns_empty_state_for_missing_thread(self):
         captured = {}

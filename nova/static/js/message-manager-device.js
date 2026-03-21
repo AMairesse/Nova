@@ -4,6 +4,15 @@
     window.NovaApp = window.NovaApp || {};
     window.NovaApp.Modules = window.NovaApp.Modules || {};
 
+    function toggleContextMenuSection(sectionEl, valueEl, value) {
+        if (!sectionEl || !valueEl) {
+            return;
+        }
+        const text = `${value || ''}`.trim();
+        valueEl.textContent = text;
+        sectionEl.classList.toggle('d-none', !text);
+    }
+
     window.NovaApp.Modules.MessageDeviceMethods = {
         initVoiceRecognition() {
             if (typeof window.VoiceRecognitionManager === 'undefined') {
@@ -254,6 +263,60 @@
             this.touchStartPos = null;
         },
 
+        getMessageTraceTaskId(messageEl) {
+            return `${messageEl?.dataset?.traceTaskId || ''}`.trim();
+        },
+
+        getMessageContextSummary(messageEl) {
+            if (!messageEl || !window.MessageRenderer?.buildContextSummary) {
+                return '';
+            }
+            return window.MessageRenderer.buildContextSummary({
+                real_tokens: messageEl.dataset.contextRealTokens,
+                approx_tokens: messageEl.dataset.contextApproxTokens,
+                context_tokens: messageEl.dataset.contextLegacyTokens,
+                max_context: messageEl.dataset.contextMaxContext,
+            });
+        },
+
+        getMessageExecutionSummary(messageEl) {
+            const taskId = this.getMessageTraceTaskId(messageEl);
+            if (!taskId) {
+                return '';
+            }
+
+            const toolCalls = Number(messageEl?.dataset?.traceToolCalls || 0);
+            const subagentCalls = Number(messageEl?.dataset?.traceSubagentCalls || 0);
+            const interactionCount = Number(messageEl?.dataset?.traceInteractionCount || 0);
+            const errorCount = Number(messageEl?.dataset?.traceErrorCount || 0);
+            const artifactCount = Number(messageEl?.dataset?.traceArtifactCount || 0);
+            const durationMs = Number(messageEl?.dataset?.traceDurationMs || 0);
+            const parts = [];
+
+            if (window.MessageRenderer?.buildExecutionSummary) {
+                const primary = window.MessageRenderer.buildExecutionSummary({
+                    tool_calls: toolCalls,
+                    subagent_calls: subagentCalls,
+                    interaction_count: interactionCount,
+                    error_count: errorCount,
+                });
+                if (primary) {
+                    parts.push(primary);
+                }
+            }
+
+            if (artifactCount > 0) {
+                parts.push(`${artifactCount} ${gettext(artifactCount === 1 ? 'artifact' : 'artifacts')}`);
+            }
+
+            const durationLabel = this.formatExecutionDuration(durationMs);
+            if (durationLabel) {
+                parts.push(durationLabel);
+            }
+
+            return parts.join(' • ') || gettext('Details available');
+        },
+
         showMessageContextMenu(messageCard) {
             if (!this.contextMenuOffcanvas) return;
 
@@ -265,26 +328,63 @@
             const cardBody = messageCard.querySelector('.card-body');
             this.currentMessageText = cardBody ? cardBody.textContent.trim() : '';
 
-            const contextInfo = document.getElementById('context-menu-info');
-            const tokensEl = document.getElementById('context-menu-tokens');
-            const cardFooter = messageCard.querySelector('.card-footer-consumption');
+            const contextSection = document.getElementById('context-menu-context-section');
+            const contextValue = document.getElementById('context-menu-context-value');
+            const executionSection = document.getElementById('context-menu-execution-section');
+            const executionValue = document.getElementById('context-menu-execution-value');
+            const metaDivider = document.getElementById('context-menu-meta-divider');
+            const executionDetailsBtn = document.getElementById('context-menu-execution-details');
+            const compactBtn = document.getElementById('context-menu-compact');
 
-            if (cardFooter && cardFooter.textContent.trim()) {
-                const footerText = cardFooter.textContent.trim();
-                if (tokensEl) {
-                    tokensEl.textContent = footerText
-                        .replace('Context consumption:', '')
-                        .trim();
-                }
-                if (contextInfo) contextInfo.classList.remove('d-none');
-            } else if (contextInfo) {
-                contextInfo.classList.add('d-none');
+            const contextSummary = this.getMessageContextSummary(messageEl);
+            toggleContextMenuSection(contextSection, contextValue, contextSummary);
+
+            const traceTaskId = this.getMessageTraceTaskId(messageEl);
+            const executionSummary = traceTaskId ? this.getMessageExecutionSummary(messageEl) : '';
+            toggleContextMenuSection(executionSection, executionValue, executionSummary);
+
+            if (executionDetailsBtn) {
+                executionDetailsBtn.dataset.taskId = traceTaskId;
+                executionDetailsBtn.classList.toggle('d-none', !traceTaskId);
+            }
+
+            const canCompact =
+                messageEl.dataset.canCompact === 'true' &&
+                !Boolean(window.NovaApp?.isContinuousPage);
+            if (compactBtn) {
+                compactBtn.classList.toggle('d-none', !canCompact);
+            }
+
+            if (metaDivider) {
+                metaDivider.classList.toggle('d-none', !contextSummary && !traceTaskId);
             }
 
             this.contextMenuOffcanvas.show();
         },
 
         initContextMenuActions() {
+            const executionDetailsBtn = document.getElementById('context-menu-execution-details');
+            if (executionDetailsBtn) {
+                executionDetailsBtn.addEventListener('click', () => {
+                    const taskId = `${executionDetailsBtn.dataset.taskId || ''}`.trim();
+                    if (!taskId) {
+                        return;
+                    }
+                    this.contextMenuOffcanvas.hide();
+                    window.setTimeout(() => {
+                        void this.openExecutionTrace(taskId);
+                    }, 150);
+                });
+            }
+
+            const compactBtn = document.getElementById('context-menu-compact');
+            if (compactBtn) {
+                compactBtn.addEventListener('click', () => {
+                    this.contextMenuOffcanvas.hide();
+                    this.summarizeCurrentThread();
+                });
+            }
+
             const copyBtn = document.getElementById('context-menu-copy');
             if (copyBtn) {
                 copyBtn.addEventListener('click', () => {

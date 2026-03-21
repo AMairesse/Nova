@@ -153,28 +153,7 @@
   </div>
 </div>
 
-<!-- Mobile Message Context Menu (Action Sheet) -->
-<div class="offcanvas offcanvas-bottom d-lg-none" tabindex="-1" id="messageContextMenu" aria-labelledby="messageContextMenuLabel">
-  <div class="offcanvas-header py-2 border-bottom">
-    <h6 class="offcanvas-title" id="messageContextMenuLabel">{% trans "Message Options" %}</h6>
-    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="{% trans 'Close' %}"></button>
-  </div>
-  <div class="offcanvas-body">
-    <!-- Context info (populated by JS) -->
-    <div id="context-menu-info" class="context-info-item d-none">
-      <span class="context-info-label">{% trans "Context" %}</span>
-      <span class="context-info-value" id="context-menu-tokens"></span>
-    </div>
-    
-    <!-- Actions -->
-    <div class="d-grid gap-1">
-      <button type="button" class="action-sheet-btn" id="context-menu-copy">
-        <i class="bi bi-clipboard"></i>
-        {% trans "Copy message" %}
-      </button>
-    </div>
-  </div>
-</div>
+{% include 'nova/partials/_message_context_menu.html' %}
 
 <!-- Scroll to bottom button -->
 <button id="scroll-to-bottom" class="btn btn-primary position-fixed bottom-0 end-0 m-3 rounded-circle d-none" style="z-index: 1050;">
@@ -195,6 +174,7 @@
     summarizeThread: "{% url 'summarize_thread' 0 %}",
     confirmSummarizeThread: "{% url 'confirm_summarize_thread' 0 %}",
     loadMoreThreads: "{% url 'load_more_threads' %}",
+    taskExecutionTrace: "{% url 'task_execution_trace' 0 %}",
     fileList: "{% url 'file_list' 0 %}",
     fileUpload: "{% url 'file_upload' 0 %}",
     fileDelete: "{% url 'file_delete' 0 %}",

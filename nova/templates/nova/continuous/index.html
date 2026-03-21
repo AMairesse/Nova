@@ -10,6 +10,7 @@
   data-url-add-message="{% url 'continuous_add_message' %}"
   data-url-message-list="{% url 'continuous_messages' %}"
   data-url-running-tasks-base="/running-tasks/"
+  data-url-task-trace="{% url 'task_execution_trace' 0 %}"
   data-url-load-days="{% url 'continuous_days' %}"
   data-url-regenerate-summary="{% url 'continuous_regenerate_summary' %}"
   data-url-day-summary="{% url 'continuous_day' '__DAY__' %}"
@@ -175,6 +176,8 @@
     </div>
   </div>
 </div>
+
+{% include 'nova/partials/_message_context_menu.html' %}
 
 <script src="{% static 'js/responsive.js' %}" defer></script>
 <script src="{% static 'js/voice_recognition.js' %}" defer></script>
