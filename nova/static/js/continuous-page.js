@@ -507,6 +507,30 @@
         const mc = document.getElementById('message-container');
         if (mc) mc.innerHTML = html;
 
+        if (window.NovaApp.messageManager) {
+            if (typeof window.NovaApp.messageManager.syncComposerAttachmentConfig === 'function') {
+                window.NovaApp.messageManager.syncComposerAttachmentConfig();
+            }
+            if (typeof window.NovaApp.messageManager.resetComposerAttachments === 'function') {
+                window.NovaApp.messageManager.resetComposerAttachments();
+            }
+            if (typeof window.NovaApp.messageManager.resetComposerThreadFiles === 'function') {
+                window.NovaApp.messageManager.resetComposerThreadFiles();
+            }
+            if (typeof window.NovaApp.messageManager.syncComposerTextStatus === 'function') {
+                window.NovaApp.messageManager.syncComposerTextStatus();
+            }
+            if (typeof window.NovaApp.messageManager.syncResponseModeControl === 'function') {
+                window.NovaApp.messageManager.syncResponseModeControl();
+            }
+            if (typeof window.NovaApp.messageManager.syncComposerCapabilityNotice === 'function') {
+                window.NovaApp.messageManager.syncComposerCapabilityNotice();
+            }
+            if (typeof window.NovaApp.messageManager.initTextareaFocus === 'function') {
+                window.NovaApp.messageManager.initTextareaFocus();
+            }
+        }
+
         if (
             window.NovaApp.messageManager
             && typeof window.NovaApp.messageManager.applyTemplateSetupPrefillFromUrl === 'function'

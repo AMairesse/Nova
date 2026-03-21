@@ -73,6 +73,49 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             arg=thread_id,
         )
 
+    def _dispatch_text_paste(self, text: str):
+        self.page.evaluate(
+            """
+            (payload) => {
+              const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+              const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+              Object.defineProperty(pasteEvent, 'clipboardData', {
+                configurable: true,
+                value: {
+                  items: [],
+                  getData: (type) => type === 'text/plain' ? payload : '',
+                },
+              });
+              textarea.dispatchEvent(pasteEvent);
+            }
+            """,
+            text,
+        )
+
+    def _dispatch_file_paste(self, *, name: str, mime_type: str, content: str = "file"):
+        self.page.evaluate(
+            """
+            (payload) => {
+              const textarea = document.querySelector('#message-container textarea[name="new_message"]');
+              const file = new File([payload.content], payload.name, { type: payload.mimeType });
+              const item = {
+                kind: 'file',
+                getAsFile: () => file,
+              };
+              const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+              Object.defineProperty(pasteEvent, 'clipboardData', {
+                configurable: true,
+                value: {
+                  items: [item],
+                  getData: () => '',
+                },
+              });
+              textarea.dispatchEvent(pasteEvent);
+            }
+            """,
+            {"name": name, "mimeType": mime_type, "content": content},
+        )
+
     def test_initial_load_selects_latest_thread_and_renders_messages(self):
         older_thread = Thread.objects.create(user=self.user, subject="Older thread")
         older_message = older_thread.add_message(
@@ -305,6 +348,82 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
                 && logs.textContent.includes('Simulated task failure');
             }
             """
+        )
+
+    def test_image_clipboard_paste_adds_attachment_chip(self):
+        thread = Thread.objects.create(user=self.user, subject="Clipboard image thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_paste(
+            name="clipboard.png",
+            mime_type="image/png",
+            content="png-bytes",
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-attachments .composer-attachment-chip');
+              return chips.length === 1 && chips[0].textContent.includes('clipboard.png');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+
+    def test_pdf_clipboard_paste_adds_attachment_chip(self):
+        thread = Thread.objects.create(user=self.user, subject="Clipboard pdf thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_file_paste(
+            name="clipboard.pdf",
+            mime_type="application/pdf",
+            content="%PDF-1.4",
+        )
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-attachments .composer-attachment-chip');
+              return chips.length === 1 && chips[0].textContent.includes('clipboard.pdf');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
+        )
+
+    def test_large_text_paste_can_queue_thread_file_without_inserting_text(self):
+        thread = Thread.objects.create(user=self.user, subject="Clipboard text thread")
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self._dispatch_text_paste("x" * 13000)
+
+        self.page.wait_for_selector("#composerPasteDecisionModal.show")
+        self.page.locator("#composer-paste-decision-file").click()
+        self.page.wait_for_function(
+            """
+            () => {
+              const chips = document.querySelectorAll('#composer-thread-files .composer-thread-file-chip');
+              return chips.length === 1 && chips[0].textContent.includes('pasted-context-');
+            }
+            """
+        )
+        self.assertEqual(
+            self.page.locator('#message-container textarea[name="new_message"]').input_value(),
+            "",
         )
 
     def test_mobile_context_menu_can_copy_message_text(self):

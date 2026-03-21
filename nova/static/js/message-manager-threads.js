@@ -21,6 +21,7 @@
                 document.getElementById('message-container').innerHTML = html;
                 this.syncComposerAttachmentConfig();
                 this.resetComposerAttachments();
+                this.resetComposerThreadFiles();
 
                 const renderedThreadId = document.querySelector(
                     '#message-container input[name="thread_id"]'
@@ -42,6 +43,7 @@
                 );
 
                 this.initTextareaFocus();
+                this.syncComposerTextStatus();
                 this.applyTemplateSetupPrefillFromUrl();
                 this.updateVoiceButtonState();
                 this.syncResponseModeControl();

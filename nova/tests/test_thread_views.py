@@ -129,6 +129,8 @@ class MainViewsTests(TestCase):
     @override_settings(
         MESSAGE_ATTACHMENT_MAX_FILES=2,
         MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES=2 * 1024 * 1024,
+        MESSAGE_COMPOSER_SOFT_TEXT_LIMIT_CHARS=8000,
+        MESSAGE_COMPOSER_HARD_TEXT_LIMIT_CHARS=12000,
     )
     def test_message_list_exposes_attachment_limits_from_settings(self):
         thread = Thread.objects.create(user=self.user, subject="Composer limits")
@@ -153,6 +155,9 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'data-message-attachment-max-files="2"')
         self.assertContains(response, 'data-message-attachment-max-bytes="2097152"')
+        self.assertContains(response, 'data-composer-soft-text-limit="8000"')
+        self.assertContains(response, 'data-composer-hard-text-limit="12000"')
+        self.assertContains(response, 'maxlength="12000"')
         self.assertContains(response, 'Attach image (up to 2 images, 2 MB each)')
 
     def test_message_list_prefers_agent_display_markdown_when_available(self):

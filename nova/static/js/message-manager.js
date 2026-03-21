@@ -10,17 +10,28 @@
         'triggerComposerSubmit',
         'resizeComposerTextarea',
         'syncComposerAttachmentConfig',
+        'syncComposerTextStatus',
         'formatAttachmentSizeLabel',
         'interpolateMessage',
         'buildAttachmentCountLimitMessage',
         'buildAttachmentSizeLimitMessage',
         'openComposerAttachmentPicker',
         'handleComposerAttachmentInputChange',
+        'handleComposerPaste',
         'addComposerAttachments',
+        'insertComposerText',
+        'openComposerPasteDecisionModal',
+        'buildComposerThreadFileName',
+        'queueComposerThreadFileFromText',
         'cloneComposerFile',
         'removeComposerAttachment',
         'resetComposerAttachments',
         'renderComposerAttachments',
+        'removeComposerThreadFile',
+        'resetComposerThreadFiles',
+        'renderComposerThreadFiles',
+        'buildComposerSubmissionMessage',
+        'resolveComposerPasteDecision',
         'getSelectedAgentCapabilityState',
         'getSelectedResponseMode',
         'updateResponseModeButton',
@@ -104,12 +115,16 @@
             this._handlersBound = false;
             this._setupPrefillApplied = false;
             this.composerAttachments = [];
+            this.composerThreadFiles = [];
             this.maxComposerAttachments = 4;
             this.maxComposerImageBytes = 4 * 1024 * 1024;
             this.maxComposerDocumentBytes = 10 * 1024 * 1024;
             this.maxComposerAudioBytes = 10 * 1024 * 1024;
             this.composerAttachmentSizeLabel = '4 MB';
+            this.maxComposerSoftTextLimit = 8_000;
+            this.maxComposerHardTextLimit = 12_000;
             this.isComposerSubmitting = false;
+            this.pendingComposerPasteDecision = null;
 
             this.streamingManager = new window.StreamingManager();
 
@@ -251,6 +266,27 @@
                     const button = target.closest('.composer-attachment-remove');
                     this.removeComposerAttachment(button?.dataset.attachmentId || '');
                 },
+                '.composer-thread-file-remove': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.composer-thread-file-remove');
+                    this.removeComposerThreadFile(button?.dataset?.threadFileId || '');
+                },
+                '#composer-paste-decision-close': (e) => {
+                    e.preventDefault();
+                    this.resolveComposerPasteDecision('cancel');
+                },
+                '#composer-paste-decision-cancel': (e) => {
+                    e.preventDefault();
+                    this.resolveComposerPasteDecision('cancel');
+                },
+                '#composer-paste-decision-keep': (e) => {
+                    e.preventDefault();
+                    this.resolveComposerPasteDecision('keep');
+                },
+                '#composer-paste-decision-file': (e) => {
+                    e.preventDefault();
+                    this.resolveComposerPasteDecision('file');
+                },
                 '.artifact-publish-btn': (e, target) => {
                     e.preventDefault();
                     const button = target.closest('.artifact-publish-btn');
@@ -279,6 +315,7 @@
             document.addEventListener('input', (e) => {
                 if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
                     this.resizeComposerTextarea(e.target);
+                    this.syncComposerTextStatus(e.target);
                 }
             });
 
@@ -293,6 +330,12 @@
             document.addEventListener('change', (e) => {
                 if (e.target.id === 'message-attachment-input' || e.target.id === 'message-camera-input') {
                     void this.handleComposerAttachmentInputChange(e.target);
+                }
+            });
+
+            document.addEventListener('paste', (e) => {
+                if (e.target.matches('#message-container textarea[name="new_message"]')) {
+                    void this.handleComposerPaste(e);
                 }
             });
 

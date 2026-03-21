@@ -25,6 +25,7 @@ from nova.file_utils import batch_upload_files
 from nova.llm.llm_agent import LLMAgent
 from nova.llm.checkpoints import get_checkpointer
 from nova.message_attachments import get_message_attachment_template_context
+from nova.message_composer import get_message_composer_template_context
 from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
 from nova.message_submission import (
     MessageSubmissionError,
@@ -162,6 +163,7 @@ def message_list(request):
                 'pending_interactions': get_pending_interactions(selected_thread),
             }
             context.update(get_message_attachment_template_context())
+            context.update(get_message_composer_template_context())
             return render(request, 'nova/message_container.html', context)
 
         except Http404:
@@ -179,6 +181,7 @@ def message_list(request):
         'default_agent': default_agent
     }
     context.update(get_message_attachment_template_context())
+    context.update(get_message_composer_template_context())
     return render(request, 'nova/message_container.html', context)
 
 

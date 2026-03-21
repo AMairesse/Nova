@@ -9,6 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
+from nova.message_submission import MessageSubmissionError
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
@@ -144,6 +145,62 @@ class ContinuousViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["status"], "ERROR")
+
+    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.views.continuous_views.run_ai_task_celery.delay")
+    @patch("nova.message_submission._upload_thread_files")
+    def test_continuous_add_message_accepts_thread_files(
+        self,
+        mocked_upload_thread_files,
+        mocked_run_ai_task,
+        mocked_enqueue_followups,
+    ):
+        mocked_run_ai_task.return_value = None
+        mocked_enqueue_followups.return_value = None
+        mocked_upload_thread_files.return_value = [701]
+
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={
+                "new_message": "Please inspect the pasted file",
+                "files": [SimpleUploadedFile("trace.log", b"traceback", content_type="text/plain")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "OK")
+        self.assertEqual(payload["uploaded_file_ids"], [701])
+        mocked_upload_thread_files.assert_called_once()
+
+    @patch("nova.views.continuous_views.enqueue_continuous_followups")
+    @patch("nova.views.continuous_views.run_ai_task_celery.delay")
+    @patch("nova.message_submission._upload_thread_files")
+    def test_continuous_add_message_cleans_created_message_when_thread_file_upload_fails(
+        self,
+        mocked_upload_thread_files,
+        mocked_run_ai_task,
+        mocked_enqueue_followups,
+    ):
+        mocked_upload_thread_files.side_effect = MessageSubmissionError(
+            "File upload failed",
+            status_code=400,
+        )
+
+        response = self.client.post(
+            reverse("continuous_add_message"),
+            data={
+                "new_message": "Please inspect the pasted file",
+                "files": [SimpleUploadedFile("trace.log", b"traceback", content_type="text/plain")],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertEqual(Message.objects.filter(user=self.user).count(), 0)
+        self.assertEqual(DaySegment.objects.filter(user=self.user).count(), 0)
+        mocked_enqueue_followups.assert_not_called()
+        mocked_run_ai_task.assert_not_called()
 
     @patch("nova.views.continuous_views.enqueue_continuous_followups")
     @patch("nova.views.continuous_views.run_ai_task_celery.delay")

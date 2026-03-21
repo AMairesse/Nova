@@ -315,6 +315,8 @@
       data-message-attachment-max-document-bytes="{{ message_attachment_max_document_size_bytes }}"
       data-message-attachment-max-audio-bytes="{{ message_attachment_max_audio_size_bytes }}"
       data-message-attachment-max-size-label="{{ message_attachment_max_image_size_label }}"
+      data-composer-soft-text-limit="{{ message_composer_soft_text_limit }}"
+      data-composer-hard-text-limit="{{ message_composer_hard_text_limit }}"
     >
       {% csrf_token %}
       <input
@@ -390,7 +392,7 @@
                   name="new_message"
                   placeholder="{% trans 'Type your message...' %}"
                   rows="1"
-                  maxlength="2000"
+                  maxlength="{{ message_composer_hard_text_limit }}"
                   autofocus></textarea>
         <button
           type="button"
@@ -434,6 +436,8 @@
       <input type="file" id="message-attachment-input" accept="image/*,application/pdf,audio/*" multiple class="d-none" />
       <input type="file" id="message-camera-input" accept="image/*" capture="environment" class="d-none" />
       <div id="composer-attachments" class="composer-attachments d-none" aria-live="polite"></div>
+      <div id="composer-thread-files" class="composer-thread-files d-none" aria-live="polite"></div>
+      <div id="composer-status-line" class="composer-status-line small text-muted mt-2 d-none" aria-live="polite"></div>
       <div id="composer-provider-capability-note" class="alert py-2 px-3 small mt-2 d-none" aria-live="polite"></div>
     </form>
   </div>
@@ -459,6 +463,39 @@
           </button>
           <button type="button" class="btn btn-primary" onclick="window.NovaApp.messageManager.confirmSummarize(true)">
             {% trans "Yes, optimize all" %}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div
+    class="modal fade"
+    id="composerPasteDecisionModal"
+    tabindex="-1"
+    aria-labelledby="composerPasteDecisionModalLabel"
+    aria-hidden="true"
+    data-bs-backdrop="static"
+    data-bs-keyboard="false"
+  >
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="composerPasteDecisionModalLabel">{% trans "Large pasted content" %}</h5>
+          <button type="button" class="btn-close" id="composer-paste-decision-close" aria-label="{% trans 'Close' %}"></button>
+        </div>
+        <div class="modal-body">
+          <p id="composer-paste-decision-message" class="mb-2"></p>
+          <div id="composer-paste-decision-detail" class="small text-muted"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="composer-paste-decision-cancel">
+            {% trans "Cancel" %}
+          </button>
+          <button type="button" class="btn btn-outline-primary" id="composer-paste-decision-keep">
+            {% trans "Keep in message" %}
+          </button>
+          <button type="button" class="btn btn-primary" id="composer-paste-decision-file">
+            {% trans "Create file in Files" %}
           </button>
         </div>
       </div>

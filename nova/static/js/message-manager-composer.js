@@ -10,7 +10,8 @@
             const originalMessage = textarea ? textarea.value : '';
             const msg = originalMessage.trim();
             const hasAttachments = this.composerAttachments.length > 0;
-            if (!msg && !hasAttachments) return;
+            const hasThreadFiles = this.composerThreadFiles.length > 0;
+            if (!msg && !hasAttachments && !hasThreadFiles) return;
             if (this.isComposerSubmitting) return;
 
             const blockingCapabilityError = this.getComposerBlockingCapabilityError();
@@ -30,13 +31,20 @@
             if (textarea) {
                 textarea.value = '';
                 this.resizeComposerTextarea(textarea);
+                this.syncComposerTextStatus(textarea);
             }
 
             try {
                 const formData = new FormData(form);
-                formData.set('new_message', originalMessage);
+                formData.set(
+                    'new_message',
+                    this.buildComposerSubmissionMessage(originalMessage)
+                );
                 for (const attachment of this.composerAttachments) {
                     formData.append('message_attachments', attachment.file, attachment.file.name);
+                }
+                for (const threadFile of this.composerThreadFiles) {
+                    formData.append('files', threadFile.file, threadFile.file.name);
                 }
 
                 const response = await window.DOMUtils.csrfFetch(
@@ -61,6 +69,7 @@
                 if (threadIdInput) threadIdInput.value = data.thread_id;
                 this.currentThreadId = data.thread_id;
                 this.resetComposerAttachments();
+                this.resetComposerThreadFiles();
 
                 const userMessageEl = window.MessageRenderer.createMessageElement(
                     data.message,
@@ -83,6 +92,7 @@
                 if (textarea) {
                     textarea.value = originalMessage;
                     this.resizeComposerTextarea(textarea);
+                    this.syncComposerTextStatus(textarea);
                     textarea.focus();
                 }
                 if (sendBtn) {
@@ -105,8 +115,12 @@
 
         resizeComposerTextarea(textarea) {
             if (!textarea) return;
+            const viewportHeight = Number.isFinite(window.innerHeight)
+                ? window.innerHeight
+                : 960;
+            const maxHeight = Math.min(Math.round(viewportHeight * 0.4), 384);
             textarea.style.height = 'auto';
-            textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+            textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
         },
 
         syncComposerAttachmentConfig() {
@@ -128,6 +142,14 @@
                 dataset.messageAttachmentMaxAudioBytes || '',
                 10
             );
+            const softTextLimit = Number.parseInt(
+                dataset.composerSoftTextLimit || '',
+                10
+            );
+            const hardTextLimit = Number.parseInt(
+                dataset.composerHardTextLimit || '',
+                10
+            );
             const sizeLabel = `${dataset.messageAttachmentMaxSizeLabel || ''}`.trim();
 
             if (Number.isFinite(maxFiles) && maxFiles > 0) {
@@ -142,8 +164,80 @@
             if (Number.isFinite(maxAudioBytes) && maxAudioBytes > 0) {
                 this.maxComposerAudioBytes = maxAudioBytes;
             }
+            if (Number.isFinite(softTextLimit) && softTextLimit > 0) {
+                this.maxComposerSoftTextLimit = softTextLimit;
+            }
+            if (Number.isFinite(hardTextLimit) && hardTextLimit > this.maxComposerSoftTextLimit) {
+                this.maxComposerHardTextLimit = hardTextLimit;
+            }
             this.composerAttachmentSizeLabel =
                 sizeLabel || this.formatAttachmentSizeLabel(this.maxComposerImageBytes);
+
+            const textarea = form?.querySelector('textarea[name="new_message"]');
+            if (textarea) {
+                textarea.maxLength = this.maxComposerHardTextLimit;
+                this.resizeComposerTextarea(textarea);
+            }
+            this.syncComposerTextStatus(textarea);
+        },
+
+        syncComposerTextStatus(textarea = null) {
+            const targetTextarea =
+                textarea ||
+                document.querySelector('#message-container textarea[name="new_message"]');
+            const status = document.getElementById('composer-status-line');
+            if (!status) return;
+
+            const currentLength = `${targetTextarea?.value || ''}`.length;
+            const pendingFilesCount = this.composerThreadFiles.length;
+
+            if (
+                currentLength < this.maxComposerSoftTextLimit &&
+                pendingFilesCount === 0
+            ) {
+                status.textContent = '';
+                status.className = 'composer-status-line small text-muted mt-2 d-none';
+                return;
+            }
+
+            const parts = [
+                this.interpolateMessage(
+                    gettext('%(count)s / %(limit)s characters'),
+                    {
+                        count: currentLength,
+                        limit: this.maxComposerHardTextLimit,
+                    }
+                ),
+            ];
+            let tone = 'muted';
+
+            if (currentLength >= this.maxComposerHardTextLimit) {
+                tone = 'danger';
+                parts.push(
+                    gettext(
+                        'Large pasted text must be moved to Files once you reach this limit.'
+                    )
+                );
+            } else if (currentLength >= this.maxComposerSoftTextLimit) {
+                tone = 'warning';
+                parts.push(
+                    gettext(
+                        'If you paste a large log or document, Nova can move it to Files.'
+                    )
+                );
+            }
+
+            if (pendingFilesCount > 0) {
+                parts.push(
+                    this.interpolateMessage(
+                        gettext('%(count)s pending file(s) will be added to Files.'),
+                        { count: pendingFilesCount }
+                    )
+                );
+            }
+
+            status.textContent = parts.join(' ');
+            status.className = `composer-status-line small mt-2 text-${tone}`;
         },
 
         formatAttachmentSizeLabel(sizeBytes) {
@@ -209,6 +303,114 @@
             }
         },
 
+        async handleComposerPaste(event) {
+            const textarea = event?.target;
+            const clipboardData = event?.clipboardData;
+            if (!textarea || !clipboardData) return;
+
+            const items = Array.from(clipboardData.items || []);
+            const acceptedAttachments = [];
+            const rejectedBinaryItems = [];
+
+            for (const item of items) {
+                if (item?.kind !== 'file') continue;
+                const file = item.getAsFile();
+                if (!file) continue;
+
+                const normalizedType = `${file.type || ''}`.toLowerCase();
+                const normalizedName = `${file.name || ''}`.toLowerCase();
+                if (
+                    normalizedType.startsWith('image/') ||
+                    normalizedType === 'application/pdf' ||
+                    normalizedName.endsWith('.pdf')
+                ) {
+                    acceptedAttachments.push(file);
+                } else {
+                    rejectedBinaryItems.push(file);
+                }
+            }
+
+            const textPayload = `${clipboardData.getData('text/plain') || ''}`;
+            const selectionStart =
+                typeof textarea.selectionStart === 'number'
+                    ? textarea.selectionStart
+                    : textarea.value.length;
+            const selectionEnd =
+                typeof textarea.selectionEnd === 'number'
+                    ? textarea.selectionEnd
+                    : selectionStart;
+            const projectedLength =
+                textarea.value.length -
+                Math.max(0, selectionEnd - selectionStart) +
+                textPayload.length;
+            const hasBinaryItems =
+                acceptedAttachments.length > 0 || rejectedBinaryItems.length > 0;
+            const shouldInterceptText =
+                Boolean(textPayload) &&
+                projectedLength >= this.maxComposerSoftTextLimit;
+
+            if (!hasBinaryItems && !shouldInterceptText) {
+                return;
+            }
+
+            event.preventDefault();
+
+            if (acceptedAttachments.length) {
+                try {
+                    await this.addComposerAttachments(acceptedAttachments);
+                } catch (error) {
+                    console.error('Error preparing pasted attachment:', error);
+                    this.showToast(
+                        gettext('Failed to prepare one of the pasted files.'),
+                        'danger'
+                    );
+                }
+            }
+
+            if (rejectedBinaryItems.length) {
+                this.showToast(
+                    gettext(
+                        'This pasted file type is not supported here. Drop it into Files instead.'
+                    ),
+                    'warning'
+                );
+            }
+
+            if (!textPayload) {
+                textarea.focus();
+                return;
+            }
+
+            let decision = 'keep';
+            if (projectedLength > this.maxComposerHardTextLimit) {
+                decision = await this.openComposerPasteDecisionModal({
+                    projectedLength,
+                    pastedLength: textPayload.length,
+                    forceFile: true,
+                });
+            } else if (projectedLength >= this.maxComposerSoftTextLimit) {
+                decision = await this.openComposerPasteDecisionModal({
+                    projectedLength,
+                    pastedLength: textPayload.length,
+                    forceFile: false,
+                });
+            }
+
+            if (decision === 'cancel') {
+                textarea.focus();
+                this.syncComposerTextStatus(textarea);
+                return;
+            }
+            if (decision === 'file') {
+                await this.queueComposerThreadFileFromText(textPayload);
+                textarea.focus();
+                this.syncComposerTextStatus(textarea);
+                return;
+            }
+
+            this.insertComposerText(textarea, textPayload);
+        },
+
         async addComposerAttachments(files) {
             const accepted = [];
             const availableSlots =
@@ -264,6 +466,155 @@
             if (!accepted.length) return;
             this.composerAttachments.push(...accepted);
             this.renderComposerAttachments();
+        },
+
+        insertComposerText(textarea, text) {
+            if (!textarea) return;
+            const insertText = `${text || ''}`;
+            const start =
+                typeof textarea.selectionStart === 'number'
+                    ? textarea.selectionStart
+                    : textarea.value.length;
+            const end =
+                typeof textarea.selectionEnd === 'number'
+                    ? textarea.selectionEnd
+                    : start;
+
+            if (typeof textarea.setRangeText === 'function') {
+                textarea.setRangeText(insertText, start, end, 'end');
+            } else {
+                textarea.value =
+                    `${textarea.value.slice(0, start)}${insertText}${textarea.value.slice(end)}`;
+                const nextPos = start + insertText.length;
+                textarea.selectionStart = nextPos;
+                textarea.selectionEnd = nextPos;
+            }
+
+            this.resizeComposerTextarea(textarea);
+            this.syncComposerTextStatus(textarea);
+            textarea.focus();
+        },
+
+        openComposerPasteDecisionModal({
+            projectedLength = 0,
+            pastedLength = 0,
+            forceFile = false,
+        } = {}) {
+            const modalEl = document.getElementById('composerPasteDecisionModal');
+            const messageEl = document.getElementById(
+                'composer-paste-decision-message'
+            );
+            const detailEl = document.getElementById(
+                'composer-paste-decision-detail'
+            );
+            const keepBtn = document.getElementById('composer-paste-decision-keep');
+            if (
+                !modalEl ||
+                !messageEl ||
+                !detailEl ||
+                !keepBtn ||
+                !window.bootstrap?.Modal
+            ) {
+                return Promise.resolve(forceFile ? 'file' : 'keep');
+            }
+
+            if (this.pendingComposerPasteDecision?.resolve) {
+                this.pendingComposerPasteDecision.resolve('cancel');
+                if (this.pendingComposerPasteDecision.modal) {
+                    this.pendingComposerPasteDecision.modal.hide();
+                }
+                this.pendingComposerPasteDecision = null;
+            }
+
+            messageEl.textContent = forceFile
+                ? gettext(
+                      'This pasted text is too large for the message box. Create a file in Files instead.'
+                  )
+                : gettext(
+                      'This pasted text will make the message quite large. Do you want to keep it in the message or create a file in Files instead?'
+                  );
+            detailEl.textContent = this.interpolateMessage(
+                gettext(
+                    'Pasted block: %(pasted)s characters. Message after paste: %(total)s / %(limit)s.'
+                ),
+                {
+                    pasted: pastedLength,
+                    total: projectedLength,
+                    limit: this.maxComposerHardTextLimit,
+                }
+            );
+            keepBtn.classList.toggle('d-none', forceFile);
+
+            const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+            return new Promise((resolve) => {
+                this.pendingComposerPasteDecision = {
+                    resolve,
+                    modal,
+                };
+                modal.show();
+            });
+        },
+
+        resolveComposerPasteDecision(decision) {
+            const pending = this.pendingComposerPasteDecision;
+            if (!pending) return;
+
+            this.pendingComposerPasteDecision = null;
+            if (pending.modal) {
+                pending.modal.hide();
+            }
+            pending.resolve(decision || 'cancel');
+        },
+
+        buildComposerThreadFileName() {
+            const now = new Date();
+            const pad = (value) => String(value).padStart(2, '0');
+            const stamp =
+                `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+                `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+
+            let candidate = `pasted-context-${stamp}.txt`;
+            const existingNames = new Set(
+                this.composerThreadFiles.map((item) => item.file?.name || '')
+            );
+            let suffix = 2;
+            while (existingNames.has(candidate)) {
+                candidate = `pasted-context-${stamp}-${suffix}.txt`;
+                suffix += 1;
+            }
+            return candidate;
+        },
+
+        async queueComposerThreadFileFromText(text) {
+            if (typeof File === 'undefined') {
+                this.showToast(
+                    gettext('Your browser cannot create a file from pasted text here.'),
+                    'warning'
+                );
+                return;
+            }
+
+            const sourceText = `${text || ''}`;
+            if (!sourceText) return;
+
+            const rawFile = new File(
+                [sourceText],
+                this.buildComposerThreadFileName(),
+                {
+                    type: 'text/plain',
+                    lastModified: Date.now(),
+                }
+            );
+            const stableFile = await this.cloneComposerFile(rawFile);
+            this.composerThreadFiles.push({
+                id:
+                    window.crypto &&
+                    typeof window.crypto.randomUUID === 'function'
+                        ? window.crypto.randomUUID()
+                        : `${Date.now()}-${Math.random()}`,
+                file: stableFile,
+            });
+            this.renderComposerThreadFiles();
         },
 
         async cloneComposerFile(file) {
@@ -329,6 +680,7 @@
                 container.innerHTML = '';
                 container.classList.add('d-none');
                 this.syncComposerCapabilityNotice();
+                this.syncComposerTextStatus();
                 return;
             }
 
@@ -351,6 +703,74 @@
             `)
                 .join('');
             this.syncComposerCapabilityNotice();
+            this.syncComposerTextStatus();
+        },
+
+        removeComposerThreadFile(threadFileId) {
+            this.composerThreadFiles = this.composerThreadFiles.filter(
+                (item) => item.id !== threadFileId
+            );
+            this.renderComposerThreadFiles();
+        },
+
+        resetComposerThreadFiles() {
+            if (this.pendingComposerPasteDecision?.modal) {
+                this.pendingComposerPasteDecision.modal.hide();
+            }
+            if (this.pendingComposerPasteDecision?.resolve) {
+                this.pendingComposerPasteDecision.resolve('cancel');
+            }
+            this.pendingComposerPasteDecision = null;
+            this.composerThreadFiles = [];
+            this.renderComposerThreadFiles();
+        },
+
+        renderComposerThreadFiles() {
+            const container = document.getElementById('composer-thread-files');
+            if (!container) return;
+
+            if (!this.composerThreadFiles.length) {
+                container.innerHTML = '';
+                container.classList.add('d-none');
+                this.syncComposerTextStatus();
+                return;
+            }
+
+            container.classList.remove('d-none');
+            container.innerHTML = this.composerThreadFiles
+                .map((threadFile) => `
+                <div class="composer-thread-file-chip">
+                    <div class="composer-thread-file-icon">
+                        <i class="bi bi-file-earmark-text"></i>
+                    </div>
+                    <div class="composer-thread-file-meta">
+                        <div class="composer-thread-file-name">${window.DOMUtils.escapeHTML(threadFile.file.name)}</div>
+                        <div class="composer-thread-file-size">FILES · ${Math.max(1, Math.round(threadFile.file.size / 1024))} KB</div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary composer-thread-file-remove" data-thread-file-id="${threadFile.id}" aria-label="${gettext('Remove file')}">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            `)
+                .join('');
+            this.syncComposerTextStatus();
+        },
+
+        buildComposerSubmissionMessage(originalMessage) {
+            if (!this.composerThreadFiles.length) {
+                return originalMessage;
+            }
+
+            const introLines = [
+                gettext(
+                    'I added the following file(s) to Files because their pasted content was too large for the message box. Please review them first if relevant before answering:'
+                ),
+                ...this.composerThreadFiles.map(
+                    (threadFile) => `- ${threadFile.file.name}`
+                ),
+            ];
+            const prefix = introLines.join('\n');
+            return `${prefix}${originalMessage.trim() ? `\n\n${originalMessage}` : ''}`;
         },
 
         getSelectedAgentCapabilityState() {

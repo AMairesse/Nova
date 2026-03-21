@@ -27,6 +27,7 @@ from nova.tasks.conversation_tasks import summarize_day_segment_task
 from nova.tasks.tasks import run_ai_task_celery
 from nova.utils import markdown_to_html
 from nova.message_attachments import get_message_attachment_template_context
+from nova.message_composer import get_message_composer_template_context
 from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
 from nova.message_submission import (
     MessageSubmissionError,
@@ -303,6 +304,7 @@ def continuous_messages(request):
             "show_day_separators": day_label is None,
             "recent_messages_limit": recent_messages_limit,
             **get_message_attachment_template_context(),
+            **get_message_composer_template_context(),
         },
     )
 
@@ -352,7 +354,7 @@ def continuous_add_message(request):
             selected_agent=request.POST.get("selected_agent"),
             response_mode=request.POST.get("response_mode"),
             thread_mode=Thread.Mode.CONTINUOUS,
-            thread_files=[],
+            thread_files=request.FILES.getlist("files"),
             message_attachments=request.FILES.getlist("message_attachments"),
             prepare_context=prepare_context,
             dispatcher_task=run_ai_task_celery,

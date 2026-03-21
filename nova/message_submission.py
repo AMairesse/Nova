@@ -102,6 +102,9 @@ def _upload_thread_files(
             {
                 "path": f"/{uploaded_file.name}",
                 "content": content,
+                "mime_type": str(
+                    getattr(uploaded_file, "content_type", "") or ""
+                ).strip().lower(),
             }
         )
 
@@ -124,6 +127,17 @@ def _upload_thread_files(
         raise MessageSubmissionError("; ".join(errors), status_code=400)
 
     return uploaded_file_ids
+
+
+def _cleanup_submission_message(context: SubmissionContext) -> None:
+    message = context.message
+    if message is None:
+        return
+
+    if context.before_message_delete is not None:
+        context.before_message_delete(message)
+    message.delete()
+    context.message = None
 
 
 def submit_user_message(
@@ -167,13 +181,17 @@ def submit_user_message(
             raise MessageSubmissionError(attachment_error, status_code=400)
 
     context = prepare_context(normalized_text)
-    uploaded_file_ids = _upload_thread_files(
-        thread=context.thread,
-        user=user,
-        uploaded_files=uploaded_thread_files,
-        thread_file_uploader=thread_file_uploader,
-        file_update_publisher=file_update_publisher,
-    )
+    try:
+        uploaded_file_ids = _upload_thread_files(
+            thread=context.thread,
+            user=user,
+            uploaded_files=uploaded_thread_files,
+            thread_file_uploader=thread_file_uploader,
+            file_update_publisher=file_update_publisher,
+        )
+    except MessageSubmissionError:
+        _cleanup_submission_message(context)
+        raise
 
     message = context.message
     if message is None:
@@ -192,9 +210,7 @@ def submit_user_message(
         )
         message_attachment_artifacts = list(attachment_meta or [])
         if attachment_errors and not message_attachment_artifacts:
-            if context.before_message_delete is not None:
-                context.before_message_delete(message)
-            message.delete()
+            _cleanup_submission_message(context)
             raise MessageSubmissionError("; ".join(attachment_errors), status_code=400)
 
     message.internal_data = {
