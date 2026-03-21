@@ -85,6 +85,42 @@ class TaskProgressHandlerTests(IsolatedAsyncioTestCase):
             status="completed",
         )
 
+    @override_settings(WEBPUSH_ENABLED=True)
+    async def test_on_task_complete_skips_webpush_notification_when_disabled(self):
+        channel_layer = AsyncMock()
+        handler = TaskProgressHandler(
+            task_id=457,
+            channel_layer=channel_layer,
+            user_id=9,
+            thread_id=12,
+            thread_mode="thread",
+            push_notifications_enabled=False,
+        )
+
+        with patch("nova.tasks.notification_tasks.send_task_webpush_notification.delay") as mocked_delay:
+            await handler.on_task_complete("ok", 12, "Subject")
+
+        mocked_delay.assert_not_called()
+
+    @override_settings(WEBPUSH_ENABLED=True)
+    async def test_on_error_skips_webpush_notification_when_disabled(self):
+        channel_layer = AsyncMock()
+        handler = TaskProgressHandler(
+            task_id=458,
+            channel_layer=channel_layer,
+            user_id=9,
+            thread_id=12,
+            thread_mode="thread",
+            push_notifications_enabled=False,
+        )
+        handler._flush_stream_chunk = AsyncMock(return_value=None)
+        handler._persist_stream_state = AsyncMock()
+
+        with patch("nova.tasks.notification_tasks.send_task_webpush_notification.delay") as mocked_delay:
+            await handler.on_error("system_error: boom", "system_error")
+
+        mocked_delay.assert_not_called()
+
     async def test_streaming_flushes_on_sentence_boundary_and_llm_end(self):
         channel_layer = AsyncMock()
         handler = TaskProgressHandler(task_id=789, channel_layer=channel_layer)

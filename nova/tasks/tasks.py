@@ -589,9 +589,18 @@ def execute_agent_task_with_executor(
     prompt_text: str,
     *,
     source_message_id: int | None = None,
+    push_notifications_enabled: bool = True,
 ) -> None:
     """Run a task execution with `AgentTaskExecutor` in a synchronous context."""
-    executor = AgentTaskExecutor(task, user, thread, agent_config, prompt_text, source_message_id=source_message_id)
+    executor = AgentTaskExecutor(
+        task,
+        user,
+        thread,
+        agent_config,
+        prompt_text,
+        source_message_id=source_message_id,
+        push_notifications_enabled=push_notifications_enabled,
+    )
     asyncio.run(executor.execute_or_resume())
 
 

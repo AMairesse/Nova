@@ -123,11 +123,32 @@ class TaskDefinitionRunnerExecutionTests(TestCase):
         thread_id = result["thread_id"]
         self.assertFalse(Thread.objects.filter(id=thread_id).exists())
 
+    @patch("nova.tasks.tasks.execute_agent_task_with_executor")
+    def test_execute_agent_task_definition_ephemeral_disables_push_notifications(self, mocked_execute):
+        task_def = self._build_task_definition(
+            run_mode=TaskDefinition.RunMode.EPHEMERAL,
+            prompt="Ephemeral run",
+        )
+
+        result = execute_agent_task_definition(task_def)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(mocked_execute.call_args.kwargs["push_notifications_enabled"])
+
     def test_execute_agent_task_definition_raises_when_task_failed(self):
         task_def = self._build_task_definition(prompt="Make this fail")
 
         class FailingExecutor:
-            def __init__(self, task, user, thread, agent_config, prompt, source_message_id=None):
+            def __init__(
+                self,
+                task,
+                user,
+                thread,
+                agent_config,
+                prompt,
+                source_message_id=None,
+                push_notifications_enabled=True,
+            ):
                 self.task = task
 
             async def execute_or_resume(self):

@@ -44,7 +44,17 @@ class TaskExecutor:
         _process_result(result) : to process the result of the agent and do any necessary updates
 
     """
-    def __init__(self, task, user, thread, agent_config, prompt, *, source_message_id: int | None = None):
+    def __init__(
+        self,
+        task,
+        user,
+        thread,
+        agent_config,
+        prompt,
+        *,
+        source_message_id: int | None = None,
+        push_notifications_enabled: bool = True,
+    ):
         self.task = task
         self.user = user
         self.thread = thread
@@ -60,6 +70,7 @@ class TaskExecutor:
             thread_id=getattr(self.thread, "id", None),
             thread_mode=getattr(self.thread, "mode", None),
             initial_streamed_markdown=getattr(self.task, "streamed_markdown", "") or "",
+            push_notifications_enabled=push_notifications_enabled,
         )
         self._llm_provider = _UNSET
 

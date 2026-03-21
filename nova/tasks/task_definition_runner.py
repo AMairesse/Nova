@@ -110,6 +110,7 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
             task_definition.agent,
             prompt,
             source_message_id=message.id if message else None,
+            push_notifications_enabled=not ephemeral,
         )
 
         task.refresh_from_db()

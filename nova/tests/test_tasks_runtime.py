@@ -877,7 +877,15 @@ class CeleryEntryPointTests(SimpleTestCase):
 
         run_ai_task_celery.run(1, 2, 3, 4, 5)
 
-        mocked_executor_cls.assert_called_once_with(task, user, thread, agent, "hello", source_message_id=5)
+        mocked_executor_cls.assert_called_once_with(
+            task,
+            user,
+            thread,
+            agent,
+            "hello",
+            source_message_id=5,
+            push_notifications_enabled=True,
+        )
         mocked_asyncio_run.assert_called_once()
         executor.execute_or_resume.assert_called_once()
 

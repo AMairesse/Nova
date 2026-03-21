@@ -24,12 +24,14 @@ class TaskProgressHandler(AsyncCallbackHandler):
         thread_id: int | None = None,
         thread_mode: str | None = None,
         initial_streamed_markdown: str | None = None,
+        push_notifications_enabled: bool = True,
     ):
         self.task_id = task_id
         self.channel_layer = channel_layer
         self.user_id = user_id
         self.thread_id = thread_id
         self.thread_mode = thread_mode
+        self.push_notifications_enabled = push_notifications_enabled
         initial_stream = (initial_streamed_markdown or "")
         self.final_chunks = [initial_stream] if initial_stream else []
         self.current_tool = None
@@ -313,7 +315,11 @@ class TaskProgressHandler(AsyncCallbackHandler):
         self._stream_has_pending_changes = True
 
     def _queue_push_notification(self, *, status: str) -> None:
-        if not self.user_id or not bool(getattr(settings, "WEBPUSH_ENABLED", False)):
+        if (
+            not self.push_notifications_enabled
+            or not self.user_id
+            or not bool(getattr(settings, "WEBPUSH_ENABLED", False))
+        ):
             return
         try:
             from nova.tasks.notification_tasks import send_task_webpush_notification
