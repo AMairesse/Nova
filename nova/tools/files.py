@@ -170,7 +170,7 @@ async def create_file(thread_id, user, filename: str, content: str) -> str:
     Create a new text file in the current thread with given content.
 
     This implementation delegates to the unified upload pipeline:
-    - Uses batch_upload_files() for consistent validation (size, MIME),
+    - Uses batch_upload_files() for consistent validation (size),
       sanitization, auto-renaming and MinIO key format:
       users/{user_id}/threads/{thread_id}{safe_path}
     - Keeps the original return shape: "File created: ID {id}" or an error message.

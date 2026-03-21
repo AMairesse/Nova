@@ -103,7 +103,11 @@ async def file_upload(request, thread_id):
                 {"type": "file_progress", "progress": progress}
             )
             content = await async_read_file(file)
-            return {'path': path, 'content': content}
+            return {
+                'path': path,
+                'content': content,
+                'mime_type': str(getattr(file, 'content_type', '') or '').strip().lower(),
+            }
 
         # Gather tasks for all files
         tasks = []

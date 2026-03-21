@@ -141,17 +141,20 @@ class FilesViewsTests(TestCase):
     @patch("nova.views.files_views.batch_upload_files", new_callable=AsyncMock)
     @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
     def test_file_upload_success(self, mocked_publish_update, mocked_batch_upload):
-        mocked_batch_upload.return_value = ([{"id": 1, "path": "/a.txt"}], [])
-        uploaded = SimpleUploadedFile("a.txt", b"hello")
+        mocked_batch_upload.return_value = ([{"id": 1, "path": "/a.bin"}], [])
+        uploaded = SimpleUploadedFile("a.bin", b"hello", content_type="application/x-custom")
         response = self.client.post(
             reverse("file_upload", args=[self.thread.id]),
-            data={"files": [uploaded], "paths": ["/a.txt"]},
+            data={"files": [uploaded], "paths": ["/a.bin"]},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload["success"])
         self.assertEqual(payload["files"][0]["id"], 1)
         mocked_batch_upload.assert_awaited_once()
+        file_specs = mocked_batch_upload.await_args.args[2]
+        self.assertEqual(file_specs[0]["path"], "/a.bin")
+        self.assertEqual(file_specs[0]["mime_type"], "application/x-custom")
         mocked_publish_update.assert_awaited_once()
 
     @patch("nova.views.files_views.batch_upload_files", new_callable=AsyncMock)

@@ -15,10 +15,6 @@ from nova.models.Thread import Thread
 logger = logging.getLogger(__name__)
 
 # Constants
-ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'text/plain', 'text/html',
-                      'text/markdown', 'application/json', 'text/csv',
-                      'text/x-script.python', 'application/pdf',
-                      'application/msword']
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5MB threshold for multipart
 MESSAGE_ATTACHMENT_STORAGE_PREFIX = "/.message_attachments"
@@ -178,6 +174,19 @@ async def check_thread_access(thread: Thread, user) -> bool:
     return await inner_check()
 
 
+def _mime_matches_policy(
+    mime: str,
+    allowed_mime_types: list[str] | None,
+    allowed_mime_prefixes: tuple[str, ...],
+) -> bool:
+    normalized = str(mime or "").strip().lower()
+    if not normalized:
+        return False
+    if allowed_mime_types and normalized in allowed_mime_types:
+        return True
+    return any(normalized.startswith(prefix) for prefix in allowed_mime_prefixes)
+
+
 async def batch_upload_files(thread: Thread, user,
                              file_data: List[Dict[str, bytes or str]], *,
                              scope: str = UserFile.Scope.THREAD_SHARED,
@@ -189,7 +198,17 @@ async def batch_upload_files(thread: Thread, user,
        return created files + errors."""
     created_files = []
     errors = []
-    allowed_types = ALLOWED_MIME_TYPES if allowed_mime_types is None else list(allowed_mime_types)
+    allowed_types = (
+        [str(mime).strip().lower() for mime in allowed_mime_types if str(mime).strip()]
+        if allowed_mime_types is not None
+        else None
+    )
+    allowed_prefixes = tuple(
+        str(prefix).strip().lower()
+        for prefix in allowed_mime_prefixes
+        if str(prefix).strip()
+    )
+    enforce_mime_policy = allowed_types is not None or bool(allowed_prefixes)
 
     for item in file_data:
         try:
@@ -209,16 +228,16 @@ async def batch_upload_files(thread: Thread, user,
                 continue
 
             mime = detect_mime(content)
-            mime_is_allowed = mime in allowed_types or any(mime.startswith(prefix) for prefix in allowed_mime_prefixes)
-            explicit_mime_is_allowed = (
-                explicit_mime in allowed_types
-                or any(explicit_mime.startswith(prefix) for prefix in allowed_mime_prefixes)
-            )
-            if explicit_mime and explicit_mime_is_allowed and (mime == 'application/octet-stream' or not mime_is_allowed):
+            if enforce_mime_policy:
+                mime_is_allowed = _mime_matches_policy(mime, allowed_types, allowed_prefixes)
+                explicit_mime_is_allowed = _mime_matches_policy(explicit_mime, allowed_types, allowed_prefixes)
+                if explicit_mime and explicit_mime_is_allowed and (mime == 'application/octet-stream' or not mime_is_allowed):
+                    mime = explicit_mime
+                if not _mime_matches_policy(mime, allowed_types, allowed_prefixes):
+                    errors.append(f"Unsupported MIME {mime} for {proposed_path}")
+                    continue
+            elif explicit_mime and mime == 'application/octet-stream':
                 mime = explicit_mime
-            if mime not in allowed_types and not any(mime.startswith(prefix) for prefix in allowed_mime_prefixes):
-                errors.append(f"Unsupported MIME {mime} for {proposed_path}")
-                continue
 
             renamed_path = await auto_rename_path(thread, proposed_path, scope=scope)
             if renamed_path != proposed_path:

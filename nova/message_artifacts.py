@@ -8,7 +8,7 @@ import httpx
 from asgiref.sync import sync_to_async
 from django.urls import reverse
 
-from nova.file_utils import ALLOWED_MIME_TYPES, batch_upload_files, download_file_content
+from nova.file_utils import batch_upload_files, download_file_content
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.UserFile import UserFile
 
@@ -216,8 +216,6 @@ async def publish_artifact_to_files(
                 }
             ],
             scope=UserFile.Scope.THREAD_SHARED,
-            allowed_mime_types=list(ALLOWED_MIME_TYPES),
-            allowed_mime_prefixes=("image/", "audio/"),
         )
         if errors and not created:
             return None, errors

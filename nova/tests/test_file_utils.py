@@ -177,7 +177,7 @@ class FileUtilsTest(BaseTestCase):
 
     @patch("nova.file_utils.upload_file_to_minio", new_callable=AsyncMock)
     @patch("nova.file_utils.detect_mime", return_value="application/octet-stream")
-    async def test_batch_upload_files_uses_explicit_mime_when_detection_is_generic(
+    async def test_batch_upload_files_uses_explicit_mime_when_detection_is_generic_without_restrictions(
         self,
         mocked_detect_mime,
         mocked_upload,
@@ -194,7 +194,6 @@ class FileUtilsTest(BaseTestCase):
                     "mime_type": "image/webp",
                 }
             ],
-            allowed_mime_prefixes=("image/",),
         )
 
         self.assertEqual(errors, [])
@@ -399,21 +398,27 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("File too large", errors[0])
 
+    @patch("nova.file_utils.upload_file_to_minio", new_callable=AsyncMock)
     @patch('nova.file_utils.detect_mime')
-    async def test_batch_upload_files_unsupported_mime(self, mock_detect_mime):
-        """Test batch upload with unsupported MIME type."""
+    async def test_batch_upload_files_accepts_arbitrary_mime_by_default(
+        self,
+        mock_detect_mime,
+        mocked_upload,
+    ):
+        """Thread Files should accept arbitrary MIME types by default."""
         mock_detect_mime.return_value = 'application/unsupported'
+        mocked_upload.return_value = f"users/{self.user.id}/threads/{self.thread.id}/bad.bin"
 
         file_data = [{
-            'path': '/bad.txt',
+            'path': '/bad.bin',
             'content': b'content'
         }]
 
         created, errors = await batch_upload_files(self.thread, self.user, file_data)
 
-        self.assertEqual(len(created), 0)
-        self.assertEqual(len(errors), 1)
-        self.assertIn("Unsupported MIME", errors[0])
+        self.assertEqual(errors, [])
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["mime_type"], "application/unsupported")
 
     @patch('nova.file_utils.detect_mime')
     async def test_batch_upload_files_rejects_non_image_for_message_scope(self, mock_detect_mime):

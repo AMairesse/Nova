@@ -41,7 +41,7 @@ class MessageArtifactsTests(TestCase):
 
     @patch("nova.message_artifacts.download_file_content", new_callable=AsyncMock)
     @patch("nova.message_artifacts.batch_upload_files", new_callable=AsyncMock)
-    def test_publish_artifact_to_files_allows_generated_media_prefixes(
+    def test_publish_artifact_to_files_does_not_apply_default_mime_restrictions(
         self,
         mocked_batch_upload,
         mocked_download,
@@ -65,14 +65,55 @@ class MessageArtifactsTests(TestCase):
         self.artifact.refresh_from_db()
         self.assertIsNotNone(self.artifact.published_file_id)
         self.assertTrue(self.artifact.is_currently_published_to_file)
-        self.assertEqual(
-            mocked_batch_upload.await_args.kwargs["allowed_mime_prefixes"],
-            ("image/", "audio/"),
+        self.assertNotIn("allowed_mime_prefixes", mocked_batch_upload.await_args.kwargs)
+        self.assertNotIn("allowed_mime_types", mocked_batch_upload.await_args.kwargs)
+
+    @patch("nova.message_artifacts.download_file_content", new_callable=AsyncMock)
+    @patch("nova.message_artifacts.batch_upload_files", new_callable=AsyncMock)
+    def test_publish_artifact_to_files_allows_non_multimodal_binary_types(
+        self,
+        mocked_batch_upload,
+        mocked_download,
+    ):
+        zip_user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=self.message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/archive.zip",
+            original_filename="/.message_attachments/generated_1/archive.zip",
+            mime_type="application/zip",
+            size=32,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
         )
-        self.assertIn(
-            "application/pdf",
-            mocked_batch_upload.await_args.kwargs["allowed_mime_types"],
+        zip_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.message,
+            user_file=zip_user_file,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.ANNOTATION,
+            label="archive.zip",
+            mime_type="application/zip",
         )
+        mocked_download.return_value = b"zip-bytes"
+        published_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/archive.zip",
+            original_filename="/generated/archive.zip",
+            mime_type="application/zip",
+            size=32,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+        mocked_batch_upload.return_value = ([{"id": published_file.id, "path": "/generated/archive.zip"}], [])
+
+        file_id, errors = async_to_sync(publish_artifact_to_files)(zip_artifact)
+
+        self.assertEqual(file_id, published_file.id)
+        self.assertEqual(errors, [])
+        upload_spec = mocked_batch_upload.await_args.args[2][0]
+        self.assertEqual(upload_spec["path"], "/generated/archive.zip")
+        self.assertEqual(upload_spec["mime_type"], "application/zip")
 
     @patch("nova.message_artifacts.httpx.AsyncClient")
     @patch("nova.message_artifacts.download_file_content", new_callable=AsyncMock)
