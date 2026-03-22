@@ -664,3 +664,40 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         )
         self.page.locator("#context-menu-copy").click()
         self.assertEqual(self.get_clipboard_text(), "Copy this exact message")
+
+    def test_narrow_viewport_uses_compact_composer_actions_menu(self):
+        thread = Thread.objects.create(user=self.user, subject="Compact composer thread")
+
+        self.recreate_browser_context(
+            viewport={"width": 360, "height": 780},
+        )
+        self.login_to_browser(self.user)
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self.assertTrue(self.page.locator("#composer-mobile-actions-btn").is_visible())
+        self.assertFalse(self.page.locator("#attach-image-btn").is_visible())
+        self.assertFalse(self.page.locator("#camera-capture-btn").is_visible())
+        self.assertFalse(self.page.locator("#voice-btn").is_visible())
+
+        self.page.evaluate(
+            """
+            () => {
+              window.__novaTest.lastComposerPicker = '';
+              const manager = window.NovaApp.messageManager;
+              manager.openComposerAttachmentPicker = (inputId) => {
+                window.__novaTest.lastComposerPicker = String(inputId || '');
+              };
+            }
+            """
+        )
+
+        self.page.locator("#composer-mobile-actions-btn").click()
+        self.page.locator('.composer-mobile-action[data-action="attach"]').click()
+        self.page.wait_for_function(
+            """
+            () => window.__novaTest.lastComposerPicker === 'message-attachment-input'
+            """
+        )

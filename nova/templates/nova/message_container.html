@@ -484,10 +484,41 @@
                   rows="1"
                   maxlength="{{ message_composer_hard_text_limit }}"
                   autofocus></textarea>
+        <div class="dropup composer-mobile-actions">
+          <button
+            type="button"
+            id="composer-mobile-actions-btn"
+            class="btn btn-outline-secondary composer-action-btn"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+            title="{% trans 'More actions' %}"
+            aria-label="{% trans 'More actions' %}"
+          >
+            <i class="bi bi-plus-lg"></i>
+            <span class="visually-hidden">{% trans "More actions" %}</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end composer-mobile-actions-menu" aria-labelledby="composer-mobile-actions-btn">
+            <li>
+              <button type="button" class="dropdown-item composer-mobile-action" data-action="attach">
+                <i class="bi bi-paperclip me-2"></i>{% trans "Attach file" %}
+              </button>
+            </li>
+            <li>
+              <button type="button" class="dropdown-item composer-mobile-action" data-action="camera">
+                <i class="bi bi-camera me-2"></i>{% trans "Take photo" %}
+              </button>
+            </li>
+            <li>
+              <button type="button" class="dropdown-item composer-mobile-action" data-action="voice">
+                <i class="bi bi-mic me-2"></i>{% trans "Voice input" %}
+              </button>
+            </li>
+          </ul>
+        </div>
         <button
           type="button"
           id="attach-image-btn"
-          class="btn btn-outline-secondary composer-action-btn"
+          class="btn btn-outline-secondary composer-action-btn composer-direct-action"
           title="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label document_size=message_attachment_max_document_size_label audio_size=message_attachment_max_audio_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each). PDFs: {{ document_size }}, audio: {{ audio_size }}.{% endblocktrans %}"
           aria-label="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label document_size=message_attachment_max_document_size_label audio_size=message_attachment_max_audio_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each). PDFs: {{ document_size }}, audio: {{ audio_size }}.{% endblocktrans %}"
         >
@@ -497,7 +528,7 @@
         <button
           type="button"
           id="camera-capture-btn"
-          class="btn btn-outline-secondary composer-action-btn d-lg-none"
+          class="btn btn-outline-secondary composer-action-btn composer-direct-action d-lg-none"
           title="{% trans 'Take photo' %}"
           aria-label="{% trans 'Take photo' %}"
         >
@@ -507,7 +538,7 @@
         <button
           type="button"
           id="voice-btn"
-          class="btn btn-outline-secondary composer-action-btn"
+          class="btn btn-outline-secondary composer-action-btn composer-direct-action"
           title="{% trans 'Voice input' %}"
         >
           <i class="bi bi-mic"></i>
