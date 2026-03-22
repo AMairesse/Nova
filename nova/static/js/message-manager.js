@@ -273,6 +273,21 @@
                     e.preventDefault();
                     this.openComposerAttachmentPicker('message-camera-input');
                 },
+                '.composer-mobile-action': (e, target) => {
+                    e.preventDefault();
+                    const action = `${target.closest('.composer-mobile-action')?.dataset?.action || ''}`.trim();
+                    if (action === 'attach') {
+                        this.openComposerAttachmentPicker('message-attachment-input');
+                        return;
+                    }
+                    if (action === 'camera') {
+                        this.openComposerAttachmentPicker('message-camera-input');
+                        return;
+                    }
+                    if (action === 'voice') {
+                        this.handleVoiceButtonClick();
+                    }
+                },
                 '#send-btn': (e, target) => {
                     e.preventDefault();
                     const form = target.closest('form');
@@ -320,6 +335,14 @@
                     const link = target.closest('.execution-trace-link');
                     if (link) {
                         void this.openExecutionTrace(link);
+                    }
+                },
+                '.message-context-menu-trigger': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.message-context-menu-trigger');
+                    const messageCard = button?.closest('.card');
+                    if (messageCard) {
+                        this.showMessageContextMenu(messageCard);
                     }
                 }
             };

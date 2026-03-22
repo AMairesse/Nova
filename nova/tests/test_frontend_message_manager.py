@@ -610,9 +610,9 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             0,
         )
 
-    def test_mobile_context_menu_can_copy_message_text(self):
+    def test_mobile_context_menu_trigger_can_copy_agent_message_text(self):
         thread = Thread.objects.create(user=self.user, subject="Touch thread")
-        message = thread.add_message("Copy this exact message", actor=Actor.USER)
+        message = thread.add_message("Copy this exact message", actor=Actor.AGENT)
 
         self.recreate_browser_context(
             viewport={"width": 390, "height": 844},
@@ -625,29 +625,9 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self.open_path("/")
         self._wait_for_selected_thread(thread.id)
         self.page.wait_for_selector(f"#message-{message.id}")
-        self.page.evaluate(
-            """
-            () => {
-              const manager = window.NovaApp.messageManager;
-              if (!manager.contextMenuOffcanvas) {
-                manager.contextMenuOffcanvas = {
-                  hide() {},
-                  show() {},
-                };
-              }
-            }
-            """
-        )
 
-        self.page.evaluate(
-            """
-            (messageId) => {
-              const card = document.querySelector(`#message-${messageId} .card`);
-              window.NovaApp.messageManager.showMessageContextMenu(card);
-            }
-            """,
-            message.id,
-        )
+        self.page.locator(f"#message-{message.id} .message-context-menu-trigger").click()
+        self.page.wait_for_selector("#messageContextMenu.show")
         self.page.wait_for_function(
             """
             (expectedText) => {
@@ -656,7 +636,68 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             """,
             arg="Copy this exact message",
         )
-        self.page.evaluate(
-            "() => window.NovaApp.messageManager.copyMessageToClipboard()"
-        )
+        self.page.locator("#context-menu-copy").click()
         self.assertEqual(self.get_clipboard_text(), "Copy this exact message")
+
+    def test_narrow_viewport_context_menu_trigger_works_without_touch_support(self):
+        thread = Thread.objects.create(user=self.user, subject="Narrow viewport thread")
+        message = thread.add_message("Copy this exact message", actor=Actor.AGENT)
+
+        self.recreate_browser_context(
+            viewport={"width": 390, "height": 844},
+        )
+        self.login_to_browser(self.user)
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector(f"#message-{message.id}")
+
+        self.page.locator(f"#message-{message.id} .message-context-menu-trigger").click()
+        self.page.wait_for_selector("#messageContextMenu.show")
+        self.page.wait_for_function(
+            """
+            (expectedText) => {
+              return window.NovaApp.messageManager.currentMessageText === expectedText;
+            }
+            """,
+            arg="Copy this exact message",
+        )
+        self.page.locator("#context-menu-copy").click()
+        self.assertEqual(self.get_clipboard_text(), "Copy this exact message")
+
+    def test_narrow_viewport_uses_compact_composer_actions_menu(self):
+        thread = Thread.objects.create(user=self.user, subject="Compact composer thread")
+
+        self.recreate_browser_context(
+            viewport={"width": 360, "height": 780},
+        )
+        self.login_to_browser(self.user)
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self.assertTrue(self.page.locator("#composer-mobile-actions-btn").is_visible())
+        self.assertFalse(self.page.locator("#attach-image-btn").is_visible())
+        self.assertFalse(self.page.locator("#camera-capture-btn").is_visible())
+        self.assertFalse(self.page.locator("#voice-btn").is_visible())
+
+        self.page.evaluate(
+            """
+            () => {
+              window.__novaTest.lastComposerPicker = '';
+              const manager = window.NovaApp.messageManager;
+              manager.openComposerAttachmentPicker = (inputId) => {
+                window.__novaTest.lastComposerPicker = String(inputId || '');
+              };
+            }
+            """
+        )
+
+        self.page.locator("#composer-mobile-actions-btn").click()
+        self.page.locator('.composer-mobile-action[data-action="attach"]').click()
+        self.page.wait_for_function(
+            """
+            () => window.__novaTest.lastComposerPicker === 'message-attachment-input'
+            """
+        )

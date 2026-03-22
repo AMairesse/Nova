@@ -179,7 +179,15 @@
           </div>
         </div>
         {% elif message.actor == Actor.AGENT %}
-        <div class="card border-secondary">
+        <div class="card border-secondary agent-message-card">
+          <button
+            type="button"
+            class="btn btn-link message-context-menu-trigger d-md-none"
+            aria-label="{% trans 'Message options' %}"
+            title="{% trans 'Message options' %}"
+          >
+            <i class="bi bi-three-dots"></i>
+          </button>
           <div class="card-body py-2">
             <div class="assistant-markdown">{{ message.rendered_html }}</div>
             {% if message.message_artifacts %}
@@ -385,7 +393,7 @@
     </a>
   </div>
   {% else %}
-  <div class="message-input-area p-2 p-sm-3">
+  <div class="message-input-area mobile-message-input-area p-2 p-sm-3">
     <form
       id="message-form"
       class="composer-dropzone"
@@ -408,7 +416,7 @@
       />
 
       <!-- Message input group with integrated agent selector -->
-      <div class="input-group mb-2">
+      <div class="input-group composer-input-group mb-1 mb-sm-2">
         <div class="input-group-prepend">
           <div class="dropdown">
             <button
@@ -476,10 +484,41 @@
                   rows="1"
                   maxlength="{{ message_composer_hard_text_limit }}"
                   autofocus></textarea>
+        <div class="dropup composer-mobile-actions">
+          <button
+            type="button"
+            id="composer-mobile-actions-btn"
+            class="btn btn-outline-secondary composer-action-btn"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+            title="{% trans 'More actions' %}"
+            aria-label="{% trans 'More actions' %}"
+          >
+            <i class="bi bi-plus-lg"></i>
+            <span class="visually-hidden">{% trans "More actions" %}</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end composer-mobile-actions-menu" aria-labelledby="composer-mobile-actions-btn">
+            <li>
+              <button type="button" class="dropdown-item composer-mobile-action" data-action="attach">
+                <i class="bi bi-paperclip me-2"></i>{% trans "Attach file" %}
+              </button>
+            </li>
+            <li>
+              <button type="button" class="dropdown-item composer-mobile-action" data-action="camera">
+                <i class="bi bi-camera me-2"></i>{% trans "Take photo" %}
+              </button>
+            </li>
+            <li>
+              <button type="button" class="dropdown-item composer-mobile-action" data-action="voice">
+                <i class="bi bi-mic me-2"></i>{% trans "Voice input" %}
+              </button>
+            </li>
+          </ul>
+        </div>
         <button
           type="button"
           id="attach-image-btn"
-          class="btn btn-outline-secondary"
+          class="btn btn-outline-secondary composer-action-btn composer-direct-action"
           title="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label document_size=message_attachment_max_document_size_label audio_size=message_attachment_max_audio_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each). PDFs: {{ document_size }}, audio: {{ audio_size }}.{% endblocktrans %}"
           aria-label="{% blocktrans with max_files=message_attachment_max_files max_size=message_attachment_max_image_size_label document_size=message_attachment_max_document_size_label audio_size=message_attachment_max_audio_size_label %}Attach image (up to {{ max_files }} images, {{ max_size }} each). PDFs: {{ document_size }}, audio: {{ audio_size }}.{% endblocktrans %}"
         >
@@ -489,7 +528,7 @@
         <button
           type="button"
           id="camera-capture-btn"
-          class="btn btn-outline-secondary d-lg-none"
+          class="btn btn-outline-secondary composer-action-btn composer-direct-action d-lg-none"
           title="{% trans 'Take photo' %}"
           aria-label="{% trans 'Take photo' %}"
         >
@@ -499,7 +538,7 @@
         <button
           type="button"
           id="voice-btn"
-          class="btn btn-outline-secondary"
+          class="btn btn-outline-secondary composer-action-btn composer-direct-action"
           title="{% trans 'Voice input' %}"
         >
           <i class="bi bi-mic"></i>
@@ -508,7 +547,7 @@
         <button
           type="submit"
           id="send-btn"
-          class="btn btn-primary {% if nb_agents == 0 %}disabled{% endif %}"
+          class="btn btn-primary composer-action-btn {% if nb_agents == 0 %}disabled{% endif %}"
           {% if nb_agents == 0 %}disabled{% endif %}
         >
           <i class="bi bi-send-fill"></i>
@@ -519,8 +558,8 @@
       <input type="file" id="message-camera-input" accept="image/*" capture="environment" class="d-none" />
       <div id="composer-attachments" class="composer-attachments d-none" aria-live="polite"></div>
       <div id="composer-thread-files" class="composer-thread-files d-none" aria-live="polite"></div>
-      <div id="composer-status-line" class="composer-status-line small text-muted mt-2 d-none" aria-live="polite"></div>
-      <div id="composer-provider-capability-note" class="alert py-2 px-3 small mt-2 d-none" aria-live="polite"></div>
+      <div id="composer-status-line" class="composer-status-line small text-muted mt-1 mt-sm-2 d-none" aria-live="polite"></div>
+      <div id="composer-provider-capability-note" class="alert py-2 px-3 small mt-1 mt-sm-2 d-none" aria-live="polite"></div>
       <div id="composer-dropzone-hint" class="composer-dropzone-hint d-none" aria-live="polite">
         <i class="bi bi-cloud-arrow-down me-2"></i>{% trans "Drop an image, PDF, or text file here" %}
       </div>
