@@ -135,6 +135,20 @@
             `;
         }
 
+        static renderMessageContextTrigger() {
+            const label = window.DOMUtils.escapeHTML(this.t('Message options'));
+            return `
+              <button
+                type="button"
+                class="btn btn-link message-context-menu-trigger d-md-none"
+                aria-label="${label}"
+                title="${label}"
+              >
+                <i class="bi bi-three-dots"></i>
+              </button>
+            `;
+        }
+
         static buildExecutionSummary(traceSummary) {
             const summary = (traceSummary && typeof traceSummary === 'object') ? traceSummary : {};
             const toolCalls = Number(summary.tool_calls || 0);
@@ -313,7 +327,8 @@
                 const contentHtml = renderedHtml || window.DOMUtils.escapeHTML(messageData.text || '');
                 // Agent message structure
                 messageDiv.innerHTML = `
-          <div class="card border-secondary">
+          <div class="card border-secondary agent-message-card">
+            ${this.renderMessageContextTrigger()}
             <div class="card-body py-2">
               <div class="streaming-content assistant-markdown">${contentHtml}</div>
               ${inlineArtifactsHtml}

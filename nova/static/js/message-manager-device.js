@@ -13,6 +13,28 @@
         sectionEl.classList.toggle('d-none', !text);
     }
 
+    function clearDocumentSelection() {
+        const selection = window.getSelection?.();
+        if (selection && typeof selection.removeAllRanges === 'function') {
+            selection.removeAllRanges();
+        }
+    }
+
+    function toggleLongPressSelectionSuppression(messageEl, isSuppressed) {
+        if (!messageEl) {
+            return;
+        }
+        messageEl.classList.toggle('long-press-arming', Boolean(isSuppressed));
+    }
+
+    function isInteractiveTouchTarget(target) {
+        return Boolean(
+            target?.closest(
+                'a, button, input, textarea, select, option, label, audio, video, summary, [contenteditable="true"]'
+            )
+        );
+    }
+
     window.NovaApp.Modules.MessageDeviceMethods = {
         initVoiceRecognition() {
             if (typeof window.VoiceRecognitionManager === 'undefined') {
@@ -173,17 +195,19 @@
         },
 
         initLongPressContextMenu() {
+            const offcanvasEl = document.getElementById('messageContextMenu');
+            if (offcanvasEl && !this.contextMenuOffcanvas && window.bootstrap?.Offcanvas) {
+                this.contextMenuOffcanvas = new bootstrap.Offcanvas(offcanvasEl);
+            }
+
+            this.initContextMenuActions();
+
             if (!('ontouchstart' in window)) return;
 
             const conversationContainer = document.getElementById(
                 'conversation-container'
             );
             if (!conversationContainer) return;
-
-            const offcanvasEl = document.getElementById('messageContextMenu');
-            if (offcanvasEl) {
-                this.contextMenuOffcanvas = new bootstrap.Offcanvas(offcanvasEl);
-            }
 
             conversationContainer.addEventListener(
                 'touchstart',
@@ -203,21 +227,23 @@
                 'touchcancel',
                 (e) => this.handleTouchCancel(e)
             );
-
-            this.initContextMenuActions();
         },
 
         handleTouchStart(e) {
             const messageCard = e.target.closest('.message .card');
-            if (!messageCard) return;
+            if (!messageCard || isInteractiveTouchTarget(e.target)) return;
 
             const touch = e.touches[0];
             this.touchStartPos = { x: touch.clientX, y: touch.clientY };
             this.longPressTarget = messageCard;
 
             const messageEl = messageCard.closest('.message');
+            this.longPressMessageEl = messageEl;
+            toggleLongPressSelectionSuppression(messageEl, true);
 
             this.longPressTimer = setTimeout(() => {
+                this.longPressTimer = null;
+                clearDocumentSelection();
                 if (messageEl) messageEl.classList.add('long-press-active');
 
                 if (window.navigator && window.navigator.vibrate) {
@@ -260,7 +286,10 @@
             const activeEl = document.querySelector('.message.long-press-active');
             if (activeEl) activeEl.classList.remove('long-press-active');
 
+            toggleLongPressSelectionSuppression(this.longPressMessageEl, false);
+            this.longPressMessageEl = null;
             this.touchStartPos = null;
+            this.longPressTarget = null;
         },
 
         getMessageTraceTaskId(messageEl) {
@@ -318,10 +347,18 @@
         },
 
         showMessageContextMenu(messageCard) {
+            if (!this.contextMenuOffcanvas) {
+                const offcanvasEl = document.getElementById('messageContextMenu');
+                if (offcanvasEl && window.bootstrap?.Offcanvas) {
+                    this.contextMenuOffcanvas = new bootstrap.Offcanvas(offcanvasEl);
+                }
+            }
             if (!this.contextMenuOffcanvas) return;
 
             const messageEl = messageCard.closest('.message');
             if (!messageEl) return;
+
+            clearDocumentSelection();
 
             this.currentContextMessage = messageEl;
 
@@ -363,6 +400,11 @@
         },
 
         initContextMenuActions() {
+            if (this._contextMenuActionsInitialized) {
+                return;
+            }
+            this._contextMenuActionsInitialized = true;
+
             const executionDetailsBtn = document.getElementById('context-menu-execution-details');
             if (executionDetailsBtn) {
                 executionDetailsBtn.addEventListener('click', () => {

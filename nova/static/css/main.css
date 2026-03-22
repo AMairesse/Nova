@@ -271,6 +271,41 @@ body {
     border-top: 1px solid rgba(var(--bs-secondary-rgb), 0.12);
 }
 
+.agent-message-card {
+    position: relative;
+}
+
+.message-context-menu-trigger {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    padding: 0;
+    border-radius: 999px;
+    color: var(--bs-secondary-color);
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(6px);
+    box-shadow: var(--bs-box-shadow-sm);
+    transform: translate(28%, -28%);
+    touch-action: manipulation;
+}
+
+.message-context-menu-trigger:hover,
+.message-context-menu-trigger:focus {
+    color: var(--bs-body-color);
+    background: rgba(255, 255, 255, 0.9);
+}
+
+.message-context-menu-trigger i {
+    font-size: 1rem;
+    line-height: 1;
+}
+
 .agent-footer-chip-row {
     display: flex;
     justify-content: flex-end;
@@ -425,6 +460,15 @@ body {
         min-height: 28px;
         min-width: 28px;
     }
+
+    .message.long-press-arming,
+    .message.long-press-arming .assistant-markdown,
+    .message.long-press-arming .streaming-content,
+    .message.long-press-arming .user-message-text {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
 }
 
 /* ============================================
@@ -457,7 +501,7 @@ body {
         border-radius: 16px 16px 4px 16px;
         background-color: var(--bs-primary);
         color: white;
-        margin-left: 15%;
+        margin-left: 10%;
     }
 
     .message .card.border-primary .card-body {
@@ -477,7 +521,71 @@ body {
         border: none !important;
         border-radius: 16px 16px 16px 4px;
         background-color: var(--bs-light);
-        margin-right: 10%;
+        margin-right: 6%;
+    }
+
+    .message-context-menu-trigger {
+        transform: translate(22%, -22%);
+    }
+
+    .assistant-markdown :is(h1, h2, h3, h4, h5, h6),
+    .streaming-content :is(h1, h2, h3, h4, h5, h6) {
+        margin-top: 0.55rem;
+        margin-bottom: 0.35rem;
+    }
+
+    .assistant-markdown p,
+    .streaming-content p {
+        margin-bottom: 0.45rem;
+    }
+
+    .assistant-markdown :is(ul, ol),
+    .streaming-content :is(ul, ol) {
+        margin-top: 0.35rem;
+        margin-bottom: 0.5rem;
+        padding-left: 1.2rem;
+    }
+
+    .assistant-markdown pre,
+    .streaming-content pre {
+        padding: 0.625rem;
+        margin-top: 0.4rem;
+        margin-bottom: 0.55rem;
+    }
+
+    .artifact-inline-list {
+        gap: 0.5rem;
+    }
+
+    .artifact-inline-card {
+        padding: 0.625rem;
+    }
+
+    .mobile-message-input-area {
+        padding: 0.375rem !important;
+    }
+
+    .composer-input-group .composer-action-btn,
+    .composer-input-group .agent-selector-btn {
+        padding-left: 0.55rem;
+        padding-right: 0.55rem;
+    }
+
+    .composer-attachments,
+    .composer-thread-files {
+        gap: 0.375rem;
+        margin-bottom: 0.375rem;
+    }
+
+    .composer-attachment-chip,
+    .composer-thread-file-chip {
+        gap: 0.5rem;
+        padding: 0.3rem 0.45rem;
+    }
+
+    .composer-attachment-name,
+    .composer-thread-file-name {
+        max-width: 140px;
     }
 
     /* Interaction cards - keep minimal border for distinction */

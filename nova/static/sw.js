@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v8';  // Includes foreground push in-app handling
+const CACHE_NAME = 'nova-v9';  // Includes foreground push in-app handling
 const urlsToCache = [
   '/static/css/main.css',
   '/static/js/utils.js',

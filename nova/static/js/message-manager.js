@@ -321,6 +321,14 @@
                     if (link) {
                         void this.openExecutionTrace(link);
                     }
+                },
+                '.message-context-menu-trigger': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.message-context-menu-trigger');
+                    const messageCard = button?.closest('.card');
+                    if (messageCard) {
+                        this.showMessageContextMenu(messageCard);
+                    }
                 }
             };
 
