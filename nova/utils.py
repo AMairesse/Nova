@@ -43,6 +43,10 @@ _THINK_BLOCK_PATTERNS = (
     re.compile(r"<think>.*?</think>", flags=re.IGNORECASE | re.DOTALL),
 )
 
+_LIST_ITEM_RE = re.compile(r"^(?P<indent>\s*)(?:[-*+]\s+|\d+[.)]\s+).+")
+_TABLE_ROW_RE = re.compile(r"^\|.*\|\s*$")
+_TABLE_SEPARATOR_RE = re.compile(r"^\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|?\s*$")
+
 
 def normalize_url(urlish) -> str:
     """
@@ -126,6 +130,74 @@ def strip_thinking_blocks(text: str | None) -> str:
     return cleaned.strip()
 
 
+def _is_markdown_table_line(stripped_line: str) -> bool:
+    if not stripped_line:
+        return False
+    return bool(_TABLE_ROW_RE.match(stripped_line) or _TABLE_SEPARATOR_RE.match(stripped_line))
+
+
+def _normalize_list_nested_tables(markdown_text: str) -> str:
+    """Make markdown tables inside list items render reliably.
+
+    Python-Markdown's table handling inside list items is strict: table blocks need
+    an empty line before the table and a deeper indentation than the list marker.
+    LLM outputs often omit one or both, so we normalize the common pattern.
+    """
+    lines = markdown_text.splitlines()
+    if not lines:
+        return markdown_text
+
+    normalized: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        normalized.append(line)
+
+        list_match = _LIST_ITEM_RE.match(line)
+        if not list_match:
+            i += 1
+            continue
+
+        list_indent = len(list_match.group("indent"))
+        table_indent = " " * (list_indent + 4)
+
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j >= len(lines):
+            i += 1
+            continue
+
+        candidate = lines[j]
+        candidate_stripped = candidate.lstrip()
+        candidate_indent = len(candidate) - len(candidate_stripped)
+        if candidate_indent <= list_indent or not _is_markdown_table_line(candidate_stripped):
+            i += 1
+            continue
+
+        if normalized and normalized[-1].strip():
+            normalized.append("")
+
+        while j < len(lines):
+            current = lines[j]
+            current_stripped = current.lstrip()
+            current_indent = len(current) - len(current_stripped)
+
+            if not current_stripped:
+                normalized.append("")
+                j += 1
+                continue
+            if current_indent <= list_indent or not _is_markdown_table_line(current_stripped):
+                break
+
+            normalized.append(f"{table_indent}{current_stripped}")
+            j += 1
+
+        i = j
+
+    return "\n".join(normalized)
+
+
 def get_theme_content(content: str, theme: str) -> str:
     """
     Extract content for a specific theme from Markdown content.
@@ -157,8 +229,9 @@ def estimate_tokens(text: str = None, input_size: int = None) -> int:
 
 
 def markdown_to_html(markdown_text: str) -> str:
+    normalized_markdown = _normalize_list_nested_tables(markdown_text)
     raw_html = markdown(
-        markdown_text,
+        normalized_markdown,
         extensions=MARKDOWN_EXTENSIONS,
         extension_configs=MARKDOWN_EXTENSION_CONFIGS,
         tab_length=2,
