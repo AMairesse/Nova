@@ -40,3 +40,18 @@ class MarkdownRenderingTests(SimpleTestCase):
 
         self.assertNotIn("<script", rendered.lower())
         self.assertIn("Safe text", rendered)
+
+    def test_table_nested_under_list_item_is_rendered_as_table(self):
+        content = (
+            "- Weekly report\n"
+            "  | Metric | Value |\n"
+            "  | --- | --- |\n"
+            "  | Uptime | 99.9% |\n"
+        )
+
+        rendered = str(markdown_to_html(content))
+
+        self.assertIn("<li>", rendered)
+        self.assertIn("<table>", rendered)
+        self.assertIn("<td>99.9%</td>", rendered)
+        self.assertNotIn("<pre><code>", rendered)
