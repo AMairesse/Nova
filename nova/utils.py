@@ -21,6 +21,7 @@ MARKDOWN_EXTENSIONS = [
 ]
 
 MARKDOWN_EXTENSION_CONFIGS = {}
+MARKDOWN_TAB_LENGTH = 2
 
 ALLOWED_TAGS = [
     "p", "strong", "em", "ul", "ol", "li", "code", "pre", "blockquote",
@@ -159,7 +160,7 @@ def _normalize_list_nested_tables(markdown_text: str) -> str:
             continue
 
         list_indent = len(list_match.group("indent"))
-        table_indent = " " * (list_indent + 4)
+        table_indent = " " * (list_indent + MARKDOWN_TAB_LENGTH)
 
         j = i + 1
         while j < len(lines) and not lines[j].strip():
@@ -234,7 +235,7 @@ def markdown_to_html(markdown_text: str) -> str:
         normalized_markdown,
         extensions=MARKDOWN_EXTENSIONS,
         extension_configs=MARKDOWN_EXTENSION_CONFIGS,
-        tab_length=2,
+        tab_length=MARKDOWN_TAB_LENGTH,
     )
     clean_html = bleach.clean(raw_html,
                               tags=ALLOWED_TAGS,

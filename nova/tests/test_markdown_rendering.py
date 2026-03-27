@@ -54,3 +54,4 @@ class MarkdownRenderingTests(SimpleTestCase):
         self.assertIn("<li>", rendered)
         self.assertIn("<table>", rendered)
         self.assertIn("<td>99.9%</td>", rendered)
+        self.assertNotIn("<pre><code>", rendered)
