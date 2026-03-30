@@ -1,10 +1,12 @@
 # nova/tests/test_main_views.py
+from datetime import timedelta
 from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpResponse
 from django.urls import reverse
+from django.utils import timezone
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -240,9 +242,43 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         data = resp.json()
         self.assertEqual(data["status"], "ERROR")
-        self.assertIn("running tasks", data["message"])
+        self.assertIn("active tasks", data["message"])
         # Thread should still exist
         self.assertTrue(Thread.objects.filter(id=thread.id).exists())
+
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    def test_delete_thread_allows_deletion_while_awaiting_input(self, mock_get_checkpointer):
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
+
+        thread = Thread.objects.create(user=self.user, subject="Awaiting input")
+        Task.objects.create(user=self.user, thread=thread, status=TaskStatus.AWAITING_INPUT)
+
+        self.client.login(username="alice", password="pass")
+        resp = self.client.post(reverse("delete_thread", args=[thread.id]))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json().get("status"), "OK")
+        self.assertFalse(Thread.objects.filter(id=thread.id).exists())
+
+    @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
+    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
+    def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self, mock_get_checkpointer):
+        mock_saver = MagicMock()
+        mock_saver.delete_thread = AsyncMock()
+        mock_get_checkpointer.return_value = mock_saver
+
+        thread = Thread.objects.create(user=self.user, subject="Stale running")
+        task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
+        Task.objects.filter(id=task.id).update(updated_at=timezone.now() - timedelta(minutes=5))
+
+        self.client.login(username="alice", password="pass")
+        resp = self.client.post(reverse("delete_thread", args=[thread.id]))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json().get("status"), "OK")
+        self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
     # ------------ add_message -------------------------------------------
 
@@ -774,6 +810,25 @@ class MainViewsTests(TestCase):
         resp = self.client.get(reverse("running_tasks",
                                        args=[foreign_thread.id]))
         self.assertEqual(resp.status_code, 404)
+
+    @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
+    def test_running_tasks_excludes_awaiting_input_and_reconciles_stale_runs(self):
+        thread = Thread.objects.create(user=self.user, subject="T")
+        fresh_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
+        stale_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
+        awaiting_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.AWAITING_INPUT)
+        Task.objects.filter(id=stale_task.id).update(updated_at=timezone.now() - timedelta(minutes=5))
+
+        self.client.login(username="alice", password="pass")
+        resp = self.client.get(reverse("running_tasks", args=[thread.id]))
+
+        self.assertEqual(resp.status_code, 200)
+        tasks_data = resp.json().get("running_tasks", [])
+        self.assertEqual([task["id"] for task in tasks_data], [fresh_task.id])
+        stale_task.refresh_from_db()
+        awaiting_task.refresh_from_db()
+        self.assertEqual(stale_task.status, TaskStatus.FAILED)
+        self.assertEqual(awaiting_task.status, TaskStatus.AWAITING_INPUT)
 
     def test_execution_trace_endpoint_requires_task_ownership(self):
         thread = Thread.objects.create(user=self.user, subject="Trace thread")

@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from django.test import SimpleTestCase, TransactionTestCase
 from langchain_core.messages import AIMessage, HumanMessage
 
+from nova.models.Interaction import Interaction
 from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
+from nova.models.Task import Task
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.tasks import (
@@ -916,6 +918,17 @@ class CeleryEntryPointTests(SimpleTestCase):
 
         mocked_retry.assert_called_once()
 
+    @patch.object(run_ai_task_celery, "retry")
+    @patch("nova.tasks.tasks.Task.objects.select_related")
+    def test_run_ai_task_celery_skips_when_task_is_missing(self, mocked_task_select_related, mocked_retry):
+        mocked_task_select_related.return_value.get.side_effect = Task.DoesNotExist()
+
+        result = run_ai_task_celery.run(1, 2, 3, 4, 5)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "missing_runtime_object")
+        mocked_retry.assert_not_called()
+
     @patch("nova.tasks.tasks.asyncio.run")
     @patch("nova.tasks.tasks.AgentTaskExecutor")
     @patch("nova.tasks.tasks.Interaction.objects.select_related")
@@ -955,6 +968,17 @@ class CeleryEntryPointTests(SimpleTestCase):
             resume_ai_task_celery.run(99)
 
         mocked_retry.assert_called_once()
+
+    @patch.object(resume_ai_task_celery, "retry")
+    @patch("nova.tasks.tasks.Interaction.objects.select_related")
+    def test_resume_ai_task_celery_skips_when_interaction_is_missing(self, mocked_interaction_select_related, mocked_retry):
+        mocked_interaction_select_related.return_value.get.side_effect = Interaction.DoesNotExist()
+
+        result = resume_ai_task_celery.run(99)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "missing_interaction")
+        mocked_retry.assert_not_called()
 
     @patch("nova.tasks.tasks.asyncio.run")
     @patch("nova.tasks.tasks.SummarizationTaskExecutor")

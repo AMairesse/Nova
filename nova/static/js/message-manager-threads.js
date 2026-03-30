@@ -211,10 +211,14 @@
 
         async deleteThread(threadId) {
             try {
-                await window.DOMUtils.csrfFetch(
+                const response = await window.DOMUtils.csrfFetch(
                     window.NovaApp.urls.deleteThread.replace('0', threadId),
                     { method: 'POST' }
                 );
+                const data = await response.json();
+                if (!response.ok || data.status !== 'OK') {
+                    throw new Error(data.message || gettext('Failed to delete thread.'));
+                }
                 const threadElement = document.getElementById(`thread-item-${threadId}`);
                 if (threadElement) threadElement.remove();
 
@@ -228,6 +232,7 @@
                 );
             } catch (error) {
                 console.error('Error deleting thread:', error);
+                this.showToast(error.message || gettext('Failed to delete thread.'), 'warning');
             }
         },
 

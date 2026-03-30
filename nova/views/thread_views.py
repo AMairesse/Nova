@@ -33,6 +33,7 @@ from nova.message_submission import (
     submit_user_message,
 )
 from nova.message_utils import upload_message_attachments
+from nova.tasks.runtime_state import reconcile_stale_running_tasks
 from nova.realtime.sidebar_updates import publish_file_update
 
 logger = logging.getLogger(__name__)
@@ -207,16 +208,19 @@ def create_thread(request):
 def delete_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
 
-    # Check for running tasks
+    reconcile_stale_running_tasks(thread=thread, user=request.user)
+
+    # Check for actively running tasks only. AWAITING_INPUT is a suspended state
+    # that can safely disappear with the thread.
     running_tasks = Task.objects.filter(
         thread=thread,
-        status__in=[TaskStatus.RUNNING, TaskStatus.AWAITING_INPUT]
+        user=request.user,
+        status=TaskStatus.RUNNING,
     )
     if running_tasks.exists():
-        # Return error instead of deleting
         return JsonResponse({
             "status": "ERROR",
-            "message": "Cannot delete thread with running tasks. Please wait for tasks to complete."
+            "message": "Cannot delete thread with active tasks. Please wait for the current run to finish."
         }, status=400)
 
     thread.delete()

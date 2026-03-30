@@ -4,16 +4,19 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
+from nova.tasks.runtime_state import reconcile_stale_running_tasks
 
 
 @login_required
 def running_tasks(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
 
+    reconcile_stale_running_tasks(thread=thread, user=request.user)
+
     running_tasks = Task.objects.filter(
         thread=thread,
         user=request.user,
-        status__in=[TaskStatus.RUNNING, TaskStatus.AWAITING_INPUT]
+        status=TaskStatus.RUNNING,
     ).values('id', 'status', 'current_response', 'progress_logs')
 
     tasks_data = []

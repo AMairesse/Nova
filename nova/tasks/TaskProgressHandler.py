@@ -5,6 +5,7 @@ from time import monotonic
 from typing import Any, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.utils import timezone
 
 from langchain_core.callbacks import AsyncCallbackHandler
 
@@ -43,6 +44,8 @@ class TaskProgressHandler(AsyncCallbackHandler):
         self._last_stream_flush_at = monotonic()
         self._last_stream_html = None
         self._stream_has_pending_changes = False
+        self._runtime_touch_interval_seconds = 15.0
+        self._last_runtime_touch_at = None
         # Insert a markdown paragraph break when a new agent segment starts
         # after an explicit boundary (tool call, interruption/resume).
         self._needs_segment_break = False
@@ -95,6 +98,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         Send a message to the client when the task is in progress
         '''
+        await self._touch_task_runtime()
         await self.publish_update('progress_update', {'progress_log': message})
 
     async def on_chunk(self, chunk):
@@ -292,9 +296,30 @@ class TaskProgressHandler(AsyncCallbackHandler):
             )(
                 current_response=html_content,
                 streamed_markdown=streamed_markdown,
+                updated_at=timezone.now(),
             )
+            self._last_runtime_touch_at = monotonic()
         except Exception as e:
             logger.error(f"Error persisting stream state: {e}")
+
+    async def _touch_task_runtime(self, *, force: bool = False):
+        from nova.models.Task import Task
+
+        now = monotonic()
+        if (
+            not force
+            and self._last_runtime_touch_at is not None
+            and (now - self._last_runtime_touch_at) < self._runtime_touch_interval_seconds
+        ):
+            return
+        try:
+            await sync_to_async(
+                Task.objects.filter(id=self.task_id).update,
+                thread_sensitive=False,
+            )(updated_at=timezone.now())
+            self._last_runtime_touch_at = now
+        except Exception as e:
+            logger.error(f"Error updating task runtime heartbeat: {e}")
 
     def _append_segment_break_before_token(self, token: str) -> None:
         """Add a markdown paragraph break when the next segment starts."""

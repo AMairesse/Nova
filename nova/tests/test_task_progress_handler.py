@@ -1,6 +1,6 @@
 from uuid import UUID
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 from django.test import override_settings
 
@@ -48,7 +48,20 @@ class TaskProgressHandlerTests(IsolatedAsyncioTestCase):
         fake_qs.update.assert_called_once_with(
             current_response="<p>Hello world</p>",
             streamed_markdown="Hello world",
+            updated_at=ANY,
         )
+
+    async def test_on_progress_touches_runtime_heartbeat(self):
+        channel_layer = AsyncMock()
+        handler = TaskProgressHandler(task_id=654, channel_layer=channel_layer)
+        fake_qs = Mock()
+        fake_qs.update = Mock(return_value=1)
+
+        with patch("nova.models.Task.Task.objects.filter", return_value=fake_qs) as mocked_filter:
+            await handler.on_progress("Agent started")
+
+        mocked_filter.assert_called_once_with(id=654)
+        fake_qs.update.assert_called_once_with(updated_at=ANY)
 
     async def test_on_interrupt_flushes_and_persists_before_prompt(self):
         channel_layer = AsyncMock()

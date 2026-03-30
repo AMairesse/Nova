@@ -740,6 +740,19 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
             source_message_id=message.id,
         )
 
+    except (
+        Task.DoesNotExist,
+        User.DoesNotExist,
+        Thread.DoesNotExist,
+        AgentConfig.DoesNotExist,
+        Message.DoesNotExist,
+    ) as e:
+        logger.warning(
+            "Skipping Celery task %s because a runtime object is missing: %s",
+            task_pk,
+            e,
+        )
+        return {"status": "skipped", "reason": "missing_runtime_object"}
     except Exception as e:
         logger.error(f"Celery task {task_pk} failed: {e}")
         # Let Celery handle retry logic
@@ -771,6 +784,12 @@ def resume_ai_task_celery(self, interaction_pk: int):
         executor = AgentTaskExecutor(task, user, thread, agent_config, interaction)
         asyncio.run(executor.execute_or_resume(interruption_response))
 
+    except Interaction.DoesNotExist:
+        logger.warning(
+            "Skipping resume_ai_task for interaction %s because it no longer exists.",
+            interaction_pk,
+        )
+        return {"status": "skipped", "reason": "missing_interaction"}
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")
         raise self.retry(countdown=30, exc=e)
