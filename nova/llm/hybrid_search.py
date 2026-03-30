@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List, Optional, Tuple
 
 from nova.llm.embeddings import aget_embeddings_provider, compute_embedding
 
+logger = logging.getLogger(__name__)
+
 
 async def resolve_query_vector(*, user_id: int, query: str) -> Optional[List[float]]:
     """Return query embedding when provider is enabled, else None."""
+    normalized_query = (query or "").strip()
+    if not normalized_query or normalized_query == "*":
+        return None
+
     provider = await aget_embeddings_provider(user_id=user_id)
     if not provider:
         return None
-    return await compute_embedding(query, user_id=user_id)
+    try:
+        return await compute_embedding(normalized_query, user_id=user_id)
+    except Exception as exc:
+        logger.warning(
+            "Query embedding unavailable for user %s. Falling back to lexical search: %s",
+            user_id,
+            exc,
+        )
+        return None
 
 
 def score_fts_saturated(fts_raw: float | int | None) -> float:

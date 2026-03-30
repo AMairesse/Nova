@@ -6,17 +6,6 @@ services:
     environment:
       - MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1
       - MEMORY_EMBEDDINGS_MODEL=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-nova-init:
-        condition: service_completed_successfully
-      llamacpp-embeddings:
-        condition: service_healthy
 
   celery-worker:
     extends:
@@ -25,13 +14,6 @@ services:
     environment:
       - MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1
       - MEMORY_EMBEDDINGS_MODEL=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
-    depends_on:
-      redis:
-        condition: service_healthy
-      db:
-        condition: service_healthy
-      llamacpp-embeddings:
-        condition: service_healthy
 
   llamacpp-embeddings:
     image: ghcr.io/ggml-org/llama.cpp:server
