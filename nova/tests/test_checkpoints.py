@@ -1,5 +1,6 @@
 # nova/tests/test_checkpoints.py
 import asyncio
+from concurrent.futures import Future
 from unittest.mock import AsyncMock, patch
 from django.test import TestCase
 from psycopg.rows import dict_row
@@ -12,6 +13,7 @@ class CheckpointsTest(TestCase):
         # Reset global state before each test
         from nova.llm import checkpoints
         checkpoints._bootstrap_done = False
+        checkpoints._bootstrap_future = None
 
     @patch('nova.llm.checkpoints.settings')
     def test_make_conn_str(self, mock_settings):
@@ -92,37 +94,24 @@ class CheckpointsTest(TestCase):
         from nova.llm import checkpoints
         self.assertTrue(checkpoints._bootstrap_done)
 
-    @patch('nova.llm.checkpoints._bootstrap_lock')
     @patch('nova.llm.checkpoints.AsyncConnectionPool')
     @patch('nova.llm.checkpoints.AsyncPostgresSaver')
-    async def test_bootstrap_tables_second_check_already_done(self, mock_saver, mock_pool, mock_lock):
-        """Test the second _bootstrap_done check inside the lock."""
-        # Setup mocks
-        mock_pool_instance = AsyncMock()
-        mock_pool.return_value.__aenter__.return_value = mock_pool_instance
-        mock_saver_instance = AsyncMock()
-        mock_saver.return_value = mock_saver_instance
-
-        # Mock the lock context manager
-        mock_lock_cm = AsyncMock()
-        mock_lock.__aenter__.return_value = mock_lock_cm
-        mock_lock.__aexit__.return_value = None
-
-        # Reset state and simulate the scenario
+    async def test_bootstrap_tables_waits_for_inflight_bootstrap(self, mock_saver, mock_pool):
+        """Test follower calls wait on an in-flight bootstrap future."""
         from nova.llm import checkpoints
         checkpoints._bootstrap_done = False
+        checkpoints._bootstrap_future = Future()
 
-        # Call bootstrap - this will enter the lock
-        # We need to set _bootstrap_done to True during the lock context
-        async def side_effect(*args, **kwargs):
-            checkpoints._bootstrap_done = True  # Simulate another task setting it done
-            return mock_lock_cm
+        loop = asyncio.get_running_loop()
 
-        mock_lock.__aenter__.side_effect = side_effect
+        def _complete_inflight_bootstrap():
+            checkpoints._bootstrap_done = True
+            checkpoints._bootstrap_future.set_result(None)
 
+        loop.call_soon(_complete_inflight_bootstrap)
         await _bootstrap_tables("postgresql://test")
 
-        # Verify no setup calls since second check returned early
+        # Verify follower path didn't start a duplicate bootstrap.
         mock_pool.assert_not_called()
         mock_saver.assert_not_called()
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from types import SimpleNamespace
+from unittest import TestCase
 from unittest import IsolatedAsyncioTestCase
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
@@ -72,3 +76,51 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         self.assertEqual(trace["summary"]["error_count"], 1)
         self.assertEqual(trace["root"]["status"], "failed")
         self.assertEqual(trace["root"]["meta"]["category"], "tool_failure")
+
+
+class TaskExecutionTraceHandlerCrossLoopTests(TestCase):
+    @patch("nova.models.Task.Task.objects.filter")
+    def test_tool_callbacks_remain_safe_across_event_loops(self, mock_filter):
+        update_started = threading.Event()
+        release_update = threading.Event()
+
+        mock_qs = MagicMock()
+
+        def slow_update(**kwargs):
+            update_started.set()
+            release_update.wait(timeout=2.0)
+            return 1
+
+        mock_qs.update.side_effect = slow_update
+        mock_filter.return_value = mock_qs
+
+        task = SimpleNamespace(id=903, execution_trace={})
+        handler = TaskExecutionTraceHandler(task)
+        errors: list[BaseException] = []
+
+        def first_loop():
+            try:
+                asyncio.run(handler.ensure_root_run(label="Planner"))
+            except BaseException as exc:  # pragma: no cover - only for assertion capture
+                errors.append(exc)
+
+        first_thread = threading.Thread(target=first_loop)
+        first_thread.start()
+
+        self.assertTrue(update_started.wait(timeout=1.0))
+        try:
+            asyncio.run(
+                handler.on_tool_start(
+                    {"name": "web_search"},
+                    '{"query": "nova"}',
+                    run_id=UUID(int=1),
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - only for assertion capture
+            errors.append(exc)
+        finally:
+            release_update.set()
+            first_thread.join(timeout=2.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(task.execution_trace["summary"]["tool_calls"], 1)

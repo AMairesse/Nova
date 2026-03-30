@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 import logging
 import re
+import threading
 from copy import deepcopy
 from typing import Any
 from uuid import UUID, uuid4
@@ -211,7 +211,7 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             trace = existing_trace if existing_trace.get("version") else self._build_default_trace()
             shared_state = {
                 "trace": trace,
-                "lock": asyncio.Lock(),
+                "lock": threading.RLock(),
                 "run_nodes": {},
             }
         self._state = shared_state
@@ -394,7 +394,10 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             "context": deepcopy((trace.get("summary") or {}).get("context") or {}),
         }
 
-    async def _persist_locked(self) -> None:
+    async def _run_serialized(self, fn, /, *args, **kwargs):
+        return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
+
+    def _persist_locked(self) -> None:
         trace = self._get_trace()
         trace["summary"] = self._build_summary()
         setattr(self.task, "execution_trace", trace)
@@ -403,14 +406,11 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         try:
             from nova.models.Task import Task
 
-            await sync_to_async(
-                Task.objects.filter(id=self.task_id).update,
-                thread_sensitive=False,
-            )(execution_trace=trace)
+            Task.objects.filter(id=self.task_id).update(execution_trace=trace)
         except Exception:
             logger.exception("Could not persist execution trace for task %s", self.task_id)
 
-    async def ensure_root_run(
+    def _ensure_root_run_sync(
         self,
         *,
         label: str,
@@ -418,7 +418,7 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         agent_id: int | None = None,
         resumed: bool = False,
     ) -> None:
-        async with self._state["lock"]:
+        with self._state["lock"]:
             trace = self._get_trace()
             root = trace.get("root") or {}
             if not root:
@@ -438,16 +438,32 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             if resumed:
                 meta["resumed"] = True
             root["meta"] = meta
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def set_context_consumption(
+    async def ensure_root_run(
+        self,
+        *,
+        label: str,
+        source_message_id: int | None = None,
+        agent_id: int | None = None,
+        resumed: bool = False,
+    ) -> None:
+        await self._run_serialized(
+            self._ensure_root_run_sync,
+            label=label,
+            source_message_id=source_message_id,
+            agent_id=agent_id,
+            resumed=resumed,
+        )
+
+    def _set_context_consumption_sync(
         self,
         *,
         real_tokens: int | None,
         approx_tokens: int | None,
         max_context: int | None,
     ) -> None:
-        async with self._state["lock"]:
+        with self._state["lock"]:
             trace = self._get_trace()
             summary = dict(trace.get("summary") or {})
             summary["context"] = {
@@ -456,24 +472,44 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 "max_context": max_context,
             }
             trace["summary"] = summary
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def complete_root_run(self, output_preview: Any = None) -> None:
-        async with self._state["lock"]:
+    async def set_context_consumption(
+        self,
+        *,
+        real_tokens: int | None,
+        approx_tokens: int | None,
+        max_context: int | None,
+    ) -> None:
+        await self._run_serialized(
+            self._set_context_consumption_sync,
+            real_tokens=real_tokens,
+            approx_tokens=approx_tokens,
+            max_context=max_context,
+        )
+
+    def _complete_root_run_sync(self, output_preview: Any = None) -> None:
+        with self._state["lock"]:
             root = (self._get_trace().get("root") or {})
             self._complete_node(root, status="completed", output_preview=output_preview)
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def mark_root_awaiting_input(self) -> None:
-        async with self._state["lock"]:
+    async def complete_root_run(self, output_preview: Any = None) -> None:
+        await self._run_serialized(self._complete_root_run_sync, output_preview)
+
+    def _mark_root_awaiting_input_sync(self) -> None:
+        with self._state["lock"]:
             root = (self._get_trace().get("root") or {})
             root["status"] = "awaiting_input"
             root["finished_at"] = None
             root["duration_ms"] = None
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def fail_root_run(self, error: Any, *, category: str | None = None) -> None:
-        async with self._state["lock"]:
+    async def mark_root_awaiting_input(self) -> None:
+        await self._run_serialized(self._mark_root_awaiting_input_sync)
+
+    def _fail_root_run_sync(self, error: Any, *, category: str | None = None) -> None:
+        with self._state["lock"]:
             root = (self._get_trace().get("root") or {})
             self._complete_node(
                 root,
@@ -490,16 +526,19 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             )
             self._complete_node(error_node, status="failed", output_preview=error)
             self._append_child(None, error_node)
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def record_interaction(
+    async def fail_root_run(self, error: Any, *, category: str | None = None) -> None:
+        await self._run_serialized(self._fail_root_run_sync, error, category=category)
+
+    def _record_interaction_sync(
         self,
         *,
         question: str,
         schema: dict[str, Any] | None = None,
         agent_name: str | None = None,
     ) -> str:
-        async with self._state["lock"]:
+        with self._state["lock"]:
             label = f"{agent_name or 'Agent'} requested input"
             node = self._new_node(
                 node_type="interaction",
@@ -510,7 +549,39 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             )
             self._complete_node(node, status="awaiting_input", output_preview="")
             self._append_child(None, node)
-            await self._persist_locked()
+            self._persist_locked()
+            return node["id"]
+
+    async def record_interaction(
+        self,
+        *,
+        question: str,
+        schema: dict[str, Any] | None = None,
+        agent_name: str | None = None,
+    ) -> str:
+        return await self._run_serialized(
+            self._record_interaction_sync,
+            question=question,
+            schema=schema,
+            agent_name=agent_name,
+        )
+
+    def _start_subagent_sync(
+        self,
+        *,
+        label: str,
+        input_preview: Any = "",
+        meta: dict[str, Any] | None = None,
+    ) -> str:
+        with self._state["lock"]:
+            node = self._new_node(
+                node_type="subagent",
+                label=label,
+                input_preview=input_preview,
+                meta=meta,
+            )
+            self._append_child(self.parent_node_id, node)
+            self._persist_locked()
             return node["id"]
 
     async def start_subagent(
@@ -520,18 +591,14 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         input_preview: Any = "",
         meta: dict[str, Any] | None = None,
     ) -> str:
-        async with self._state["lock"]:
-            node = self._new_node(
-                node_type="subagent",
-                label=label,
-                input_preview=input_preview,
-                meta=meta,
-            )
-            self._append_child(self.parent_node_id, node)
-            await self._persist_locked()
-            return node["id"]
+        return await self._run_serialized(
+            self._start_subagent_sync,
+            label=label,
+            input_preview=input_preview,
+            meta=meta,
+        )
 
-    async def complete_subagent(
+    def _complete_subagent_sync(
         self,
         node_id: str,
         *,
@@ -539,7 +606,7 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         artifact_refs: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
-        async with self._state["lock"]:
+        with self._state["lock"]:
             node = self._find_node(node_id)
             if node is None:
                 return
@@ -550,16 +617,32 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 artifact_refs=artifact_refs,
                 meta=meta,
             )
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def fail_subagent(
+    async def complete_subagent(
+        self,
+        node_id: str,
+        *,
+        output_preview: Any = None,
+        artifact_refs: list[dict[str, Any]] | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        await self._run_serialized(
+            self._complete_subagent_sync,
+            node_id,
+            output_preview=output_preview,
+            artifact_refs=artifact_refs,
+            meta=meta,
+        )
+
+    def _fail_subagent_sync(
         self,
         node_id: str,
         *,
         error: Any,
         meta: dict[str, Any] | None = None,
     ) -> None:
-        async with self._state["lock"]:
+        with self._state["lock"]:
             node = self._find_node(node_id)
             if node is None:
                 return
@@ -573,10 +656,24 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             )
             self._complete_node(error_node, status="failed", output_preview=error, meta=meta)
             self._append_child(node_id, error_node)
-            await self._persist_locked()
+            self._persist_locked()
 
-    async def get_message_trace_summary(self) -> dict[str, Any]:
-        async with self._state["lock"]:
+    async def fail_subagent(
+        self,
+        node_id: str,
+        *,
+        error: Any,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        await self._run_serialized(
+            self._fail_subagent_sync,
+            node_id,
+            error=error,
+            meta=meta,
+        )
+
+    def _get_message_trace_summary_sync(self) -> dict[str, Any]:
+        with self._state["lock"]:
             summary = deepcopy(self._build_summary())
             return {
                 "has_trace": bool(summary.get("has_trace")),
@@ -587,6 +684,32 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 "artifact_count": int(summary.get("artifact_count") or 0),
                 "duration_ms": summary.get("duration_ms"),
             }
+
+    async def get_message_trace_summary(self) -> dict[str, Any]:
+        return await self._run_serialized(self._get_message_trace_summary_sync)
+
+    def _on_tool_start_sync(
+        self,
+        serialized: dict[str, Any],
+        input_str: str,
+        *,
+        run_id: UUID,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        tool_name = str((serialized or {}).get("name") or "Unknown").strip() or "Unknown"
+        if tool_name in self.ignored_tool_names:
+            return None
+        with self._state["lock"]:
+            node = self._new_node(
+                node_type="tool",
+                label=tool_name,
+                input_preview=input_str,
+                meta=metadata if isinstance(metadata, dict) else None,
+            )
+            self._state["run_nodes"][str(run_id)] = node["id"]
+            self._append_child(self.parent_node_id, node)
+            self._persist_locked()
+        return None
 
     async def on_tool_start(
         self,
@@ -599,30 +722,21 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        tool_name = str((serialized or {}).get("name") or "Unknown").strip() or "Unknown"
-        if tool_name in self.ignored_tool_names:
-            return None
-        async with self._state["lock"]:
-            node = self._new_node(
-                node_type="tool",
-                label=tool_name,
-                input_preview=input_str,
-                meta=metadata if isinstance(metadata, dict) else None,
-            )
-            self._state["run_nodes"][str(run_id)] = node["id"]
-            self._append_child(self.parent_node_id, node)
-            await self._persist_locked()
-        return None
+        return await self._run_serialized(
+            self._on_tool_start_sync,
+            serialized,
+            input_str,
+            run_id=run_id,
+            metadata=metadata,
+        )
 
-    async def on_tool_end(
+    def _on_tool_end_sync(
         self,
         output: Any,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        async with self._state["lock"]:
+    ) -> None:
+        with self._state["lock"]:
             node_id = self._state["run_nodes"].pop(str(run_id), None)
             node = self._find_node(node_id) if node_id else None
             if node is None:
@@ -633,18 +747,26 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 output_preview=output,
                 artifact_refs=extract_artifact_refs(output),
             )
-            await self._persist_locked()
+            self._persist_locked()
         return None
 
-    async def on_tool_error(
+    async def on_tool_end(
         self,
-        error: BaseException,
+        output: Any,
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
-        async with self._state["lock"]:
+        return await self._run_serialized(self._on_tool_end_sync, output, run_id=run_id)
+
+    def _on_tool_error_sync(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+    ) -> None:
+        with self._state["lock"]:
             node_id = self._state["run_nodes"].pop(str(run_id), None)
             node = self._find_node(node_id) if node_id else None
             if node is None:
@@ -659,5 +781,15 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             )
             self._complete_node(error_node, status="failed", output_preview=error_text)
             self._append_child(self.parent_node_id, error_node)
-            await self._persist_locked()
+            self._persist_locked()
         return None
+
+    async def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return await self._run_serialized(self._on_tool_error_sync, error, run_id=run_id)
