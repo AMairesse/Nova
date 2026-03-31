@@ -94,6 +94,13 @@ class MemorySettingsViewTests(TestCase):
         self.assertContains(response, "Memory: embeddings settings")
         self.assertContains(response, "Memory browser")
 
+    def test_memory_browser_fragment_loads_immediately_when_memory_form_renders(self):
+        response = self.client.get(self.partial_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="memory-items-container"', html=False)
+        self.assertContains(response, 'hx-trigger="load"', html=False)
+
     def test_form_valid_delegates_to_update_view(self):
         request = RequestFactory().post(self.url)
         request.user = self.user

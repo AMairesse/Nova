@@ -105,7 +105,7 @@
     <div class="card-body"
          id="memory-items-container"
          hx-get="{% url 'user_settings:memory-items' %}"
-         hx-trigger="revealed once"
+         hx-trigger="load"
          hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading memory items…" %}</div>
