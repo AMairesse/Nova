@@ -118,35 +118,36 @@
     <nav class="navbar bg-body-tertiary border-bottom d-lg-none mobile-navbar py-1">
       <div class="container-fluid px-2">
         {% if user.is_authenticated %}
-        <!-- Left: Threads button -->
+        <!-- Left: workspace panel button -->
         <button
-          class="btn btn-sm mobile-nav-btn {% if request.path == '/' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+          class="btn btn-sm btn-outline-secondary mobile-nav-btn"
+          id="mobile-open-workspace-panel-btn"
           type="button"
           data-bs-toggle="offcanvas"
           data-bs-target="#threadsOffcanvas"
           aria-controls="threadsOffcanvas"
-          title="{% trans 'Threads' %}"
-          {% if request.path == '/' %}aria-current="page"{% endif %}
+          title="{% if request.path|slice:':11' == '/continuous' %}{% trans 'Open days' %}{% else %}{% trans 'Open threads' %}{% endif %}"
+          aria-label="{% if request.path|slice:':11' == '/continuous' %}{% trans 'Open days' %}{% else %}{% trans 'Open threads' %}{% endif %}"
         >
-          <i class="bi bi-chat-dots"></i>
+          <i class="bi {% if request.path|slice:':11' == '/continuous' %}bi-calendar3{% else %}bi-list-ul{% endif %}"></i>
         </button>
         <a
-          class="btn btn-sm mobile-nav-btn ms-1 {% if request.path|slice:':11' == '/continuous' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
-          href="{% url 'continuous_home' %}"
-          title="{% trans 'Continuous' %}"
-          data-view-mode="continuous"
-          {% if request.path|slice:':11' == '/continuous' %}aria-current="page"{% endif %}
+          class="btn btn-sm btn-outline-primary mobile-mode-toggle-btn ms-1"
+          id="mobile-mode-toggle-btn"
+          href="{% if request.path|slice:':11' == '/continuous' %}{% url 'index' %}{% else %}{% url 'continuous_home' %}{% endif %}"
+          title="{% if request.path|slice:':11' == '/continuous' %}{% trans 'Switch to threads' %}{% else %}{% trans 'Switch to continuous' %}{% endif %}"
+          aria-label="{% if request.path|slice:':11' == '/continuous' %}{% trans 'Switch to threads' %}{% else %}{% trans 'Switch to continuous' %}{% endif %}"
+          data-view-mode="{% if request.path|slice:':11' == '/continuous' %}threads{% else %}continuous{% endif %}"
         >
-          <i class="bi bi-infinity"></i>
+          <i class="bi {% if request.path|slice:':11' == '/continuous' %}bi-chat-left-text{% else %}bi-infinity{% endif %} me-1"></i>
+          <span>{% if request.path|slice:':11' == '/continuous' %}{% trans "Threads" %}{% else %}{% trans "Continuous" %}{% endif %}</span>
         </a>
         {% endif %}
         
         <!-- Center: Brand -->
         <a
-          class="navbar-brand fw-bold mx-auto mb-0 py-0 {% if request.path == '/' %}text-primary{% endif %}"
+          class="navbar-brand fw-bold mx-auto mb-0 py-0"
           href="{% url 'index' %}"
-          data-view-mode="threads"
-          {% if request.path == '/' %}aria-current="page"{% endif %}
         >
           <img src="{% static 'images/nova_logo.png' %}" alt="Nova Logo" height="20" class="d-inline-block align-text-top">
           Nova

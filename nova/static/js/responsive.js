@@ -272,8 +272,8 @@
         return;
       }
 
-      const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
-      const mobileThreadList = document.querySelector('#threadsOffcanvas .list-group');
+      const desktopThreadList = document.getElementById('threads-list');
+      const mobileThreadList = document.getElementById('mobile-threads-list');
 
       if (desktopThreadList && mobileThreadList) {
         mobileThreadList.innerHTML = desktopThreadList.innerHTML;
@@ -306,7 +306,7 @@
       }
 
       // Watch for changes in desktop thread list and sync to mobile
-      const desktopThreadList = document.querySelector('#threads-sidebar .list-group');
+      const desktopThreadList = document.getElementById('threads-list');
       if (!desktopThreadList || this._mutationObserver) return;
 
       this._mutationObserver = new MutationObserver(() => {

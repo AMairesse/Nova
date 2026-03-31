@@ -563,6 +563,16 @@ class ContinuousViewsTests(TestCase):
         self.assertContains(response, 'id="messageContextMenu"')
         self.assertContains(response, 'id="context-menu-execution-details"')
 
+    def test_continuous_home_exposes_mobile_mode_toggle_and_days_panel_button(self):
+        response = self.client.get(reverse("continuous_home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="mobile-open-workspace-panel-btn"')
+        self.assertContains(response, 'title="Open days"')
+        self.assertContains(response, 'id="mobile-mode-toggle-btn"')
+        self.assertContains(response, 'title="Switch to threads"')
+        self.assertContains(response, '>Threads<', html=False)
+
     def test_continuous_messages_includes_pending_interactions(self):
         thread = ensure_continuous_thread(self.user)
         provider = create_provider(self.user, name="Continuous Provider")
