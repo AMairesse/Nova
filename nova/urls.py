@@ -27,7 +27,6 @@ from nova.views.push_views import push_config, push_subscriptions
 from nova.views.security_views import csrf_token
 from nova.views.health import healthz
 from nova.views.webapp_views import serve_webapp, webapps_list, preview_webapp, delete_webapp
-from django.conf import settings
 
 urlpatterns = [
     # Main views
@@ -61,6 +60,7 @@ urlpatterns = [
     # i18n
     path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("api/csrf/", csrf_token, name="api-csrf"),
+    path("healthz/", healthz, name="healthz"),
     path("push/config/", push_config, name="push_config"),
     path("push/subscriptions/", push_subscriptions, name="push_subscriptions"),
     ]
@@ -94,12 +94,6 @@ urlpatterns += [
     path('apps/<slug:slug>/', serve_webapp, name='serve_webapp_root'),
     path('apps/<slug:slug>/<path:path>/', serve_webapp, name='serve_webapp_file'),
 ]
-
-# Add healthcheck only in DEBUG mode
-if settings.DEBUG:
-    urlpatterns += [
-        path('healthz/', healthz, name='healthz'),
-    ]
 
 # User settings
 urlpatterns += [

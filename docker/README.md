@@ -102,6 +102,10 @@ If you changed `COMPOSE_FILE`, recreate services with:
 docker compose up -d --remove-orphans
 ```
 
+If an older deployment is already stuck on `502 Bad Gateway` after recreating `web`,
+`docker compose restart nginx` is a temporary workaround while updating to the
+newer dynamic upstream configuration.
+
 ## Available optional modules
 
 - `docker-compose.add-searxng.yml`
