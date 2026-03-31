@@ -1,14 +1,14 @@
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
 from django.contrib.messages.views import SuccessMessageMixin
 from django.http import HttpResponse
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
+
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding
-from nova.models.UserObjects import UserParameters
+from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from user_settings.views.memory import MemorySettingsView
 
 
@@ -30,7 +30,7 @@ class MemorySettingsViewTests(TestCase):
     def _payload(
         self,
         *,
-        enabled=False,
+        source=MemoryEmbeddingsSource.SYSTEM,
         url="",
         model="",
         api_key="",
@@ -39,12 +39,11 @@ class MemorySettingsViewTests(TestCase):
     ):
         data = {
             "from": "memory",
+            "memory_embeddings_source": source,
             "memory_embeddings_url": url,
             "memory_embeddings_model": model,
             "memory_embeddings_api_key": api_key,
         }
-        if enabled:
-            data["memory_embeddings_enabled"] = "on"
         if action:
             data["action"] = action
         if confirm is not None:
@@ -62,10 +61,9 @@ class MemorySettingsViewTests(TestCase):
     def _messages(self, response):
         return [message.message for message in get_messages(response.wsgi_request)]
 
-    @patch("user_settings.views.memory.get_embeddings_provider")
-    def test_get_partial_prefills_pending_values_and_context(self, mocked_get_provider):
+    def test_get_partial_prefills_pending_values_and_context(self):
         pending = {
-            "memory_embeddings_enabled": True,
+            "memory_embeddings_source": MemoryEmbeddingsSource.CUSTOM,
             "memory_embeddings_url": "https://pending.example.com/v1",
             "memory_embeddings_model": "embed-pending",
             "memory_embeddings_api_key": "pending-secret",
@@ -76,11 +74,6 @@ class MemorySettingsViewTests(TestCase):
         self.parameters.delete()
         self._create_embedding(content="first")
         self._create_embedding(content="second")
-        mocked_get_provider.return_value = SimpleNamespace(
-            base_url="https://active.example.com/v1",
-            model="active-model",
-            provider_type="custom_http",
-        )
 
         response = self.client.get(self.partial_url)
 
@@ -89,12 +82,9 @@ class MemorySettingsViewTests(TestCase):
         self.assertEqual(UserParameters.objects.filter(user=self.user).count(), 1)
         self.assertTrue(response.context["has_pending_reembed"])
         self.assertEqual(response.context["pending_reembed_count"], 2)
-        self.assertContains(
-            response,
-            'value="https://pending.example.com/v1"',
-            html=False,
-        )
-        self.assertContains(response, "Active provider")
+        self.assertContains(response, 'value="https://pending.example.com/v1"', html=False)
+        self.assertContains(response, "Effective provider")
+        self.assertContains(response, "Custom embeddings provider")
 
     def test_get_full_page_uses_full_template(self):
         response = self.client.get(self.url)
@@ -122,7 +112,7 @@ class MemorySettingsViewTests(TestCase):
 
     def test_cancel_reembed_htmx_clears_pending_session(self):
         session = self.client.session
-        session["memory_embeddings_pending"] = {"memory_embeddings_url": "https://pending.example.com/v1"}
+        session["memory_embeddings_pending"] = {"memory_embeddings_source": MemoryEmbeddingsSource.CUSTOM}
         session.save()
 
         response = self.client.post(
@@ -137,7 +127,7 @@ class MemorySettingsViewTests(TestCase):
 
     def test_cancel_reembed_without_htmx_renders_page(self):
         session = self.client.session
-        session["memory_embeddings_pending"] = {"memory_embeddings_url": "https://pending.example.com/v1"}
+        session["memory_embeddings_pending"] = {"memory_embeddings_source": MemoryEmbeddingsSource.CUSTOM}
         session.save()
 
         response = self.client.post(
@@ -169,13 +159,15 @@ class MemorySettingsViewTests(TestCase):
         self.assertIn("No pending embeddings change to confirm.", self._messages(response))
 
     @patch("user_settings.views.memory.rebuild_user_memory_embeddings_task.delay")
-    def test_confirm_reembed_applies_pending_settings_and_enqueues_rebuild(
+    @patch("user_settings.views.memory.rebuild_user_conversation_embeddings_task.delay")
+    def test_confirm_reembed_applies_pending_settings_and_enqueues_rebuilds(
         self,
-        mocked_delay,
+        mocked_conversation_delay,
+        mocked_memory_delay,
     ):
         session = self.client.session
         session["memory_embeddings_pending"] = {
-            "memory_embeddings_enabled": True,
+            "memory_embeddings_source": MemoryEmbeddingsSource.CUSTOM,
             "memory_embeddings_url": "https://new.example.com/v1",
             "memory_embeddings_model": "embed-large",
             "memory_embeddings_api_key": "new-secret",
@@ -189,18 +181,24 @@ class MemorySettingsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.parameters.refresh_from_db()
-        self.assertTrue(self.parameters.memory_embeddings_enabled)
+        self.assertEqual(self.parameters.memory_embeddings_source, MemoryEmbeddingsSource.CUSTOM)
         self.assertEqual(self.parameters.memory_embeddings_url, "https://new.example.com/v1")
         self.assertEqual(self.parameters.memory_embeddings_model, "embed-large")
         self.assertEqual(self.parameters.memory_embeddings_api_key, "new-secret")
         self.assertNotIn("memory_embeddings_pending", self.client.session)
-        mocked_delay.assert_called_once_with(self.user.id)
+        mocked_memory_delay.assert_called_once_with(self.user.id)
+        mocked_conversation_delay.assert_called_once_with(self.user.id)
 
     @patch("user_settings.views.memory.rebuild_user_memory_embeddings_task.delay")
-    def test_confirm_reembed_htmx_refreshes_after_applying_settings(self, mocked_delay):
+    @patch("user_settings.views.memory.rebuild_user_conversation_embeddings_task.delay")
+    def test_confirm_reembed_htmx_refreshes_after_applying_settings(
+        self,
+        mocked_conversation_delay,
+        mocked_memory_delay,
+    ):
         session = self.client.session
         session["memory_embeddings_pending"] = {
-            "memory_embeddings_enabled": True,
+            "memory_embeddings_source": MemoryEmbeddingsSource.CUSTOM,
             "memory_embeddings_url": "https://new.example.com/v1",
             "memory_embeddings_model": "embed-large",
             "memory_embeddings_api_key": "new-secret",
@@ -215,34 +213,32 @@ class MemorySettingsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertEqual(response.headers.get("HX-Refresh"), "true")
-        mocked_delay.assert_called_once_with(self.user.id)
+        mocked_memory_delay.assert_called_once_with(self.user.id)
+        mocked_conversation_delay.assert_called_once_with(self.user.id)
 
-    @patch("user_settings.views.memory.get_embeddings_provider")
-    def test_test_embeddings_without_provider_shows_warning(self, mocked_get_provider):
-        mocked_get_provider.return_value = None
-
+    def test_test_embeddings_without_system_provider_shows_warning(self):
         response = self.client.post(
             self.url,
-            self._payload(action="test_embeddings"),
+            self._payload(
+                source=MemoryEmbeddingsSource.SYSTEM,
+                action="test_embeddings",
+            ),
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Embeddings provider is not configured.", self._messages(response))
+        self.assertIn("No system embeddings provider is configured.", self._messages(response)[0])
 
-    @patch("user_settings.views.memory.get_embeddings_provider")
     @patch("user_settings.views.memory.compute_embedding", new_callable=AsyncMock)
-    def test_test_embeddings_success_with_typed_provider_refreshes_htmx(
+    def test_test_embeddings_success_with_typed_custom_provider_refreshes_htmx(
         self,
         mocked_compute_embedding,
-        mocked_get_provider,
     ):
         mocked_compute_embedding.return_value = [0.1, 0.2, 0.3]
-        mocked_get_provider.return_value = None
 
         response = self.client.post(
             self.partial_url,
             self._payload(
-                enabled=True,
+                source=MemoryEmbeddingsSource.CUSTOM,
                 url="https://embeddings.example.com/v1",
                 model="embed-small",
                 api_key="secret",
@@ -253,7 +249,18 @@ class MemorySettingsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertEqual(response.headers.get("HX-Refresh"), "true")
-        mocked_get_provider.assert_not_called()
+
+    def test_test_embeddings_warns_when_disabled(self):
+        response = self.client.post(
+            self.url,
+            self._payload(
+                source=MemoryEmbeddingsSource.DISABLED,
+                action="test_embeddings",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Embeddings are disabled for memory.", self._messages(response))
 
     @patch("user_settings.views.memory.compute_embedding", new_callable=AsyncMock)
     def test_test_embeddings_warns_when_provider_returns_no_vector(self, mocked_compute_embedding):
@@ -262,7 +269,7 @@ class MemorySettingsViewTests(TestCase):
         response = self.client.post(
             self.url,
             self._payload(
-                enabled=True,
+                source=MemoryEmbeddingsSource.CUSTOM,
                 url="https://embeddings.example.com/v1",
                 model="embed-small",
                 action="test_embeddings",
@@ -282,7 +289,7 @@ class MemorySettingsViewTests(TestCase):
         response = self.client.post(
             self.url,
             self._payload(
-                enabled=True,
+                source=MemoryEmbeddingsSource.CUSTOM,
                 url="https://embeddings.example.com/v1",
                 model="embed-small",
                 action="test_embeddings",
@@ -295,7 +302,10 @@ class MemorySettingsViewTests(TestCase):
     def test_invalid_form_renders_errors(self):
         response = self.client.post(
             self.partial_url,
-            self._payload(url="x" * 401),
+            self._payload(
+                source=MemoryEmbeddingsSource.CUSTOM,
+                url="x" * 401,
+            ),
             HTTP_HX_REQUEST="true",
         )
 
@@ -303,11 +313,13 @@ class MemorySettingsViewTests(TestCase):
         self.assertContains(response, "Ensure this value has at most 400 characters")
 
     @patch("user_settings.views.memory.rebuild_user_memory_embeddings_task.delay")
-    def test_provider_change_requires_confirmation_and_stores_pending_session(
+    @patch("user_settings.views.memory.rebuild_user_conversation_embeddings_task.delay")
+    def test_custom_provider_change_requires_confirmation_and_stores_pending_session(
         self,
-        mocked_delay,
+        mocked_conversation_delay,
+        mocked_memory_delay,
     ):
-        self.parameters.memory_embeddings_enabled = True
+        self.parameters.memory_embeddings_source = MemoryEmbeddingsSource.CUSTOM
         self.parameters.memory_embeddings_url = "https://old.example.com/v1"
         self.parameters.memory_embeddings_model = "embed-old"
         self.parameters.memory_embeddings_api_key = "old-secret"
@@ -317,7 +329,7 @@ class MemorySettingsViewTests(TestCase):
         response = self.client.post(
             self.partial_url,
             self._payload(
-                enabled=True,
+                source=MemoryEmbeddingsSource.CUSTOM,
                 url="https://new.example.com/v1",
                 model="embed-new",
                 api_key="new-secret",
@@ -330,54 +342,59 @@ class MemorySettingsViewTests(TestCase):
         self.parameters.refresh_from_db()
         self.assertEqual(self.parameters.memory_embeddings_url, "https://old.example.com/v1")
         pending = self.client.session["memory_embeddings_pending"]
+        self.assertEqual(pending["memory_embeddings_source"], MemoryEmbeddingsSource.CUSTOM)
         self.assertEqual(pending["memory_embeddings_url"], "https://new.example.com/v1")
         self.assertEqual(pending["memory_embeddings_model"], "embed-new")
-        mocked_delay.assert_not_called()
+        mocked_memory_delay.assert_not_called()
+        mocked_conversation_delay.assert_not_called()
 
-    def test_provider_change_requires_confirmation_renders_page_without_htmx(self):
-        self.parameters.memory_embeddings_enabled = True
-        self.parameters.memory_embeddings_url = "https://old.example.com/v1"
-        self.parameters.memory_embeddings_model = "embed-old"
-        self.parameters.save()
+    @patch("user_settings.views.memory.rebuild_user_memory_embeddings_task.delay")
+    @patch("user_settings.views.memory.rebuild_user_conversation_embeddings_task.delay")
+    def test_switching_from_disabled_to_custom_saves_and_rebuilds_without_confirmation(
+        self,
+        mocked_conversation_delay,
+        mocked_memory_delay,
+    ):
+        self.parameters.memory_embeddings_source = MemoryEmbeddingsSource.DISABLED
+        self.parameters.save(update_fields=["memory_embeddings_source"])
 
         response = self.client.post(
             self.url,
             self._payload(
-                enabled=True,
-                url="https://new.example.com/v1",
-                model="embed-new",
-            ),
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("memory_embeddings_pending", self.client.session)
-
-    def test_immediate_save_updates_settings_without_confirmation(self):
-        response = self.client.post(
-            self.url,
-            self._payload(
-                enabled=True,
+                source=MemoryEmbeddingsSource.CUSTOM,
                 url="https://same.example.com/v1",
                 model="embed-same",
                 api_key="secret",
-                confirm=1,
             ),
         )
 
         self.assertEqual(response.status_code, 200)
         self.parameters.refresh_from_db()
-        self.assertTrue(self.parameters.memory_embeddings_enabled)
+        self.assertEqual(self.parameters.memory_embeddings_source, MemoryEmbeddingsSource.CUSTOM)
         self.assertEqual(self.parameters.memory_embeddings_url, "https://same.example.com/v1")
         self.assertEqual(self.parameters.memory_embeddings_model, "embed-same")
         self.assertEqual(self.parameters.memory_embeddings_api_key, "secret")
-        self.assertIn("Memory settings updated successfully", self._messages(response))
-
-    def test_immediate_save_htmx_returns_refresh(self):
-        response = self.client.post(
-            self.partial_url,
-            self._payload(confirm=1),
-            HTTP_HX_REQUEST="true",
+        mocked_memory_delay.assert_called_once_with(self.user.id)
+        mocked_conversation_delay.assert_called_once_with(self.user.id)
+        self.assertIn(
+            "Embeddings settings updated. Rebuilding embeddings in background.",
+            self._messages(response),
         )
 
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(response.headers.get("HX-Refresh"), "true")
+    @override_settings(
+        MEMORY_EMBEDDINGS_URL="https://system.example.com/v1",
+        MEMORY_EMBEDDINGS_MODEL="embed-system",
+    )
+    @patch("nova.tasks.memory_rebuild_tasks.rebuild_user_memory_embeddings_task.delay")
+    @patch("nova.tasks.conversation_embedding_tasks.rebuild_user_conversation_embeddings_task.delay")
+    def test_page_displays_system_provider_details_when_available(
+        self,
+        mocked_conversation_delay,
+        mocked_memory_delay,
+    ):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "System embeddings provider")
+        self.assertContains(response, "https://system.example.com/v1")
+        self.assertContains(response, "embed-system")

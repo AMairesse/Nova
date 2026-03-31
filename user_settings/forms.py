@@ -20,7 +20,7 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
 from nova.providers import get_provider_defaults
 from nova.models.Tool import Tool, ToolCredential
-from nova.models.UserObjects import UserParameters
+from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from user_settings.mixins import SecretPreserveMixin
 
 
@@ -661,8 +661,8 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
 class UserMemoryEmbeddingsForm(SecretPreserveMixin, forms.ModelForm):
     """Configure embeddings provider for long-term memory.
 
-    Note: llama.cpp system provider (if present) is enforced at runtime.
-    The UI can still show these fields, but the backend will prefer llama.cpp.
+    The user explicitly chooses between the deployment-level system provider,
+    a custom provider, or disabling embeddings for memory.
     """
 
     secret_fields = ("memory_embeddings_api_key",)
@@ -670,12 +670,13 @@ class UserMemoryEmbeddingsForm(SecretPreserveMixin, forms.ModelForm):
     class Meta:
         model = UserParameters
         fields = [
-            "memory_embeddings_enabled",
+            "memory_embeddings_source",
             "memory_embeddings_url",
             "memory_embeddings_model",
             "memory_embeddings_api_key",
         ]
         widgets = {
+            "memory_embeddings_source": forms.RadioSelect,
             "memory_embeddings_api_key": forms.PasswordInput(render_value=False),
         }
 
@@ -683,11 +684,26 @@ class UserMemoryEmbeddingsForm(SecretPreserveMixin, forms.ModelForm):
         self.user = user
         super().__init__(*args, **kwargs)
 
+        self.fields["memory_embeddings_source"].choices = [
+            (
+                MemoryEmbeddingsSource.SYSTEM,
+                _("Use system provider"),
+            ),
+            (
+                MemoryEmbeddingsSource.CUSTOM,
+                _("Use custom provider"),
+            ),
+            (
+                MemoryEmbeddingsSource.DISABLED,
+                _("Disable embeddings"),
+            ),
+        ]
+
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
-            Field("memory_embeddings_enabled"),
+            Field("memory_embeddings_source"),
             Field("memory_embeddings_url"),
             Field("memory_embeddings_model"),
             Field("memory_embeddings_api_key"),

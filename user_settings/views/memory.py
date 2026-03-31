@@ -11,11 +11,12 @@ from django.views.generic import UpdateView
 from nova.llm.embeddings import (
     compute_embedding,
     get_custom_http_provider,
-    get_embeddings_provider,
+    resolve_embeddings_provider_for_values,
 )
 from nova.models.Memory import MemoryItemEmbedding
+from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
+from nova.tasks.conversation_embedding_tasks import rebuild_user_conversation_embeddings_task
 from nova.tasks.memory_rebuild_tasks import rebuild_user_memory_embeddings_task
-from nova.models.UserObjects import UserParameters
 from user_settings.forms import UserMemoryEmbeddingsForm
 from user_settings.mixins import DashboardRedirectMixin
 
@@ -31,6 +32,7 @@ class MemorySettingsView(
 
     Memory content itself is not edited here (tool-driven memory).
     """
+
     model = UserParameters
     form_class = UserMemoryEmbeddingsForm
     template_name = "user_settings/memory_form.html"
@@ -38,107 +40,171 @@ class MemorySettingsView(
     dashboard_tab = "memory"
     success_url = reverse_lazy("user_settings:dashboard")
 
-    # Ensure every user has a UserParameters row
     def get_object(self, queryset=None):
         obj, _ = UserParameters.objects.get_or_create(user=self.request.user)
         return obj
 
     def get_initial(self):
-        """When a rebuild confirmation is pending, pre-fill the form with the
-        unsaved values stored in session.
-        """
-
         initial = super().get_initial()
         pending = self.request.session.get("memory_embeddings_pending")
         if isinstance(pending, dict):
             initial.update(pending)
         return initial
 
-    # HTMX: if ?partial=1, return only the fragment
     def get_template_names(self):
         if self.request.GET.get("partial") == "1":
             return ["user_settings/fragments/memory_form.html"]
         return [self.template_name]
 
     def form_valid(self, form):
-        # NOTE: save is handled in post() so we can implement a two-step
-        # confirmation flow when changing the embeddings provider/model.
         return super().form_valid(form)
 
+    def _normalize_source(self, value: str | None) -> str:
+        if value in set(MemoryEmbeddingsSource.values):
+            return str(value)
+        return MemoryEmbeddingsSource.SYSTEM
+
+    def _instance_values(self, obj: UserParameters) -> dict:
+        return {
+            "memory_embeddings_source": self._normalize_source(obj.memory_embeddings_source),
+            "memory_embeddings_url": (obj.memory_embeddings_url or "").strip(),
+            "memory_embeddings_model": (obj.memory_embeddings_model or "").strip(),
+            "memory_embeddings_api_key": obj.memory_embeddings_api_key or None,
+        }
+
+    def _cleaned_values(self, cleaned_data: dict) -> dict:
+        return {
+            "memory_embeddings_source": self._normalize_source(
+                cleaned_data.get("memory_embeddings_source")
+            ),
+            "memory_embeddings_url": (cleaned_data.get("memory_embeddings_url") or "").strip(),
+            "memory_embeddings_model": (cleaned_data.get("memory_embeddings_model") or "").strip(),
+            "memory_embeddings_api_key": cleaned_data.get("memory_embeddings_api_key") or None,
+        }
+
+    def _form_display_values(self, form) -> dict:
+        if form.is_bound:
+            api_key = form.data.get("memory_embeddings_api_key")
+            if api_key in ("", None) and getattr(form.instance, "pk", None):
+                api_key = form.instance.memory_embeddings_api_key or None
+            return {
+                "memory_embeddings_source": self._normalize_source(
+                    form.data.get("memory_embeddings_source")
+                ),
+                "memory_embeddings_url": (form.data.get("memory_embeddings_url") or "").strip(),
+                "memory_embeddings_model": (form.data.get("memory_embeddings_model") or "").strip(),
+                "memory_embeddings_api_key": api_key,
+            }
+
+        initial = getattr(form, "initial", {}) or {}
+        instance = getattr(form, "instance", None)
+        return {
+            "memory_embeddings_source": self._normalize_source(
+                initial.get(
+                    "memory_embeddings_source",
+                    getattr(instance, "memory_embeddings_source", MemoryEmbeddingsSource.SYSTEM),
+                )
+            ),
+            "memory_embeddings_url": (
+                initial.get("memory_embeddings_url", getattr(instance, "memory_embeddings_url", "")) or ""
+            ).strip(),
+            "memory_embeddings_model": (
+                initial.get("memory_embeddings_model", getattr(instance, "memory_embeddings_model", "")) or ""
+            ).strip(),
+            "memory_embeddings_api_key": initial.get(
+                "memory_embeddings_api_key",
+                getattr(instance, "memory_embeddings_api_key", None),
+            ),
+        }
+
+    def _resolve_values(self, values: dict):
+        return resolve_embeddings_provider_for_values(
+            selected_source=values.get("memory_embeddings_source"),
+            base_url=values.get("memory_embeddings_url"),
+            model=values.get("memory_embeddings_model"),
+            api_key=values.get("memory_embeddings_api_key"),
+        )
+
+    def _render_refresh_or_get(self, request, *args, **kwargs):
+        if request.headers.get("HX-Request") == "true":
+            resp = HttpResponse(status=204)
+            resp["HX-Refresh"] = "true"
+            return resp
+        return self.get(request, *args, **kwargs)
+
+    def _warning_for_missing_provider(self, selected_source: str) -> str:
+        if selected_source == MemoryEmbeddingsSource.SYSTEM:
+            return _(
+                "No system embeddings provider is configured. Semantic search will stay inactive until one is added."
+            )
+        if selected_source == MemoryEmbeddingsSource.CUSTOM:
+            return _(
+                "Custom embeddings provider is not configured yet. Provide an endpoint URL to enable semantic search."
+            )
+        return _("Embeddings are disabled for memory.")
+
     def post(self, request, *args, **kwargs):
-        # ------------------------------------------------------------
-        # Cancel pending confirmation
-        # ------------------------------------------------------------
         if request.POST.get("action") == "cancel_reembed":
             request.session.pop("memory_embeddings_pending", None)
             messages.info(request, _("Embeddings settings change cancelled."))
-            if request.headers.get("HX-Request") == "true":
-                resp = HttpResponse(status=204)
-                resp["HX-Refresh"] = "true"
-                return resp
-            return self.get(request, *args, **kwargs)
+            return self._render_refresh_or_get(request, *args, **kwargs)
 
-        # ------------------------------------------------------------
-        # Confirm pending confirmation
-        # ------------------------------------------------------------
         if request.POST.get("action") == "confirm_reembed":
             pending = request.session.get("memory_embeddings_pending")
             if not isinstance(pending, dict):
                 messages.warning(request, _("No pending embeddings change to confirm."))
-                if request.headers.get("HX-Request") == "true":
-                    resp = HttpResponse(status=204)
-                    resp["HX-Refresh"] = "true"
-                    return resp
-                return self.get(request, *args, **kwargs)
+                return self._render_refresh_or_get(request, *args, **kwargs)
 
             obj = self.get_object()
-            for k, v in pending.items():
-                if hasattr(obj, k):
-                    setattr(obj, k, v)
-            obj.save(update_fields=[
-                "memory_embeddings_enabled",
-                "memory_embeddings_url",
-                "memory_embeddings_model",
-                "memory_embeddings_api_key",
-            ])
+            for key, value in pending.items():
+                if hasattr(obj, key):
+                    setattr(obj, key, value)
+            obj.save(
+                update_fields=[
+                    "memory_embeddings_source",
+                    "memory_embeddings_url",
+                    "memory_embeddings_model",
+                    "memory_embeddings_api_key",
+                ]
+            )
             request.session.pop("memory_embeddings_pending", None)
 
-            # Kick-off rebuild in the background (best-effort).
             rebuild_user_memory_embeddings_task.delay(request.user.id)
+            rebuild_user_conversation_embeddings_task.delay(request.user.id)
             messages.success(
                 request,
                 _("Embeddings settings updated. Rebuilding embeddings in background."),
             )
+            return self._render_refresh_or_get(request, *args, **kwargs)
 
-            if request.headers.get("HX-Request") == "true":
-                resp = HttpResponse(status=204)
-                resp["HX-Refresh"] = "true"
-                return resp
-            return self.get(request, *args, **kwargs)
+        obj = self.get_object()
 
-        # Handle healthcheck button
         if request.POST.get("action") == "test_embeddings":
-            # Prefer testing the values currently typed in the form (without saving).
-            # If not present, fall back to the runtime provider selection.
-            form = self.form_class(data=request.POST, instance=self.get_object())
+            form = self.form_class(data=request.POST, instance=obj)
+            if not form.is_valid():
+                self.object = obj
+                return self.form_invalid(form)
 
-            provider_override = None
-            if form.is_valid() and form.cleaned_data.get("memory_embeddings_enabled"):
-                provider_override = get_custom_http_provider(
-                    base_url=form.cleaned_data.get("memory_embeddings_url"),
-                    model=form.cleaned_data.get("memory_embeddings_model"),
-                    api_key=form.cleaned_data.get("memory_embeddings_api_key"),
+            values = self._cleaned_values(form.cleaned_data)
+            selected_source = values["memory_embeddings_source"]
+
+            if selected_source == MemoryEmbeddingsSource.CUSTOM:
+                provider = get_custom_http_provider(
+                    base_url=values["memory_embeddings_url"],
+                    model=values["memory_embeddings_model"],
+                    api_key=values["memory_embeddings_api_key"],
                 )
+            else:
+                provider = self._resolve_values(values).provider
 
-            provider = provider_override or get_embeddings_provider()
             if not provider:
-                messages.warning(request, _("Embeddings provider is not configured."))
-                return self.get(request, *args, **kwargs)
+                messages.warning(request, self._warning_for_missing_provider(selected_source))
+                return self._render_refresh_or_get(request, *args, **kwargs)
 
             try:
                 vec = async_to_sync(compute_embedding)(
                     "healthcheck",
-                    provider_override=provider_override,
+                    provider_override=provider,
                 )
                 if vec is None:
                     messages.warning(request, _("Embeddings provider returned no vector (disabled)."))
@@ -151,84 +217,60 @@ class MemorySettingsView(
             except Exception as e:
                 messages.error(request, _("Embeddings test failed: %(err)s") % {"err": str(e)})
 
-            # The Memory settings form is typically posted via HTMX with
-            # `hx-swap="none"`, so the response body is not rendered.
-            # Force a full refresh so Django messages are visible immediately.
-            if request.headers.get("HX-Request") == "true":
-                resp = HttpResponse(status=204)
-                resp["HX-Refresh"] = "true"
-                return resp
+            return self._render_refresh_or_get(request, *args, **kwargs)
 
-            return self.get(request, *args, **kwargs)
-
-        # ------------------------------------------------------------
-        # Normal save (with optional confirmation)
-        # ------------------------------------------------------------
-        obj = self.get_object()
-
-        # IMPORTANT:
-        # `ModelForm.is_valid()` mutates `instance` (via `construct_instance`).
-        # So we must snapshot the "old" values *before* calling `is_valid()`,
-        # otherwise old==new and change detection never triggers.
-        old_signature = (
-            bool(obj.memory_embeddings_enabled),
-            (obj.memory_embeddings_url or "").strip(),
-            (obj.memory_embeddings_model or "").strip(),
-        )
+        old_values = self._instance_values(obj)
+        old_resolved = self._resolve_values(old_values)
 
         form = self.form_class(data=request.POST, instance=obj)
         if not form.is_valid():
-            # Render errors in-place (HTMX will refresh the whole tab anyway).
             self.object = obj
             return self.form_invalid(form)
 
-        new_data = form.cleaned_data
+        new_values = self._cleaned_values(form.cleaned_data)
+        new_resolved = self._resolve_values(new_values)
 
-        # Detect a provider/model change that should trigger a rebuild.
-        new_signature = (
-            bool(new_data.get("memory_embeddings_enabled")),
-            (new_data.get("memory_embeddings_url") or "").strip(),
-            (new_data.get("memory_embeddings_model") or "").strip(),
+        signature_changed = old_resolved.signature != new_resolved.signature
+        requires_confirmation = (
+            signature_changed
+            and old_resolved.signature is not None
+            and new_resolved.signature is not None
+            and request.POST.get("confirm") != "1"
         )
+        should_queue_rebuild = signature_changed and new_resolved.signature is not None
 
-        signature_changed = old_signature != new_signature
-        will_have_embeddings = bool(new_signature[0] and new_signature[1])
-
-        # If changing to a different provider/model while embeddings are enabled,
-        # require confirmation because existing vectors become inconsistent.
-        if signature_changed and will_have_embeddings and request.POST.get("confirm") != "1":
+        if requires_confirmation:
             count = MemoryItemEmbedding.objects.filter(user=request.user).count()
             request.session["memory_embeddings_pending"] = {
-                "memory_embeddings_enabled": new_data.get("memory_embeddings_enabled"),
-                "memory_embeddings_url": new_data.get("memory_embeddings_url"),
-                "memory_embeddings_model": new_data.get("memory_embeddings_model"),
-                "memory_embeddings_api_key": new_data.get("memory_embeddings_api_key"),
+                "memory_embeddings_source": new_values.get("memory_embeddings_source"),
+                "memory_embeddings_url": new_values.get("memory_embeddings_url"),
+                "memory_embeddings_model": new_values.get("memory_embeddings_model"),
+                "memory_embeddings_api_key": new_values.get("memory_embeddings_api_key"),
             }
             messages.warning(
                 request,
                 _(
-                    "Changing the embeddings provider/model will trigger a rebuild of %(count)s embeddings. "
+                    "Changing the active embeddings provider will trigger a rebuild of %(count)s embeddings. "
                     "Click Confirm to proceed or Cancel to abort."
                 )
                 % {"count": count},
             )
+            return self._render_refresh_or_get(request, *args, **kwargs)
 
-            if request.headers.get("HX-Request") == "true":
-                resp = HttpResponse(status=204)
-                resp["HX-Refresh"] = "true"
-                return resp
-            return self.get(request, *args, **kwargs)
-
-        # No confirmation needed → save immediately.
         self.object = obj
         form.save()
-        messages.success(request, self.success_message)
 
-        if request.headers.get("HX-Request") == "true":
-            resp = HttpResponse(status=204)
-            resp["HX-Refresh"] = "true"
-            return resp
-        return self.get(request, *args, **kwargs)
+        if should_queue_rebuild:
+            rebuild_user_memory_embeddings_task.delay(request.user.id)
+            rebuild_user_conversation_embeddings_task.delay(request.user.id)
+            messages.success(
+                request,
+                _("Embeddings settings updated. Rebuilding embeddings in background."),
+            )
+        else:
+            messages.success(request, self.success_message)
+
+        return self._render_refresh_or_get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -238,10 +280,26 @@ class MemorySettingsView(
             context["pending_reembed_count"] = MemoryItemEmbedding.objects.filter(
                 user=self.request.user
             ).count()
-        provider = get_embeddings_provider()
-        context["embeddings_provider"] = provider
+
+        form = context.get("form")
+        display_values = self._form_display_values(form)
+        resolved = self._resolve_values(display_values)
+
+        selected_source = display_values["memory_embeddings_source"]
+        context["selected_embeddings_source"] = selected_source
+        context["resolved_embeddings_provider"] = resolved
+        context["embeddings_provider"] = resolved.provider
+        context["embeddings_provider_source"] = resolved.provider_source
+        context["system_embeddings_provider"] = resolved.system_provider
+        context["system_embeddings_provider_available"] = resolved.system_provider_available
+        context["show_system_embeddings_warning"] = (
+            selected_source == MemoryEmbeddingsSource.SYSTEM and not resolved.system_provider_available
+        )
+        context["show_custom_embeddings_warning"] = (
+            selected_source == MemoryEmbeddingsSource.CUSTOM and resolved.provider is None
+        )
         context["help_text"] = _(
-            "Configure semantic search (embeddings) for long-term memory. "
-            "If no provider is configured, Nova will run in text-search (FTS) mode only."
+            "Choose whether long-term memory should use the deployment-level embeddings provider, "
+            "a custom endpoint, or lexical search only."
         )
         return context

@@ -9,6 +9,12 @@ from encrypted_model_fields.fields import EncryptedCharField
 from nova.utils import validate_relaxed_url
 
 
+class MemoryEmbeddingsSource(models.TextChoices):
+    SYSTEM = "system", _("System provider")
+    CUSTOM = "custom", _("Custom provider")
+    DISABLED = "disabled", _("Disabled")
+
+
 class UserParameters(models.Model):
     CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT = 40
     CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN = 10
@@ -22,9 +28,11 @@ class UserParameters(models.Model):
     # Memory embeddings (optional)
     # ------------------------------------------------------------------
     # Note: memory is global per-user, so config lives at user level.
-    memory_embeddings_enabled = models.BooleanField(
-        default=False,
-        help_text=_("Enable semantic (embedding) search for long-term memory"),
+    memory_embeddings_source = models.CharField(
+        max_length=20,
+        choices=MemoryEmbeddingsSource.choices,
+        default=MemoryEmbeddingsSource.SYSTEM,
+        help_text=_("Select which embeddings provider source should be used for semantic search"),
     )
     memory_embeddings_url = models.CharField(
         max_length=400,

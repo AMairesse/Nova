@@ -1,6 +1,6 @@
 # Embeddings (Memory + Conversation)
 
-Last reviewed: 2026-02-28
+Last reviewed: 2026-03-31
 Status: implemented
 
 ## Scope
@@ -25,20 +25,45 @@ Embedding state lifecycle:
 - `ready`
 - `error`
 
+User configuration:
+- `UserParameters.memory_embeddings_source`
+  - `system`
+  - `custom`
+  - `disabled`
+- Custom endpoint values stay persisted on `UserParameters` even when the active
+  source is `system` or `disabled`.
+
 ## Provider resolution
 
-Runtime code uses two provider resolution paths:
+Runtime code uses one shared provider resolution contract for sync and async paths:
 
-1. Async path (`aget_embeddings_provider`, used by query embedding/tool paths):
-- system `LLAMA_CPP_SERVER_URL` + `LLAMA_CPP_MODEL`
-- then per-user DB config (`UserParameters`)
-- then legacy env fallback (`MEMORY_EMBEDDINGS_URL`)
+1. `custom` source:
+- use the per-user DB config from `UserParameters`
+- no fallback to `system`
 
-2. Sync path (`get_embeddings_provider`, used by Celery embedding tasks):
-- env `MEMORY_EMBEDDINGS_URL`
-- then per-user DB config (when `user_id` is provided)
+2. `system` source:
+- use the deployment-level `MEMORY_EMBEDDINGS_*` settings
+- no fallback to `custom`
+
+3. `disabled` source:
+- no provider
+
+`LLAMA_CPP_*` is not part of embeddings resolution.
 
 If no provider is available, semantic computation is skipped and lexical search remains active.
+
+## System provider backfill
+
+The deployment-level embeddings provider is tracked through a singleton DB row:
+- availability
+- current fingerprint
+- last successful backfill fingerprint/state
+
+When the system provider appears or changes fingerprint, Nova lazily schedules:
+- `rebuild_user_memory_embeddings_task`
+- `rebuild_user_conversation_embeddings_task`
+
+This auto-backfill is limited to users still configured with `memory_embeddings_source="system"`.
 
 ## Vector generation contract
 
@@ -74,5 +99,6 @@ Conversation search:
 ## Operational notes
 
 - Embeddings are optional; feature behavior degrades gracefully to lexical retrieval.
-- Provider/model changes from user settings trigger background memory re-embedding confirmation/rebuild flow.
-- Conversation embeddings are refreshed by transcript/day-summary pipelines and dedicated rebuild task.
+- The memory settings screen lets users choose `system`, `custom`, or `disabled`.
+- Provider changes from the memory settings screen trigger rebuild confirmation only
+  when the effective provider changes from one concrete provider to another.
