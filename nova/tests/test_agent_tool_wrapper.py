@@ -83,6 +83,8 @@ class AgentToolWrapperTests(TransactionTestCase):
         Import AgentToolWrapper after injecting the fake langchain_core.tools,
         guaranteeing the wrapper is wired against the controlled test stub.
         """
+        sys.modules.pop("nova.tools.agent_tool_wrapper", None)
+
         # Ensure fake third-party module is in place
         # before importing the module under test
         self._install_fake_langchain_tools()
