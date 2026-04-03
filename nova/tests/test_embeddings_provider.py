@@ -273,3 +273,25 @@ class EmbeddingsSystemBackfillTests(TestCase):
 
         mocked_memory_delay.assert_called_once_with(self.system_user.id)
         mocked_conversation_delay.assert_called_once_with(self.system_user.id)
+
+    @override_settings(
+        MEMORY_EMBEDDINGS_URL="http://system-embed:8080/v1",
+        MEMORY_EMBEDDINGS_MODEL="system-model",
+    )
+    @patch("nova.tasks.memory_rebuild_tasks.rebuild_user_memory_embeddings_task.delay")
+    @patch("nova.tasks.conversation_embedding_tasks.rebuild_user_conversation_embeddings_task.delay")
+    def test_unchanged_system_provider_skips_locking_write_path(
+        self,
+        _mocked_conversation_delay,
+        _mocked_memory_delay,
+    ):
+        get_resolved_embeddings_provider(user_id=self.system_user.id)
+        state = EmbeddingsSystemState.objects.get(singleton_key=1)
+        initial_updated_at = state.updated_at
+
+        with patch("nova.llm.embeddings.EmbeddingsSystemState.objects.select_for_update") as mocked_select_for_update:
+            get_resolved_embeddings_provider(user_id=self.system_user.id)
+
+        state.refresh_from_db()
+        self.assertEqual(state.updated_at, initial_updated_at)
+        mocked_select_for_update.assert_not_called()

@@ -116,6 +116,22 @@ def _sync_system_embeddings_state(system_provider: EmbeddingsProvider | None) ->
 
     provider_available = system_provider is not None
     fingerprint = _system_provider_fingerprint(system_provider)
+    current_state = EmbeddingsSystemState.objects.filter(singleton_key=1).only(
+        "provider_available",
+        "current_fingerprint",
+        "last_backfill_fingerprint",
+    ).first()
+
+    if current_state:
+        state_matches_provider = (
+            bool(current_state.provider_available) == provider_available
+            and (current_state.current_fingerprint or "") == fingerprint
+        )
+        backfill_state_is_current = (not provider_available) or (
+            (current_state.last_backfill_fingerprint or "") == fingerprint
+        )
+        if state_matches_provider and backfill_state_is_current:
+            return
 
     with transaction.atomic():
         state, _ = EmbeddingsSystemState.objects.select_for_update().get_or_create(singleton_key=1)
@@ -123,9 +139,15 @@ def _sync_system_embeddings_state(system_provider: EmbeddingsProvider | None) ->
         should_backfill = provider_available and (
             not previous_available or (state.last_backfill_fingerprint or "") != fingerprint
         )
+        update_fields: list[str] = []
 
-        state.provider_available = provider_available
-        state.current_fingerprint = fingerprint
+        if bool(state.provider_available) != provider_available:
+            state.provider_available = provider_available
+            update_fields.append("provider_available")
+
+        if (state.current_fingerprint or "") != fingerprint:
+            state.current_fingerprint = fingerprint
+            update_fields.append("current_fingerprint")
 
         if should_backfill:
             from nova.tasks.conversation_embedding_tasks import rebuild_user_conversation_embeddings_task
@@ -149,18 +171,17 @@ def _sync_system_embeddings_state(system_provider: EmbeddingsProvider | None) ->
                     )
 
             if scheduled_ok:
-                state.last_backfill_provider_available = True
-                state.last_backfill_fingerprint = fingerprint
+                if not bool(state.last_backfill_provider_available):
+                    state.last_backfill_provider_available = True
+                    update_fields.append("last_backfill_provider_available")
+                if (state.last_backfill_fingerprint or "") != fingerprint:
+                    state.last_backfill_fingerprint = fingerprint
+                    update_fields.append("last_backfill_fingerprint")
 
-        state.save(
-            update_fields=[
-                "provider_available",
-                "current_fingerprint",
-                "last_backfill_provider_available",
-                "last_backfill_fingerprint",
-                "updated_at",
-            ]
-        )
+        if not update_fields:
+            return
+
+        state.save(update_fields=[*update_fields, "updated_at"])
 
 
 def resolve_embeddings_provider_for_values(
