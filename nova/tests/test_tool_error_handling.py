@@ -22,6 +22,10 @@ class ToolErrorHandlingHelpersTests(SimpleTestCase):
     def test_categorize_error_detects_expected_categories(self):
         cases = [
             (TimeoutError("Request timeout"), ToolErrorCategory.TIMEOUT_ERROR),
+            (
+                RuntimeError("Page.goto: net::ERR_ABORTED at https://example.com/article"),
+                ToolErrorCategory.BROWSER_ERROR,
+            ),
             (ConnectionError("DNS lookup failed"), ToolErrorCategory.NETWORK_ERROR),
             (ValueError("Invalid schema: required field missing"), ToolErrorCategory.VALIDATION_ERROR),
             (RuntimeError("Rate limit exceeded"), ToolErrorCategory.RATE_LIMIT_ERROR),
@@ -43,6 +47,11 @@ class ToolErrorHandlingHelpersTests(SimpleTestCase):
 
         self.assertIn("artifact_search", message)
         self.assertIn("unexpected error", message.lower())
+
+    def test_categorize_error_does_not_treat_plain_urls_as_api_errors(self):
+        error = RuntimeError("Unexpected redirect while loading https://example.com/path")
+
+        self.assertEqual(categorize_error(error), ToolErrorCategory.UNKNOWN_ERROR)
 
 
 class RetryWithBackoffTests(IsolatedAsyncioTestCase):
@@ -153,6 +162,24 @@ class HandleToolErrorsMiddlewareTests(IsolatedAsyncioTestCase):
             ToolErrorCategory.NETWORK_ERROR,
         )
         mocked_retry.assert_awaited_once_with(handler, request)
+
+    async def test_handle_tool_errors_does_not_retry_browser_abort_errors(self):
+        request = SimpleNamespace(tool_call={"name": "navigate_browser", "id": "call-5"})
+        handler = AsyncMock(side_effect=RuntimeError("Page.goto: net::ERR_ABORTED at https://example.com"))
+
+        with patch(
+            "nova.llm.tool_error_handling.retry_with_backoff",
+            new_callable=AsyncMock,
+        ) as mocked_retry:
+            result = await handle_tool_errors.awrap_tool_call(request, handler)
+
+        self.assertIsInstance(result, ToolMessage)
+        self.assertIn("could not finish loading the page", result.content)
+        self.assertEqual(
+            result.additional_kwargs["error_category"],
+            ToolErrorCategory.BROWSER_ERROR,
+        )
+        mocked_retry.assert_not_awaited()
 
 
 def http_error_sequence(message: str):
