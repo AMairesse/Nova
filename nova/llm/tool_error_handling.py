@@ -5,14 +5,20 @@ Provides centralized, consistent error handling for all tool calls.
 """
 import asyncio
 import logging
+import re
 from langchain.agents.middleware import wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 
+HTTP_STATUS_PATTERN = re.compile(
+    r"\b(?:http|status(?:\s+code)?|error\s+code)\b[^0-9]{0,20}([1-5]\d{2})\b"
+)
+
 
 class ToolErrorCategory:
     """Categories of tool errors for consistent handling."""
+    BROWSER_ERROR = "browser_error"
     NETWORK_ERROR = "network_error"
     VALIDATION_ERROR = "validation_error"
     RATE_LIMIT_ERROR = "rate_limit_error"
@@ -22,6 +28,26 @@ class ToolErrorCategory:
     UNKNOWN_ERROR = "unknown_error"
 
 
+def is_browser_navigation_error(error_str: str) -> bool:
+    """Return True for browser navigation failures that are not usually helped by retries."""
+    return "net::err_aborted" in error_str
+
+
+def looks_like_http_api_error(error_str: str, error_type: str) -> bool:
+    """Detect explicit HTTP/API failures without confusing plain URLs for API errors."""
+    return any(
+        marker in error_str or marker in error_type
+        for marker in (
+            "client error",
+            "server error",
+            "api error",
+            "httperror",
+            "httpstatuserror",
+            "apistatuserror",
+        )
+    ) or bool(HTTP_STATUS_PATTERN.search(error_str))
+
+
 def categorize_error(error: Exception) -> str:
     """Categorize an exception for consistent handling."""
     error_str = str(error).lower()
@@ -29,6 +55,8 @@ def categorize_error(error: Exception) -> str:
 
     if 'timeout' in error_str or 'timeout' in error_type:
         return ToolErrorCategory.TIMEOUT_ERROR
+    if is_browser_navigation_error(error_str):
+        return ToolErrorCategory.BROWSER_ERROR
     if any(keyword in error_str or keyword in error_type for keyword in
            ['connection', 'network', 'ssl', 'dns']):
         return ToolErrorCategory.NETWORK_ERROR
@@ -41,8 +69,7 @@ def categorize_error(error: Exception) -> str:
     elif any(keyword in error_str for keyword in
              ['auth', 'unauthorized', 'forbidden', 'credentials']):
         return ToolErrorCategory.AUTHENTICATION_ERROR
-    elif any(keyword in error_str for keyword in
-             ['api', 'http', 'status']):
+    elif looks_like_http_api_error(error_str, error_type):
         return ToolErrorCategory.API_ERROR
     else:
         return ToolErrorCategory.UNKNOWN_ERROR
@@ -51,6 +78,10 @@ def categorize_error(error: Exception) -> str:
 def get_user_friendly_message(category: str, tool_name: str, original_error: Exception) -> str:
     """Convert technical errors to user-friendly messages."""
     messages = {
+        ToolErrorCategory.BROWSER_ERROR: (
+            f"{tool_name} could not finish loading the page. "
+            "The destination site may be blocking automation or interrupting navigation."
+        ),
         ToolErrorCategory.NETWORK_ERROR: (
             f"Network connectivity issue while using {tool_name}. "
             "Please check your internet connection and try again."
