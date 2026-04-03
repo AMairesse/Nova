@@ -274,6 +274,55 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
 
         self.assertFalse(Thread.objects.filter(pk=new_thread.id).exists())
 
+    def test_mobile_create_thread_closes_offcanvas_and_selects_new_thread(self):
+        original_thread = Thread.objects.create(user=self.user, subject="Existing mobile thread")
+        original_thread.add_message("Seed message", actor=Actor.USER)
+
+        self.recreate_browser_context(
+            viewport={"width": 390, "height": 844},
+            has_touch=True,
+            is_mobile=True,
+            extra_init_scripts=[_TOUCH_ENABLED_INIT_SCRIPT],
+        )
+        self.login_to_browser(self.user)
+
+        self.open_path("/")
+        self._wait_for_selected_thread(original_thread.id)
+        self.page.wait_for_selector("#message-form")
+
+        self.page.locator("#mobile-open-workspace-panel-btn").click()
+        self.page.wait_for_selector("#threadsOffcanvas.show")
+        self.page.locator("#threadsOffcanvas .create-thread-btn").click()
+        self.page.wait_for_function(
+            "() => document.querySelectorAll('#threads-list .thread-link').length === 2"
+        )
+
+        new_thread = (
+            Thread.objects.filter(user=self.user, mode=Thread.Mode.THREAD)
+            .exclude(pk=original_thread.pk)
+            .order_by("-id")
+            .first()
+        )
+        self.assertIsNotNone(new_thread)
+
+        self.page.wait_for_function(
+            """
+            () => {
+              const offcanvas = document.getElementById('threadsOffcanvas');
+              return offcanvas && !offcanvas.classList.contains('show');
+            }
+            """
+        )
+        self._wait_for_selected_thread(new_thread.id)
+
+        self.page.locator("#mobile-open-workspace-panel-btn").click()
+        self.page.wait_for_selector("#threadsOffcanvas.show")
+        self.assertTrue(
+            self.page.locator(
+                f'#mobile-threads-list .thread-link[data-thread-id="{new_thread.id}"]'
+            ).evaluate("el => el.classList.contains('active')")
+        )
+
     def test_voice_input_can_submit_a_message(self):
         thread = Thread.objects.create(user=self.user, subject="Voice thread")
 

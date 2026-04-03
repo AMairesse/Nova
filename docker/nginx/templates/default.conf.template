@@ -3,10 +3,11 @@ server {
 
     # Set nginx variable from environment
     set $static_cache_duration "${STATIC_CACHE_DURATION}";
+    set $nova_web http://web:8000;
     client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 
     location / {
-        proxy_pass http://web;
+        proxy_pass $nova_web;
         proxy_set_header Host "localhost";
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -16,7 +17,7 @@ server {
 
     # WebSockets
     location /ws/ {
-        proxy_pass http://web;
+        proxy_pass $nova_web;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";

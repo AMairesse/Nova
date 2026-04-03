@@ -96,11 +96,6 @@ services:
     environment:
       DEBUG: "True"
       PYTHONUNBUFFERED: 1
-    healthcheck:  # Checks container health
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
 volumes:  # Merge auto
   postgres_data:

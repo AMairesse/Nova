@@ -288,7 +288,7 @@ LLAMA_CPP_MODEL = os.getenv('LLAMA_CPP_MODEL', None)
 LLAMA_CPP_CTX_SIZE = os.getenv('LLAMA_CPP_CTX_SIZE', None)
 
 # Memory embeddings (optional)
-# If llama.cpp is configured, it is auto-preferred (see `nova.llm.embeddings`).
+# Used as the deployment-level "system" embeddings provider for memory/conversation embeddings.
 MEMORY_EMBEDDINGS_URL = os.getenv('MEMORY_EMBEDDINGS_URL', None)
 MEMORY_EMBEDDINGS_MODEL = os.getenv('MEMORY_EMBEDDINGS_MODEL', None)
 MEMORY_EMBEDDINGS_API_KEY = os.getenv('MEMORY_EMBEDDINGS_API_KEY', None)

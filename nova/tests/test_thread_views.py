@@ -81,6 +81,18 @@ class MainViewsTests(TestCase):
         self.assertContains(response, 'id="context-menu-execution-details"')
         self.assertContains(response, 'id="context-menu-compact"')
 
+    def test_index_exposes_mobile_mode_toggle_and_threads_panel_button(self):
+        self.client.login(username="alice", password="pass")
+
+        response = self.client.get(reverse("index"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="mobile-open-workspace-panel-btn"')
+        self.assertContains(response, 'title="Open threads"')
+        self.assertContains(response, 'id="mobile-mode-toggle-btn"')
+        self.assertContains(response, 'title="Switch to continuous"')
+        self.assertContains(response, '>Continuous<', html=False)
+
     # ------------ message_list ------------------------------------------
 
     def test_message_list_sanitizes_html_and_requires_ownership(self):

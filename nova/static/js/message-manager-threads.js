@@ -31,10 +31,11 @@
                 document.querySelectorAll('.thread-link').forEach((link) => {
                     link.classList.remove('active');
                 });
-                const active = document.querySelector(
+                document.querySelectorAll(
                     `.thread-link[data-thread-id="${this.currentThreadId}"]`
-                );
-                if (active) active.classList.add('active');
+                ).forEach((link) => {
+                    link.classList.add('active');
+                });
 
                 document.dispatchEvent(
                     new CustomEvent('threadChanged', {
@@ -186,24 +187,37 @@
                 );
                 const data = await response.json();
                 if (data.threadHtml) {
-                    const container = document.getElementById('threads-list');
-                    const todayGroup = window.ThreadManager.UIUtils.ensureGroupContainer(
-                        'today',
-                        container
-                    );
-                    const ul = todayGroup
-                        ? todayGroup.querySelector('ul.list-group')
-                        : null;
-                    if (ul) {
-                        ul.insertAdjacentHTML('afterbegin', data.threadHtml);
+                    ['threads-list', 'mobile-threads-list'].forEach((containerId) => {
+                        const container = document.getElementById(containerId);
+                        if (!container) return;
+
+                        const todayGroup = window.ThreadManager.UIUtils.ensureGroupContainer(
+                            'today',
+                            container
+                        );
+                        const ul = todayGroup
+                            ? todayGroup.querySelector('ul.list-group')
+                            : null;
+                        if (ul) {
+                            ul.insertAdjacentHTML('afterbegin', data.threadHtml);
+                        }
+                    });
+                }
+
+                await this.loadMessages(data.thread_id);
+
+                document.querySelectorAll(
+                    `.thread-link[data-thread-id="${data.thread_id}"]`
+                ).forEach((link) => {
+                    link.scrollIntoView({ block: 'nearest' });
+                });
+
+                if (window.innerWidth < 992) {
+                    const offcanvasEl = document.getElementById('threadsOffcanvas');
+                    if (offcanvasEl && window.bootstrap?.Offcanvas) {
+                        window.bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).hide();
                     }
                 }
-                this.loadMessages(data.thread_id);
-                document.dispatchEvent(
-                    new CustomEvent('threadChanged', {
-                        detail: { threadId: data.thread_id }
-                    })
-                );
             } catch (error) {
                 console.error('Error creating thread:', error);
             }

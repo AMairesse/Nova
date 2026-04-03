@@ -1,8 +1,10 @@
-<!-- user_settings/templates/user_settings/fragments/memory_form.html -->
 {% load crispy_forms_tags i18n %}
 
 <form hx-post="{% url 'user_settings:memory' %}?partial=1"
-      hx-swap="none" novalidate>
+      hx-swap="none"
+      novalidate
+      data-memory-embeddings-form="1"
+      data-system-provider-available="{% if system_embeddings_provider_available %}1{% else %}0{% endif %}">
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
 
@@ -15,25 +17,62 @@
         <div class="form-text">{{ help_text }}</div>
       </div>
 
-      {% if embeddings_provider %}
-        <div class="alert alert-info">
-          <strong>{% trans "Active provider" %}:</strong>
+      <div class="alert alert-info">
+        <strong>{% trans "Effective provider" %}:</strong>
+        {% if embeddings_provider %}
+          {% if embeddings_provider_source == 'system' %}
+            {% trans "System embeddings provider" %}
+          {% elif embeddings_provider_source == 'custom' %}
+            {% trans "Custom embeddings provider" %}
+          {% endif %}
+          :
           <code>{{ embeddings_provider.base_url }}</code>
           {% if embeddings_provider.model %}
             — <code>{{ embeddings_provider.model }}</code>
           {% endif %}
+        {% else %}
+          {% trans "None (lexical search only)" %}
+        {% endif %}
+      </div>
+
+      {% if system_embeddings_provider %}
+        <div class="alert alert-light border small">
+          <strong>{% trans "System embeddings provider" %}:</strong>
+          <code>{{ system_embeddings_provider.base_url }}</code>
+          {% if system_embeddings_provider.model %}
+            — <code>{{ system_embeddings_provider.model }}</code>
+          {% endif %}
         </div>
       {% endif %}
 
-      {{ form.memory_embeddings_enabled|as_crispy_field }}
-      {{ form.memory_embeddings_url|as_crispy_field }}
-      {{ form.memory_embeddings_model|as_crispy_field }}
-      {{ form.memory_embeddings_api_key|as_crispy_field }}
+      <div class="mb-3">
+        {{ form.memory_embeddings_source|as_crispy_field }}
+      </div>
+
+      <div
+        class="alert alert-warning {% if not show_system_embeddings_warning %}d-none{% endif %}"
+        data-memory-system-warning>
+        {% trans "No system embeddings provider is configured currently. Semantic search will remain inactive until a provider is added or you switch to a custom provider." %}
+      </div>
+
+      <div
+        class="alert alert-warning {% if not show_custom_embeddings_warning %}d-none{% endif %}"
+        data-memory-custom-warning>
+        {% trans "Custom embeddings are selected, but no endpoint URL is configured yet. Semantic search will remain inactive until you provide one." %}
+      </div>
+
+      <div
+        class="{% if selected_embeddings_source != 'custom' %}d-none{% endif %}"
+        data-memory-custom-fields>
+        {{ form.memory_embeddings_url|as_crispy_field }}
+        {{ form.memory_embeddings_model|as_crispy_field }}
+        {{ form.memory_embeddings_api_key|as_crispy_field }}
+      </div>
 
       {% if has_pending_reembed %}
         <div class="alert alert-warning mt-3">
           {% blocktrans with count=pending_reembed_count %}
-            Changing the embeddings provider/model will trigger a rebuild of {{ count }} embeddings.
+            Changing the active embeddings provider will trigger a rebuild of {{ count }} memory embeddings.
           {% endblocktrans %}
         </div>
       {% endif %}
@@ -53,7 +92,7 @@
         {% endif %}
 
         <button type="submit" class="btn btn-outline-secondary" name="action" value="test_embeddings">
-          {% trans "Test embeddings endpoint" %}
+          {% trans "Test selected embeddings source" %}
         </button>
       </div>
     </div>
@@ -66,10 +105,57 @@
     <div class="card-body"
          id="memory-items-container"
          hx-get="{% url 'user_settings:memory-items' %}"
-         hx-trigger="revealed once"
+         hx-trigger="load"
          hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading memory items…" %}</div>
     </div>
   </div>
 </form>
+
+<script>
+  (function () {
+    const script = document.currentScript;
+    const form = script && script.previousElementSibling;
+    if (!form || form.dataset.memoryEmbeddingsBound === "1") {
+      return;
+    }
+
+    const customFields = form.querySelector("[data-memory-custom-fields]");
+    const systemWarning = form.querySelector("[data-memory-system-warning]");
+    const customWarning = form.querySelector("[data-memory-custom-warning]");
+    const systemAvailable = form.dataset.systemProviderAvailable === "1";
+    const customUrlInput = form.querySelector("#id_memory_embeddings_url");
+
+    function selectedSource() {
+      const checked = form.querySelector("input[name='memory_embeddings_source']:checked");
+      if (checked) {
+        return checked.value;
+      }
+      const select = form.querySelector("[name='memory_embeddings_source']");
+      return select ? select.value : "";
+    }
+
+    function updateVisibility() {
+      const source = selectedSource();
+      const hasCustomUrl = Boolean(customUrlInput && customUrlInput.value.trim());
+
+      if (customFields) {
+        customFields.classList.toggle("d-none", source !== "custom");
+      }
+      if (systemWarning) {
+        systemWarning.classList.toggle("d-none", !(source === "system" && !systemAvailable));
+      }
+      if (customWarning) {
+        customWarning.classList.toggle("d-none", !(source === "custom" && !hasCustomUrl));
+      }
+    }
+
+    form.dataset.memoryEmbeddingsBound = "1";
+    form.addEventListener("change", updateVisibility);
+    if (customUrlInput) {
+      customUrlInput.addEventListener("input", updateVisibility);
+    }
+    updateVisibility();
+  })();
+</script>

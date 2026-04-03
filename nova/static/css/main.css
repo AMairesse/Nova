@@ -89,6 +89,17 @@ body {
     font-size: 1.1rem;
 }
 
+.mobile-mode-toggle-btn {
+    min-height: 36px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 0.7rem;
+    white-space: nowrap;
+    font-size: 0.875rem;
+}
+
 /* Remove dropdown caret on mobile user button for cleaner look */
 .mobile-navbar .dropdown-toggle::after {
     display: none;
