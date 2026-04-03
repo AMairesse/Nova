@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import smtplib
+from email import encoders as email_encoders
+from email import message_from_string
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -522,6 +526,90 @@ class EmailBuiltinsTests(TransactionTestCase):
         self.assertIn("Full Content", full)
 
     @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
+    def test_read_email_and_list_email_attachments_render_attachment_manifest(self, mocked_get_imap_client):
+        client = Mock()
+        mocked_get_imap_client.return_value = client
+
+        message = MIMEMultipart()
+        message.attach(MIMEText("Body", "plain", "utf-8"))
+        attachment = MIMEBase("application", "pdf")
+        attachment.set_payload(b"%PDF-1.4")
+        email_encoders.encode_base64(attachment)
+        attachment.add_header("Content-Disposition", "attachment", filename="report.pdf")
+        message.attach(attachment)
+
+        envelope = SimpleNamespace(
+            sender="alice@example.com",
+            to=["bob@example.com"],
+            subject="With attachment",
+            date=dt.datetime(2026, 2, 10, 9, 0),
+        )
+        client.fetch.return_value = {2: {"ENVELOPE": envelope, "BODY[]": message.as_bytes(), "UID": 55}}
+
+        rendered = asyncio.run(email_tools.read_email(self.user, self.tool.id, message_id=2))
+        attachments = asyncio.run(email_tools.list_email_attachments(self.user, self.tool.id, message_id=2))
+
+        self.assertIn("Attachments:", rendered)
+        self.assertIn("attachment_id=2", rendered)
+        self.assertIn("report.pdf", rendered)
+        self.assertIn("attachment_id=2", attachments)
+        self.assertIn("report.pdf", attachments)
+
+    @patch("nova.tools.builtins.email.stage_external_files_as_artifacts", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
+    def test_import_email_attachments_returns_artifact_payload(
+        self,
+        mocked_get_imap_client,
+        mocked_stage_artifacts,
+    ):
+        client = Mock()
+        mocked_get_imap_client.return_value = client
+
+        message = MIMEMultipart()
+        message.attach(MIMEText("Body", "plain", "utf-8"))
+        attachment = MIMEBase("application", "pdf")
+        attachment.set_payload(b"%PDF-1.4")
+        email_encoders.encode_base64(attachment)
+        attachment.add_header("Content-Disposition", "attachment", filename="report.pdf")
+        message.attach(attachment)
+
+        client.fetch.return_value = {
+            9: {
+                "ENVELOPE": SimpleNamespace(subject="Subject"),
+                "BODY[]": message.as_bytes(),
+                "UID": 123,
+            }
+        }
+        mocked_stage_artifacts.return_value = (
+            [
+                SimpleNamespace(
+                    id=91,
+                    kind="pdf",
+                    filename="report.pdf",
+                    mime_type="application/pdf",
+                )
+            ],
+            [],
+        )
+        agent = SimpleNamespace(thread=SimpleNamespace(id=77), user=self.user)
+
+        response, payload = asyncio.run(
+            email_tools.import_email_attachments(
+                self.user,
+                self.tool.id,
+                message_id=9,
+                attachment_ids=["2"],
+                folder="INBOX",
+                agent=agent,
+                mailbox="alice@example.com",
+            )
+        )
+
+        self.assertIn("Imported email attachment", response)
+        self.assertEqual(payload["artifact_refs"][0]["artifact_id"], 91)
+        self.assertTrue(payload["artifact_refs"][0]["tool_output"])
+
+    @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
     def test_search_emails_and_mailboxes_and_capabilities(self, mocked_get_imap_client):
         client = Mock()
         mocked_get_imap_client.return_value = client
@@ -593,12 +681,67 @@ class EmailBuiltinsTests(TransactionTestCase):
         missing = asyncio.run(email_tools.send_email(self.user, self.tool.id, "bob@example.com", "x", "y"))
         self.assertIn("SMTP server not configured", missing)
 
+    @patch("nova.tools.builtins.email.resolve_binary_attachments_for_ids", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.email.folder_exists", return_value=True)
+    @patch("nova.tools.builtins.email.build_smtp_client")
+    @patch("nova.tools.builtins.email.ToolCredential.objects.get")
+    def test_send_email_attaches_resolved_artifacts(
+        self,
+        mocked_get_credential,
+        mocked_build_smtp_client,
+        mocked_folder_exists,
+        mocked_get_imap_client,
+        mocked_resolve_attachments,
+    ):
+        mocked_get_credential.return_value = SimpleNamespace(
+            config={
+                "smtp_server": "smtp.example.com",
+                "username": "alice@example.com",
+                "password": "secret",
+                "sent_folder": "Sent",
+            }
+        )
+        smtp_server = Mock()
+        mocked_build_smtp_client.return_value = smtp_server
+        mocked_get_imap_client.return_value = Mock()
+        mocked_resolve_attachments.return_value = [
+            SimpleNamespace(
+                filename="report.pdf",
+                mime_type="application/pdf",
+                content=b"%PDF-1.4",
+            )
+        ]
+
+        result = asyncio.run(
+            email_tools.send_email(
+                self.user,
+                self.tool.id,
+                to="bob@example.com",
+                subject="Hello",
+                body="Body",
+                artifact_ids=[10],
+                thread=SimpleNamespace(id=77),
+            )
+        )
+
+        self.assertIn("Email sent successfully", result)
+        raw_message = smtp_server.sendmail.call_args.args[2]
+        parsed = message_from_string(raw_message)
+        attachment_names = [
+            part.get_filename()
+            for part in parsed.walk()
+            if part.get_filename()
+        ]
+        self.assertEqual(attachment_names, ["report.pdf"])
+        mocked_resolve_attachments.assert_awaited_once()
+
     @patch("nova.tools.builtins.email.ToolCredential.objects.get", side_effect=email_tools.ToolCredential.DoesNotExist)
     def test_send_email_and_save_draft_handle_missing_credentials(self, mocked_get):
         sent = asyncio.run(email_tools.send_email(self.user, self.tool.id, "bob@example.com", "x", "y"))
         self.assertIn("No email credential found", sent)
-        with self.assertRaisesMessage(ValueError, "No IMAP credential found"):
-            asyncio.run(email_tools.save_draft(self.user, self.tool.id, "bob@example.com", "x", "y"))
+        draft = asyncio.run(email_tools.save_draft(self.user, self.tool.id, "bob@example.com", "x", "y"))
+        self.assertIn("No IMAP credential found", draft)
 
     @patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock)
     @patch("nova.tools.builtins.email.folder_exists", return_value=False)

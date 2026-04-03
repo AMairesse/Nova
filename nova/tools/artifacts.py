@@ -38,6 +38,7 @@ def get_skill_instructions(agent=None, tools=None) -> list[str]:
         "Never guess artifact_ids.",
         "Use artifact_attach to bring a past artifact back into the current turn without copying it into Files.",
         "Use artifact_publish_to_files only when a generated artifact should become a visible thread file.",
+        "Temporary files imported from mail, web, or WebDAV appear here first before any optional promotion to Files.",
     ]
 
 

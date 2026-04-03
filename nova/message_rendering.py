@@ -33,7 +33,10 @@ def prepare_messages_for_display(
     visible_messages = [
         message
         for message in list(messages)
-        if not ((message.internal_data or {}).get("hidden_subagent_trace"))
+        if not (
+            (message.internal_data or {}).get("hidden_subagent_trace")
+            or (message.internal_data or {}).get("hidden_tool_output")
+        )
     ]
 
     last_agent_message_id = None
