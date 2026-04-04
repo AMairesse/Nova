@@ -7,14 +7,19 @@ from .constants import RUNTIME_ENGINE_REACT_TERMINAL_V1
 
 @dataclass(slots=True)
 class TerminalCapabilities:
-    email_tool: object | None = None
+    email_tools: list = field(default_factory=list)
     browser_tool: object | None = None
     code_execution_tool: object | None = None
+    date_time_tool: object | None = None
     subagents: list = field(default_factory=list)
 
     @property
     def has_email(self) -> bool:
-        return self.email_tool is not None
+        return bool(self.email_tools)
+
+    @property
+    def has_multiple_mailboxes(self) -> bool:
+        return len(self.email_tools) > 1
 
     @property
     def has_web(self) -> bool:
@@ -23,6 +28,10 @@ class TerminalCapabilities:
     @property
     def has_python(self) -> bool:
         return self.code_execution_tool is not None
+
+    @property
+    def has_date_time(self) -> bool:
+        return self.date_time_tool is not None
 
     @property
     def has_subagents(self) -> bool:
@@ -36,11 +45,13 @@ class TerminalCapabilities:
             families.append("mail")
         if self.has_python:
             families.append("python")
+        if self.has_date_time:
+            families.append("date")
         return families
 
 
 def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
-    tools = list(agent_config.tools.filter(is_active=True))
+    tools = list(agent_config.tools.filter(is_active=True).order_by("id"))
     subagents = list(
         agent_config.agent_tools.filter(
             is_tool=True,
@@ -48,13 +59,15 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
         ).select_related("llm_provider")
     )
 
-    email_tool = next((tool for tool in tools if tool.tool_subtype == "email"), None)
+    email_tools = [tool for tool in tools if tool.tool_subtype == "email"]
     browser_tool = next((tool for tool in tools if tool.tool_subtype == "browser"), None)
     code_execution_tool = next((tool for tool in tools if tool.tool_subtype == "code_execution"), None)
+    date_time_tool = next((tool for tool in tools if tool.tool_subtype == "date"), None)
 
     return TerminalCapabilities(
-        email_tool=email_tool,
+        email_tools=email_tools,
         browser_tool=browser_tool,
         code_execution_tool=code_execution_tool,
+        date_time_tool=date_time_tool,
         subagents=subagents,
     )

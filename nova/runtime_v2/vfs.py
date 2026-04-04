@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from asgiref.sync import sync_to_async
 from django.db.models import Q
 
-from nova.file_utils import batch_upload_files, download_file_content
+from nova.file_utils import batch_upload_files, download_file_content, upload_file_to_minio
 from nova.models.UserFile import UserFile
 
 from .constants import RUNTIME_STORAGE_ROOT
@@ -278,6 +278,28 @@ class VirtualFileSystem:
             if not overwrite:
                 raise VFSError(f"File already exists: {normalized}")
             await sync_to_async(existing.user_file.delete, thread_sensitive=True)()
+
+        if len(content) == 0:
+            key = await upload_file_to_minio(content, storage_path, mime_type, self.thread, self.user)
+
+            def _create_empty_file():
+                return UserFile.objects.create(
+                    user=self.user,
+                    thread=self.thread,
+                    original_filename=storage_path,
+                    mime_type=mime_type,
+                    size=0,
+                    key=key,
+                    scope=scope,
+                )
+
+            user_file = await sync_to_async(_create_empty_file, thread_sensitive=True)()
+            return VFSFile(
+                path=normalized,
+                user_file=user_file,
+                mime_type=str(user_file.mime_type or mime_type),
+                size=0,
+            )
 
         created, errors = await batch_upload_files(
             self.thread,

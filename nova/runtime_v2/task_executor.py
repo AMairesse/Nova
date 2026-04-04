@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from asgiref.sync import sync_to_async
 
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor, Message
 from nova.tasks.TaskExecutor import TaskExecutor
+from nova.thread_titles import is_default_thread_subject
 from nova.utils import markdown_to_html
 
 from .agent import ReactTerminalRunResult, ReactTerminalRuntime
@@ -18,6 +22,8 @@ from .compaction import (
 from .provider_client import OpenAICompatibleProviderClient
 from .sessions import get_or_create_agent_thread_session
 from .support import get_v2_runtime_error
+
+logger = logging.getLogger(__name__)
 
 
 class ReactTerminalTaskExecutor(TaskExecutor):
@@ -198,6 +204,38 @@ class ReactTerminalTaskExecutor(TaskExecutor):
 
         self.task.current_response = None
         self.task.streamed_markdown = ""
+        await self._enqueue_thread_title_generation()
+
+    async def _enqueue_thread_title_generation(self):
+        if not self.thread or not self.agent_config:
+            return
+        if not is_default_thread_subject(self.thread.subject):
+            return
+
+        enqueue_start = time.perf_counter()
+        try:
+            from nova.tasks.tasks import generate_thread_title_task
+
+            await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
+                thread_id=self.thread.id,
+                user_id=self.user.id,
+                agent_config_id=self.agent_config.id,
+                source_task_id=self.task.id,
+            )
+            duration_ms = int((time.perf_counter() - enqueue_start) * 1000)
+            logger.debug(
+                "Enqueued v2 thread title generation (thread_id=%s, task_id=%s) in %sms.",
+                getattr(self.thread, "id", None),
+                getattr(self.task, "id", None),
+                duration_ms,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not enqueue v2 thread title generation (thread_id=%s, task_id=%s): %s",
+                getattr(self.thread, "id", None),
+                getattr(self.task, "id", None),
+                exc,
+            )
 
     async def _cleanup(self):
         return None

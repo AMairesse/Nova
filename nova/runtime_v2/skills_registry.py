@@ -14,6 +14,8 @@ Start with:
 - `ls`
 - `ls /thread`
 - `ls /skills`
+- `touch /workspace/note.txt`
+- `tee /workspace/note.txt --text "hello"`
 
 Use relative paths only if you are confident about the current working directory.
 If you are unsure, run `pwd` first.
@@ -21,18 +23,26 @@ If you are unsure, run `pwd` first.
     }
 
     if capabilities.has_email:
-        skills["mail.md"] = """# Mail
+        mailbox_note = (
+            "\nWhen several mailboxes are configured, always pass `--mailbox <email>`.\n"
+            if capabilities.has_multiple_mailboxes
+            else "\nIf only one mailbox is configured, `--mailbox` is optional.\n"
+        )
+        skills["mail.md"] = f"""# Mail
 
 Mail is accessed through shell-like commands:
 
+- `mail accounts`
 - `mail list`
 - `mail read <id>`
 - `mail attachments <id>`
 - `mail import <id> --attachment <part> --output /workspace/<name>`
-- `mail send --to ... --subject ... --body-file /workspace/body.txt --attach /workspace/file.pdf`
+- `mail folders --mailbox <email>`
+- `mail send --mailbox <email> --to ... --subject ... --body-file /workspace/body.txt --attach /workspace/file.pdf`
 
 Prefer reading attachments metadata first, then importing only the files you need.
 Imported attachments become normal files in the terminal workspace.
+{mailbox_note}Reuse the same mailbox throughout a workflow unless the user explicitly asks you to switch.
 """
 
     if capabilities.has_web:
@@ -56,8 +66,27 @@ Python execution is available through:
 
 - `python /workspace/script.py`
 - `python -c "print('hello')"`
+- `python --output /workspace/result.txt /workspace/script.py`
+- `python --output /workspace/result.txt -c "print('hello')"`
 
 Keep scripts in `/workspace` when they are reused across multiple commands.
+Typical workflow:
+- create a script with `tee /workspace/script.py --text "..."`
+- run it with `python /workspace/script.py`
+- capture stdout into a file with `python --output /workspace/result.txt /workspace/script.py`
+"""
+
+    if capabilities.has_date_time:
+        skills["date.md"] = """# Date / Time
+
+Use the native `date` command for current date and time:
+
+- `date`
+- `date -u`
+- `date +%F`
+- `date +%T`
+
+For more advanced date arithmetic, use Python instead of expecting full GNU date support.
 """
 
     if capabilities.has_subagents:

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import posixpath
 import shlex
+from datetime import timezone as dt_timezone
+from types import SimpleNamespace
 
 import httpx
+from django.utils import timezone
 
 from nova.file_utils import MAX_FILE_SIZE
 from nova.runtime_v2.capabilities import TerminalCapabilities
@@ -21,6 +24,7 @@ class TerminalExecutor:
     def __init__(self, *, vfs: VirtualFileSystem, capabilities: TerminalCapabilities):
         self.vfs = vfs
         self.capabilities = capabilities
+        self._mailbox_registry_cache = None
 
     def _parse(self, command: str) -> list[str]:
         raw = str(command or "").strip()
@@ -55,6 +59,10 @@ class TerminalExecutor:
             return await self._cmd_head_tail(tokens[1:], tail=True)
         if name == "mkdir":
             return await self._cmd_mkdir(tokens[1:])
+        if name == "touch":
+            return await self._cmd_touch(tokens[1:])
+        if name == "tee":
+            return await self._cmd_tee(tokens[1:])
         if name == "cp":
             return await self._cmd_cp(tokens[1:])
         if name == "mv":
@@ -63,6 +71,8 @@ class TerminalExecutor:
             return await self._cmd_rm(tokens[1:])
         if name == "find":
             return await self._cmd_find(tokens[1:])
+        if name == "date":
+            return await self._cmd_date(tokens[1:])
         if name == "wget":
             return await self._cmd_wget(tokens[1:])
         if name == "curl":
@@ -142,6 +152,64 @@ class TerminalExecutor:
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
+    def _validate_text_write_path(self, raw_path: str) -> str:
+        normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+        if normalized.startswith("/skills"):
+            raise TerminalCommandError("Writing into /skills is not supported.")
+        if normalized.startswith("/thread"):
+            raise TerminalCommandError("Writing into /thread is not supported for terminal text commands.")
+        if not (normalized.startswith("/workspace") or normalized.startswith("/tmp")):
+            raise TerminalCommandError("Text writes are only supported in /workspace and /tmp.")
+        return normalized
+
+    async def _cmd_touch(self, args: list[str]) -> str:
+        if len(args) != 1:
+            raise TerminalCommandError("Usage: touch <path>")
+        normalized = self._validate_text_write_path(args[0])
+        if await self.vfs.is_dir(normalized):
+            raise TerminalCommandError(f"Cannot touch a directory: {normalized}")
+        existing = await self.vfs.get_real_file(normalized)
+        if existing is not None:
+            return f"Touched {normalized}"
+        try:
+            written = await self.vfs.write_file(normalized, b"", mime_type="text/plain")
+            return f"Created empty file {written.path}"
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+
+    async def _cmd_tee(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError('Usage: tee <path> --text "<content>" [--append]')
+        append = "--append" in args
+        remainder = [item for item in args if item != "--append"]
+        text, remainder = self._parse_flag_value(remainder, "--text")
+        if len(remainder) != 1 or text is None:
+            raise TerminalCommandError('Usage: tee <path> --text "<content>" [--append]')
+
+        normalized = self._validate_text_write_path(remainder[0])
+        if await self.vfs.is_dir(normalized):
+            raise TerminalCommandError(f"Cannot write text into a directory: {normalized}")
+
+        content = str(text)
+        if append and await self.vfs.path_exists(normalized):
+            try:
+                existing_text = await self.vfs.read_text(normalized)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            content = f"{existing_text}{content}"
+
+        encoded = content.encode("utf-8")
+        try:
+            written = await self.vfs.write_file(
+                normalized,
+                encoded,
+                mime_type="text/plain",
+                overwrite=True,
+            )
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return f"Wrote {len(str(text).encode('utf-8'))} bytes to {written.path}"
+
     async def _cmd_cp(self, args: list[str]) -> str:
         if len(args) != 2:
             raise TerminalCommandError("Usage: cp <source> <destination>")
@@ -174,6 +242,30 @@ class TerminalExecutor:
         term = args[1] if len(args) > 1 else ""
         results = await self.vfs.find(start, term)
         return "\n".join(results)
+
+    async def _cmd_date(self, args: list[str]) -> str:
+        if not self.capabilities.has_date_time:
+            raise TerminalCommandError("Date/time commands are not enabled for this agent.")
+
+        use_utc = False
+        format_token = None
+        for token in args:
+            if token == "-u":
+                use_utc = True
+                continue
+            if token in {"+%F", "+%T"} and format_token is None:
+                format_token = token
+                continue
+            raise TerminalCommandError("Usage: date [-u] [+%F|+%T]")
+
+        now = timezone.now()
+        current = now.astimezone(dt_timezone.utc) if use_utc else timezone.localtime(now)
+        if format_token == "+%F":
+            return current.strftime("%Y-%m-%d")
+        if format_token == "+%T":
+            return current.strftime("%H:%M:%S")
+        zone_label = "UTC" if use_utc else str(current.tzname() or timezone.get_current_timezone_name())
+        return f"{current.strftime('%Y-%m-%d %H:%M:%S')} {zone_label}"
 
     def _parse_output_path(self, args: list[str], *,
                            default_filename: str | None = None) -> tuple[str | None, list[str]]:
@@ -271,23 +363,72 @@ class TerminalExecutor:
             index += 1
         return values, remaining
 
+    async def _get_mailbox_registry(self):
+        if self._mailbox_registry_cache is None:
+            agent = SimpleNamespace(user=self.vfs.user, thread=self.vfs.thread)
+            self._mailbox_registry_cache = await email_builtin._build_mailbox_registry(
+                list(self.capabilities.email_tools or []),
+                agent,
+            )
+        return self._mailbox_registry_cache
+
+    async def _resolve_terminal_mailbox(self, mailbox: str | None):
+        _user, entries, lookup, _mailbox_schema, selector_values = await self._get_mailbox_registry()
+        requested = str(mailbox or "").strip()
+        if not requested:
+            if len(entries) == 1:
+                return entries[0], selector_values
+            raise TerminalCommandError(
+                "The --mailbox selector is required when multiple mailboxes are configured. "
+                f"Available addresses: {', '.join(selector_values)}."
+            )
+
+        entry, err = email_builtin._resolve_mailbox(requested, lookup, selector_values)
+        if err:
+            raise TerminalCommandError(err)
+        return entry, selector_values
+
+    async def _cmd_mail_accounts(self) -> str:
+        _user, entries, _lookup, _mailbox_schema, selector_values = await self._get_mailbox_registry()
+        if not entries:
+            raise TerminalCommandError("No email mailbox is configured for this agent.")
+        lines = ["Configured mailboxes:"]
+        for entry in entries:
+            label = str(entry.get("display_label") or "").strip()
+            label_part = f", label: {label}" if label else ""
+            sending = "enabled" if entry.get("can_send") else "disabled"
+            lines.append(
+                f"- {entry['selector_email']} (sending: {sending}{label_part})"
+            )
+        if len(selector_values) > 1:
+            lines.append("Pass --mailbox <email> on mail commands to choose an account explicitly.")
+        return "\n".join(lines)
+
     async def _cmd_mail(self, args: list[str]) -> str:
         if not self.capabilities.has_email:
             raise TerminalCommandError("Mail commands are not enabled for this agent.")
         if not args:
-            raise TerminalCommandError("Usage: mail <list|read|attachments|import|send> ...")
-        tool = self.capabilities.email_tool
+            raise TerminalCommandError("Usage: mail <accounts|list|read|attachments|import|send|folders> ...")
         subcommand = args[0]
         remainder = args[1:]
+        mailbox, remainder = self._parse_flag_value(remainder, "--mailbox")
+
+        if subcommand == "accounts":
+            if remainder:
+                raise TerminalCommandError("Usage: mail accounts")
+            return await self._cmd_mail_accounts()
+
+        entry, _selector_values = await self._resolve_terminal_mailbox(mailbox)
+        tool_id = int(entry["tool_id"])
 
         if subcommand == "list":
             folder, remainder = self._parse_flag_value(remainder, "--folder")
             limit, remainder = self._parse_flag_value(remainder, "--limit")
             if remainder:
-                raise TerminalCommandError("Unexpected arguments for mail list.")
+                raise TerminalCommandError("Usage: mail list [--mailbox <email>] [--folder INBOX] [--limit N]")
             return await email_builtin.list_emails(
                 self.vfs.user,
-                tool.id,
+                tool_id,
                 folder=folder or "INBOX",
                 limit=int(limit or 10),
             )
@@ -297,10 +438,12 @@ class TerminalExecutor:
             full = "--full" in remainder
             remainder = [item for item in remainder if item != "--full"]
             if len(remainder) != 1:
-                raise TerminalCommandError("Usage: mail read <id> [--folder F] [--full]")
+                raise TerminalCommandError(
+                    "Usage: mail read [--mailbox <email>] <id> [--folder F] [--full]"
+                )
             return await email_builtin.read_email(
                 self.vfs.user,
-                tool.id,
+                tool_id,
                 int(remainder[0]),
                 folder=folder or "INBOX",
                 preview_only=not full,
@@ -309,13 +452,20 @@ class TerminalExecutor:
         if subcommand == "attachments":
             folder, remainder = self._parse_flag_value(remainder, "--folder")
             if len(remainder) != 1:
-                raise TerminalCommandError("Usage: mail attachments <id> [--folder F]")
+                raise TerminalCommandError(
+                    "Usage: mail attachments [--mailbox <email>] <id> [--folder F]"
+                )
             return await email_builtin.list_email_attachments(
                 self.vfs.user,
-                tool.id,
+                tool_id,
                 int(remainder[0]),
                 folder=folder or "INBOX",
             )
+
+        if subcommand == "folders":
+            if remainder:
+                raise TerminalCommandError("Usage: mail folders [--mailbox <email>]")
+            return await email_builtin.list_mailboxes(self.vfs.user, tool_id)
 
         if subcommand == "import":
             folder, remainder = self._parse_flag_value(remainder, "--folder")
@@ -323,12 +473,12 @@ class TerminalExecutor:
             output_path, remainder = self._parse_flag_value(remainder, "--output")
             if len(remainder) != 1 or not attachment_id:
                 raise TerminalCommandError(
-                    "Usage: mail import <id> --attachment <part> [--folder F] [--output PATH]"
+                    "Usage: mail import [--mailbox <email>] <id> --attachment <part> [--folder F] [--output PATH]"
                 )
             message_id = int(remainder[0])
             _envelope, _message, _uid, attachments = await email_builtin._load_email_message_with_attachments(
                 self.vfs.user,
-                tool.id,
+                tool_id,
                 message_id,
                 folder=folder or "INBOX",
             )
@@ -357,11 +507,16 @@ class TerminalExecutor:
             attach_paths, remainder = self._parse_multi_flag(remainder, "--attach")
             if remainder or not to or not subject or not body_file:
                 raise TerminalCommandError(
-                    "Usage: mail send --to <addr> --subject <subject> --body-file <path> [--cc <addr>] [--attach <path> ...]"
+                    "Usage: mail send [--mailbox <email>] --to <addr> --subject <subject> "
+                    "--body-file <path> [--cc <addr>] [--attach <path> ...]"
+                )
+            if not entry.get("can_send"):
+                raise TerminalCommandError(
+                    f"Sending is disabled for mailbox '{entry['selector_email']}'."
                 )
             body = await self.vfs.read_text(body_file)
             return await self._send_mail_direct(
-                tool=tool,
+                tool_id=tool_id,
                 to=to,
                 cc=cc,
                 subject=subject,
@@ -371,9 +526,9 @@ class TerminalExecutor:
 
         raise TerminalCommandError(f"Unknown mail subcommand: {subcommand}")
 
-    async def _send_mail_direct(self, *, tool, to: str, cc: str | None,
+    async def _send_mail_direct(self, *, tool_id: int, to: str, cc: str | None,
                                 subject: str, body: str, attach_paths: list[str]) -> str:
-        credential = await email_builtin._get_credential(self.vfs.user, tool.id)
+        credential = await email_builtin._get_credential(self.vfs.user, tool_id)
         if credential is None:
             raise TerminalCommandError("No email credential found.")
 
@@ -419,6 +574,19 @@ class TerminalExecutor:
 
         return f"Email sent successfully to {to}"
 
+    @staticmethod
+    def _extract_python_stdout(result: str) -> str:
+        marker_stdout = "\nStdout: "
+        marker_stderr = "\nStderr: "
+        stdout_index = result.find(marker_stdout)
+        if stdout_index == -1:
+            return ""
+        start = stdout_index + len(marker_stdout)
+        stderr_index = result.find(marker_stderr, start)
+        if stderr_index == -1:
+            return result[start:]
+        return result[start:stderr_index]
+
     async def _cmd_python(self, args: list[str]) -> str:
         if not self.capabilities.has_python:
             raise TerminalCommandError("Python execution is not enabled for this agent.")
@@ -428,15 +596,29 @@ class TerminalExecutor:
         timeout = int(config.get("timeout") or 5)
 
         if not args:
-            raise TerminalCommandError("Usage: python <script.py> or python -c \"...\"")
-        if args[0] == "-c":
-            if len(args) < 2:
-                raise TerminalCommandError("Usage: python -c \"...\"")
-            code = args[1]
-            return await code_builtin.execute_code(host, code, language="python", timeout=timeout)
+            raise TerminalCommandError("Usage: python [--output PATH] <script.py> or python [--output PATH] -c \"...\"")
 
-        if len(args) != 1:
-            raise TerminalCommandError("Usage: python <script.py>")
-        script_path = args[0]
-        code = await self.vfs.read_text(script_path)
-        return await code_builtin.execute_code(host, code, language="python", timeout=timeout)
+        output_path, remaining = self._parse_output_path(args)
+        if remaining and remaining[0] == "-c":
+            if len(remaining) != 2:
+                raise TerminalCommandError("Usage: python [--output PATH] -c \"...\"")
+            code = remaining[1]
+            result = await code_builtin.execute_code(host, code, language="python", timeout=timeout)
+        else:
+            if len(remaining) != 1:
+                raise TerminalCommandError("Usage: python [--output PATH] <script.py>")
+            script_path = remaining[0]
+            code = await self.vfs.read_text(script_path)
+            result = await code_builtin.execute_code(host, code, language="python", timeout=timeout)
+
+        if output_path:
+            normalized_output = self._validate_text_write_path(output_path)
+            stdout = self._extract_python_stdout(result)
+            await self.vfs.write_file(
+                normalized_output,
+                stdout.encode("utf-8"),
+                mime_type="text/plain",
+                overwrite=True,
+            )
+
+        return result

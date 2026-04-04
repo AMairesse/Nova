@@ -80,6 +80,17 @@ class ReactTerminalRuntime:
             f"{subagent.id}:{subagent.name}"
             for subagent in self.capabilities.subagents
         ) or "none"
+        extra_guidance: list[str] = [
+            "Create text files with `touch` and `tee`; do not expect shell redirection to work.",
+        ]
+        if self.capabilities.has_date_time:
+            extra_guidance.append(
+                "Use `date`, `date -u`, `date +%F`, and `date +%T` for current time queries."
+            )
+        if self.capabilities.has_multiple_mailboxes:
+            extra_guidance.append(
+                "When using mail commands, always pass `--mailbox <email>` to choose the mailbox explicitly."
+            )
         base_prompt = (
             "You are Nova running in React Terminal V1.\n"
             "Your main action surface is the `terminal` tool.\n"
@@ -95,6 +106,7 @@ class ReactTerminalRuntime:
             f"Enabled command families: {families}.\n"
             f"Configured sub-agents: {subagents}.\n"
             "Use `delegate_to_agent` only for configured sub-agents.\n"
+            f"{' '.join(extra_guidance)}\n"
         )
         custom_prompt = str(getattr(self.agent_config, "system_prompt", "") or "").strip()
         if custom_prompt:

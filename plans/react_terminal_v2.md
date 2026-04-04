@@ -127,6 +127,27 @@ LangChain/LangGraph stack and centered around a persistent pseudo-terminal.
 - [x] Reuse the existing `summarization_complete` websocket event
 - [x] Keep compaction scoped to the main v2 agent session only
 
+### Phase 9: Terminal parity increment
+
+- [x] Reuse legacy thread title generation for successful v2 runs
+- [x] Add terminal text-file creation commands:
+  - [x] `touch`
+  - [x] `tee --text ... [--append]`
+- [x] Add explicit multi-mailbox support:
+  - [x] `mail accounts`
+  - [x] `mail folders`
+  - [x] `--mailbox <email>` required when multiple mailboxes are configured
+- [x] Add native terminal date/time command:
+  - [x] `date`
+  - [x] `date -u`
+  - [x] `date +%F`
+  - [x] `date +%T`
+- [x] Finalize Python execution/VFS interoperability:
+  - [x] `python --output /workspace/result.txt ...`
+  - [x] script creation via `tee` then execution through `python`
+- [x] Update `/skills` guidance and v2 system prompt invariants
+- [x] Add targeted tests for the new commands and title-generation wiring
+
 ## Out of Scope for V1
 
 - Continuous mode

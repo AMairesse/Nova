@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -15,20 +17,23 @@ from nova.models.Message import Actor
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
+from nova.models.Tool import Tool, ToolCredential
 from nova.runtime_v2.agent import ReactTerminalRuntime
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.compaction import (
     SESSION_KEY_HISTORY_SUMMARY,
     SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID,
 )
+from nova.runtime_v2.skills_registry import build_skill_registry
 from nova.runtime_v2.support import get_v2_runtime_error
 from nova.runtime_v2.task_executor import (
     ReactTerminalSummarizationTaskExecutor,
     ReactTerminalTaskExecutor,
 )
-from nova.runtime_v2.terminal import TerminalExecutor
+from nova.runtime_v2.terminal import TerminalCommandError, TerminalExecutor
 from nova.runtime_v2.vfs import VirtualFileSystem
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
+from nova.thread_titles import build_default_thread_subject
 
 
 class _FakeChannelLayer:
@@ -88,6 +93,267 @@ class TerminalExecutorTests(TestCase):
         self.assertIn("python.md", skills_listing)
         self.assertEqual(cwd, "/tmp")
         self.assertEqual(pwd, "/tmp")
+
+
+class TerminalExecutorCommandTests(TransactionTestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="terminal-user", password="pwd")
+        self.provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="test-key",
+        )
+        self.agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Terminal Command Agent",
+            llm_provider=self.provider,
+            system_prompt="",
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+        )
+        self.thread = Thread.objects.create(user=self.user, subject="Terminal thread")
+        self.base_state = {
+            "cwd": "/workspace",
+            "history": [],
+            "directories": ["/workspace", "/tmp"],
+        }
+        self._stored_contents: dict[str, bytes] = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        self.upload_patcher = patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio)
+        self.vfs_upload_patcher = patch("nova.runtime_v2.vfs.upload_file_to_minio", new=fake_upload_file_to_minio)
+        self.download_patcher = patch("nova.runtime_v2.vfs.download_file_content", new=fake_download_file_content)
+        self.delete_storage_patcher = patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock())
+        self.upload_patcher.start()
+        self.vfs_upload_patcher.start()
+        self.download_patcher.start()
+        self.delete_storage_patcher.start()
+        self.addCleanup(self.upload_patcher.stop)
+        self.addCleanup(self.vfs_upload_patcher.stop)
+        self.addCleanup(self.download_patcher.stop)
+        self.addCleanup(self.delete_storage_patcher.stop)
+
+    def _build_executor(self, capabilities: TerminalCapabilities | None = None):
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+        )
+        return TerminalExecutor(vfs=vfs, capabilities=capabilities or TerminalCapabilities())
+
+    def _create_builtin_tool(self, subtype: str, *, name: str, description: str = "") -> Tool:
+        python_path_map = {
+            "email": "nova.tools.builtins.email",
+            "code_execution": "nova.tools.builtins.code_execution",
+            "date": "nova.tools.builtins.date",
+            "browser": "nova.tools.builtins.browser",
+        }
+        return Tool.objects.create(
+            user=self.user,
+            name=name,
+            description=description or name,
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype=subtype,
+            python_path=python_path_map.get(subtype, ""),
+        )
+
+    def _create_email_tool(
+        self,
+        *,
+        name: str,
+        address: str,
+        imap_server: str = "imap.example.com",
+        smtp_server: str = "smtp.example.com",
+        enable_sending: bool = True,
+    ) -> Tool:
+        tool = self._create_builtin_tool("email", name=name)
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "imap_server": imap_server,
+                "smtp_server": smtp_server,
+                "username": address,
+                "password": "secret",
+                "from_address": address,
+                "enable_sending": enable_sending,
+            },
+        )
+        return tool
+
+    def _create_code_execution_tool(self) -> Tool:
+        tool = self._create_builtin_tool("code_execution", name="Judge0")
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"judge0_url": "https://judge0.example.com", "timeout": 5},
+        )
+        return tool
+
+    def test_touch_and_tee_create_and_append_workspace_files(self):
+        executor = self._build_executor()
+
+        created = async_to_sync(executor.execute)("touch note.txt")
+        written = async_to_sync(executor.execute)('tee note.txt --text "hello"')
+        appended = async_to_sync(executor.execute)('tee note.txt --text " world" --append')
+        content = async_to_sync(executor.execute)("cat note.txt")
+
+        self.assertIn("Created empty file /workspace/note.txt", created)
+        self.assertIn("Wrote 5 bytes to /workspace/note.txt", written)
+        self.assertIn("Wrote 6 bytes to /workspace/note.txt", appended)
+        self.assertEqual(content, "hello world")
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("touch /thread/blocked.txt")
+
+    def test_date_command_supports_native_formats(self):
+        executor = self._build_executor(
+            TerminalCapabilities(date_time_tool=object())
+        )
+
+        default_output = async_to_sync(executor.execute)("date")
+        utc_output = async_to_sync(executor.execute)("date -u")
+        date_only = async_to_sync(executor.execute)("date +%F")
+        time_only = async_to_sync(executor.execute)("date +%T")
+
+        self.assertRegex(default_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+$")
+        self.assertRegex(utc_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$")
+        self.assertRegex(date_only, r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(time_only, r"^\d{2}:\d{2}:\d{2}$")
+
+    def test_mail_accounts_and_multi_mailbox_selection_are_explicit(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        personal_tool = self._create_email_tool(name="Personal Mail", address="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[work_tool, personal_tool])
+        )
+
+        accounts = async_to_sync(executor.execute)("mail accounts")
+        self.assertIn("work@example.com", accounts)
+        self.assertIn("personal@example.com", accounts)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mail list")
+
+        with patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock, return_value="ok") as mocked_list:
+            listed = async_to_sync(executor.execute)("mail list --mailbox personal@example.com --limit 5")
+
+        self.assertEqual(listed, "ok")
+        mocked_list.assert_awaited_once_with(self.user, personal_tool.id, folder="INBOX", limit=5)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mail list --mailbox missing@example.com")
+
+    def test_mail_rejects_ambiguous_mailbox_identifiers(self):
+        first_tool = self._create_email_tool(
+            name="Shared Mail A",
+            address="shared@example.com",
+            imap_server="imap.example.com",
+        )
+        second_tool = self._create_email_tool(
+            name="Shared Mail B",
+            address="shared@example.com",
+            imap_server="imap.example.com",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[first_tool, second_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError) as cm:
+            async_to_sync(executor.execute)("mail list --mailbox shared@example.com")
+
+        self.assertIn("Ambiguous mailbox", str(cm.exception))
+
+    def test_single_mailbox_allows_mail_commands_without_mailbox_flag(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[work_tool])
+        )
+
+        with patch("nova.tools.builtins.email.list_emails", new_callable=AsyncMock, return_value="ok") as mocked_list:
+            listed = async_to_sync(executor.execute)("mail list --limit 3")
+
+        self.assertEqual(listed, "ok")
+        mocked_list.assert_awaited_once_with(self.user, work_tool.id, folder="INBOX", limit=3)
+
+    def test_mail_send_uses_selected_mailbox(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        personal_tool = self._create_email_tool(name="Personal Mail", address="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[work_tool, personal_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/workspace/body.txt",
+            b"Hello from Nova",
+            mime_type="text/plain",
+        )
+
+        with patch.object(executor, "_send_mail_direct", new=AsyncMock(return_value="sent")) as mocked_send:
+            result = async_to_sync(executor.execute)(
+                "mail send --mailbox personal@example.com --to bob@example.com "
+                '--subject "Hello" --body-file /workspace/body.txt'
+            )
+
+        self.assertEqual(result, "sent")
+        mocked_send.assert_awaited_once()
+        self.assertEqual(mocked_send.await_args.kwargs["tool_id"], personal_tool.id)
+
+    def test_python_output_writes_stdout_file_and_preserves_terminal_result(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)(
+            'tee /workspace/script.py --text "print(\'hello\')\nprint(\'world\')"'
+        )
+
+        with (
+            patch(
+                "nova.tools.builtins.code_execution.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.tools.builtins.code_execution.execute_code",
+                new_callable=AsyncMock,
+                return_value="Status: Accepted\nStdout: hello\nworld\nStderr: ",
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)(
+                "python --output /workspace/result.txt /workspace/script.py"
+            )
+
+        output_file = async_to_sync(executor.execute)("cat /workspace/result.txt")
+        self.assertIn("Status: Accepted", result)
+        self.assertEqual(output_file, "hello\nworld")
+        self.assertEqual(mocked_execute.await_args.args[1], "print('hello')\nprint('world')")
+
+    def test_skill_registry_mentions_mail_python_and_date_guidance(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(
+                email_tools=[object(), object()],
+                code_execution_tool=object(),
+                date_time_tool=object(),
+            )
+        )
+
+        self.assertIn("mail.md", skills)
+        self.assertIn("python.md", skills)
+        self.assertIn("date.md", skills)
+        self.assertIn("mail accounts", skills["mail.md"])
+        self.assertIn("--mailbox <email>", skills["mail.md"])
+        self.assertIn("python --output", skills["python.md"])
+        self.assertIn("date +%F", skills["date.md"])
 
 
 class ReactTerminalRuntimeTests(TransactionTestCase):
@@ -229,6 +495,67 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertFalse(any(item["content"] == "Initial requirement" for item in history[1:]))
         self.assertTrue(any(item["content"] == "Recent context" for item in history[1:]))
 
+    def test_system_prompt_mentions_touch_tee_and_conditional_mailbox_and_date_guidance(self):
+        date_tool = Tool.objects.create(
+            user=self.user,
+            name="Date",
+            description="Date",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="date",
+            python_path="nova.tools.builtins.date",
+        )
+        first_mail = Tool.objects.create(
+            user=self.user,
+            name="Work Mail",
+            description="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        second_mail = Tool.objects.create(
+            user=self.user,
+            name="Personal Mail",
+            description="Personal Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=first_mail,
+            config={
+                "imap_server": "imap.work.example.com",
+                "username": "work@example.com",
+                "password": "secret",
+                "from_address": "work@example.com",
+            },
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=second_mail,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "personal@example.com",
+                "password": "secret",
+                "from_address": "personal@example.com",
+            },
+        )
+        self.agent.tools.add(date_tool, first_mail, second_mail)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("touch", prompt)
+        self.assertIn("tee", prompt)
+        self.assertIn("date +%F", prompt)
+        self.assertIn("--mailbox <email>", prompt)
+
 
 class ReactTerminalExecutorTests(TransactionTestCase):
     def setUp(self):
@@ -304,6 +631,91 @@ class ReactTerminalExecutorTests(TransactionTestCase):
         self.assertIn("context_consumption", event_types)
         self.assertIn("new_message", event_types)
         self.assertIn("task_complete", event_types)
+
+    def test_task_executor_enqueues_thread_title_generation_for_default_subject(self):
+        thread = Thread.objects.create(user=self.user, subject=build_default_thread_subject(1))
+        source_message = thread.add_message("Give me the result.", Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        async def fake_stream_chat_completion(self, *, messages, tools, on_content_delta):
+            del self, messages, tools
+            await on_content_delta("Result")
+            return {
+                "content": "Result",
+                "tool_calls": [],
+                "total_tokens": 5,
+                "streamed": True,
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch(
+                "nova.runtime_v2.provider_client.OpenAICompatibleProviderClient.stream_chat_completion",
+                new=fake_stream_chat_completion,
+            ),
+            patch("nova.tasks.tasks.generate_thread_title_task.delay") as mocked_delay,
+        ):
+            executor = ReactTerminalTaskExecutor(
+                task,
+                self.user,
+                thread,
+                self.agent,
+                source_message.text,
+                source_message_id=source_message.id,
+                push_notifications_enabled=False,
+            )
+            async_to_sync(executor.execute_or_resume)()
+
+        mocked_delay.assert_called_once_with(
+            thread_id=thread.id,
+            user_id=self.user.id,
+            agent_config_id=self.agent.id,
+            source_task_id=task.id,
+        )
+
+    def test_task_executor_skips_thread_title_generation_for_custom_subject(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        async def fake_stream_chat_completion(self, *, messages, tools, on_content_delta):
+            del self, messages, tools
+            await on_content_delta("Result")
+            return {
+                "content": "Result",
+                "tool_calls": [],
+                "total_tokens": 5,
+                "streamed": True,
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch(
+                "nova.runtime_v2.provider_client.OpenAICompatibleProviderClient.stream_chat_completion",
+                new=fake_stream_chat_completion,
+            ),
+            patch("nova.tasks.tasks.generate_thread_title_task.delay") as mocked_delay,
+        ):
+            executor = ReactTerminalTaskExecutor(
+                task,
+                self.user,
+                self.thread,
+                self.agent,
+                self.source_message.text,
+                source_message_id=self.source_message.id,
+                push_notifications_enabled=False,
+            )
+            async_to_sync(executor.execute_or_resume)()
+
+        mocked_delay.assert_not_called()
 
     def test_summarization_executor_updates_session_and_emits_completion(self):
         self.thread.add_message("Message 1", Actor.USER)
