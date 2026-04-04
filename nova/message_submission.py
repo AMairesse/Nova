@@ -13,6 +13,7 @@ from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.models.Message import Message
 from nova.models.Task import Task
 from nova.models.Thread import Thread
+from nova.runtime_v2.support import is_react_terminal_runtime
 from nova.realtime.sidebar_updates import publish_file_update
 from nova.views.agent_dispatch import (
     enqueue_message_agent_task,
@@ -164,6 +165,10 @@ def submit_user_message(
         raise MessageSubmissionError("Message or attachment required", status_code=400)
 
     agent_config = resolve_selected_or_default_agent(user, selected_agent)
+    if is_react_terminal_runtime(agent_config) and uploaded_message_attachments:
+        uploaded_thread_files.extend(uploaded_message_attachments)
+        uploaded_message_attachments = []
+
     execution_error = get_agent_execution_capability_error(
         agent_config,
         thread_mode=thread_mode,

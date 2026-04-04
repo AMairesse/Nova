@@ -136,6 +136,7 @@ class AgentForm(forms.ModelForm):
         fields = [
             "name",
             "llm_provider",
+            "runtime_engine",
             "system_prompt",
             "recursion_limit",
             "is_tool",
@@ -177,6 +178,7 @@ class AgentForm(forms.ModelForm):
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
 
         # Make summarization fields not required (they have model defaults)
+        self.fields["runtime_engine"].required = False
         self.fields["auto_summarize"].required = False
         self.fields["token_threshold"].required = False
         self.fields["preserve_recent"].required = False
@@ -197,6 +199,7 @@ class AgentForm(forms.ModelForm):
         self.helper.layout = Layout(
             "name",
             "llm_provider",
+            "runtime_engine",
             "system_prompt",
             "recursion_limit",
             Field("is_tool", wrapper_class="mb-2"),

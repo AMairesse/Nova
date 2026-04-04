@@ -45,6 +45,8 @@ from nova.tasks.task_definition_runner import (
 from nova.telemetry.langfuse import create_langfuse_callback_handler
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
+from nova.runtime_v2.support import is_react_terminal_runtime
+from nova.runtime_v2.task_executor import ReactTerminalTaskExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -603,7 +605,8 @@ def execute_agent_task_with_executor(
     push_notifications_enabled: bool = True,
 ) -> None:
     """Run a task execution with `AgentTaskExecutor` in a synchronous context."""
-    executor = AgentTaskExecutor(
+    executor_class = ReactTerminalTaskExecutor if is_react_terminal_runtime(agent_config) else AgentTaskExecutor
+    executor = executor_class(
         task,
         user,
         thread,

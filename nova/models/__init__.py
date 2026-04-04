@@ -12,3 +12,4 @@ from .TaskDefinition import TaskDefinition  # noqa: F401
 from .PushSubscription import PushSubscription  # noqa: F401
 from .MessageArtifact import MessageArtifact  # noqa: F401
 from .EmbeddingsSystemState import EmbeddingsSystemState  # noqa: F401
+from .AgentThreadSession import AgentThreadSession  # noqa: F401

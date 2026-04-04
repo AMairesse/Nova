@@ -11,6 +11,7 @@ from asgiref.sync import async_to_sync
 from .serializers import QuestionSerializer
 from nova.models.UserObjects import UserProfile
 from nova.llm.llm_agent import LLMAgent
+from nova.runtime_v2.support import is_react_terminal_runtime
 
 
 class QuestionAnswerView(APIView):
@@ -54,6 +55,11 @@ class QuestionAnswerView(APIView):
         if not agent_config:
             return Response(
                 {"detail": "User has no default agent"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if is_react_terminal_runtime(agent_config):
+            return Response(
+                {"detail": "React Terminal V1 is only available in thread-backed conversations."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

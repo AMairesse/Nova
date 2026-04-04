@@ -32,6 +32,7 @@ from nova.message_submission import (
     SubmissionContext,
     submit_user_message,
 )
+from nova.runtime_v2.support import is_react_terminal_runtime
 from nova.message_utils import upload_message_attachments
 from nova.tasks.runtime_state import reconcile_stale_running_tasks
 from nova.realtime.sidebar_updates import publish_file_update
@@ -283,6 +284,11 @@ def summarize_thread(request, thread_id):
         return JsonResponse({
             "status": "ERROR",
             "message": "No default agent configured"
+        }, status=400)
+    if is_react_terminal_runtime(agent_config):
+        return JsonResponse({
+            "status": "ERROR",
+            "message": "Summarization is not supported yet for React Terminal V1 agents.",
         }, status=400)
 
     # Check if there are enough messages for summarization
