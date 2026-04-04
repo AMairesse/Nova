@@ -81,6 +81,9 @@ async def build_nova_system_prompt(request: ModelRequest) -> str:
         artifact_context = await _get_artifact_context(thread, user)
         if artifact_context:
             sections.append(artifact_context)
+        external_file_guidance = _get_external_file_workflow_guidance(runtime_context)
+        if external_file_guidance:
+            sections.append(external_file_guidance)
     elif not thread:
         # When no thread is associated (e.g. /api/ask/), skip DB access
         sections.append("No attached files available.")
@@ -172,6 +175,42 @@ def _get_skill_catalog(runtime_context) -> dict[str, dict]:
     return out
 
 
+def _get_external_file_workflow_guidance(runtime_context) -> Optional[str]:
+    tool_hints = _get_tool_prompt_hints(runtime_context)
+    skill_catalog = _get_skill_catalog(runtime_context)
+
+    has_mail_skill = "mail" in skill_catalog
+    has_webdav_skill = "webdav" in skill_catalog
+    has_web_download = any("web_download_file" in hint for hint in tool_hints)
+
+    if not any([has_mail_skill, has_webdav_skill, has_web_download]):
+        return None
+
+    lines = [
+        "External file workflow guidance:",
+        "- Files imported from email, web downloads, or WebDAV usually enter the conversation as artifacts first.",
+        "- Reuse temporary imports and generated outputs with artifact_ids. Use file_ids for existing thread files.",
+        "- Promote artifacts to Files only when the user wants durable thread visibility.",
+    ]
+
+    if has_mail_skill:
+        lines.append(
+            "- For email attachments, load_skill with mail, call list_email_attachments before import_email_attachments, then analyze, delegate, or send the returned artifact_ids."
+        )
+
+    if has_web_download:
+        lines.append(
+            "- When the user needs the actual downloadable file, prefer web_download_file over page-only browsing, then reuse the returned artifact_ids or email them."
+        )
+
+    if has_webdav_skill:
+        lines.append(
+            "- For WebDAV files, load_skill with webdav, use webdav_import_file to stage the file into the conversation, and webdav_export_file to send artifact_ids or file_ids back out."
+        )
+
+    return "\n".join(lines)
+
+
 async def _is_memory_tool_enabled(agent_config) -> bool:
     """Check if memory tool is enabled for this agent."""
     # Wrap ORM call in sync_to_async to avoid async context error
@@ -233,7 +272,10 @@ async def _get_file_context(thread, user) -> Optional[str]:
         )()
 
         if file_count:
-            return f"{file_count} file(s) are attached to this thread. Use file tools if needed."
+            return (
+                f"{file_count} file(s) are attached to this thread. "
+                "Use file_ls when you need exact file_ids or file metadata."
+            )
         else:
             return "No attached files available."
     except Exception as e:
@@ -275,7 +317,7 @@ async def _get_artifact_context(thread, user) -> Optional[str]:
             lines.append(
                 "Recent reusable artifacts: "
                 + ", ".join(recent_labels)
-                + ". Use artifact_search / artifact_attach when needed."
+                + ". Use artifact_search / artifact_attach to recover exact artifact_ids when needed."
             )
         return "\n".join(lines)
     except Exception as e:

@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 
 from nova.llm.prompts import (
     _get_artifact_context,
+    _get_external_file_workflow_guidance,
     _get_file_context,
     _get_skill_catalog,
     _get_tool_prompt_hints,
@@ -117,6 +118,68 @@ class PromptToolHintsTests(TestCase):
         self.assertIn("- Mail (mail)", rendered)
         self.assertIn("Email mailbox map:", rendered)
         self.assertEqual(ctx.active_skill_ids, ["mail"])
+
+    def test_get_external_file_workflow_guidance_mentions_supported_workflows(self):
+        ctx = SimpleNamespace(
+            tool_prompt_hints=[
+                "Use web_download_file when the user needs the actual file, not just a page summary.",
+            ],
+            skill_catalog={
+                "mail": {"label": "Mail"},
+                "webdav": {"label": "WebDAV"},
+            },
+        )
+
+        rendered = _get_external_file_workflow_guidance(ctx)
+
+        self.assertIn("External file workflow guidance:", rendered)
+        self.assertIn("load_skill with mail", rendered)
+        self.assertIn("web_download_file", rendered)
+        self.assertIn("webdav_import_file", rendered)
+        self.assertIn("artifact_ids", rendered)
+        self.assertIn("file_ids", rendered)
+
+    def test_nova_system_prompt_includes_external_file_workflow_guidance(self):
+        ctx = SimpleNamespace(
+            agent_config=SimpleNamespace(system_prompt="You are Nova."),
+            user=SimpleNamespace(id=1),
+            thread=SimpleNamespace(id=7),
+            tool_prompt_hints=[
+                "Use web_download_file when the user needs the actual file, not just a page summary.",
+            ],
+            skill_catalog={
+                "mail": {
+                    "label": "Mail",
+                    "instructions": [],
+                },
+                "webdav": {
+                    "label": "WebDAV",
+                    "instructions": [],
+                },
+            },
+            skill_control_tool_names=["load_skill"],
+            active_skill_ids=[],
+        )
+        request = SimpleNamespace(
+            runtime=SimpleNamespace(context=ctx),
+            state={"messages": [HumanMessage(content="Download and email a PDF")]},
+        )
+
+        with patch("nova.llm.prompts._is_memory_tool_enabled", new=AsyncMock(return_value=False)):
+            with patch(
+                "nova.llm.prompts._get_file_context",
+                new=AsyncMock(return_value="No attached files available."),
+            ):
+                with patch(
+                    "nova.llm.prompts._get_artifact_context",
+                    new=AsyncMock(return_value="No reusable conversation artifacts available."),
+                ):
+                    rendered = async_to_sync(build_nova_system_prompt)(request)
+
+        self.assertIn("External file workflow guidance:", rendered)
+        self.assertIn("list_email_attachments before import_email_attachments", rendered)
+        self.assertIn("prefer web_download_file over page-only browsing", rendered)
+        self.assertIn("webdav_import_file", rendered)
 
     def test_build_nova_system_prompt_without_agent_config_uses_fallback(self):
         request = SimpleNamespace(runtime=SimpleNamespace(context=SimpleNamespace()), state={})
