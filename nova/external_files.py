@@ -395,9 +395,30 @@ async def _load_thread_artifacts(user, thread, artifact_ids: list[int]) -> dict[
     return await sync_to_async(_load, thread_sensitive=True)()
 
 
+async def _load_scoped_user_file(
+    *,
+    user_id: int | None,
+    thread_id: int | None,
+    file_id: int | None,
+) -> UserFile | None:
+    if not user_id or not thread_id or not file_id:
+        return None
+
+    def _load():
+        return UserFile.objects.filter(
+            id=file_id,
+            user_id=user_id,
+            thread_id=thread_id,
+        ).first()
+
+    return await sync_to_async(_load, thread_sensitive=True)()
+
+
 async def _resolve_artifact_source_user_file(
     artifact: MessageArtifact,
 ) -> UserFile | None:
+    owner_user_id = getattr(artifact, "user_id", None)
+    owner_thread_id = getattr(artifact, "thread_id", None)
     seen_ids: set[int] = set()
     current = artifact
     while current is not None and getattr(current, "id", None) not in seen_ids:
@@ -405,11 +426,19 @@ async def _resolve_artifact_source_user_file(
         if current_id:
             seen_ids.add(current_id)
 
-        published_file = getattr(current, "published_file", None)
+        published_file = await _load_scoped_user_file(
+            user_id=owner_user_id,
+            thread_id=owner_thread_id,
+            file_id=getattr(current, "published_file_id", None),
+        )
         if published_file is not None:
             return published_file
 
-        user_file = getattr(current, "user_file", None)
+        user_file = await _load_scoped_user_file(
+            user_id=owner_user_id,
+            thread_id=owner_thread_id,
+            file_id=getattr(current, "user_file_id", None),
+        )
         if user_file is not None:
             return user_file
 
@@ -424,7 +453,11 @@ async def _resolve_artifact_source_user_file(
                     "published_file",
                     "source_artifact",
                 )
-                .filter(id=source_artifact_id)
+                .filter(
+                    id=source_artifact_id,
+                    user_id=owner_user_id,
+                    thread_id=owner_thread_id,
+                )
                 .first()
             )
 

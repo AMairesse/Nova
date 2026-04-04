@@ -11,6 +11,7 @@ from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, Message
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tests.base import BaseTestCase
+from nova.tests.factories import create_user
 
 
 class ExternalFilesTests(BaseTestCase):
@@ -69,3 +70,52 @@ class ExternalFilesTests(BaseTestCase):
                 thread=self.thread,
                 file_ids=[foreign_file.id],
             )
+
+    def test_resolve_binary_attachments_for_ids_ignores_cross_tenant_source_artifact_chain(self):
+        other_user = create_user(username="external-files-other", email="external-files-other@example.com")
+        other_thread = Thread.objects.create(user=other_user, subject="Other tenant")
+        other_message = other_thread.add_message("foreign", actor=Actor.USER)
+        foreign_file = UserFile.objects.create(
+            user=other_user,
+            thread=other_thread,
+            source_message=other_message,
+            key=f"users/{other_user.id}/threads/{other_thread.id}/foreign.pdf",
+            original_filename="/foreign.pdf",
+            mime_type="application/pdf",
+            size=12,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        foreign_artifact = MessageArtifact.objects.create(
+            user=other_user,
+            thread=other_thread,
+            message=other_message,
+            user_file=foreign_file,
+            direction=ArtifactDirection.INPUT,
+            kind=ArtifactKind.PDF,
+            label="foreign.pdf",
+            mime_type="application/pdf",
+        )
+        local_artifact = MessageArtifact.objects.create(
+            user=self.user,
+            thread=self.thread,
+            message=self.message,
+            source_artifact=foreign_artifact,
+            direction=ArtifactDirection.OUTPUT,
+            kind=ArtifactKind.ANNOTATION,
+            label="tenant-safe-notes",
+            summary_text="tenant-safe fallback",
+            search_text="tenant-safe fallback",
+        )
+
+        resolved = async_to_sync(resolve_binary_attachments_for_ids)(
+            user=self.user,
+            thread=self.thread,
+            artifact_ids=[local_artifact.id],
+        )
+
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0].artifact_id, local_artifact.id)
+        self.assertIsNone(resolved[0].user_file_id)
+        self.assertEqual(resolved[0].content, b"tenant-safe fallback")
+        self.assertEqual(resolved[0].mime_type, "text/plain")
+        self.assertEqual(resolved[0].filename, "tenant-safe-notes.txt")
