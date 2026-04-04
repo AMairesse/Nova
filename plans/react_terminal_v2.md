@@ -108,6 +108,25 @@ LangChain/LangGraph stack and centered around a persistent pseudo-terminal.
 - [x] Add thread submission tests for v2 file handling
 - [ ] Add delegation tests
 
+### Phase 7: Realtime UI parity
+
+- [x] Reuse the existing websocket/frontend contract for v2
+- [x] Stream assistant output progressively through `TaskProgressHandler`
+- [x] Persist `Task.current_response` and `Task.streamed_markdown` during v2 runs
+- [x] Publish progress updates for generation, tool execution, and finalization
+- [x] Persist final agent message footer metadata:
+  - [x] context consumption
+  - [x] execution trace link data
+  - [x] compact button visibility compatibility
+
+### Phase 8: V2 compaction
+
+- [x] Enable compaction route for React Terminal V1 agents
+- [x] Store compaction state in `AgentThreadSession.session_state`
+- [x] Inject the compacted summary back into v2 history loading
+- [x] Reuse the existing `summarization_complete` websocket event
+- [x] Keep compaction scoped to the main v2 agent session only
+
 ## Out of Scope for V1
 
 - Continuous mode

@@ -3,17 +3,32 @@ from __future__ import annotations
 import json
 import posixpath
 import uuid
+from dataclasses import dataclass
+from typing import Any
+
 from asgiref.sync import sync_to_async
 
 from nova.models.Message import Actor, Message
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
 
 from .capabilities import resolve_terminal_capabilities
+from .compaction import (
+    SESSION_KEY_HISTORY_SUMMARY,
+    SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID,
+)
 from .provider_client import OpenAICompatibleProviderClient
 from .sessions import get_or_create_agent_thread_session, update_agent_thread_session
 from .skills_registry import build_skill_registry
 from .terminal import TerminalCommandError, TerminalExecutor
 from .vfs import VirtualFileSystem
+
+
+@dataclass(slots=True)
+class ReactTerminalRunResult:
+    final_answer: str
+    real_tokens: int | None
+    approx_tokens: int | None
+    max_context: int | None
 
 
 class ReactTerminalRuntime:
@@ -25,6 +40,7 @@ class ReactTerminalRuntime:
         agent_config,
         task=None,
         trace_handler: TaskExecutionTraceHandler | None = None,
+        progress_handler=None,
         source_message_id: int | None = None,
         parent_trace_node_id: str | None = None,
     ):
@@ -33,6 +49,7 @@ class ReactTerminalRuntime:
         self.agent_config = agent_config
         self.task = task
         self.trace_handler = trace_handler
+        self.progress_handler = progress_handler
         self.source_message_id = source_message_id
         self.parent_trace_node_id = parent_trace_node_id
 
@@ -84,17 +101,40 @@ class ReactTerminalRuntime:
             base_prompt += f"\nAgent-specific instructions:\n{custom_prompt}\n"
         return base_prompt
 
+    def _build_history_summary_message(self, session_state: dict[str, Any]) -> dict[str, str] | None:
+        summary_markdown = str(session_state.get(SESSION_KEY_HISTORY_SUMMARY) or "").strip()
+        if not summary_markdown:
+            return None
+        return {
+            "role": "system",
+            "content": (
+                "Compacted history summary for this thread:\n"
+                f"{summary_markdown}"
+            ),
+        }
+
     async def _load_history_messages(self) -> list[dict]:
         source_message_id = self.source_message_id
+        session_state = dict(getattr(self.session, "session_state", {}) or {})
+        summary_until_message_id = session_state.get(SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID)
+        try:
+            summary_until_message_id = int(summary_until_message_id) if summary_until_message_id is not None else None
+        except (TypeError, ValueError):
+            summary_until_message_id = None
 
         def _load():
             queryset = Message.objects.filter(thread=self.thread).order_by("created_at", "id")
             if source_message_id:
                 queryset = queryset.filter(id__lte=source_message_id)
+            if summary_until_message_id:
+                queryset = queryset.filter(id__gt=summary_until_message_id)
             return list(queryset)
 
         messages = await sync_to_async(_load, thread_sensitive=True)()
         history: list[dict] = []
+        summary_message = self._build_history_summary_message(session_state)
+        if summary_message:
+            history.append(summary_message)
         for message in messages:
             if message.actor == Actor.SYSTEM:
                 continue
@@ -162,6 +202,43 @@ class ReactTerminalRuntime:
     async def _persist_session(self):
         await update_agent_thread_session(self.session, state=self.vfs.session_state)
 
+    async def _record_progress(self, message: str, *, severity: str = "info") -> None:
+        if self.progress_handler and hasattr(self.progress_handler, "record_progress"):
+            await self.progress_handler.record_progress(message, severity=severity)
+
+    async def _append_stream_delta(self, delta: str) -> None:
+        if self.progress_handler and hasattr(self.progress_handler, "append_markdown_delta") and delta:
+            await self.progress_handler.append_markdown_delta(delta)
+
+    async def _replace_streamed_markdown(self, markdown: str) -> None:
+        if self.progress_handler and hasattr(self.progress_handler, "replace_streamed_markdown"):
+            await self.progress_handler.replace_streamed_markdown(markdown)
+
+    async def _complete_stream(self) -> None:
+        if self.progress_handler and hasattr(self.progress_handler, "complete_markdown_stream"):
+            await self.progress_handler.complete_markdown_stream()
+
+    @staticmethod
+    def _approximate_tokens(messages: list[dict], *, final_answer: str = "") -> int:
+        total_bytes = 0
+        for message in list(messages or []):
+            role = str(message.get("role") or "")
+            total_bytes += len(role.encode("utf-8", "ignore"))
+            content = message.get("content")
+            if isinstance(content, str):
+                total_bytes += len(content.encode("utf-8", "ignore"))
+            else:
+                total_bytes += len(str(content).encode("utf-8", "ignore"))
+            tool_calls = list(message.get("tool_calls") or [])
+            if tool_calls:
+                total_bytes += len(json.dumps(tool_calls, ensure_ascii=True).encode("utf-8", "ignore"))
+            tool_call_id = message.get("tool_call_id")
+            if tool_call_id:
+                total_bytes += len(str(tool_call_id).encode("utf-8", "ignore"))
+        if final_answer:
+            total_bytes += len(str(final_answer).encode("utf-8", "ignore"))
+        return total_bytes // 4 + 1 if total_bytes else 0
+
     async def _execute_terminal_command(self, command: str) -> str:
         try:
             output = await self.terminal.execute(command)
@@ -199,6 +276,7 @@ class ReactTerminalRuntime:
             agent_config=match,
             task=self.task,
             trace_handler=child_trace,
+            progress_handler=None,
             parent_trace_node_id=node_id,
         ).initialize()
 
@@ -229,7 +307,8 @@ class ReactTerminalRuntime:
             )
 
         try:
-            answer = await child_runtime.run(ephemeral_user_prompt=child_question, ensure_root_trace=False)
+            child_result = await child_runtime.run(ephemeral_user_prompt=child_question, ensure_root_trace=False)
+            answer = child_result.final_answer
         except Exception as exc:
             if self.trace_handler and node_id:
                 await self.trace_handler.fail_subagent(node_id, error=str(exc))
@@ -273,6 +352,12 @@ class ReactTerminalRuntime:
             return {"tool_call_id": tool_call_id, "name": tool_name, "content": f"Tool argument error: {exc}"}
 
         run_id = uuid.uuid4()
+        if self.progress_handler:
+            await self.progress_handler.on_tool_start(
+                {"name": tool_name},
+                tool_arguments,
+                run_id=run_id,
+            )
         if self.trace_handler:
             await self.trace_handler.on_tool_start(
                 {"name": tool_name},
@@ -297,13 +382,43 @@ class ReactTerminalRuntime:
                 content = f"Unknown tool: {tool_name}"
             if self.trace_handler:
                 await self.trace_handler.on_tool_end(content, run_id=run_id)
+            if self.progress_handler:
+                await self.progress_handler.on_tool_end(content, run_id=run_id)
             return {"tool_call_id": tool_call_id, "name": tool_name, "content": content}
         except Exception as exc:
             if self.trace_handler:
                 await self.trace_handler.on_tool_error(exc, run_id=run_id)
+            if self.progress_handler and hasattr(self.progress_handler, "on_tool_failure"):
+                await self.progress_handler.on_tool_failure(f"Tool '{tool_name}' failed")
             return {"tool_call_id": tool_call_id, "name": tool_name, "content": f"Tool execution error: {exc}"}
 
-    async def run(self, *, ephemeral_user_prompt: str | None = None, ensure_root_trace: bool = True) -> str:
+    async def _create_model_response(self, messages: list[dict]) -> dict:
+        if not self.progress_handler:
+            return await self.provider_client.create_chat_completion(
+                messages=messages,
+                tools=self._tool_schemas(),
+            )
+
+        try:
+            return await self.provider_client.stream_chat_completion(
+                messages=messages,
+                tools=self._tool_schemas(),
+                on_content_delta=self._append_stream_delta,
+            )
+        except Exception:
+            response = await self.provider_client.create_chat_completion(
+                messages=messages,
+                tools=self._tool_schemas(),
+            )
+            content = str(response.get("content") or "")
+            if content:
+                await self._replace_streamed_markdown(content)
+            else:
+                await self._complete_stream()
+            response["streaming_fallback"] = True
+            return response
+
+    async def run(self, *, ephemeral_user_prompt: str | None = None, ensure_root_trace: bool = True) -> ReactTerminalRunResult:
         if ensure_root_trace and self.trace_handler:
             await self.trace_handler.ensure_root_run(
                 label=getattr(self.agent_config, "name", "") or "React Terminal agent",
@@ -316,23 +431,16 @@ class ReactTerminalRuntime:
         if ephemeral_user_prompt:
             messages.append({"role": "user", "content": str(ephemeral_user_prompt or "")})
 
+        await self._record_progress("Preparing React Terminal context")
+
         max_iterations = max(int(getattr(self.agent_config, "recursion_limit", 8) or 8), 1)
         final_answer = ""
-        for iteration in range(max_iterations):
-            if self.task is not None:
-                self.task.progress_logs.append(
-                    {
-                        "step": f"React Terminal V1 iteration {iteration + 1}",
-                        "severity": "info",
-                    }
-                )
-                await sync_to_async(self.task.save,
-                                    thread_sensitive=False)(update_fields=["progress_logs", "updated_at"])
+        real_tokens = None
+        approx_tokens = None
 
-            response = await self.provider_client.create_chat_completion(
-                messages=messages,
-                tools=self._tool_schemas(),
-            )
+        for iteration in range(max_iterations):
+            await self._record_progress(f"Generating model response ({iteration + 1}/{max_iterations})")
+            response = await self._create_model_response(messages)
             assistant_message = {
                 "role": "assistant",
                 "content": str(response.get("content") or ""),
@@ -353,6 +461,7 @@ class ReactTerminalRuntime:
             messages.append(assistant_message)
 
             if tool_calls:
+                await self._complete_stream()
                 for tool_call in tool_calls:
                     tool_result = await self._execute_tool_call(tool_call)
                     messages.append(
@@ -365,8 +474,20 @@ class ReactTerminalRuntime:
                 continue
 
             final_answer = assistant_message["content"].strip()
+            real_tokens = response.get("total_tokens")
+            approx_tokens = self._approximate_tokens(messages)
             break
 
         if not final_answer:
             final_answer = "No final response produced."
-        return final_answer
+            approx_tokens = self._approximate_tokens(messages, final_answer=final_answer)
+
+        await self._complete_stream()
+        await self._record_progress("Finalizing response")
+
+        return ReactTerminalRunResult(
+            final_answer=final_answer,
+            real_tokens=real_tokens,
+            approx_tokens=approx_tokens,
+            max_context=self.provider_client.max_context_tokens,
+        )

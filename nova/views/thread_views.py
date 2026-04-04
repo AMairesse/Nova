@@ -33,6 +33,7 @@ from nova.message_submission import (
     submit_user_message,
 )
 from nova.runtime_v2.support import is_react_terminal_runtime
+from nova.runtime_v2.compaction import get_v2_compactable_message_count
 from nova.message_utils import upload_message_attachments
 from nova.tasks.runtime_state import reconcile_stale_running_tasks
 from nova.realtime.sidebar_updates import publish_file_update
@@ -286,10 +287,22 @@ def summarize_thread(request, thread_id):
             "message": "No default agent configured"
         }, status=400)
     if is_react_terminal_runtime(agent_config):
-        return JsonResponse({
-            "status": "ERROR",
-            "message": "Summarization is not supported yet for React Terminal V1 agents.",
-        }, status=400)
+        compactable_count = get_v2_compactable_message_count(thread, agent_config)
+        if compactable_count <= 0:
+            min_messages_for_summarization = agent_config.preserve_recent + 1
+            total_messages = (
+                thread.get_messages()
+                .exclude(actor=Actor.SYSTEM)
+                .count()
+            )
+            return JsonResponse({
+                "status": "ERROR",
+                "message": (
+                    f"Not enough messages to summarize. Need at least "
+                    f"{min_messages_for_summarization} messages, but only have {total_messages}."
+                )
+            }, status=400)
+        return start_summarization(request, thread, agent_config, False)
 
     # Check if there are enough messages for summarization
     messages = thread.get_messages()
@@ -385,5 +398,7 @@ def confirm_summarize_thread(request, thread_id):
             "status": "ERROR",
             "message": "No default agent configured"
         }, status=400)
+    if is_react_terminal_runtime(agent_config):
+        return start_summarization(request, thread, agent_config, False)
 
     return start_summarization(request, thread, agent_config, include_sub_agents, sub_agent_ids)

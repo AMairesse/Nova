@@ -101,6 +101,31 @@ class TaskProgressHandler(AsyncCallbackHandler):
         await self._touch_task_runtime()
         await self.publish_update('progress_update', {'progress_log': message})
 
+    async def record_progress(self, message, *, severity: str = "info"):
+        """
+        Persist a progress log entry and publish it to the client.
+        Prefer this helper for runtimes that do not manage progress_logs directly.
+        """
+        from nova.models.Task import Task
+
+        entry = {
+            "step": str(message),
+            "severity": str(severity or "info"),
+            "timestamp": timezone.now().isoformat(),
+        }
+        try:
+            def _append_progress():
+                task = Task.objects.get(id=self.task_id)
+                logs = list(task.progress_logs or [])
+                logs.append(entry)
+                task.progress_logs = logs
+                task.save(update_fields=["progress_logs", "updated_at"])
+
+            await sync_to_async(_append_progress, thread_sensitive=True)()
+        except Exception as e:
+            logger.error(f"Error persisting progress log: {e}")
+        await self.on_progress(message)
+
     async def on_chunk(self, chunk):
         '''
         Send a message to the client when a chunk is generated
@@ -165,39 +190,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
         Mandatory method for langchain
         '''
         try:
-            # Send only chunks from the root run
-            if self.tool_depth == 0:
-                if self._needs_segment_break:
-                    self._append_segment_break_before_token(token)
-                    self._needs_segment_break = False
-                self.final_chunks.append(token)
-                self._stream_has_pending_changes = True
-                current_html = None
-                now = monotonic()
-                sentence_boundary = token.endswith((".", "!", "?", ";", ":"))
-                line_boundary = "\n" in token
-                should_flush = (
-                    line_boundary
-                    or sentence_boundary
-                    or (now - self._last_stream_flush_at) >= self._stream_flush_interval_seconds
-                )
-
-                if should_flush:
-                    current_html = await self._flush_stream_chunk()
-
-                # Persist periodically for recovery
-                self.token_count += 1
-                if self.token_count - self._last_persist_count >= self._persist_interval:
-                    if current_html is None:
-                        current_html = self._render_current_response()
-                    await self._persist_stream_state(current_html)
-                    self._last_persist_count = self.token_count
-            else:
-                # If a sub agent is generating a response,
-                # send it as a progress update every 100 tokens
-                self.token_count += 1
-                if self.token_count % 100 == 0:
-                    await self.on_progress("Sub-agent still working...")
+            await self.append_markdown_delta(token)
         except Exception as e:
             logger.error(f"Error in on_llm_new_token: {e}")
 
@@ -208,13 +201,64 @@ class TaskProgressHandler(AsyncCallbackHandler):
         '''
         try:
             if self.tool_depth == 0:
-                current_html = await self._flush_stream_chunk()
-                await self._persist_stream_state(current_html)
+                await self.complete_markdown_stream()
                 await self.on_progress("Agent finished")
             else:
                 await self.on_progress("Sub-agent finished")
         except Exception as e:
             logger.error(f"Error in on_llm_end: {e}")
+
+    async def append_markdown_delta(self, token: str) -> None:
+        """Append streamed markdown produced outside the LangChain callback path."""
+        # Send only chunks from the root run
+        if self.tool_depth == 0:
+            if self._needs_segment_break:
+                self._append_segment_break_before_token(token)
+                self._needs_segment_break = False
+            self.final_chunks.append(token)
+            self._stream_has_pending_changes = True
+            current_html = None
+            now = monotonic()
+            sentence_boundary = token.endswith((".", "!", "?", ";", ":"))
+            line_boundary = "\n" in token
+            should_flush = (
+                line_boundary
+                or sentence_boundary
+                or (now - self._last_stream_flush_at) >= self._stream_flush_interval_seconds
+            )
+
+            if should_flush:
+                current_html = await self._flush_stream_chunk()
+
+            # Persist periodically for recovery
+            self.token_count += 1
+            if self.token_count - self._last_persist_count >= self._persist_interval:
+                if current_html is None:
+                    current_html = self._render_current_response()
+                await self._persist_stream_state(current_html)
+                self._last_persist_count = self.token_count
+        else:
+            # If a sub agent is generating a response,
+            # send it as a progress update every 100 tokens
+            self.token_count += 1
+            if self.token_count % 100 == 0:
+                await self.on_progress("Sub-agent still working...")
+
+    async def complete_markdown_stream(self) -> None:
+        """Flush and persist the current streamed markdown state."""
+        if self.tool_depth == 0:
+            current_html = await self._flush_stream_chunk()
+            await self._persist_stream_state(current_html)
+
+    async def replace_streamed_markdown(self, markdown: str) -> None:
+        """Replace the current streamed response with a full markdown payload."""
+        normalized = str(markdown or "")
+        self.final_chunks = [normalized] if normalized else []
+        self._needs_segment_break = False
+        self._stream_has_pending_changes = True
+        self._last_stream_html = None
+        current_html = await self._flush_stream_chunk()
+        await self._persist_stream_state(current_html)
 
     def _render_current_response(self):
         return markdown_to_html(''.join(self.final_chunks))
@@ -266,6 +310,19 @@ class TaskProgressHandler(AsyncCallbackHandler):
             self.tool_depth -= 1
         except Exception as e:
             logger.error(f"Error in on_tool_end: {e}")
+
+    async def on_tool_failure(self, message: str | None = None) -> None:
+        """
+        Reset tool-scoped streaming state after a tool failure outside the
+        LangChain callback flow.
+        """
+        try:
+            tool_name = self.current_tool or "Unknown"
+            await self.on_progress(message or f"Tool '{tool_name}' failed")
+            self.current_tool = None
+            self.tool_depth = max(self.tool_depth - 1, 0)
+        except Exception as e:
+            logger.error(f"Error in on_tool_failure: {e}")
 
     async def on_agent_finish(self, finish: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None,
                               **kwargs: Any) -> Any:

@@ -1485,6 +1485,41 @@ class CeleryEntryPointTests(SimpleTestCase):
 
         mocked_retry.assert_called_once()
 
+    @patch("nova.tasks.tasks.asyncio.run")
+    @patch("nova.tasks.tasks.ReactTerminalSummarizationTaskExecutor")
+    @patch("nova.tasks.tasks.Task.objects.get")
+    @patch("nova.tasks.tasks.AgentConfig.objects.get")
+    @patch("nova.tasks.tasks.User.objects.get")
+    @patch("nova.tasks.tasks.Thread.objects.get")
+    def test_summarize_thread_task_uses_v2_executor_for_react_terminal_agents(
+        self,
+        mocked_thread_get,
+        mocked_user_get,
+        mocked_agent_get,
+        mocked_task_get,
+        mocked_executor_cls,
+        mocked_asyncio_run,
+    ):
+        thread = SimpleNamespace(id=1)
+        user = SimpleNamespace(id=2)
+        agent = SimpleNamespace(
+            id=3,
+            runtime_engine="react_terminal_v1",
+        )
+        task = SimpleNamespace(id=4)
+        mocked_thread_get.return_value = thread
+        mocked_user_get.return_value = user
+        mocked_agent_get.return_value = agent
+        mocked_task_get.return_value = task
+        executor = SimpleNamespace(execute=Mock(return_value=None))
+        mocked_executor_cls.return_value = executor
+
+        summarize_thread_task.run(1, 2, 3, 4)
+
+        mocked_executor_cls.assert_called_once_with(task, user, thread, agent)
+        executor.execute.assert_called_once()
+        mocked_asyncio_run.assert_called_once()
+
 
 class SummarizationTaskExecutorTests(IsolatedAsyncioTestCase):
     async def test_perform_summarization_with_subagents(self):

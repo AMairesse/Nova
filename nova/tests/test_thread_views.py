@@ -1015,6 +1015,74 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "ERROR")
         self.assertIn("Not enough messages to summarize", response.json()["message"])
 
+    @patch("nova.views.thread_views.start_summarization")
+    def test_summarize_thread_starts_v2_compaction_without_confirmation(self, mocked_start):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov V2",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="V2 Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=1,
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(user=self.user, subject="Compaction")
+        thread.add_message("m1", actor=Actor.USER)
+        thread.add_message("m2", actor=Actor.AGENT)
+        thread.add_message("m3", actor=Actor.USER)
+        mocked_start.return_value = HttpResponse("OK")
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+
+        self.assertEqual(response.status_code, 200)
+        mocked_start.assert_called_once()
+        called_request, called_thread, called_agent, called_include_sub_agents = mocked_start.call_args[0]
+        self.assertEqual(called_request.user, self.user)
+        self.assertEqual(called_thread, thread)
+        self.assertEqual(called_agent, agent)
+        self.assertFalse(called_include_sub_agents)
+
+    def test_summarize_thread_v2_rejects_when_not_enough_unsummarized_messages(self):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov V2 tiny",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="V2 Agent tiny",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=3,
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(user=self.user, subject="Few messages V2")
+        thread.add_message("only one", actor=Actor.USER)
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("Not enough messages to summarize", response.json()["message"])
+
     @patch("nova.views.thread_views.get_checkpointer")
     @patch("nova.views.thread_views.LLMAgent.create")
     def test_summarize_thread_returns_confirmation_when_sub_agents_have_context(

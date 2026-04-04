@@ -46,7 +46,10 @@ from nova.telemetry.langfuse import create_langfuse_callback_handler
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
 from nova.runtime_v2.support import is_react_terminal_runtime
-from nova.runtime_v2.task_executor import ReactTerminalTaskExecutor
+from nova.runtime_v2.task_executor import (
+    ReactTerminalSummarizationTaskExecutor,
+    ReactTerminalTaskExecutor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -812,8 +815,16 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id,
         agent_config = AgentConfig.objects.get(id=agent_config_id, user=user)
         task = Task.objects.get(id=task_id)
 
-        # Use the executor pattern (same as AgentTaskExecutor)
-        executor = SummarizationTaskExecutor(task, user, thread, agent_config, include_sub_agents, sub_agent_ids or [])
+        if is_react_terminal_runtime(agent_config):
+            executor = ReactTerminalSummarizationTaskExecutor(
+                task,
+                user,
+                thread,
+                agent_config,
+            )
+        else:
+            # Use the executor pattern (same as AgentTaskExecutor)
+            executor = SummarizationTaskExecutor(task, user, thread, agent_config, include_sub_agents, sub_agent_ids or [])
         asyncio.run(executor.execute())
 
     except Exception as e:
