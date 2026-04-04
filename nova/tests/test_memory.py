@@ -13,8 +13,17 @@ from django.core.exceptions import ValidationError
 from asgiref.sync import async_to_sync
 from django.utils import timezone
 
-import nova.tools.builtins.memory as memory_mod
+import nova.memory.service as memory_service_mod
+from nova.models.Message import Actor
+from nova.models.Thread import Thread
 from nova.models.Memory import MemoryItem, MemoryItemEmbedding, MemoryItemStatus, MemoryTheme
+from nova.memory.service import (
+    archive_memory_path,
+    get_memory_item_by_path,
+    move_memory_path,
+    read_memory_text,
+    write_memory_document,
+)
 from nova.tools.builtins.memory import (
     _get_default_theme_slug,
     _normalize_theme_slug,
@@ -66,7 +75,7 @@ class MemoryToolV2Tests(TestCase):
         if emb:
             self.assertEqual(emb.state, "pending")
 
-    @patch("nova.tools.builtins.memory.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_add_validates_inputs_and_uses_default_theme(self, mocked_provider):
         with self.assertRaisesMessage(ValidationError, "Invalid memory item type"):
             async_to_sync(add)(type="invalid", content="Hello", agent=self.agent)
@@ -86,8 +95,9 @@ class MemoryToolV2Tests(TestCase):
         self.assertEqual(item.tags, ["dev"])
         self.assertIsNone(out["embedding_state"])
         mocked_provider.assert_awaited()
+        self.assertEqual(out["path"], f"/memory/general/{out['id']}.md")
 
-    @patch("nova.tools.builtins.memory.aget_embeddings_provider", new_callable=AsyncMock)
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock)
     def test_add_with_embeddings_enabled_tolerates_enqueue_failures(self, mocked_provider):
         mocked_provider.return_value = object()
 
@@ -114,6 +124,7 @@ class MemoryToolV2Tests(TestCase):
         out = async_to_sync(get)(item.id, self.agent)
         self.assertEqual(out["id"], item.id)
         self.assertEqual(out["theme"], "work")
+        self.assertEqual(out["path"], f"/memory/work/{item.id}.md")
 
     def test_get_returns_not_found_for_unknown_item(self):
         self.assertEqual(async_to_sync(get)(999999, self.agent), {"error": "not_found"})
@@ -177,12 +188,12 @@ class MemoryToolV2Tests(TestCase):
         self.assertIn("results", out)
         self.assertGreaterEqual(len(out["results"]), 1)
 
-    @patch("nova.tools.builtins.memory.resolve_query_vector", new_callable=AsyncMock, return_value=None)
+    @patch("nova.memory.service.resolve_query_vector", new_callable=AsyncMock, return_value=None)
     def test_search_rejects_non_integer_limit(self, mocked_vector):
         with self.assertRaisesMessage(ValidationError, "limit must be an integer"):
             async_to_sync(search)(query="Alice", agent=self.agent, limit="bad")
 
-    @patch("nova.tools.builtins.memory.resolve_query_vector", new_callable=AsyncMock, return_value=None)
+    @patch("nova.memory.service.resolve_query_vector", new_callable=AsyncMock, return_value=None)
     def test_search_match_all_applies_filters_and_clamps_limit(self, mocked_vector):
         work_theme = MemoryTheme.objects.create(user=self.user, slug="work-theme", display_name="Work Theme")
         other_theme = MemoryTheme.objects.create(user=self.user, slug="other-theme", display_name="Other Theme")
@@ -249,12 +260,12 @@ class MemoryToolV2Tests(TestCase):
         self.assertEqual(out, {"id": item.id, "status": MemoryItemStatus.ARCHIVED})
         self.assertEqual(item.status, MemoryItemStatus.ARCHIVED)
 
-    @patch("nova.tools.builtins.memory.resolve_query_vector", new_callable=AsyncMock)
+    @patch("nova.memory.service.resolve_query_vector", new_callable=AsyncMock)
     def test_search_postgresql_branch_returns_no_matches_without_candidates(self, mocked_vector):
         mocked_vector.return_value = None
 
-        with patch.object(memory_mod.connection, "vendor", "postgresql"), patch.object(
-            memory_mod.MemoryItem.objects,
+        with patch.object(memory_service_mod.connection, "vendor", "postgresql"), patch.object(
+            memory_service_mod.MemoryItem.objects,
             "select_related",
             return_value=FakeMemoryPostgresQuerySet([]),
         ):
@@ -262,7 +273,7 @@ class MemoryToolV2Tests(TestCase):
 
         self.assertEqual(out, {"results": [], "notes": ["no matches"]})
 
-    @patch("nova.tools.builtins.memory.resolve_query_vector", new_callable=AsyncMock)
+    @patch("nova.memory.service.resolve_query_vector", new_callable=AsyncMock)
     def test_search_postgresql_branch_scores_fts_only_when_query_vector_is_missing(self, mocked_vector):
         mocked_vector.return_value = None
         item = SimpleNamespace(
@@ -277,8 +288,8 @@ class MemoryToolV2Tests(TestCase):
             embedding=SimpleNamespace(state="ready"),
         )
 
-        with patch.object(memory_mod.connection, "vendor", "postgresql"), patch.object(
-            memory_mod.MemoryItem.objects,
+        with patch.object(memory_service_mod.connection, "vendor", "postgresql"), patch.object(
+            memory_service_mod.MemoryItem.objects,
             "select_related",
             return_value=FakeMemoryPostgresQuerySet([item]),
         ):
@@ -289,7 +300,7 @@ class MemoryToolV2Tests(TestCase):
         self.assertEqual(out["results"][0]["signals"], {"fts": True, "semantic": False})
         self.assertIsNone(out["results"][0]["score"]["cosine_distance"])
 
-    @patch("nova.tools.builtins.memory.resolve_query_vector", new_callable=AsyncMock)
+    @patch("nova.memory.service.resolve_query_vector", new_callable=AsyncMock)
     def test_search_postgresql_branch_blends_semantic_and_fts_scores(self, mocked_vector):
         mocked_vector.return_value = [0.1, 0.2]
         newer = timezone.now()
@@ -319,8 +330,8 @@ class MemoryToolV2Tests(TestCase):
             ),
         ]
 
-        with patch.object(memory_mod.connection, "vendor", "postgresql"), patch.object(
-            memory_mod.MemoryItem.objects,
+        with patch.object(memory_service_mod.connection, "vendor", "postgresql"), patch.object(
+            memory_service_mod.MemoryItem.objects,
             "select_related",
             return_value=FakeMemoryPostgresQuerySet(items),
         ):
@@ -358,7 +369,7 @@ class MemoryIntegrationTest(TestCase):
         self.assertNotIn("conversation_search", joined)
         self.assertNotIn("conversation_get", joined)
 
-    @patch("nova.tools.builtins.memory.resolve_query_vector", new_callable=AsyncMock, return_value=None)
+    @patch("nova.memory.service.resolve_query_vector", new_callable=AsyncMock, return_value=None)
     def test_get_functions_returns_wrapped_tool_surface(self, mocked_vector):
         agent = SimpleNamespace(user=self.user)
         tools = async_to_sync(get_functions)(tool=None, agent=agent)
@@ -381,6 +392,88 @@ class MemoryIntegrationTest(TestCase):
 
         self.assertEqual(get_result["id"], add_result["id"])
         self.assertEqual(archive_result["status"], MemoryItemStatus.ARCHIVED)
+
+
+class MemoryVirtualPathServiceTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="memory-vfs-user",
+            email="memory-vfs@example.com",
+            password="testpass123",
+        )
+        self.thread = Thread.objects.create(user=self.user, subject="Memory source thread")
+        self.source_message = self.thread.add_message("Remember this", actor=Actor.USER)
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_write_read_move_and_archive_memory_path(self, mocked_provider):
+        written = async_to_sync(write_memory_document)(
+            user=self.user,
+            path="/memory/preferences/editor.md",
+            text="---\ntype: preference\ntags:\n- dev\n---\nUses Vim",
+            source_thread=self.thread,
+            source_message=self.source_message,
+        )
+        content = async_to_sync(read_memory_text)(user=self.user, path="/memory/preferences/editor.md")
+        moved = async_to_sync(move_memory_path)(
+            user=self.user,
+            source_path="/memory/preferences/editor.md",
+            destination_path="/memory/tools/editor.md",
+        )
+        item = async_to_sync(get_memory_item_by_path)(user=self.user, path=moved)
+        archived = async_to_sync(archive_memory_path)(user=self.user, path=moved)
+
+        self.assertEqual(written.path, "/memory/preferences/editor.md")
+        self.assertIn("Uses Vim", content)
+        self.assertIn("type: preference", content)
+        self.assertEqual(moved, "/memory/tools/editor.md")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.theme.slug, "tools")
+        self.assertEqual(archived, "/memory/tools/editor.md")
+        item.refresh_from_db()
+        self.assertEqual(item.status, MemoryItemStatus.ARCHIVED)
+        mocked_provider.assert_awaited()
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_write_memory_document_ignores_read_only_frontmatter_fields(self, mocked_provider):
+        first = async_to_sync(write_memory_document)(
+            user=self.user,
+            path="/memory/preferences/editor.md",
+            text="---\ntype: preference\ntags:\n- dev\n---\nUses Vim",
+            source_thread=self.thread,
+            source_message=self.source_message,
+        )
+        original = MemoryItem.objects.get(id=first.item_id)
+
+        async_to_sync(write_memory_document)(
+            user=self.user,
+            path="/memory/preferences/editor.md",
+            text=(
+                "---\n"
+                "id: 999\n"
+                "status: archived\n"
+                "source_thread_id: 999\n"
+                "source_message_id: 999\n"
+                "path: /memory/other/wrong.md\n"
+                "type: instruction\n"
+                "tags:\n"
+                "- cli\n"
+                "---\n"
+                "Prefer Vim"
+            ),
+            source_thread=self.thread,
+            source_message=self.source_message,
+        )
+
+        updated = MemoryItem.objects.get(id=original.id)
+        self.assertEqual(updated.id, original.id)
+        self.assertEqual(updated.status, MemoryItemStatus.ACTIVE)
+        self.assertEqual(updated.source_thread_id, self.thread.id)
+        self.assertEqual(updated.source_message_id, self.source_message.id)
+        self.assertEqual(updated.virtual_path, "/memory/preferences/editor.md")
+        self.assertEqual(updated.type, "instruction")
+        self.assertEqual(updated.tags, ["cli"])
+        self.assertEqual(updated.content, "Prefer Vim")
+        mocked_provider.assert_awaited()
 
 
 class FakeMemoryPostgresQuerySet:

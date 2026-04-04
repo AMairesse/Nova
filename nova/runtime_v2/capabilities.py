@@ -11,6 +11,7 @@ class TerminalCapabilities:
     browser_tool: object | None = None
     code_execution_tool: object | None = None
     date_time_tool: object | None = None
+    memory_tool: object | None = None
     subagents: list = field(default_factory=list)
 
     @property
@@ -34,6 +35,10 @@ class TerminalCapabilities:
         return self.date_time_tool is not None
 
     @property
+    def has_memory(self) -> bool:
+        return self.memory_tool is not None
+
+    @property
     def has_subagents(self) -> bool:
         return bool(self.subagents)
 
@@ -47,6 +52,8 @@ class TerminalCapabilities:
             families.append("python")
         if self.has_date_time:
             families.append("date")
+        if self.has_memory:
+            families.append("memory")
         return families
 
 
@@ -63,11 +70,13 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
     browser_tool = next((tool for tool in tools if tool.tool_subtype == "browser"), None)
     code_execution_tool = next((tool for tool in tools if tool.tool_subtype == "code_execution"), None)
     date_time_tool = next((tool for tool in tools if tool.tool_subtype == "date"), None)
+    memory_tool = next((tool for tool in tools if tool.tool_subtype == "memory"), None)
 
     return TerminalCapabilities(
         email_tools=email_tools,
         browser_tool=browser_tool,
         code_execution_tool=code_execution_tool,
         date_time_tool=date_time_tool,
+        memory_tool=memory_tool,
         subagents=subagents,
     )

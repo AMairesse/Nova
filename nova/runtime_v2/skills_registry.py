@@ -83,6 +83,24 @@ Use `curl` without `--output` only when you want a text preview.
 Use `wget` or `curl --output` when you need a reusable file.
 """
 
+    if capabilities.has_memory:
+        skills["memory.md"] = """# Memory
+
+Long-term memory is mounted as `/memory` and is shared at the user level.
+
+Useful commands:
+- `ls /memory`
+- `ls /memory/<theme>`
+- `cat /memory/<theme>/<file>.md`
+- `grep -r "term" /memory`
+- `memory search "conceptual query"`
+- `tee /memory/<theme>/<file>.md --text "..."`
+
+Use `grep` for lexical text matching on visible memory documents.
+Use `memory search` when you need semantic retrieval or hybrid lexical + embeddings ranking.
+The theme comes from the path, not from the file frontmatter.
+"""
+
     if capabilities.has_python:
         skills["python.md"] = """# Python
 

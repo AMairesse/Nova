@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import posixpath
+import re
 import shlex
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from django.utils import timezone
 
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
 from nova.file_utils import MAX_FILE_SIZE
+from nova.memory.service import search_memory_items
 from nova.models.Thread import Thread
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.vfs import VFSError, VirtualFileSystem, normalize_vfs_path
@@ -73,6 +75,8 @@ class TerminalExecutor:
             return await self._cmd_rm(tokens[1:])
         if name == "find":
             return await self._cmd_find(tokens[1:])
+        if name == "grep":
+            return await self._cmd_grep(tokens[1:])
         if name == "history":
             return await self._cmd_history(tokens[1:])
         if name == "date":
@@ -83,6 +87,8 @@ class TerminalExecutor:
             return await self._cmd_curl(tokens[1:])
         if name == "mail":
             return await self._cmd_mail(tokens[1:])
+        if name == "memory":
+            return await self._cmd_memory(tokens[1:])
         if name == "python":
             return await self._cmd_python(tokens[1:])
 
@@ -168,8 +174,7 @@ class TerminalExecutor:
         normalized = self._validate_text_write_path(args[0])
         if await self.vfs.is_dir(normalized):
             raise TerminalCommandError(f"Cannot touch a directory: {normalized}")
-        existing = await self.vfs.get_real_file(normalized)
-        if existing is not None:
+        if await self.vfs.path_exists(normalized):
             return f"Touched {normalized}"
         try:
             written = await self.vfs.write_file(normalized, b"", mime_type="text/plain")
@@ -241,6 +246,60 @@ class TerminalExecutor:
         start = args[0] if args else self.vfs.cwd
         term = args[1] if len(args) > 1 else ""
         results = await self.vfs.find(start, term)
+        return "\n".join(results)
+
+    async def _cmd_grep(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> <path>")
+
+        recursive = False
+        ignore_case = False
+        show_numbers = False
+        remaining: list[str] = []
+        for token in args:
+            if token == "-r":
+                recursive = True
+            elif token == "-i":
+                ignore_case = True
+            elif token == "-n":
+                show_numbers = True
+            else:
+                remaining.append(token)
+
+        if len(remaining) != 2:
+            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> <path>")
+
+        pattern, raw_path = remaining
+        normalized_path = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+        if not await self.vfs.path_exists(normalized_path):
+            raise TerminalCommandError(f"Path not found: {normalized_path}")
+
+        if await self.vfs.is_dir(normalized_path):
+            if not recursive:
+                raise TerminalCommandError("grep on directories requires -r")
+            candidates = await self.vfs.find(normalized_path, "")
+        else:
+            candidates = [normalized_path]
+
+        results: list[str] = []
+        flags = re.IGNORECASE if ignore_case else 0
+        for candidate in candidates:
+            if await self.vfs.is_dir(candidate):
+                continue
+            try:
+                content = await self.vfs.read_text(candidate)
+            except VFSError:
+                continue
+            for line_number, line in enumerate(content.splitlines(), start=1):
+                try:
+                    matched = re.search(pattern, line, flags=flags)
+                except re.error as exc:
+                    raise TerminalCommandError(f"Invalid grep pattern: {exc}") from exc
+                if matched:
+                    if show_numbers:
+                        results.append(f"{candidate}:{line_number}:{line}")
+                    else:
+                        results.append(f"{candidate}:{line}")
         return "\n".join(results)
 
     def _ensure_continuous_mode(self) -> None:
@@ -436,6 +495,90 @@ class TerminalExecutor:
             after_message_id=options["after_message_id"],
         )
         return self._format_history_get_payload(payload)
+
+    @staticmethod
+    def _format_memory_search_payload(payload: dict) -> str:
+        results = list(payload.get("results") or [])
+        notes = list(payload.get("notes") or [])
+        if not results:
+            if notes:
+                return "\n".join(str(note) for note in notes)
+            return "No matching memory entries found."
+
+        lines: list[str] = []
+        for index, result in enumerate(results, start=1):
+            lines.append(
+                f"{index}. {result.get('path') or '?'} "
+                f"(theme={result.get('theme') or '?'}, type={result.get('type') or '?'})"
+            )
+            lines.append(str(result.get("content_snippet") or "").strip() or "(empty snippet)")
+        if notes:
+            lines.append("")
+            lines.extend(f"Note: {note}" for note in notes)
+        return "\n".join(lines).strip()
+
+    async def _cmd_memory(self, args: list[str]) -> str:
+        if not self.capabilities.has_memory:
+            raise TerminalCommandError("Memory commands are not enabled for this agent.")
+        if not args or str(args[0] or "").strip().lower() != "search":
+            raise TerminalCommandError(
+                "Usage: memory search <query> [--limit N] [--theme slug] [--type value ...] [--recency-days N] [--status active|archived|any]"
+            )
+
+        query_tokens: list[str] = []
+        theme = None
+        types: list[str] = []
+        recency_days = None
+        status = None
+        limit = 10
+        index = 1
+        while index < len(args):
+            token = args[index]
+            if token == "--limit":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --limit")
+                limit = self._parse_int_flag("--limit", args[index])
+            elif token == "--theme":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --theme")
+                theme = args[index]
+            elif token == "--type":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --type")
+                types.append(args[index])
+            elif token == "--recency-days":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --recency-days")
+                recency_days = self._parse_int_flag("--recency-days", args[index])
+            elif token == "--status":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --status")
+                status = args[index]
+            else:
+                query_tokens.append(token)
+            index += 1
+
+        query = " ".join(query_tokens).strip()
+        if not query:
+            raise TerminalCommandError(
+                "Usage: memory search <query> [--limit N] [--theme slug] [--type value ...] [--recency-days N] [--status active|archived|any]"
+            )
+
+        payload = await search_memory_items(
+            query=query,
+            user=self.vfs.user,
+            limit=limit,
+            theme=theme,
+            types=types or None,
+            recency_days=recency_days,
+            status=status,
+        )
+        return self._format_memory_search_payload(payload)
 
     async def _cmd_date(self, args: list[str]) -> str:
         if not self.capabilities.has_date_time:

@@ -13,6 +13,7 @@ from django.test import TestCase, TransactionTestCase
 from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
 from nova.models.AgentThreadSession import AgentThreadSession
+from nova.models.Memory import MemoryItem, MemoryItemStatus, MemoryTheme
 from nova.models.Message import Actor
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
@@ -140,28 +141,32 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.addCleanup(self.delete_storage_patcher.stop)
 
     def _build_executor(self, capabilities: TerminalCapabilities | None = None):
+        resolved_capabilities = capabilities or TerminalCapabilities()
         vfs = VirtualFileSystem(
             thread=self.thread,
             user=self.user,
             agent_config=self.agent,
             session_state=dict(self.base_state),
             skill_registry={},
+            memory_enabled=resolved_capabilities.has_memory,
         )
-        return TerminalExecutor(vfs=vfs, capabilities=capabilities or TerminalCapabilities())
+        return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
     def _build_executor_for_thread(
         self,
         thread,
         capabilities: TerminalCapabilities | None = None,
     ):
+        resolved_capabilities = capabilities or TerminalCapabilities()
         vfs = VirtualFileSystem(
             thread=thread,
             user=self.user,
             agent_config=self.agent,
             session_state=dict(self.base_state),
             skill_registry={},
+            memory_enabled=resolved_capabilities.has_memory,
         )
-        return TerminalExecutor(vfs=vfs, capabilities=capabilities or TerminalCapabilities())
+        return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
     def _create_builtin_tool(self, subtype: str, *, name: str, description: str = "") -> Tool:
         python_path_map = {
@@ -169,6 +174,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             "code_execution": "nova.tools.builtins.code_execution",
             "date": "nova.tools.builtins.date",
             "browser": "nova.tools.builtins.browser",
+            "memory": "nova.tools.builtins.memory",
         }
         return Tool.objects.create(
             user=self.user,
@@ -212,6 +218,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
         return tool
 
+    def _create_memory_tool(self) -> Tool:
+        return self._create_builtin_tool("memory", name="Memory")
+
     def test_touch_and_tee_create_and_append_root_files(self):
         executor = self._build_executor()
 
@@ -239,6 +248,124 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("note.txt", listing)
         self.assertNotIn("workspace/", listing)
         self.assertNotIn("thread/", listing)
+
+    def test_memory_mount_is_visible_only_when_memory_capability_is_enabled(self):
+        plain_executor = self._build_executor()
+        memory_executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        plain_listing = async_to_sync(plain_executor.execute)("ls /")
+        memory_listing = async_to_sync(memory_executor.execute)("ls /")
+
+        self.assertNotIn("memory/", plain_listing)
+        self.assertIn("memory/", memory_listing)
+
+    def test_memory_paths_are_reserved_without_memory_capability(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mkdir /memory/preferences")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)('tee /memory/preferences/editor.md --text "Vim"')
+
+    def test_memory_mount_supports_ls_cat_and_grep(self):
+        theme = MemoryTheme.objects.create(user=self.user, slug="preferences", display_name="Preferences")
+        item = MemoryItem.objects.create(
+            user=self.user,
+            theme=theme,
+            type="preference",
+            content="Preferred editor is Vim",
+            virtual_path="/memory/preferences/editor.md",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        memory_root = async_to_sync(executor.execute)("ls /memory")
+        memory_theme = async_to_sync(executor.execute)("ls /memory/preferences")
+        memory_doc = async_to_sync(executor.execute)("cat /memory/preferences/editor.md")
+        grep_result = async_to_sync(executor.execute)('grep -r -n "Vim" /memory')
+
+        self.assertIn("README.md", memory_root)
+        self.assertIn("preferences/", memory_root)
+        self.assertIn("editor.md", memory_theme)
+        self.assertIn("Preferred editor is Vim", memory_doc)
+        self.assertIn("/memory/preferences/editor.md", grep_result)
+        self.assertIn("type: preference", memory_doc)
+        self.assertEqual(item.id, MemoryItem.objects.get(id=item.id).id)
+
+    def test_tee_and_rm_manage_memory_items(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        written = async_to_sync(executor.execute)(
+            'tee /memory/preferences/editor.md --text "---\\ntype: preference\\n---\\nVim"'
+        )
+        content = async_to_sync(executor.execute)("cat /memory/preferences/editor.md")
+        removed = async_to_sync(executor.execute)("rm /memory/preferences/editor.md")
+
+        item = MemoryItem.objects.get(user=self.user, virtual_path="/memory/preferences/editor.md")
+        self.assertIn("/memory/preferences/editor.md", written)
+        self.assertIn("Vim", content)
+        self.assertEqual(removed, "Removed /memory/preferences/editor.md")
+        self.assertEqual(item.status, MemoryItemStatus.ARCHIVED)
+
+    def test_touch_and_mv_manage_memory_items(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        async_to_sync(executor.execute)("mkdir /memory/preferences")
+        created = async_to_sync(executor.execute)("touch /memory/preferences/editor.md")
+        moved = async_to_sync(executor.execute)("mv /memory/preferences/editor.md /memory/tools/editor.txt")
+        content = async_to_sync(executor.execute)("cat /memory/tools/editor.txt")
+
+        item = MemoryItem.objects.get(user=self.user, virtual_path="/memory/tools/editor.txt")
+        self.assertEqual(created, "Created empty file /memory/preferences/editor.md")
+        self.assertEqual(moved, "Moved to /memory/tools/editor.txt")
+        self.assertIn("path: /memory/tools/editor.txt", content)
+        self.assertEqual(item.theme.slug, "tools")
+
+    def test_memory_rejects_paths_deeper_than_one_theme_directory(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)('tee /memory/preferences/editors/vim.md --text "Vim"')
+
+    def test_memory_search_formats_results_with_paths(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.search_memory_items",
+            new_callable=AsyncMock,
+            return_value={
+                "results": [
+                    {
+                        "id": 7,
+                        "path": "/memory/preferences/editor.md",
+                        "theme": "preferences",
+                        "type": "preference",
+                        "content_snippet": "Uses Vim",
+                    }
+                ],
+                "notes": [],
+            },
+        ) as mocked_search:
+            result = async_to_sync(executor.execute)(
+                'memory search "editor preference" --limit 2 --theme preferences --type preference'
+            )
+
+        self.assertIn("/memory/preferences/editor.md", result)
+        self.assertIn("Uses Vim", result)
+        self.assertEqual(mocked_search.await_args.kwargs["query"], "editor preference")
+        self.assertEqual(mocked_search.await_args.kwargs["theme"], "preferences")
+        self.assertEqual(mocked_search.await_args.kwargs["types"], ["preference"])
 
     def test_copy_and_move_preserve_source_basename_for_directory_destinations(self):
         executor = self._build_executor()
@@ -452,6 +579,15 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("date +%F", skills["date.md"])
+
+    def test_skill_registry_adds_memory_guide_when_memory_is_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        self.assertIn("memory.md", skills)
+        self.assertIn("memory search", skills["memory.md"])
+        self.assertIn("grep", skills["memory.md"])
 
     def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
         skills = build_skill_registry(
@@ -707,6 +843,71 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertNotIn("/thread", prompt)
         self.assertNotIn("/workspace", prompt)
 
+    def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("/memory", prompt)
+        self.assertIn("grep", prompt)
+        self.assertIn("memory search", prompt)
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+        other_thread = Thread.objects.create(user=self.user, subject="Other thread")
+        other_thread.add_message("Check memory", Actor.USER)
+
+        runtime_a = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                source_message_id=self.thread.get_messages().order_by("id").first().id,
+            ).initialize
+        )()
+        runtime_b = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=other_thread,
+                agent_config=self.agent,
+                source_message_id=other_thread.get_messages().order_by("id").first().id,
+            ).initialize
+        )()
+
+        async_to_sync(runtime_a.vfs.write_file)(
+            "/memory/preferences/editor.md",
+            b"---\ntype: preference\n---\nUses Vim",
+            mime_type="text/markdown",
+        )
+        content = async_to_sync(runtime_b.vfs.read_text)("/memory/preferences/editor.md")
+
+        self.assertIn("Uses Vim", content)
+        mocked_provider.assert_awaited()
+
     def test_continuous_system_prompt_mentions_history_commands(self):
         continuous_thread = Thread.objects.create(
             user=self.user,
@@ -793,6 +994,65 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
         self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
         self.assertEqual(copied_answer, "answer")
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.tools.builtins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Memory Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child memory tool",
+        )
+        child_agent.tools.add(memory_tool)
+        self.agent.agent_tools.add(child_agent)
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            await self.vfs.write_file(
+                "/memory/preferences/editor.md",
+                b"---\ntype: preference\n---\nUses Vim",
+                mime_type="text/markdown",
+            )
+            return ReactTerminalRunResult(
+                final_answer="Stored memory.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime_v2.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Remember the editor.",
+                input_paths=[],
+            )
+
+        content = async_to_sync(runtime.vfs.read_text)("/memory/preferences/editor.md")
+        self.assertIn("Stored memory.", result)
+        self.assertIn("Uses Vim", content)
+        mocked_provider.assert_awaited()
 
 
 class ReactTerminalExecutorTests(TransactionTestCase):

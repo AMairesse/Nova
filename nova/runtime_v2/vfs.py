@@ -4,9 +4,25 @@ import posixpath
 from dataclasses import dataclass
 
 from asgiref.sync import sync_to_async
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 
 from nova.file_utils import batch_upload_files, download_file_content, upload_file_to_minio
+from nova.memory.service import (
+    MEMORY_ROOT,
+    archive_memory_path,
+    find_memory_paths,
+    is_memory_path,
+    list_memory_dir_entries,
+    memory_is_dir,
+    memory_path_exists,
+    mkdir_memory_theme,
+    move_memory_path,
+    read_memory_document,
+    read_memory_text,
+    write_memory_document,
+)
+from nova.models.Message import Message
 from nova.models.UserFile import UserFile
 
 from .constants import RUNTIME_STORAGE_ROOT
@@ -45,6 +61,8 @@ class VirtualFileSystem:
         agent_config,
         session_state: dict,
         skill_registry: dict[str, str],
+        memory_enabled: bool = False,
+        source_message_id: int | None = None,
         persistent_root_scope: str = UserFile.Scope.THREAD_SHARED,
         persistent_root_prefix: str | None = None,
         tmp_storage_prefix: str | None = None,
@@ -55,6 +73,8 @@ class VirtualFileSystem:
         self.agent_config = agent_config
         self.session_state = session_state
         self.skill_registry = dict(skill_registry or {})
+        self.memory_enabled = bool(memory_enabled)
+        self.source_message_id = source_message_id
         self.persistent_root_scope = str(persistent_root_scope or UserFile.Scope.THREAD_SHARED)
         self.persistent_root_prefix = (
             str(persistent_root_prefix or "").rstrip("/") if persistent_root_prefix else None
@@ -70,6 +90,14 @@ class VirtualFileSystem:
 
     def _default_tmp_storage_prefix(self) -> str:
         return f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/tmp"
+
+    @staticmethod
+    def _is_reserved_memory_path(path: str) -> bool:
+        normalized = normalize_vfs_path(path, cwd="/")
+        return normalized == MEMORY_ROOT or normalized.startswith(f"{MEMORY_ROOT}/")
+
+    def _is_memory_enabled_path(self, path: str) -> bool:
+        return self.memory_enabled and is_memory_path(path)
 
     @property
     def cwd(self) -> str:
@@ -100,6 +128,11 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized == "/skills" or normalized.startswith("/skills/"):
             raise VFSError("Writing into /skills is not supported.")
+        if self._is_reserved_memory_path(normalized):
+            if not self.memory_enabled:
+                raise VFSError("Memory is not enabled for this agent.")
+            if not is_memory_path(normalized):
+                raise VFSError("Invalid memory path.")
         if normalized == "/tmp" or normalized.startswith("/tmp/"):
             suffix = normalized[len("/tmp"):] or "/"
             return UserFile.Scope.MESSAGE_ATTACHMENT, f"{self.tmp_storage_prefix}{suffix}"
@@ -112,10 +145,16 @@ class VirtualFileSystem:
     def _root_vfs_path_for_user_file(self, original_path: str) -> str | None:
         raw_path = str(original_path or "").strip()
         if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
-            return normalize_vfs_path(raw_path or "/", cwd="/")
+            normalized = normalize_vfs_path(raw_path or "/", cwd="/")
+            if self._is_reserved_memory_path(normalized):
+                return None
+            return normalized
         if self.persistent_root_prefix and raw_path.startswith(self.persistent_root_prefix):
             suffix = raw_path[len(self.persistent_root_prefix):] or "/"
-            return normalize_vfs_path(suffix, cwd="/")
+            normalized = normalize_vfs_path(suffix, cwd="/")
+            if self._is_reserved_memory_path(normalized):
+                return None
+            return normalized
         return None
 
     def _vfs_path_for_user_file(self, user_file: UserFile) -> str | None:
@@ -182,6 +221,12 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             return True
+        if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
+            return False
+        if self._is_reserved_memory_path(normalized) and not is_memory_path(normalized):
+            return False
+        if self._is_memory_enabled_path(normalized):
+            return await memory_path_exists(user=self.user, path=normalized)
         if normalized.startswith("/skills/"):
             skill_name = posixpath.basename(normalized)
             return skill_name in self.skill_registry
@@ -198,6 +243,12 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             return True
+        if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
+            return False
+        if self._is_reserved_memory_path(normalized) and not is_memory_path(normalized):
+            return False
+        if self._is_memory_enabled_path(normalized):
+            return await memory_is_dir(user=self.user, path=normalized)
         if normalized in self._get_session_dirs():
             return True
         for item in await self._load_real_files():
@@ -212,11 +263,15 @@ class VirtualFileSystem:
                 {"name": name, "path": f"/skills/{name}", "type": "file"}
                 for name in sorted(self.skill_registry.keys())
             ]
+        if self._is_memory_enabled_path(normalized):
+            return await list_memory_dir_entries(user=self.user, path=normalized)
 
         entries: dict[str, dict] = {}
         if normalized == "/":
             entries["skills"] = {"name": "skills", "path": "/skills", "type": "dir"}
             entries["tmp"] = {"name": "tmp", "path": "/tmp", "type": "dir"}
+            if self.memory_enabled:
+                entries["memory"] = {"name": "memory", "path": MEMORY_ROOT, "type": "dir"}
 
         all_files = await self._load_real_files()
         session_dirs = self._get_session_dirs()
@@ -272,6 +327,11 @@ class VirtualFileSystem:
             if skill_name not in self.skill_registry:
                 raise VFSError(f"Skill file not found: {normalized}")
             return self.skill_registry[skill_name]
+        if self._is_memory_enabled_path(normalized):
+            try:
+                return await read_memory_text(user=self.user, path=normalized)
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
 
         item = await self.get_real_file(normalized)
         if item is None or item.user_file is None:
@@ -287,6 +347,13 @@ class VirtualFileSystem:
 
     async def read_bytes(self, path: str) -> tuple[bytes, str]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
+        if self._is_memory_enabled_path(normalized):
+            try:
+                entry = await read_memory_document(user=self.user, path=normalized)
+                text = await read_memory_text(user=self.user, path=normalized)
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
+            return text.encode("utf-8"), entry.mime_type
         item = await self.get_real_file(normalized)
         if item is None or item.user_file is None:
             raise VFSError(f"File not found: {normalized}")
@@ -296,6 +363,16 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized.startswith("/skills"):
             raise VFSError("mkdir is not supported inside /skills.")
+        if self._is_reserved_memory_path(normalized):
+            if not self.memory_enabled:
+                raise VFSError("Memory is not enabled for this agent.")
+            if not is_memory_path(normalized):
+                raise VFSError("Invalid memory path.")
+        if self._is_memory_enabled_path(normalized):
+            try:
+                return await mkdir_memory_theme(user=self.user, path=normalized)
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
         if normalized in {"/", "/tmp"}:
             return normalized
         existing_file = await self.get_real_file(normalized)
@@ -317,6 +394,39 @@ class VirtualFileSystem:
         overwrite: bool = True,
     ) -> VFSFile:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
+        if self._is_memory_enabled_path(normalized):
+            if not overwrite and await memory_path_exists(user=self.user, path=normalized):
+                raise VFSError(f"File already exists: {normalized}")
+            try:
+                decoded = content.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise VFSError("Memory files must be valid UTF-8 text.") from exc
+            source_message = None
+            if self.source_message_id is not None:
+                def _load_source_message():
+                    return Message.objects.filter(
+                        id=self.source_message_id,
+                        user=self.user,
+                        thread=self.thread,
+                    ).first()
+
+                source_message = await sync_to_async(_load_source_message, thread_sensitive=True)()
+            try:
+                entry = await write_memory_document(
+                    user=self.user,
+                    path=normalized,
+                    text=decoded,
+                    source_thread=self.thread,
+                    source_message=source_message,
+                )
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
+            return VFSFile(
+                path=entry.path,
+                user_file=None,
+                mime_type=entry.mime_type,
+                size=entry.size,
+            )
         scope, storage_path = self._storage_path_for_vfs_path(normalized)
         existing = await self.get_real_file(normalized)
         if existing and existing.user_file is not None:
@@ -371,6 +481,14 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             raise VFSError(f"Cannot remove protected path: {normalized}")
+        if self._is_memory_enabled_path(normalized):
+            if await memory_is_dir(user=self.user, path=normalized):
+                raise VFSError("Removing memory directories is not supported.")
+            try:
+                await archive_memory_path(user=self.user, path=normalized)
+                return
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
 
         item = await self.get_real_file(normalized)
         if item and item.user_file is not None:
@@ -419,6 +537,21 @@ class VirtualFileSystem:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
         source_name = posixpath.basename(normalized_source) or "file"
         resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
+        source_is_memory = self._is_memory_enabled_path(normalized_source)
+        destination_is_memory = self._is_memory_enabled_path(resolved_destination)
+        if source_is_memory and destination_is_memory:
+            try:
+                return await move_memory_path(
+                    user=self.user,
+                    source_path=normalized_source,
+                    destination_path=resolved_destination,
+                )
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
+        if source_is_memory or destination_is_memory:
+            await self.copy(normalized_source, resolved_destination)
+            await self.remove(normalized_source)
+            return resolved_destination
         item = await self.get_real_file(normalized_source)
         if item is None or item.user_file is None:
             raise VFSError(f"File not found: {normalized_source}")
@@ -447,6 +580,11 @@ class VirtualFileSystem:
     async def find(self, start_path: str, term: str = "") -> list[str]:
         normalized_start = normalize_vfs_path(start_path, cwd=self.cwd)
         matches: list[str] = []
+        if self._is_memory_enabled_path(normalized_start):
+            try:
+                return await find_memory_paths(user=self.user, start_path=normalized_start, term=term)
+            except ValidationError as exc:
+                raise VFSError(str(exc)) from exc
 
         if normalized_start in {"/skills", "/"}:
             for name in sorted(self.skill_registry.keys()):
@@ -465,6 +603,10 @@ class VirtualFileSystem:
             if directory == normalized_start or directory.startswith(prefix):
                 if not term or term.lower() in posixpath.basename(directory).lower():
                     matches.append(directory)
+
+        if normalized_start == "/" and self.memory_enabled:
+            memory_matches = await find_memory_paths(user=self.user, start_path=MEMORY_ROOT, term=term)
+            matches.extend(memory_matches)
 
         return sorted(set(matches))
 

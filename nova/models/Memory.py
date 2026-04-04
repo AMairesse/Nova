@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from pgvector.django import VectorField
@@ -63,6 +64,7 @@ class MemoryItem(models.Model):
 
     type = models.CharField(max_length=20, choices=MemoryItemType.choices)
     content = models.TextField()
+    virtual_path = models.CharField(max_length=255, blank=True, default="")
 
     source_thread = models.ForeignKey(
         "nova.Thread",
@@ -91,12 +93,20 @@ class MemoryItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "virtual_path"],
+                condition=Q(status=MemoryItemStatus.ACTIVE) & ~Q(virtual_path=""),
+                name="uniq_mem_item_u_vpath_a",
+            ),
+        ]
         indexes = [
             models.Index(fields=["user", "created_at"], name="idx_memory_item_user_created"),
             # NOTE: index names must be <= 30 chars (Django constraint for some backends)
             models.Index(fields=["user", "theme", "created_at"], name="idx_mem_item_u_t_created"),
             models.Index(fields=["user", "type"], name="idx_memory_item_user_type"),
             models.Index(fields=["user", "status"], name="idx_memory_item_user_status"),
+            models.Index(fields=["user", "virtual_path"], name="idx_mem_item_u_vpath"),
         ]
 
     def __str__(self) -> str:

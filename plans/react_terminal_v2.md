@@ -17,6 +17,8 @@ very small tool surface and a file-centric mental model.
 - No `ask_user`, `load_skill`, or `list_skills`.
 - Skills are documentation only, exposed as virtual markdown files under `/skills`.
 - V2 is file-centric and does not rely on `MessageArtifact` for normal runtime flows.
+- Long-term memory is canonical in the database and exposed as a user-scoped
+  virtual mount under `/memory` only when the agent has memory capability.
 - Continuous threads do not use v2 compaction; they rely on day summaries plus
   `history search` / `history get`.
 
@@ -38,6 +40,8 @@ very small tool surface and a file-centric mental model.
 
 - `/`: persistent files for the agent/thread and the main visible working area
 - `/skills`: virtual readonly recipes
+- `/memory`: virtual user-scoped durable memory shared across v2 agents that have
+  memory capability
 - `/tmp`: scratch files visible in the terminal but hidden from the normal file UI
 - `/subagents/<agent-id>-<run-id>/`: outputs copied back automatically from delegated sub-agents
 
@@ -45,16 +49,37 @@ very small tool surface and a file-centric mental model.
 
 - Visible persistent root paths (`/foo.txt`, `/docs/report.md`, `/subagents/...`) are stored as:
   - `UserFile(scope=THREAD_SHARED)`
+- `/memory/...` is not stored in MinIO; it is projected from:
+  - `MemoryTheme`
+  - `MemoryItem`
+  - `MemoryItemEmbedding`
 - `/tmp/...` is stored in MinIO too, but as:
   - `UserFile(scope=MESSAGE_ATTACHMENT)`
   - under a hidden runtime prefix
 - Existing hidden v2 workspace files are still remapped into `/` for migration compatibility
+
+### Memory model
+
+- `/memory` is user-scoped and shared across all v2 threads for the same user
+- `/memory` is also shared with sub-agents that have memory capability
+- Supported visible paths:
+  - `/memory/README.md`
+  - `/memory/<theme>/<file>.md`
+  - `/memory/<theme>/<file>.txt`
+- Theme is determined by the directory name, not by file frontmatter
+- File reads project memory items as YAML frontmatter plus body content
+- File writes support creation and editing through terminal-native commands such as
+  `touch`, `tee`, `mv`, and `rm`
+- `rm /memory/...` archives the memory item instead of deleting a MinIO object
+- `grep` is lexical only
+- `memory search ...` is the semantic/hybrid retrieval command
 
 ### Sub-agents
 
 - Delegation stays on the dedicated `delegate_to_agent(...)` tool
 - Sub-agents are isolated from the parent filesystem
 - Parent input files are copied into the child under `/inbox/...`
+- Child agents with memory capability see the same `/memory` mount as the parent
 - Files created or modified by the child persistent root are copied back automatically into the parent under:
   - `/subagents/<agent-id>-<run-id>/...`
 - Child `/tmp` files are never copied back
@@ -66,11 +91,15 @@ very small tool surface and a file-centric mental model.
 - Continuous mode command family:
   - `history search ...`
   - `history get ...`
+- Memory command family:
+  - `grep ...`
+  - `memory search ...`
 - Optional command families enabled by configured tools:
   - browser builtin -> `curl`, `wget`
   - email builtin -> `mail ...`
   - code execution builtin -> `python ...`
   - date builtin -> `date`
+  - memory builtin -> `/memory` mount + `memory search`
 
 ## Implemented
 
@@ -90,9 +119,15 @@ very small tool surface and a file-centric mental model.
 - Continuous mode support in the v2 runtime
 - Continuous recall through terminal-native `history search` and `history get`
 - Continuous-specific virtual skill documentation under `/skills/continuous.md`
+- Shared database-backed `/memory` mount with terminal read/write support
+- Thin shared memory service used by both the legacy memory builtin and the v2 runtime
+- Terminal-native `grep` for lexical search across real and virtual text files
+- Terminal-native `memory search` for hybrid lexical + embeddings retrieval
 
 ## Next Steps
 
+- Add broader runtime coverage around memory path collisions, archived-item retrieval,
+  and cross-agent memory scenarios beyond the current focused tests
 - Add or harden delegation-focused tests if edge cases remain around nested directories or modified input files
 - Sweep remaining product/UI text for any stale `/thread` or `/workspace` wording outside the v2 runtime package
 - Consider whether the file sidebar should eventually surface `/subagents/...` differently from other root files
@@ -107,3 +142,4 @@ very small tool surface and a file-centric mental model.
 - Pipes, redirections, globbing, heredocs, shell chaining, and shell substitutions
 - Interactive editors
 - Shared writable filesystem between parent and sub-agents
+- Binary storage inside `/memory`

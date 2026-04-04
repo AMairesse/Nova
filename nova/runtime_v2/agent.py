@@ -103,6 +103,8 @@ class ReactTerminalRuntime:
             agent_config=self.agent_config,
             session_state=session_state,
             skill_registry=skill_registry,
+            memory_enabled=self.capabilities.has_memory,
+            source_message_id=self.source_message_id,
             persistent_root_scope=self.persistent_root_scope,
             persistent_root_prefix=self.persistent_root_prefix,
             tmp_storage_prefix=self.tmp_storage_prefix,
@@ -133,20 +135,30 @@ class ReactTerminalRuntime:
             extra_guidance.append(
                 "Use `date`, `date -u`, `date +%F`, and `date +%T` for current time queries."
             )
+        if self.capabilities.has_memory:
+            extra_guidance.append(
+                "Use `/memory` for user-scoped durable memory. "
+                "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
+            )
         if self.capabilities.has_multiple_mailboxes:
             extra_guidance.append(
                 "When using mail commands, always pass `--mailbox <email>` to choose the mailbox explicitly."
             )
+        filesystem_lines = [
+            "- /: persistent files for this thread",
+            "- /skills: readonly recipes",
+            "- /tmp: scratch files hidden from the normal file sidebar",
+            "- /subagents/<agent-id>-<run-id>/: files returned by delegated sub-agents",
+        ]
+        if self.capabilities.has_memory:
+            filesystem_lines.insert(2, "- /memory: shared user-scoped long-term memory")
         base_prompt = (
             "You are Nova running in React Terminal V1.\n"
             "Your main action surface is the `terminal` tool.\n"
             "Use shell-like commands only.\n"
             "The terminal session is persistent for this agent and thread.\n"
             "Filesystem layout:\n"
-            "- /: persistent files for this thread\n"
-            "- /skills: readonly recipes\n"
-            "- /tmp: scratch files hidden from the normal file sidebar\n"
-            "- /subagents/<agent-id>-<run-id>/: files returned by delegated sub-agents\n"
+            f"{'\n'.join(filesystem_lines)}\n"
             "When you need guidance, inspect /skills with `ls /skills` and `cat /skills/<file>.md`.\n"
             "If the current working directory matters and you are unsure, run `pwd` first.\n"
             f"Enabled command families: {', '.join(families)}.\n"
@@ -389,6 +401,7 @@ class ReactTerminalRuntime:
             task=self.task,
             trace_handler=child_trace,
             progress_handler=None,
+            source_message_id=self.source_message_id,
             parent_trace_node_id=node_id,
             persist_session=False,
             session_state_override={"cwd": "/", "history": [], "directories": ["/tmp", "/inbox"]},
