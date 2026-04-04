@@ -500,7 +500,7 @@ class NativeProviderRuntimeTests(BaseTestCase):
                 size=len(upload_specs[1]["content"]),
                 scope=UserFile.Scope.MESSAGE_ATTACHMENT,
             )
-            return [{"id": "bad"}, {"id": audio_user_file.id}], []
+            return [{"id": audio_user_file.id, "request_id": upload_specs[1]["request_id"]}], []
 
         mocked_batch_upload.side_effect = _fake_batch_upload_files
 

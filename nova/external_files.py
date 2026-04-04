@@ -212,6 +212,7 @@ async def stage_external_files_as_artifacts(
 
         valid_specs.append(
             {
+                "request_id": f"external-file-{index}",
                 "filename": filename,
                 "content": raw_content,
                 "mime_type": mime_type,
@@ -232,6 +233,7 @@ async def stage_external_files_as_artifacts(
     )
     upload_specs = [
         {
+            "request_id": spec["request_id"],
             "path": build_message_artifact_output_path(
                 hidden_message.id,
                 spec["filename"],
@@ -274,6 +276,11 @@ async def stage_external_files_as_artifacts(
 
     user_files = await sync_to_async(_load_files, thread_sensitive=True)()
     created_artifacts: list[MessageArtifact] = []
+    specs_by_request_id = {
+        str(spec.get("request_id") or "").strip(): spec
+        for spec in valid_specs
+        if str(spec.get("request_id") or "").strip()
+    }
 
     for index, file_meta in enumerate(created_files):
         try:
@@ -285,7 +292,12 @@ async def stage_external_files_as_artifacts(
         if user_file is None:
             continue
 
-        spec = valid_specs[index] if index < len(valid_specs) else {}
+        request_id = str(file_meta.get("request_id") or "").strip()
+        spec = specs_by_request_id.get(request_id)
+        if spec is None and not request_id and len(created_files) == len(valid_specs):
+            spec = valid_specs[index] if index < len(valid_specs) else {}
+        if spec is None:
+            spec = {}
         detected_kind = detect_artifact_kind(
             user_file.mime_type,
             user_file.original_filename,

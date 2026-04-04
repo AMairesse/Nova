@@ -255,14 +255,17 @@ async def batch_upload_files(thread: Thread, user,
                     source_message=source_message,
                 )
             user_file = await create_user_file()
-            created_files.append({
+            created_file = {
                 'id': user_file.id,
                 'path': renamed_path,
                 'filename': posixpath.basename(renamed_path),
                 'mime_type': mime,
                 'size': len(content),
                 'scope': scope,
-            })
+            }
+            if 'request_id' in item:
+                created_file['request_id'] = item.get('request_id')
+            created_files.append(created_file)
         except Exception as e:
             err_msg = f"Error uploading {item.get('path', 'unknown')}: {str(e)}"
             logger.error(err_msg)

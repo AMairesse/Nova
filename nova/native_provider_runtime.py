@@ -427,14 +427,17 @@ async def persist_native_result_artifacts(
             or nested_url.get("filename")
             or f"generated-image-{index}{_guess_extension(mime_type, '.png')}"
         ).strip()
+        request_id = f"native-output-{len(upload_metadata) + 1}"
         upload_specs.append(
             {
+                "request_id": request_id,
                 "path": build_message_artifact_output_path(message.id, filename),
                 "content": binary,
             }
         )
         upload_metadata.append(
             {
+                "request_id": request_id,
                 "kind": ArtifactKind.IMAGE,
                 "label": posixpath.basename(filename),
                 "mime_type": mime_type,
@@ -449,14 +452,17 @@ async def persist_native_result_artifacts(
         binary = _decode_base64_payload(raw_audio or "")
         if binary:
             filename = str(audio.get("filename") or f"generated-audio{_guess_extension(mime_type, '.wav')}").strip()
+            request_id = f"native-output-{len(upload_metadata) + 1}"
             upload_specs.append(
                 {
+                    "request_id": request_id,
                     "path": build_message_artifact_output_path(message.id, filename),
                     "content": binary,
                 }
             )
             upload_metadata.append(
                 {
+                    "request_id": request_id,
                     "kind": ArtifactKind.AUDIO,
                     "label": posixpath.basename(filename),
                     "mime_type": mime_type,
@@ -472,6 +478,11 @@ async def persist_native_result_artifacts(
             source_message=message,
             allowed_mime_prefixes=("image/", "audio/"),
         )
+        metadata_by_request_id = {
+            str(item.get("request_id") or "").strip(): item
+            for item in upload_metadata
+            if str(item.get("request_id") or "").strip()
+        }
         for index, file_meta in enumerate(created_files):
             try:
                 file_id = int(file_meta.get("id"))
@@ -482,7 +493,15 @@ async def persist_native_result_artifacts(
                 return UserFile.objects.get(id=file_id, user=message.user, thread=message.thread)
 
             user_file = await sync_to_async(_load_user_file, thread_sensitive=True)()
-            meta = upload_metadata[index] if index < len(upload_metadata) else {}
+            request_id = str(file_meta.get("request_id") or "").strip()
+            if request_id:
+                meta = metadata_by_request_id.get(request_id, {})
+            else:
+                meta = (
+                    upload_metadata[index]
+                    if len(created_files) == len(upload_metadata) and index < len(upload_metadata)
+                    else {}
+                )
             created_artifacts.append(
                 await sync_to_async(MessageArtifact.objects.create, thread_sensitive=True)(
                     user=message.user,

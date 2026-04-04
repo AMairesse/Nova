@@ -324,7 +324,8 @@ class FileUtilsTest(BaseTestCase):
 
         file_data = [{
             'path': '/test.txt',
-            'content': b'content'
+            'content': b'content',
+            'request_id': 'spec-1',
         }]
 
         created, errors = await batch_upload_files(self.thread, self.user, file_data)
@@ -332,6 +333,7 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(len(created), 1)
         self.assertEqual(len(errors), 0)
         self.assertEqual(created[0]['path'], '/test.txt')
+        self.assertEqual(created[0]['request_id'], 'spec-1')
 
     @patch('nova.file_utils.upload_file_to_minio')
     @patch('nova.file_utils.auto_rename_path')
