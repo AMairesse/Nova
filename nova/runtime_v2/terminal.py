@@ -106,7 +106,7 @@ class TerminalExecutor:
         return "\n".join(lines)
 
     async def _cmd_cd(self, args: list[str]) -> str:
-        target = args[0] if args else "/workspace"
+        target = args[0] if args else "/"
         normalized = normalize_vfs_path(target, cwd=self.vfs.cwd)
         if not await self.vfs.path_exists(normalized) or not await self.vfs.is_dir(normalized):
             raise TerminalCommandError(f"Directory not found: {normalized}")
@@ -156,10 +156,6 @@ class TerminalExecutor:
         normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
         if normalized.startswith("/skills"):
             raise TerminalCommandError("Writing into /skills is not supported.")
-        if normalized.startswith("/thread"):
-            raise TerminalCommandError("Writing into /thread is not supported for terminal text commands.")
-        if not (normalized.startswith("/workspace") or normalized.startswith("/tmp")):
-            raise TerminalCommandError("Text writes are only supported in /workspace and /tmp.")
         return normalized
 
     async def _cmd_touch(self, args: list[str]) -> str:
@@ -307,6 +303,10 @@ class TerminalExecutor:
         url = remaining[0]
         content, mime_type, inferred_name = await self._download_http(url)
         destination = output_path or posixpath.join(self.vfs.cwd, inferred_name)
+        try:
+            destination = await self.vfs.resolve_output_path(destination, source_name=inferred_name)
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
         written = await self.vfs.write_file(destination, content, mime_type=mime_type)
         return f"Downloaded {url} to {written.path}"
 
@@ -319,7 +319,11 @@ class TerminalExecutor:
         url = remaining[0]
         content, mime_type, inferred_name = await self._download_http(url)
         if output_path:
-            written = await self.vfs.write_file(output_path, content, mime_type=mime_type)
+            try:
+                resolved_output = await self.vfs.resolve_output_path(output_path, source_name=inferred_name)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            written = await self.vfs.write_file(resolved_output, content, mime_type=mime_type)
             return f"Downloaded {url} to {written.path}"
         if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
             try:
@@ -488,10 +492,12 @@ class TerminalExecutor:
             )
             if selected is None:
                 raise TerminalCommandError(f"Attachment {attachment_id} not found on email {message_id}.")
-            destination = output_path or posixpath.join(
-                self.vfs.cwd,
-                str(selected.get("filename") or f"attachment-{attachment_id}"),
-            )
+            source_name = str(selected.get("filename") or f"attachment-{attachment_id}")
+            destination = output_path or posixpath.join(self.vfs.cwd, source_name)
+            try:
+                destination = await self.vfs.resolve_output_path(destination, source_name=source_name)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
             written = await self.vfs.write_file(
                 destination,
                 bytes(selected.get("content") or b""),
@@ -612,10 +618,21 @@ class TerminalExecutor:
             result = await code_builtin.execute_code(host, code, language="python", timeout=timeout)
 
         if output_path:
-            normalized_output = self._validate_text_write_path(output_path)
+            output_name = "python-stdout.txt"
+            if remaining and remaining[0] != "-c":
+                script_name = posixpath.basename(normalize_vfs_path(remaining[0], cwd=self.vfs.cwd)) or "python"
+                stem, _ext = posixpath.splitext(script_name)
+                output_name = f"{stem or 'python'}.stdout.txt"
+            try:
+                resolved_output = await self.vfs.resolve_output_path(
+                    self._validate_text_write_path(output_path),
+                    source_name=output_name,
+                )
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
             stdout = self._extract_python_stdout(result)
             await self.vfs.write_file(
-                normalized_output,
+                resolved_output,
                 stdout.encode("utf-8"),
                 mime_type="text/plain",
                 overwrite=True,

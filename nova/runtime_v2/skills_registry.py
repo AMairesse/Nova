@@ -12,10 +12,10 @@ The main action surface is the persistent Nova terminal.
 Start with:
 - `pwd`
 - `ls`
-- `ls /thread`
+- `ls /`
 - `ls /skills`
-- `touch /workspace/note.txt`
-- `tee /workspace/note.txt --text "hello"`
+- `touch /note.txt`
+- `tee /note.txt --text "hello"`
 
 Use relative paths only if you are confident about the current working directory.
 If you are unsure, run `pwd` first.
@@ -36,12 +36,12 @@ Mail is accessed through shell-like commands:
 - `mail list`
 - `mail read <id>`
 - `mail attachments <id>`
-- `mail import <id> --attachment <part> --output /workspace/<name>`
+- `mail import <id> --attachment <part> --output /attachment.bin`
 - `mail folders --mailbox <email>`
-- `mail send --mailbox <email> --to ... --subject ... --body-file /workspace/body.txt --attach /workspace/file.pdf`
+- `mail send --mailbox <email> --to ... --subject ... --body-file /body.txt --attach /file.pdf`
 
 Prefer reading attachments metadata first, then importing only the files you need.
-Imported attachments become normal files in the terminal workspace.
+Imported attachments become normal files in the terminal filesystem.
 {mailbox_note}Reuse the same mailbox throughout a workflow unless the user explicitly asks you to switch.
 """
 
@@ -51,9 +51,9 @@ Imported attachments become normal files in the terminal workspace.
 Web downloads are exposed through familiar commands:
 
 - `wget <url>`
-- `wget <url> --output /workspace/file.ext`
+- `wget <url> --output /downloads/file.ext`
 - `curl <url>`
-- `curl <url> --output /workspace/file.ext`
+- `curl <url> --output /downloads/file.ext`
 
 Use `curl` without `--output` only when you want a text preview.
 Use `wget` or `curl --output` when you need a reusable file.
@@ -64,16 +64,16 @@ Use `wget` or `curl --output` when you need a reusable file.
 
 Python execution is available through:
 
-- `python /workspace/script.py`
+- `python /script.py`
 - `python -c "print('hello')"`
-- `python --output /workspace/result.txt /workspace/script.py`
-- `python --output /workspace/result.txt -c "print('hello')"`
+- `python --output /result.txt /script.py`
+- `python --output /result.txt -c "print('hello')"`
 
-Keep scripts in `/workspace` when they are reused across multiple commands.
+Keep scripts at stable paths in `/` when they are reused across multiple commands.
 Typical workflow:
-- create a script with `tee /workspace/script.py --text "..."`
-- run it with `python /workspace/script.py`
-- capture stdout into a file with `python --output /workspace/result.txt /workspace/script.py`
+- create a script with `tee /script.py --text "..."`
+- run it with `python /script.py`
+- capture stdout into a file with `python --output /result.txt /script.py`
 """
 
     if capabilities.has_date_time:
@@ -97,6 +97,9 @@ through terminal commands.
 
 Use sub-agents when a specialized configured agent can handle a focused task.
 Pass terminal file paths in `input_paths` when the child agent needs local files.
+The child agent receives copied inputs under `/inbox`.
+Files created or modified by the child are copied back automatically under
+`/subagents/<agent-id>-<run-id>/`.
 """
 
     return skills

@@ -18,7 +18,8 @@ from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
-from nova.runtime_v2.agent import ReactTerminalRuntime
+from nova.models.UserFile import UserFile
+from nova.runtime_v2.agent import ReactTerminalRunResult, ReactTerminalRuntime
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.compaction import (
     SESSION_KEY_HISTORY_SUMMARY,
@@ -80,7 +81,7 @@ class TerminalExecutorTests(TestCase):
             thread=SimpleNamespace(id=1),
             user=SimpleNamespace(id=1),
             agent_config=SimpleNamespace(id=42),
-            session_state={"cwd": "/workspace", "history": [], "directories": ["/workspace", "/tmp"]},
+            session_state={"cwd": "/", "history": [], "directories": ["/tmp"]},
             skill_registry={"mail.md": "# Mail\n", "python.md": "# Python\n"},
         )
         executor = TerminalExecutor(vfs=vfs, capabilities=TerminalCapabilities())
@@ -114,9 +115,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
         self.thread = Thread.objects.create(user=self.user, subject="Terminal thread")
         self.base_state = {
-            "cwd": "/workspace",
+            "cwd": "/",
             "history": [],
-            "directories": ["/workspace", "/tmp"],
+            "directories": ["/tmp"],
         }
         self._stored_contents: dict[str, bytes] = {}
 
@@ -200,7 +201,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
         return tool
 
-    def test_touch_and_tee_create_and_append_workspace_files(self):
+    def test_touch_and_tee_create_and_append_root_files(self):
         executor = self._build_executor()
 
         created = async_to_sync(executor.execute)("touch note.txt")
@@ -208,13 +209,40 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         appended = async_to_sync(executor.execute)('tee note.txt --text " world" --append')
         content = async_to_sync(executor.execute)("cat note.txt")
 
-        self.assertIn("Created empty file /workspace/note.txt", created)
-        self.assertIn("Wrote 5 bytes to /workspace/note.txt", written)
-        self.assertIn("Wrote 6 bytes to /workspace/note.txt", appended)
+        self.assertIn("Created empty file /note.txt", created)
+        self.assertIn("Wrote 5 bytes to /note.txt", written)
+        self.assertIn("Wrote 6 bytes to /note.txt", appended)
         self.assertEqual(content, "hello world")
 
         with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("touch /thread/blocked.txt")
+            async_to_sync(executor.execute)("touch /skills/blocked.txt")
+
+    def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("touch /note.txt")
+        listing = async_to_sync(executor.execute)("ls /")
+
+        self.assertIn("skills/", listing)
+        self.assertIn("tmp/", listing)
+        self.assertIn("note.txt", listing)
+        self.assertNotIn("workspace/", listing)
+        self.assertNotIn("thread/", listing)
+
+    def test_copy_and_move_preserve_source_basename_for_directory_destinations(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('tee /a.txt --text "hello"')
+        async_to_sync(executor.execute)("mkdir /docs")
+
+        moved = async_to_sync(executor.execute)("mv /a.txt /docs")
+        copied = async_to_sync(executor.execute)("cp /docs/a.txt /")
+
+        self.assertEqual(moved, "Moved to /docs/a.txt")
+        self.assertEqual(copied, "Copied to /a.txt")
+        self.assertEqual(async_to_sync(executor.execute)("cat /docs/a.txt"), "hello")
+        self.assertEqual(async_to_sync(executor.execute)("cat /a.txt"), "hello")
+        self.assertNotIn("\n\n", async_to_sync(executor.execute)("ls /docs"))
 
     def test_date_command_supports_native_formats(self):
         executor = self._build_executor(
@@ -293,7 +321,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             TerminalCapabilities(email_tools=[work_tool, personal_tool])
         )
         async_to_sync(executor.vfs.write_file)(
-            "/workspace/body.txt",
+            "/body.txt",
             b"Hello from Nova",
             mime_type="text/plain",
         )
@@ -301,7 +329,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with patch.object(executor, "_send_mail_direct", new=AsyncMock(return_value="sent")) as mocked_send:
             result = async_to_sync(executor.execute)(
                 "mail send --mailbox personal@example.com --to bob@example.com "
-                '--subject "Hello" --body-file /workspace/body.txt'
+                '--subject "Hello" --body-file /body.txt'
             )
 
         self.assertEqual(result, "sent")
@@ -314,8 +342,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             TerminalCapabilities(code_execution_tool=code_tool)
         )
         async_to_sync(executor.execute)(
-            'tee /workspace/script.py --text "print(\'hello\')\nprint(\'world\')"'
+            'tee /script.py --text "print(\'hello\')\nprint(\'world\')"'
         )
+        async_to_sync(executor.execute)("mkdir /results")
 
         with (
             patch(
@@ -330,10 +359,10 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             ) as mocked_execute,
         ):
             result = async_to_sync(executor.execute)(
-                "python --output /workspace/result.txt /workspace/script.py"
+                "python --output /results /script.py"
             )
 
-        output_file = async_to_sync(executor.execute)("cat /workspace/result.txt")
+        output_file = async_to_sync(executor.execute)("cat /results/script.stdout.txt")
         self.assertIn("Status: Accepted", result)
         self.assertEqual(output_file, "hello\nworld")
         self.assertEqual(mocked_execute.await_args.args[1], "print('hello')\nprint('world')")
@@ -399,7 +428,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                     ],
                 },
                 {
-                    "content": "The current directory is /workspace.",
+                    "content": "The current directory is /.",
                     "tool_calls": [],
                 },
             ]
@@ -412,7 +441,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             agent_config=self.agent,
             runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
         )
-        self.assertEqual(result.final_answer, "The current directory is /workspace.")
+        self.assertEqual(result.final_answer, "The current directory is /.")
         self.assertIn("pwd", session.session_state["history"])
 
     def test_runtime_persists_stream_state_for_reconnect(self):
@@ -443,9 +472,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         async def fake_stream_chat_completion(*, messages, tools, on_content_delta):
             del messages, tools
             await on_content_delta("The current")
-            await on_content_delta(" directory is /workspace.")
+            await on_content_delta(" directory is /.")
             return {
-                "content": "The current directory is /workspace.",
+                "content": "The current directory is /.",
                 "tool_calls": [],
                 "total_tokens": 123,
                 "streamed": True,
@@ -457,11 +486,11 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         task.refresh_from_db()
         event_types = [item["message"]["type"] for item in channel_layer.messages]
-        self.assertEqual(result.final_answer, "The current directory is /workspace.")
+        self.assertEqual(result.final_answer, "The current directory is /.")
         self.assertEqual(result.real_tokens, 123)
         self.assertIn("response_chunk", event_types)
         self.assertIn("progress_update", event_types)
-        self.assertIn("The current directory is /workspace.", task.streamed_markdown)
+        self.assertIn("The current directory is /.", task.streamed_markdown)
         self.assertIsNotNone(task.current_response)
 
     def test_runtime_loads_compacted_history_summary(self):
@@ -472,9 +501,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             agent_config=self.agent,
             runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
             session_state={
-                "cwd": "/workspace",
+                "cwd": "/",
                 "history": [],
-                "directories": ["/workspace", "/tmp"],
+                "directories": ["/tmp"],
                 SESSION_KEY_HISTORY_SUMMARY: "## Summary\nPrevious goals",
                 SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID: first.id,
             },
@@ -555,6 +584,76 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("tee", prompt)
         self.assertIn("date +%F", prompt)
         self.assertIn("--mailbox <email>", prompt)
+        self.assertIn("- /: persistent files for this thread", prompt)
+        self.assertNotIn("/thread", prompt)
+        self.assertNotIn("/workspace", prompt)
+
+    def test_subagent_outputs_are_copied_back_under_subagents_directory(self):
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Child Agent",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        self._stored_contents: dict[str, bytes] = {}
+        seen = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ensure_root_trace
+            seen["prompt"] = ephemeral_user_prompt
+            await self.vfs.write_file("/answer.txt", b"answer", mime_type="text/plain")
+            await self.vfs.write_file("/tmp/ignored.txt", b"temp", mime_type="text/plain")
+            return ReactTerminalRunResult(
+                final_answer="Child done.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime_v2.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime_v2.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+            patch("nova.runtime_v2.agent.ReactTerminalRuntime.run", new=fake_child_run),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+            async_to_sync(runtime.vfs.write_file)("/input.txt", b"parent", mime_type="text/plain")
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Use the input.",
+                input_paths=["/input.txt"],
+            )
+
+            copied_paths = async_to_sync(runtime.vfs.find)("/subagents", "")
+            copied_answer_path = next(path for path in copied_paths if path.endswith("/answer.txt"))
+            copied_answer = async_to_sync(runtime.vfs.read_text)(copied_answer_path)
+
+        self.assertIn("Child done.", result)
+        self.assertIn("/inbox/input.txt", seen["prompt"])
+        self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
+        self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
+        self.assertEqual(copied_answer, "answer")
 
 
 class ReactTerminalExecutorTests(TransactionTestCase):

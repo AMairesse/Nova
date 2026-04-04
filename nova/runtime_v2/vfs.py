@@ -24,12 +24,12 @@ class VFSFile:
     size: int
 
 
-def normalize_vfs_path(raw_path: str, *, cwd: str = "/workspace") -> str:
+def normalize_vfs_path(raw_path: str, *, cwd: str = "/") -> str:
     candidate = str(raw_path or "").strip()
     if not candidate:
-        candidate = cwd or "/workspace"
+        candidate = cwd or "/"
     if not candidate.startswith("/"):
-        candidate = posixpath.join(cwd or "/workspace", candidate)
+        candidate = posixpath.join(cwd or "/", candidate)
     normalized = posixpath.normpath(candidate)
     if not normalized.startswith("/"):
         normalized = f"/{normalized}"
@@ -37,24 +37,43 @@ def normalize_vfs_path(raw_path: str, *, cwd: str = "/workspace") -> str:
 
 
 class VirtualFileSystem:
-    def __init__(self, *, thread, user, agent_config, session_state: dict, skill_registry: dict[str, str]):
+    def __init__(
+        self,
+        *,
+        thread,
+        user,
+        agent_config,
+        session_state: dict,
+        skill_registry: dict[str, str],
+        persistent_root_scope: str = UserFile.Scope.THREAD_SHARED,
+        persistent_root_prefix: str | None = None,
+        tmp_storage_prefix: str | None = None,
+        legacy_workspace_storage_prefix: str | None = None,
+    ):
         self.thread = thread
         self.user = user
         self.agent_config = agent_config
         self.session_state = session_state
         self.skill_registry = dict(skill_registry or {})
+        self.persistent_root_scope = str(persistent_root_scope or UserFile.Scope.THREAD_SHARED)
+        self.persistent_root_prefix = (
+            str(persistent_root_prefix or "").rstrip("/") if persistent_root_prefix else None
+        )
+        self.tmp_storage_prefix = (
+            str(tmp_storage_prefix or self._default_tmp_storage_prefix()).rstrip("/")
+        )
+        self.legacy_workspace_storage_prefix = (
+            str(legacy_workspace_storage_prefix or "").rstrip("/")
+            if legacy_workspace_storage_prefix
+            else None
+        )
 
-    @property
-    def _workspace_storage_prefix(self) -> str:
-        return f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/workspace"
-
-    @property
-    def _tmp_storage_prefix(self) -> str:
+    def _default_tmp_storage_prefix(self) -> str:
         return f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/tmp"
 
     @property
     def cwd(self) -> str:
-        return normalize_vfs_path(self.session_state.get("cwd", "/workspace"), cwd="/workspace")
+        return normalize_vfs_path(self.session_state.get("cwd", "/"), cwd="/")
 
     def set_cwd(self, path: str) -> None:
         self.session_state["cwd"] = normalize_vfs_path(path, cwd=self.cwd)
@@ -65,80 +84,105 @@ class VirtualFileSystem:
         self.session_state["history"] = history[-50:]
 
     def _get_session_dirs(self) -> set[str]:
-        return {
-            normalize_vfs_path(path, cwd="/workspace")
-            for path in list(self.session_state.get("directories") or [])
-        }
+        directories = set()
+        for path in list(self.session_state.get("directories") or []):
+            normalized = normalize_vfs_path(path, cwd="/")
+            if normalized != "/":
+                directories.add(normalized)
+        return directories
 
     def _set_session_dirs(self, dirs: set[str]) -> None:
-        self.session_state["directories"] = sorted(dirs)
+        self.session_state["directories"] = sorted(
+            directory for directory in dirs if directory and directory != "/"
+        )
 
     def _storage_path_for_vfs_path(self, path: str) -> tuple[str, str]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
-        if normalized == "/thread" or normalized.startswith("/thread/"):
-            suffix = normalized[len("/thread"):] or "/"
-            return UserFile.Scope.THREAD_SHARED, suffix
-        if normalized == "/workspace" or normalized.startswith("/workspace/"):
-            suffix = normalized[len("/workspace"):] or "/"
-            return UserFile.Scope.MESSAGE_ATTACHMENT, f"{self._workspace_storage_prefix}{suffix}"
+        if normalized == "/skills" or normalized.startswith("/skills/"):
+            raise VFSError("Writing into /skills is not supported.")
         if normalized == "/tmp" or normalized.startswith("/tmp/"):
             suffix = normalized[len("/tmp"):] or "/"
-            return UserFile.Scope.MESSAGE_ATTACHMENT, f"{self._tmp_storage_prefix}{suffix}"
-        raise VFSError(f"Unsupported writable path: {normalized}")
+            return UserFile.Scope.MESSAGE_ATTACHMENT, f"{self.tmp_storage_prefix}{suffix}"
+        if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
+            return UserFile.Scope.THREAD_SHARED, normalized
+        if not self.persistent_root_prefix:
+            raise VFSError("Persistent root prefix is not configured.")
+        return UserFile.Scope.MESSAGE_ATTACHMENT, f"{self.persistent_root_prefix}{normalized}"
+
+    def _root_vfs_path_for_user_file(self, original_path: str) -> str | None:
+        raw_path = str(original_path or "").strip()
+        if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
+            return normalize_vfs_path(raw_path or "/", cwd="/")
+        if self.persistent_root_prefix and raw_path.startswith(self.persistent_root_prefix):
+            suffix = raw_path[len(self.persistent_root_prefix):] or "/"
+            return normalize_vfs_path(suffix, cwd="/")
+        return None
 
     def _vfs_path_for_user_file(self, user_file: UserFile) -> str | None:
         original_path = str(user_file.original_filename or "").strip()
-        if user_file.scope == UserFile.Scope.THREAD_SHARED:
-            return f"/thread{original_path or ''}"
         if user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT:
-            if original_path.startswith(self._workspace_storage_prefix):
-                suffix = original_path[len(self._workspace_storage_prefix):] or ""
-                return f"/workspace{suffix}"
-            if original_path.startswith(self._tmp_storage_prefix):
-                suffix = original_path[len(self._tmp_storage_prefix):] or ""
-                return f"/tmp{suffix}"
+            if original_path.startswith(self.tmp_storage_prefix):
+                suffix = original_path[len(self.tmp_storage_prefix):] or ""
+                return normalize_vfs_path(f"/tmp{suffix}", cwd="/")
+            if self.legacy_workspace_storage_prefix and original_path.startswith(self.legacy_workspace_storage_prefix):
+                suffix = original_path[len(self.legacy_workspace_storage_prefix):] or "/"
+                return normalize_vfs_path(suffix, cwd="/")
+
+        if user_file.scope == self.persistent_root_scope:
+            return self._root_vfs_path_for_user_file(original_path)
         return None
 
     async def _load_real_files(self) -> list[VFSFile]:
         def _load():
+            query = Q(scope=UserFile.Scope.MESSAGE_ATTACHMENT, original_filename__startswith=self.tmp_storage_prefix)
+            if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
+                query |= Q(scope=UserFile.Scope.THREAD_SHARED)
+            elif self.persistent_root_prefix:
+                query |= Q(
+                    scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                    original_filename__startswith=self.persistent_root_prefix,
+                )
+            if self.legacy_workspace_storage_prefix:
+                query |= Q(
+                    scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                    original_filename__startswith=self.legacy_workspace_storage_prefix,
+                )
             return list(
                 UserFile.objects.filter(
                     user=self.user,
                     thread=self.thread,
-                ).filter(
-                    Q(scope=UserFile.Scope.THREAD_SHARED)
-                    | Q(
-                        scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-                        original_filename__startswith=self._workspace_storage_prefix,
-                    )
-                    | Q(
-                        scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-                        original_filename__startswith=self._tmp_storage_prefix,
-                    )
-                )
+                ).filter(query)
             )
 
         user_files = await sync_to_async(_load, thread_sensitive=True)()
-        result: list[VFSFile] = []
+        by_path: dict[str, VFSFile] = {}
         for user_file in user_files:
             vfs_path = self._vfs_path_for_user_file(user_file)
             if not vfs_path:
                 continue
-            result.append(
-                VFSFile(
-                    path=normalize_vfs_path(vfs_path, cwd="/"),
-                    user_file=user_file,
-                    mime_type=str(user_file.mime_type or "application/octet-stream"),
-                    size=int(user_file.size or 0),
-                )
+            candidate = VFSFile(
+                path=normalize_vfs_path(vfs_path, cwd="/"),
+                user_file=user_file,
+                mime_type=str(user_file.mime_type or "application/octet-stream"),
+                size=int(user_file.size or 0),
             )
-        return result
+            existing = by_path.get(candidate.path)
+            if existing is None:
+                by_path[candidate.path] = candidate
+                continue
+            existing_scope = getattr(existing.user_file, "scope", None)
+            candidate_scope = getattr(candidate.user_file, "scope", None)
+            if existing_scope != UserFile.Scope.THREAD_SHARED and candidate_scope == UserFile.Scope.THREAD_SHARED:
+                by_path[candidate.path] = candidate
+            elif getattr(candidate.user_file, "id", 0) > getattr(existing.user_file, "id", 0):
+                by_path[candidate.path] = candidate
+        return list(by_path.values())
 
     async def path_exists(self, path: str) -> bool:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
-        if normalized in {"/", "/skills", "/thread", "/workspace", "/tmp"}:
+        if normalized in {"/", "/skills", "/tmp"}:
             return True
-        if normalized == "/skills" or normalized.startswith("/skills/"):
+        if normalized.startswith("/skills/"):
             skill_name = posixpath.basename(normalized)
             return skill_name in self.skill_registry
         if normalized in self._get_session_dirs():
@@ -152,7 +196,7 @@ class VirtualFileSystem:
 
     async def is_dir(self, path: str) -> bool:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
-        if normalized in {"/", "/skills", "/thread", "/workspace", "/tmp"}:
+        if normalized in {"/", "/skills", "/tmp"}:
             return True
         if normalized in self._get_session_dirs():
             return True
@@ -163,14 +207,6 @@ class VirtualFileSystem:
 
     async def list_dir(self, path: str | None = None) -> list[dict]:
         normalized = normalize_vfs_path(path or self.cwd, cwd=self.cwd)
-        if normalized == "/":
-            return [
-                {"name": "skills", "path": "/skills", "type": "dir"},
-                {"name": "thread", "path": "/thread", "type": "dir"},
-                {"name": "workspace", "path": "/workspace", "type": "dir"},
-                {"name": "tmp", "path": "/tmp", "type": "dir"},
-            ]
-
         if normalized == "/skills":
             return [
                 {"name": name, "path": f"/skills/{name}", "type": "file"}
@@ -178,6 +214,10 @@ class VirtualFileSystem:
             ]
 
         entries: dict[str, dict] = {}
+        if normalized == "/":
+            entries["skills"] = {"name": "skills", "path": "/skills", "type": "dir"}
+            entries["tmp"] = {"name": "tmp", "path": "/tmp", "type": "dir"}
+
         all_files = await self._load_real_files()
         session_dirs = self._get_session_dirs()
 
@@ -240,10 +280,10 @@ class VirtualFileSystem:
         content = await download_file_content(item.user_file)
         try:
             return content.decode("utf-8")
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as exc:
             raise VFSError(
                 f"Binary file cannot be displayed as text: {normalized} ({item.mime_type}, {item.size} bytes)"
-            )
+            ) from exc
 
     async def read_bytes(self, path: str) -> tuple[bytes, str]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
@@ -254,10 +294,15 @@ class VirtualFileSystem:
 
     async def mkdir(self, path: str) -> str:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
-        if normalized.startswith("/thread"):
-            raise VFSError("mkdir is only supported in /workspace and /tmp.")
-        if not (normalized.startswith("/workspace") or normalized.startswith("/tmp")):
-            raise VFSError(f"Unsupported directory path: {normalized}")
+        if normalized.startswith("/skills"):
+            raise VFSError("mkdir is not supported inside /skills.")
+        if normalized in {"/", "/tmp"}:
+            return normalized
+        existing_file = await self.get_real_file(normalized)
+        if existing_file is not None:
+            raise VFSError(f"Cannot create directory over file: {normalized}")
+        if await self.is_dir(normalized):
+            return normalized
         dirs = self._get_session_dirs()
         dirs.add(normalized)
         self._set_session_dirs(dirs)
@@ -324,6 +369,9 @@ class VirtualFileSystem:
 
     async def remove(self, path: str) -> None:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
+        if normalized in {"/", "/skills", "/tmp"}:
+            raise VFSError(f"Cannot remove protected path: {normalized}")
+
         item = await self.get_real_file(normalized)
         if item and item.user_file is not None:
             await sync_to_async(item.user_file.delete, thread_sensitive=True)()
@@ -341,27 +389,52 @@ class VirtualFileSystem:
 
         raise VFSError(f"Path not found: {normalized}")
 
+    async def resolve_output_path(self, destination: str, *, source_name: str | None = None) -> str:
+        raw_destination = str(destination or "").strip()
+        normalized_destination = normalize_vfs_path(raw_destination, cwd=self.cwd)
+        if normalized_destination.startswith("/skills"):
+            raise VFSError("Writing into /skills is not supported.")
+        if raw_destination.endswith("/") and not await self.path_exists(normalized_destination):
+            raise VFSError(f"Directory not found: {normalized_destination}")
+        if await self.path_exists(normalized_destination) and await self.is_dir(normalized_destination):
+            if not source_name:
+                raise VFSError(f"Destination is a directory: {normalized_destination}")
+            return normalize_vfs_path(
+                posixpath.join(normalized_destination, str(source_name or "").strip()),
+                cwd="/",
+            )
+        return normalized_destination
+
     async def copy(self, source: str, destination: str) -> VFSFile:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
+        source_name = posixpath.basename(normalized_source) or "file"
+        resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
         if normalized_source.startswith("/skills/"):
             content = (await self.read_text(normalized_source)).encode("utf-8")
-            return await self.write_file(destination, content, mime_type="text/markdown")
+            return await self.write_file(resolved_destination, content, mime_type="text/markdown")
         content, mime_type = await self.read_bytes(normalized_source)
-        return await self.write_file(destination, content, mime_type=mime_type)
+        return await self.write_file(resolved_destination, content, mime_type=mime_type)
 
     async def move(self, source: str, destination: str) -> str:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
-        normalized_destination = normalize_vfs_path(destination, cwd=self.cwd)
+        source_name = posixpath.basename(normalized_source) or "file"
+        resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
         item = await self.get_real_file(normalized_source)
         if item is None or item.user_file is None:
             raise VFSError(f"File not found: {normalized_source}")
+        if normalized_source == resolved_destination:
+            return resolved_destination
 
-        src_scope, _src_storage = self._storage_path_for_vfs_path(normalized_source)
-        dst_scope, dst_storage = self._storage_path_for_vfs_path(normalized_destination)
-        if src_scope != dst_scope:
-            await self.copy(normalized_source, normalized_destination)
+        destination_existing = await self.get_real_file(resolved_destination)
+        if destination_existing and destination_existing.user_file is not None:
+            await sync_to_async(destination_existing.user_file.delete, thread_sensitive=True)()
+
+        actual_src_scope = str(item.user_file.scope or "")
+        dst_scope, dst_storage = self._storage_path_for_vfs_path(resolved_destination)
+        if actual_src_scope != dst_scope:
+            await self.copy(normalized_source, resolved_destination)
             await self.remove(normalized_source)
-            return normalized_destination
+            return resolved_destination
 
         def _save():
             item.user_file.original_filename = dst_storage
@@ -369,7 +442,7 @@ class VirtualFileSystem:
             item.user_file.save(update_fields=["original_filename", "scope", "updated_at"])
 
         await sync_to_async(_save, thread_sensitive=True)()
-        return normalized_destination
+        return resolved_destination
 
     async def find(self, start_path: str, term: str = "") -> list[str]:
         normalized_start = normalize_vfs_path(start_path, cwd=self.cwd)
@@ -394,3 +467,15 @@ class VirtualFileSystem:
                     matches.append(directory)
 
         return sorted(set(matches))
+
+    async def snapshot_persistent_files(self) -> dict[str, tuple[int | None, int, str]]:
+        snapshot: dict[str, tuple[int | None, int, str]] = {}
+        for item in await self._load_real_files():
+            if item.path == "/tmp" or item.path.startswith("/tmp/"):
+                continue
+            snapshot[item.path] = (
+                getattr(item.user_file, "id", None),
+                item.size,
+                item.mime_type,
+            )
+        return snapshot

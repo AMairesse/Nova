@@ -8,9 +8,6 @@ SUPPORTED_PROVIDER_TYPES = {
 
 RUNTIME_STORAGE_ROOT = "/.runtime_v2/agents"
 
-DEFAULT_WORKSPACE_DIRS = [
-    "/workspace",
-    "/workspace/inbox",
-    "/workspace/subagents",
+DEFAULT_SESSION_DIRS = [
     "/tmp",
 ]

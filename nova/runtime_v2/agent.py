@@ -4,11 +4,13 @@ import json
 import posixpath
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from asgiref.sync import sync_to_async
 
 from nova.models.Message import Actor, Message
+from nova.models.UserFile import UserFile
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
 
 from .capabilities import resolve_terminal_capabilities
@@ -16,8 +18,13 @@ from .compaction import (
     SESSION_KEY_HISTORY_SUMMARY,
     SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID,
 )
+from .constants import RUNTIME_STORAGE_ROOT
 from .provider_client import OpenAICompatibleProviderClient
-from .sessions import get_or_create_agent_thread_session, update_agent_thread_session
+from .sessions import (
+    get_or_create_agent_thread_session,
+    normalize_session_state,
+    update_agent_thread_session,
+)
 from .skills_registry import build_skill_registry
 from .terminal import TerminalCommandError, TerminalExecutor
 from .vfs import VirtualFileSystem
@@ -43,6 +50,12 @@ class ReactTerminalRuntime:
         progress_handler=None,
         source_message_id: int | None = None,
         parent_trace_node_id: str | None = None,
+        persist_session: bool = True,
+        session_state_override: dict | None = None,
+        persistent_root_scope: str | None = None,
+        persistent_root_prefix: str | None = None,
+        tmp_storage_prefix: str | None = None,
+        legacy_workspace_storage_prefix: str | None = None,
     ):
         self.user = user
         self.thread = thread
@@ -52,6 +65,12 @@ class ReactTerminalRuntime:
         self.progress_handler = progress_handler
         self.source_message_id = source_message_id
         self.parent_trace_node_id = parent_trace_node_id
+        self.persist_session = bool(persist_session)
+        self.session_state_override = dict(session_state_override or {})
+        self.persistent_root_scope = persistent_root_scope or UserFile.Scope.THREAD_SHARED
+        self.persistent_root_prefix = persistent_root_prefix
+        self.tmp_storage_prefix = tmp_storage_prefix
+        self.legacy_workspace_storage_prefix = legacy_workspace_storage_prefix
 
         self.capabilities = None
         self.session = None
@@ -61,14 +80,28 @@ class ReactTerminalRuntime:
 
     async def initialize(self):
         self.capabilities = await sync_to_async(resolve_terminal_capabilities, thread_sensitive=True)(self.agent_config)
-        self.session = await get_or_create_agent_thread_session(self.thread, self.agent_config)
+        if self.persist_session:
+            self.session = await get_or_create_agent_thread_session(self.thread, self.agent_config)
+            session_state = dict(self.session.session_state or {})
+        else:
+            session_state = normalize_session_state(self.session_state_override)
+            self.session = SimpleNamespace(session_state=session_state)
+        legacy_workspace_storage_prefix = self.legacy_workspace_storage_prefix
+        if legacy_workspace_storage_prefix is None and self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
+            legacy_workspace_storage_prefix = (
+                f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/workspace"
+            )
         skill_registry = build_skill_registry(self.capabilities)
         self.vfs = VirtualFileSystem(
             thread=self.thread,
             user=self.user,
             agent_config=self.agent_config,
-            session_state=dict(self.session.session_state or {}),
+            session_state=session_state,
             skill_registry=skill_registry,
+            persistent_root_scope=self.persistent_root_scope,
+            persistent_root_prefix=self.persistent_root_prefix,
+            tmp_storage_prefix=self.tmp_storage_prefix,
+            legacy_workspace_storage_prefix=legacy_workspace_storage_prefix,
         )
         self.terminal = TerminalExecutor(vfs=self.vfs, capabilities=self.capabilities)
         self.provider_client = OpenAICompatibleProviderClient(self.agent_config.llm_provider)
@@ -97,10 +130,10 @@ class ReactTerminalRuntime:
             "Use shell-like commands only.\n"
             "The terminal session is persistent for this agent and thread.\n"
             "Filesystem layout:\n"
+            "- /: persistent files for this thread\n"
             "- /skills: readonly recipes\n"
-            "- /thread: durable thread files\n"
-            "- /workspace: your working area\n"
-            "- /tmp: temporary working area\n"
+            "- /tmp: scratch files hidden from the normal file sidebar\n"
+            "- /subagents/<agent-id>-<run-id>/: files returned by delegated sub-agents\n"
             "When you need guidance, inspect /skills with `ls /skills` and `cat /skills/<file>.md`.\n"
             "If the current working directory matters and you are unsure, run `pwd` first.\n"
             f"Enabled command families: {families}.\n"
@@ -156,8 +189,8 @@ class ReactTerminalRuntime:
             file_ids = internal_data.get("file_ids")
             if role == "user" and isinstance(file_ids, list) and file_ids:
                 content = (
-                    f"{content}\n\n[New files were added to /thread with this message. "
-                    "Inspect them with `ls /thread` if needed.]"
+                    f"{content}\n\n[New files were added to the terminal filesystem with this message. "
+                    "Inspect them with `ls /` if needed.]"
                 ).strip()
             history.append({"role": role, "content": content})
         return history
@@ -201,7 +234,7 @@ class ReactTerminalRuntime:
                             "input_paths": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "optional file paths to copy into the child workspace",
+                                "description": "optional file paths to copy into the child runtime under /inbox",
                             },
                         },
                         "required": ["agent_id", "question"],
@@ -212,6 +245,9 @@ class ReactTerminalRuntime:
         ]
 
     async def _persist_session(self):
+        if not self.persist_session:
+            self.session.session_state = normalize_session_state(self.vfs.session_state)
+            return
         await update_agent_thread_session(self.session, state=self.vfs.session_state)
 
     async def _record_progress(self, message: str, *, severity: str = "info") -> None:
@@ -282,6 +318,13 @@ class ReactTerminalRuntime:
             )
             child_trace = self.trace_handler.clone_for_parent(parent_node_id=node_id)
 
+        child_run_id = uuid.uuid4().hex[:8]
+        child_root_prefix = (
+            f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/delegations/{child_run_id}/root"
+        )
+        child_tmp_prefix = (
+            f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/delegations/{child_run_id}/tmp"
+        )
         child_runtime = await ReactTerminalRuntime(
             user=self.user,
             thread=self.thread,
@@ -290,12 +333,17 @@ class ReactTerminalRuntime:
             trace_handler=child_trace,
             progress_handler=None,
             parent_trace_node_id=node_id,
+            persist_session=False,
+            session_state_override={"cwd": "/", "history": [], "directories": ["/tmp", "/inbox"]},
+            persistent_root_scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+            persistent_root_prefix=child_root_prefix,
+            tmp_storage_prefix=child_tmp_prefix,
         ).initialize()
 
         copied_inputs: list[str] = []
         for input_path in list(input_paths or []):
             basename = posixpath.basename(str(input_path or "").strip()) or "input"
-            child_target = f"/workspace/inbox/{basename}"
+            child_target = f"/inbox/{basename}"
             try:
                 normalized_input = str(input_path or "").strip()
                 if normalized_input.startswith("/skills/"):
@@ -307,14 +355,14 @@ class ReactTerminalRuntime:
             except Exception as exc:
                 if self.trace_handler and node_id:
                     await self.trace_handler.fail_subagent(node_id, error=str(exc))
-                return f"Failed to copy {input_path} into sub-agent workspace: {exc}"
+                return f"Failed to copy {input_path} into the sub-agent input area: {exc}"
             copied_inputs.append(child_target)
 
-        before_files = await child_runtime.vfs.find("/workspace", "")
+        before_files = await child_runtime.vfs.snapshot_persistent_files()
         child_question = str(question or "").strip()
         if copied_inputs:
             child_question += (
-                "\n\nInput files were copied into your workspace:\n"
+                "\n\nInput files were copied into /inbox:\n"
                 + "\n".join(f"- {path}" for path in copied_inputs)
             )
 
@@ -326,15 +374,28 @@ class ReactTerminalRuntime:
                 await self.trace_handler.fail_subagent(node_id, error=str(exc))
             return f"Sub-agent failed: {exc}"
 
-        after_files = await child_runtime.vfs.find("/workspace", "")
-        created_files = [path for path in after_files if path not in before_files]
+        after_files = await child_runtime.vfs.snapshot_persistent_files()
+        changed_files = sorted([
+            path
+            for path, snapshot in after_files.items()
+            if before_files.get(path) != snapshot
+        ])
         copied_outputs: list[str] = []
-        if created_files:
-            target_dir = f"/workspace/subagents/{match.id}-{uuid.uuid4().hex[:8]}"
+        if changed_files:
+            target_dir = f"/subagents/{match.id}-{child_run_id}"
+
+            async def _ensure_parent_dirs(full_path: str) -> None:
+                current = "/"
+                for segment in [part for part in full_path.strip("/").split("/")[:-1] if part]:
+                    current = posixpath.join(current, segment) if current != "/" else f"/{segment}"
+                    await self.vfs.mkdir(current)
+
+            await self.vfs.mkdir("/subagents")
             await self.vfs.mkdir(target_dir)
-            for created_path in created_files:
-                basename = posixpath.basename(created_path)
-                parent_target = f"{target_dir}/{basename}"
+            for created_path in changed_files:
+                relative_path = created_path.lstrip("/")
+                parent_target = posixpath.join(target_dir, relative_path)
+                await _ensure_parent_dirs(parent_target)
                 content, mime_type = await child_runtime.vfs.read_bytes(created_path)
                 await self.vfs.write_file(parent_target, content, mime_type=mime_type)
                 copied_outputs.append(parent_target)
@@ -349,7 +410,7 @@ class ReactTerminalRuntime:
 
         output_suffix = ""
         if copied_outputs:
-            output_suffix = "\nOutput files copied back to parent workspace:\n" + "\n".join(copied_outputs)
+            output_suffix = "\nOutput files copied back to the parent runtime:\n" + "\n".join(copied_outputs)
         return f"Sub-agent {subagent_label} finished.\n\n{answer}{output_suffix}"
 
     async def _execute_tool_call(self, tool_call: dict) -> dict:

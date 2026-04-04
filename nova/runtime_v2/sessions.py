@@ -3,15 +3,32 @@ from __future__ import annotations
 from asgiref.sync import sync_to_async
 
 from nova.models.AgentThreadSession import AgentThreadSession
-from .constants import DEFAULT_WORKSPACE_DIRS, RUNTIME_ENGINE_REACT_TERMINAL_V1
+from .constants import DEFAULT_SESSION_DIRS, RUNTIME_ENGINE_REACT_TERMINAL_V1
+
+
+def _normalize_visible_runtime_path(raw_path: str | None) -> str:
+    path = str(raw_path or "").strip()
+    if not path:
+        return ""
+    if path in {"/workspace", "/thread"}:
+        return "/"
+    for prefix in ("/workspace/", "/thread/"):
+        if path.startswith(prefix):
+            suffix = path[len(prefix):].lstrip("/")
+            return f"/{suffix}" if suffix else "/"
+    return path
 
 
 def normalize_session_state(state: dict | None) -> dict:
     normalized = dict(state or {})
-    cwd = str(normalized.get("cwd") or "/workspace").strip() or "/workspace"
+    cwd = _normalize_visible_runtime_path(normalized.get("cwd")) or "/"
     history = [str(item) for item in list(normalized.get("history") or []) if str(item).strip()]
-    directories = [str(item) for item in list(normalized.get("directories") or []) if str(item).strip()]
-    for required_dir in DEFAULT_WORKSPACE_DIRS:
+    directories = []
+    for raw_directory in list(normalized.get("directories") or []):
+        directory = _normalize_visible_runtime_path(raw_directory)
+        if directory and directory != "/":
+            directories.append(directory)
+    for required_dir in DEFAULT_SESSION_DIRS:
         if required_dir not in directories:
             directories.append(required_dir)
     normalized["cwd"] = cwd

@@ -10,6 +10,7 @@ from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
+from nova.runtime_v2.constants import RUNTIME_STORAGE_ROOT
 from nova.tests.factories import create_user
 
 
@@ -90,6 +91,25 @@ class FilesViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         files_arg = mocked_tree.call_args.args[0]
         self.assertEqual(list(files_arg.values_list("scope", flat=True)), [UserFile.Scope.THREAD_SHARED])
+
+    @patch("nova.views.files_views.build_virtual_tree", return_value=[])
+    def test_file_list_hides_runtime_v2_tmp_files(self, mocked_tree):
+        self._create_user_file(name="/visible.txt")
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/runtime-tmp.txt",
+            original_filename=f"{RUNTIME_STORAGE_ROOT}/42/tmp/runtime-tmp.txt",
+            mime_type="text/plain",
+            size=8,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        response = self.client.get(reverse("file_list", args=[self.thread.id]))
+
+        self.assertEqual(response.status_code, 200)
+        files_arg = mocked_tree.call_args.args[0]
+        self.assertEqual(list(files_arg.values_list("original_filename", flat=True)), ["/visible.txt"])
 
     @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/file")
     def test_file_download_url_success(self, mocked_get_url):
