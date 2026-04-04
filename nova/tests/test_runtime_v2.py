@@ -63,16 +63,13 @@ class RuntimeV2SupportTests(TestCase):
             runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
         )
 
-    def test_get_v2_runtime_error_rejects_continuous_mode(self):
+    def test_get_v2_runtime_error_accepts_continuous_mode(self):
         error = get_v2_runtime_error(
             self.agent,
             thread_mode=Thread.Mode.CONTINUOUS,
         )
 
-        self.assertEqual(
-            error,
-            "React Terminal V1 only supports standard thread mode.",
-        )
+        self.assertIsNone(error)
 
 
 class TerminalExecutorTests(TestCase):
@@ -145,6 +142,20 @@ class TerminalExecutorCommandTests(TransactionTestCase):
     def _build_executor(self, capabilities: TerminalCapabilities | None = None):
         vfs = VirtualFileSystem(
             thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+        )
+        return TerminalExecutor(vfs=vfs, capabilities=capabilities or TerminalCapabilities())
+
+    def _build_executor_for_thread(
+        self,
+        thread,
+        capabilities: TerminalCapabilities | None = None,
+    ):
+        vfs = VirtualFileSystem(
+            thread=thread,
             user=self.user,
             agent_config=self.agent,
             session_state=dict(self.base_state),
@@ -258,6 +269,64 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertRegex(utc_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$")
         self.assertRegex(date_only, r"^\d{4}-\d{2}-\d{2}$")
         self.assertRegex(time_only, r"^\d{2}:\d{2}:\d{2}$")
+
+    def test_history_commands_are_available_in_continuous_mode(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous thread",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        executor = self._build_executor_for_thread(continuous_thread)
+
+        with patch(
+            "nova.runtime_v2.terminal.conversation_search",
+            new_callable=AsyncMock,
+            return_value={
+                "results": [
+                    {
+                        "kind": "message",
+                        "day_label": "2026-04-04",
+                        "day_segment_id": 5,
+                        "message_id": 42,
+                        "snippet": "important note",
+                    }
+                ],
+                "notes": [],
+            },
+        ) as mocked_search:
+            search_result = async_to_sync(executor.execute)(
+                'history search "important note" --limit 2'
+            )
+
+        self.assertIn("message_id=42", search_result)
+        self.assertIn("important note", search_result)
+        self.assertEqual(mocked_search.await_args.kwargs["query"], "important note")
+        self.assertEqual(mocked_search.await_args.kwargs["limit"], 2)
+        self.assertEqual(mocked_search.await_args.kwargs["agent"].thread, continuous_thread)
+
+        with patch(
+            "nova.runtime_v2.terminal.conversation_get",
+            new_callable=AsyncMock,
+            return_value={
+                "messages": [
+                    {
+                        "message_id": 42,
+                        "role": Actor.USER,
+                        "content": "important note",
+                        "created_at": "2026-04-04T10:00:00+00:00",
+                    }
+                ],
+                "truncated": False,
+            },
+        ) as mocked_get:
+            get_result = async_to_sync(executor.execute)(
+                "history get --message 42 --limit 5"
+            )
+
+        self.assertIn("[42]", get_result)
+        self.assertIn("important note", get_result)
+        self.assertEqual(mocked_get.await_args.kwargs["message_id"], 42)
+        self.assertEqual(mocked_get.await_args.kwargs["limit"], 5)
 
     def test_mail_accounts_and_multi_mailbox_selection_are_explicit(self):
         work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
@@ -383,6 +452,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("date +%F", skills["date.md"])
+
+    def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(),
+            thread_mode=Thread.Mode.CONTINUOUS,
+        )
+
+        self.assertIn("continuous.md", skills)
+        self.assertIn("history search", skills["continuous.md"])
+        self.assertIn("history get", skills["continuous.md"])
 
 
 class ReactTerminalRuntimeTests(TransactionTestCase):
@@ -524,6 +603,46 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertFalse(any(item["content"] == "Initial requirement" for item in history[1:]))
         self.assertTrue(any(item["content"] == "Recent context" for item in history[1:]))
 
+    def test_runtime_loads_continuous_context_and_rewrites_history_guidance(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous runtime",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=continuous_thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        fake_messages = [
+            SimpleNamespace(
+                type="system",
+                content="Use conversation_search and conversation_get for older context.",
+            ),
+            SimpleNamespace(type="human", content="User note"),
+            SimpleNamespace(type="ai", content="Assistant note"),
+        ]
+
+        with patch(
+            "nova.runtime_v2.agent.load_continuous_context",
+            return_value=(SimpleNamespace(), fake_messages),
+        ) as mocked_loader:
+            history = async_to_sync(runtime._load_history_messages)()
+
+        self.assertEqual(history[0]["role"], "system")
+        self.assertIn("history search", history[0]["content"])
+        self.assertIn("history get", history[0]["content"])
+        self.assertEqual(history[1], {"role": "user", "content": "User note"})
+        self.assertEqual(history[2], {"role": "assistant", "content": "Assistant note"})
+        mocked_loader.assert_called_once_with(
+            self.user,
+            continuous_thread,
+            exclude_message_id=None,
+        )
+
     def test_system_prompt_mentions_touch_tee_and_conditional_mailbox_and_date_guidance(self):
         date_tool = Tool.objects.create(
             user=self.user,
@@ -587,6 +706,26 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("- /: persistent files for this thread", prompt)
         self.assertNotIn("/thread", prompt)
         self.assertNotIn("/workspace", prompt)
+
+    def test_continuous_system_prompt_mentions_history_commands(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous prompt thread",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=continuous_thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+
+        self.assertIn("continuous thread", prompt)
+        self.assertIn("history search", prompt)
+        self.assertIn("history get", prompt)
 
     def test_subagent_outputs_are_copied_back_under_subagents_directory(self):
         child_agent = AgentConfig.objects.create(
@@ -858,6 +997,37 @@ class ReactTerminalExecutorTests(TransactionTestCase):
         self.assertIn(SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID, session.session_state)
         self.assertIn("summarization_complete", event_types)
         self.assertIn("task_complete", event_types)
+
+    def test_summarization_executor_rejects_continuous_mode(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous compaction",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        continuous_thread.add_message("Message 1", Actor.USER)
+        continuous_thread.add_message("Message 2", Actor.AGENT)
+        continuous_thread.add_message("Message 3", Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        with patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer):
+            executor = ReactTerminalSummarizationTaskExecutor(
+                task,
+                self.user,
+                continuous_thread,
+                self.agent,
+            )
+            async_to_sync(executor.execute)()
+
+        task.refresh_from_db()
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertEqual(task.status, TaskStatus.FAILED)
+        self.assertIn("task_error", event_types)
+        self.assertIn("continuous mode", task.result)
 
 
 class MessageSubmissionV2Tests(TestCase):

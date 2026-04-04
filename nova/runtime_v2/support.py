@@ -16,8 +16,8 @@ def get_v2_runtime_error(agent_config, *, thread_mode: str | None) -> str | None
     if not is_react_terminal_runtime(agent_config):
         return None
 
-    if thread_mode != Thread.Mode.THREAD:
-        return "React Terminal V1 only supports standard thread mode."
+    if thread_mode not in {Thread.Mode.THREAD, Thread.Mode.CONTINUOUS}:
+        return "React Terminal V1 only supports standard and continuous thread modes."
 
     provider = getattr(agent_config, "llm_provider", None)
     provider_type = str(getattr(provider, "provider_type", "") or "").strip().lower()

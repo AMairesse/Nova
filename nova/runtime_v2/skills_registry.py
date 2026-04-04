@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from nova.models.Thread import Thread
+
 from .capabilities import TerminalCapabilities
 
 
-def build_skill_registry(capabilities: TerminalCapabilities) -> dict[str, str]:
+def build_skill_registry(
+    capabilities: TerminalCapabilities,
+    *,
+    thread_mode: str | None = None,
+) -> dict[str, str]:
     skills = {
         "terminal.md": """# Terminal
 
@@ -21,6 +27,24 @@ Use relative paths only if you are confident about the current working directory
 If you are unsure, run `pwd` first.
 """,
     }
+
+    if thread_mode == Thread.Mode.CONTINUOUS:
+        skills["continuous.md"] = """# Continuous Mode
+
+This thread runs in continuous mode.
+
+The model already receives:
+- summaries from previous days when available
+- a recent raw message window for today
+
+When you need older evidence or exact passages, use:
+- `history search <query>`
+- `history get --message <id>`
+- `history get --day-segment <id>`
+
+Use `history search` first to locate the right day segment or message, then
+`history get` to retrieve exact content before answering.
+"""
 
     if capabilities.has_email:
         mailbox_note = (

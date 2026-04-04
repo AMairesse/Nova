@@ -1083,6 +1083,41 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "ERROR")
         self.assertIn("Not enough messages to summarize", response.json()["message"])
 
+    def test_summarize_thread_v2_rejects_continuous_mode(self):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov V2 continuous",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="V2 Agent continuous",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=1,
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous v2",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        thread.add_message("m1", actor=Actor.USER)
+        thread.add_message("m2", actor=Actor.AGENT)
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("not available in continuous mode", response.json()["message"])
+
     @patch("nova.views.thread_views.get_checkpointer")
     @patch("nova.views.thread_views.LLMAgent.create")
     def test_summarize_thread_returns_confirmation_when_sub_agents_have_context(

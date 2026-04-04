@@ -16,6 +16,7 @@ from .compaction import (
     approximate_token_count_from_text,
     build_v2_compaction_messages,
     format_messages_for_compaction,
+    get_v2_compaction_error,
     get_v2_compaction_payload,
     store_v2_compaction_state,
 )
@@ -265,6 +266,9 @@ class ReactTerminalSummarizationTaskExecutor(TaskExecutor):
         )
         if runtime_error:
             raise ValueError(runtime_error)
+        compaction_error = get_v2_compaction_error(self.thread)
+        if compaction_error:
+            raise ValueError(compaction_error)
         await self.handler.record_progress("Preparing React Terminal compaction")
         self.provider_client = OpenAICompatibleProviderClient(self.agent_config.llm_provider)
         self.session = await get_or_create_agent_thread_session(self.thread, self.agent_config)

@@ -7,12 +7,17 @@ from asgiref.sync import sync_to_async
 
 from nova.models.AgentThreadSession import AgentThreadSession
 from nova.models.Message import Actor, Message
+from nova.models.Thread import Thread
 
 from .constants import RUNTIME_ENGINE_REACT_TERMINAL_V1
 
 SESSION_KEY_HISTORY_SUMMARY = "history_summary_markdown"
 SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID = "summary_until_message_id"
 SESSION_KEY_COMPACTED_AT = "compacted_at"
+CONTINUOUS_MODE_COMPACTION_ERROR = (
+    "React Terminal compaction is not available in continuous mode. "
+    "Continuous mode relies on day summaries and history search/get."
+)
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -20,6 +25,12 @@ def _coerce_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def get_v2_compaction_error(thread) -> str | None:
+    if getattr(thread, "mode", None) == Thread.Mode.CONTINUOUS:
+        return CONTINUOUS_MODE_COMPACTION_ERROR
+    return None
 
 
 def get_v2_compaction_state(thread, agent_config) -> dict[str, Any]:

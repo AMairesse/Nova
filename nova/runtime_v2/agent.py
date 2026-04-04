@@ -9,7 +9,9 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 
+from nova.continuous.context_builder import load_continuous_context
 from nova.models.Message import Actor, Message
+from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
 
@@ -91,7 +93,10 @@ class ReactTerminalRuntime:
             legacy_workspace_storage_prefix = (
                 f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/workspace"
             )
-        skill_registry = build_skill_registry(self.capabilities)
+        skill_registry = build_skill_registry(
+            self.capabilities,
+            thread_mode=getattr(self.thread, "mode", None),
+        )
         self.vfs = VirtualFileSystem(
             thread=self.thread,
             user=self.user,
@@ -108,7 +113,9 @@ class ReactTerminalRuntime:
         return self
 
     def build_system_prompt(self) -> str:
-        families = ", ".join(self.capabilities.enabled_command_families())
+        families = list(self.capabilities.enabled_command_families())
+        if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
+            families.append("history")
         subagents = ", ".join(
             f"{subagent.id}:{subagent.name}"
             for subagent in self.capabilities.subagents
@@ -116,6 +123,12 @@ class ReactTerminalRuntime:
         extra_guidance: list[str] = [
             "Create text files with `touch` and `tee`; do not expect shell redirection to work.",
         ]
+        if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
+            extra_guidance.append(
+                "This is a continuous thread: the loaded context may contain prior-day summaries "
+                "and only a recent raw-message window. When you need older evidence, use "
+                "`history search` first and `history get` second."
+            )
         if self.capabilities.has_date_time:
             extra_guidance.append(
                 "Use `date`, `date -u`, `date +%F`, and `date +%T` for current time queries."
@@ -136,7 +149,7 @@ class ReactTerminalRuntime:
             "- /subagents/<agent-id>-<run-id>/: files returned by delegated sub-agents\n"
             "When you need guidance, inspect /skills with `ls /skills` and `cat /skills/<file>.md`.\n"
             "If the current working directory matters and you are unsure, run `pwd` first.\n"
-            f"Enabled command families: {families}.\n"
+            f"Enabled command families: {', '.join(families)}.\n"
             f"Configured sub-agents: {subagents}.\n"
             "Use `delegate_to_agent` only for configured sub-agents.\n"
             f"{' '.join(extra_guidance)}\n"
@@ -158,7 +171,51 @@ class ReactTerminalRuntime:
             ),
         }
 
+    @staticmethod
+    def _rewrite_continuous_recall_commands(content: str) -> str:
+        rewritten = str(content or "")
+        rewritten = rewritten.replace("conversation_search", "history search")
+        rewritten = rewritten.replace("conversation_get", "history get")
+        return rewritten
+
+    def _serialize_continuous_message(self, message: Any) -> dict[str, str] | None:
+        message_type = str(getattr(message, "type", "") or "").strip().lower()
+        role_map = {
+            "system": "system",
+            "human": "user",
+            "ai": "assistant",
+        }
+        role = role_map.get(message_type)
+        if not role:
+            return None
+        content = self._rewrite_continuous_recall_commands(
+            str(getattr(message, "content", "") or "")
+        ).strip()
+        if not content:
+            return None
+        return {"role": role, "content": content}
+
     async def _load_history_messages(self) -> list[dict]:
+        if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
+            def _load_continuous():
+                _snapshot, continuous_messages = load_continuous_context(
+                    self.user,
+                    self.thread,
+                    exclude_message_id=None,
+                )
+                return list(continuous_messages)
+
+            continuous_messages = await sync_to_async(
+                _load_continuous,
+                thread_sensitive=True,
+            )()
+            serialized: list[dict] = []
+            for item in continuous_messages:
+                payload = self._serialize_continuous_message(item)
+                if payload is not None:
+                    serialized.append(payload)
+            return serialized
+
         source_message_id = self.source_message_id
         session_state = dict(getattr(self.session, "session_state", {}) or {})
         summary_until_message_id = session_state.get(SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID)

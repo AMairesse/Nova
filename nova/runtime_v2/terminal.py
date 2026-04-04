@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import httpx
 from django.utils import timezone
 
+from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
 from nova.file_utils import MAX_FILE_SIZE
+from nova.models.Thread import Thread
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.vfs import VFSError, VirtualFileSystem, normalize_vfs_path
 from nova.tools.builtins import browser as browser_builtin
@@ -71,6 +73,8 @@ class TerminalExecutor:
             return await self._cmd_rm(tokens[1:])
         if name == "find":
             return await self._cmd_find(tokens[1:])
+        if name == "history":
+            return await self._cmd_history(tokens[1:])
         if name == "date":
             return await self._cmd_date(tokens[1:])
         if name == "wget":
@@ -238,6 +242,200 @@ class TerminalExecutor:
         term = args[1] if len(args) > 1 else ""
         results = await self.vfs.find(start, term)
         return "\n".join(results)
+
+    def _ensure_continuous_mode(self) -> None:
+        if getattr(self.vfs.thread, "mode", None) != Thread.Mode.CONTINUOUS:
+            raise TerminalCommandError("History commands are only available in continuous mode.")
+
+    def _build_continuous_agent_proxy(self):
+        return SimpleNamespace(user=self.vfs.user, thread=self.vfs.thread)
+
+    @staticmethod
+    def _parse_int_flag(token: str, value: str) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise TerminalCommandError(f"Invalid integer value for {token}: {value}") from exc
+
+    @staticmethod
+    def _format_history_search_payload(payload: dict) -> str:
+        results = list(payload.get("results") or [])
+        notes = list(payload.get("notes") or [])
+        if not results:
+            if notes:
+                return "\n".join(str(note) for note in notes)
+            return "No matching history entries found."
+
+        lines: list[str] = []
+        for index, result in enumerate(results, start=1):
+            kind = str(result.get("kind") or "result")
+            if kind == "summary":
+                lines.append(
+                    f"{index}. summary day={result.get('day_label') or '?'} "
+                    f"day_segment_id={result.get('day_segment_id') or '?'}"
+                )
+                lines.append(str(result.get("summary_snippet") or "").strip() or "(empty summary)")
+                continue
+            lines.append(
+                f"{index}. message day={result.get('day_label') or '?'} "
+                f"day_segment_id={result.get('day_segment_id') or '?'} "
+                f"message_id={result.get('message_id') or '?'}"
+            )
+            lines.append(str(result.get("snippet") or "").strip() or "(empty snippet)")
+        if notes:
+            lines.append("")
+            lines.extend(f"Note: {note}" for note in notes)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _format_history_get_payload(payload: dict) -> str:
+        error = str(payload.get("error") or "").strip()
+        if error == "not_found":
+            return "No matching history entry found."
+        if error == "invalid_request":
+            raise TerminalCommandError("Usage: history get --day-segment <id> | --message <id> [--limit N] | --from-message <id> --to-message <id> [--limit N]")
+
+        if payload.get("day_segment_id") is not None and "summary_markdown" in payload:
+            summary = str(payload.get("summary_markdown") or "").strip()
+            return (
+                f"day_segment_id={payload.get('day_segment_id')} "
+                f"day={payload.get('day_label') or '?'}\n"
+                f"{summary or '(empty summary)'}"
+            )
+
+        messages = list(payload.get("messages") or [])
+        if not messages:
+            return "No messages returned."
+
+        lines: list[str] = []
+        for item in messages:
+            lines.append(
+                f"[{item.get('message_id')}] {item.get('role')} @ {item.get('created_at') or '?'}"
+            )
+            lines.append(str(item.get("content") or "").strip() or "(empty message)")
+        if payload.get("truncated"):
+            lines.append("")
+            lines.append("Note: results were truncated; narrow the range or lower the limit if needed.")
+        return "\n".join(lines).strip()
+
+    async def _cmd_history(self, args: list[str]) -> str:
+        self._ensure_continuous_mode()
+        if not args:
+            raise TerminalCommandError("Usage: history search <query> | history get <options>")
+
+        subcommand = str(args[0] or "").strip().lower()
+        if subcommand == "search":
+            return await self._cmd_history_search(args[1:])
+        if subcommand == "get":
+            return await self._cmd_history_get(args[1:])
+        raise TerminalCommandError("Usage: history search <query> | history get <options>")
+
+    async def _cmd_history_search(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError("Usage: history search <query> [--day YYYY-MM-DD] [--recency-days N] [--limit N] [--offset N]")
+
+        query_tokens: list[str] = []
+        day = None
+        recency_days = 14
+        limit = 6
+        offset = 0
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--day":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --day")
+                day = args[index]
+            elif token == "--recency-days":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --recency-days")
+                recency_days = self._parse_int_flag("--recency-days", args[index])
+            elif token == "--limit":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --limit")
+                limit = self._parse_int_flag("--limit", args[index])
+            elif token == "--offset":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --offset")
+                offset = self._parse_int_flag("--offset", args[index])
+            else:
+                query_tokens.append(token)
+            index += 1
+
+        query = " ".join(query_tokens).strip()
+        if not query:
+            raise TerminalCommandError("Usage: history search <query> [--day YYYY-MM-DD] [--recency-days N] [--limit N] [--offset N]")
+
+        payload = await conversation_search(
+            query=query,
+            agent=self._build_continuous_agent_proxy(),
+            day=day,
+            recency_days=recency_days,
+            limit=limit,
+            offset=offset,
+        )
+        return self._format_history_search_payload(payload)
+
+    async def _cmd_history_get(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError("Usage: history get --day-segment <id> | --message <id> [--limit N] | --from-message <id> --to-message <id> [--limit N]")
+
+        options: dict[str, int | None] = {
+            "message_id": None,
+            "day_segment_id": None,
+            "from_message_id": None,
+            "to_message_id": None,
+            "before_message_id": None,
+            "after_message_id": None,
+        }
+        limit = 30
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--limit":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --limit")
+                limit = self._parse_int_flag("--limit", args[index])
+            elif token in {
+                "--message",
+                "--day-segment",
+                "--from-message",
+                "--to-message",
+                "--before-message",
+                "--after-message",
+            }:
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError(f"Missing value after {token}")
+                target_key = {
+                    "--message": "message_id",
+                    "--day-segment": "day_segment_id",
+                    "--from-message": "from_message_id",
+                    "--to-message": "to_message_id",
+                    "--before-message": "before_message_id",
+                    "--after-message": "after_message_id",
+                }[token]
+                options[target_key] = self._parse_int_flag(token, args[index])
+            else:
+                raise TerminalCommandError("Usage: history get --day-segment <id> | --message <id> [--limit N] | --from-message <id> --to-message <id> [--limit N]")
+            index += 1
+
+        payload = await conversation_get(
+            agent=self._build_continuous_agent_proxy(),
+            message_id=options["message_id"],
+            day_segment_id=options["day_segment_id"],
+            from_message_id=options["from_message_id"],
+            to_message_id=options["to_message_id"],
+            limit=limit,
+            before_message_id=options["before_message_id"],
+            after_message_id=options["after_message_id"],
+        )
+        return self._format_history_get_payload(payload)
 
     async def _cmd_date(self, args: list[str]) -> str:
         if not self.capabilities.has_date_time:

@@ -9,7 +9,7 @@ very small tool surface and a file-centric mental model.
 
 - Runtime selection is per-agent during the experimentation phase.
 - No legacy <-> v2 interoperability is required.
-- V2 targets standard thread mode only.
+- V2 supports standard threads and continuous threads.
 - V2 targets OpenAI-compatible providers only.
 - V2 exposes a stable model tool surface:
   - `terminal(command: str)`
@@ -17,6 +17,8 @@ very small tool surface and a file-centric mental model.
 - No `ask_user`, `load_skill`, or `list_skills`.
 - Skills are documentation only, exposed as virtual markdown files under `/skills`.
 - V2 is file-centric and does not rely on `MessageArtifact` for normal runtime flows.
+- Continuous threads do not use v2 compaction; they rely on day summaries plus
+  `history search` / `history get`.
 
 ## Current Target Architecture
 
@@ -26,6 +28,11 @@ very small tool surface and a file-centric mental model.
 - No LangChain, LangGraph, or Langfuse in the v2 runtime package
 - Reuses the existing realtime/frontend contract for streaming, progress, trace
   footer data, and compaction UI
+- Standard threads load raw thread history, optionally preceded by v2 compaction
+  state stored in `AgentThreadSession`
+- Continuous threads load context through the continuous context builder:
+  previous day summaries plus the current-day raw window
+- React Terminal compaction is explicitly disabled in continuous mode
 
 ### Filesystem model
 
@@ -56,6 +63,9 @@ very small tool surface and a file-centric mental model.
 
 - Base shell-like commands:
   - `pwd`, `ls`, `cd`, `cat`, `head`, `tail`, `mkdir`, `touch`, `tee`, `cp`, `mv`, `rm`, `find`
+- Continuous mode command family:
+  - `history search ...`
+  - `history get ...`
 - Optional command families enabled by configured tools:
   - browser builtin -> `curl`, `wget`
   - email builtin -> `mail ...`
@@ -77,10 +87,12 @@ very small tool surface and a file-centric mental model.
 - Root-oriented VFS implementation with directory-aware copy/move/output resolution
 - Hidden `/tmp` stored in MinIO
 - Isolated sub-agent runtime roots with automatic output copy-back into `/subagents/...`
+- Continuous mode support in the v2 runtime
+- Continuous recall through terminal-native `history search` and `history get`
+- Continuous-specific virtual skill documentation under `/skills/continuous.md`
 
 ## Next Steps
 
-- Run the updated targeted test suite and fix any regressions uncovered by the VFS layout change
 - Add or harden delegation-focused tests if edge cases remain around nested directories or modified input files
 - Sweep remaining product/UI text for any stale `/thread` or `/workspace` wording outside the v2 runtime package
 - Consider whether the file sidebar should eventually surface `/subagents/...` differently from other root files
@@ -88,7 +100,6 @@ very small tool surface and a file-centric mental model.
 
 ## Out of Scope for V1
 
-- Continuous mode
 - Non OpenAI-compatible providers
 - Legacy interoperability
 - `MessageArtifact`-centric workflows in v2
