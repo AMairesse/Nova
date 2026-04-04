@@ -2,7 +2,7 @@
 {% load static %}
 {% load i18n %}
 
-<li class="list-group-item" id="thread-item-{{ thread.id }}">
+<li class="list-group-item" data-thread-item-id="{{ thread.id }}">
     <a href="#" class="thread-link" data-thread-id="{{ thread.id }}">{{ thread.subject }}</a>
     <button class="delete-thread-btn"
             data-thread-id="{{ thread.id }}"

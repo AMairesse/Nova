@@ -466,6 +466,8 @@ class LLMAgent:
 
         if artifact_refs:
             for artifact_ref in artifact_refs[::-1]:
+                if artifact_ref.get("auto_attach", True) is False:
+                    continue
                 label, parts = await self._hydrate_tool_ref(artifact_ref)
                 if label:
                     labels.append(label)
@@ -512,6 +514,34 @@ class LLMAgent:
 
     def _normalize_tool_artifact_payload(self, artifact: dict) -> list[dict]:
         refs: list[dict] = []
+        artifact_refs = artifact.get("artifact_refs")
+        if isinstance(artifact_refs, list):
+            for artifact_ref in artifact_refs:
+                if not isinstance(artifact_ref, dict):
+                    continue
+                ref_type = str(artifact_ref.get("ref_type") or "artifact").strip() or "artifact"
+                normalized = {
+                    "ref_type": ref_type,
+                    "kind": artifact_ref.get("kind") or "",
+                    "label": artifact_ref.get("label") or "",
+                    "mime_type": artifact_ref.get("mime_type") or "",
+                    "tool_output": bool(artifact_ref.get("tool_output")),
+                    "auto_attach": artifact_ref.get("auto_attach", True) is not False,
+                }
+                if ref_type == "file":
+                    try:
+                        normalized["file_id"] = int(artifact_ref.get("file_id"))
+                    except (TypeError, ValueError):
+                        continue
+                else:
+                    try:
+                        normalized["artifact_id"] = int(artifact_ref.get("artifact_id"))
+                    except (TypeError, ValueError):
+                        continue
+                refs.append(normalized)
+            if refs:
+                return refs
+
         artifact_ids = artifact.get("artifact_ids")
         if isinstance(artifact_ids, list):
             for artifact_id in artifact_ids:
@@ -527,6 +557,7 @@ class LLMAgent:
                         "label": artifact.get("label") or "",
                         "mime_type": artifact.get("mime_type") or "",
                         "tool_output": bool(artifact.get("tool_output")),
+                        "auto_attach": artifact.get("auto_attach", True) is not False,
                     }
                 )
             return refs
@@ -546,6 +577,7 @@ class LLMAgent:
                         "label": artifact.get("label") or "",
                         "mime_type": artifact.get("mime_type") or "",
                         "tool_output": bool(artifact.get("tool_output")),
+                        "auto_attach": artifact.get("auto_attach", True) is not False,
                     }
                 )
             return refs
@@ -564,6 +596,7 @@ class LLMAgent:
                     "label": artifact.get("label") or "",
                     "mime_type": artifact.get("mime_type") or "",
                     "tool_output": bool(artifact.get("tool_output")),
+                    "auto_attach": artifact.get("auto_attach", True) is not False,
                 }
             )
             return refs
@@ -581,6 +614,7 @@ class LLMAgent:
                 "label": artifact.get("label") or "",
                 "mime_type": artifact.get("mime_type") or "",
                 "tool_output": bool(artifact.get("tool_output")),
+                "auto_attach": artifact.get("auto_attach", True) is not False,
             }
         )
         return refs

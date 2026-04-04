@@ -233,12 +233,17 @@
                 if (!response.ok || data.status !== 'OK') {
                     throw new Error(data.message || gettext('Failed to delete thread.'));
                 }
-                const threadElement = document.getElementById(`thread-item-${threadId}`);
-                if (threadElement) threadElement.remove();
+                document.querySelectorAll(
+                    `[data-thread-item-id="${threadId}"]`
+                ).forEach((threadElement) => {
+                    threadElement.remove();
+                });
 
-                const firstThread = document.querySelector('.thread-link');
+                const firstThread = document.querySelector(
+                    '#threads-list .thread-link, #mobile-threads-list .thread-link'
+                );
                 const firstThreadId = firstThread?.dataset.threadId;
-                this.loadMessages(firstThreadId);
+                await this.loadMessages(firstThreadId || null);
                 document.dispatchEvent(
                     new CustomEvent('threadChanged', {
                         detail: { threadId: firstThreadId || null }

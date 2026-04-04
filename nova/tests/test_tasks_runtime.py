@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from asgiref.sync import sync_to_async
+from email import encoders as email_encoders
+from email import message_from_string
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
@@ -26,7 +32,58 @@ from nova.tasks.tasks import (
     run_ai_task_celery,
     summarize_thread_task,
 )
-from nova.tests.factories import create_agent, create_provider, create_user
+from nova.tests.factories import (
+    create_agent,
+    create_provider,
+    create_tool,
+    create_tool_credential,
+    create_user,
+)
+from nova.tools.artifacts import artifact_publish_to_files
+from nova.tools.builtins import browser as browser_tools
+from nova.tools.builtins import email as email_tools
+from nova.tools.builtins import webdav as webdav_tools
+
+
+class _FakeBrowserDownloadResponse:
+    def __init__(self, headers: dict[str, str], chunks: list[bytes]):
+        self.headers = headers
+        self._chunks = chunks
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def raise_for_status(self):
+        return None
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeBrowserAsyncClient:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def stream(self, method: str, url: str):
+        del method, url
+        return _FakeBrowserDownloadResponse(
+            headers={
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="report.pdf"',
+            },
+            chunks=[b"%PDF", b"-1.4"],
+        )
 
 
 class ContextConsumptionTrackerTests(IsolatedAsyncioTestCase):
@@ -557,8 +614,110 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
     def setUp(self):
         self.user = create_user(username="runtime-user", email="runtime@example.com")
         self.provider = create_provider(self.user, name="runtime-provider")
+        self.provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "test",
+                "inputs": {"text": "pass", "image": "pass", "pdf": "pass", "audio": "pass"},
+                "outputs": {"text": "pass", "image": "unknown", "audio": "unknown"},
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": "pass",
+                    "vision": "pass",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": "unknown",
+                    "audio_generation": "unknown",
+                },
+                "limits": {},
+                "model_state": {},
+            }
+        )
         self.agent = create_agent(self.user, self.provider, name="runtime-agent")
         self.thread = Thread.objects.create(user=self.user, subject="Runtime thread")
+        self._stored_file_bytes: dict[int, bytes] = {}
+
+    async def _fake_batch_upload_files(
+        self,
+        thread,
+        user,
+        upload_specs,
+        *,
+        scope=UserFile.Scope.THREAD_SHARED,
+        source_message=None,
+        **kwargs,
+    ):
+        del kwargs
+        created = []
+        for spec in upload_specs:
+            path = str(spec["path"])
+            content = bytes(spec["content"])
+            mime_type = str(spec.get("mime_type") or "application/octet-stream")
+
+            def _create_user_file():
+                return UserFile.objects.create(
+                    user=user,
+                    thread=thread,
+                    source_message=source_message,
+                    key=f"users/{user.id}/threads/{thread.id}{path}",
+                    original_filename=path,
+                    mime_type=mime_type,
+                    size=len(content),
+                    scope=scope,
+                )
+
+            user_file = await sync_to_async(_create_user_file, thread_sensitive=True)()
+            self._stored_file_bytes[user_file.id] = content
+            created.append(
+                {
+                    "id": user_file.id,
+                    "path": path,
+                    "filename": path.rsplit("/", 1)[-1],
+                    "mime_type": mime_type,
+                    "size": len(content),
+                    "scope": scope,
+                }
+            )
+        return created, []
+
+    async def _fake_download_file_content(self, user_file):
+        return self._stored_file_bytes[int(user_file.id)]
+
+    def _build_executor(self, source_message, artifact_refs, *, task_id: int):
+        executor = AgentTaskExecutor(
+            task=SimpleNamespace(
+                id=task_id,
+                progress_logs=[],
+                save=Mock(),
+                result=None,
+                current_response="",
+                streamed_markdown="",
+            ),
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+            prompt=source_message.text or "",
+            source_message_id=source_message.id,
+        )
+        executor._source_message = source_message
+        executor.handler = SimpleNamespace(on_context_consumption=AsyncMock())
+        executor.llm = SimpleNamespace(
+            last_generated_tool_artifact_refs=list(artifact_refs or []),
+        )
+        return executor
+
+    def _process_tool_artifacts(self, executor, result_text: str):
+        with (
+            patch(
+                "nova.tasks.tasks.ContextConsumptionTracker.calculate",
+                new_callable=AsyncMock,
+                return_value=(5, None, 4096),
+            ),
+            patch.object(executor, "_enqueue_thread_title_generation", new_callable=AsyncMock),
+        ):
+            asyncio.run(executor._process_result(result_text))
+
+        return self.thread.get_messages().filter(actor=Actor.AGENT).latest("id")
 
     def test_build_realtime_message_payload_includes_rendered_html(self):
         source_message = self.thread.add_message("prompt", actor=Actor.USER)
@@ -763,6 +922,310 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
         cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
         self.assertEqual(cloned_artifact.source_artifact_id, source_artifact.id)
         self.assertEqual(cloned_artifact.user_file_id, user_file.id)
+
+    def test_browser_downloaded_artifact_can_be_emailed_after_runtime_clone(self):
+        source_message = self.thread.add_message(
+            "Download the PDF and send it by email.",
+            actor=Actor.USER,
+        )
+        email_tool = create_tool(
+            self.user,
+            name="Email",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={
+                "imap_server": "imap.example.com",
+                "username": "alice@example.com",
+                "password": "secret",
+                "enable_sending": True,
+                "smtp_server": "smtp.example.com",
+                "sent_folder": "Sent",
+            },
+        )
+        runtime_agent = SimpleNamespace(user=self.user, thread=self.thread)
+
+        with (
+            patch(
+                "nova.external_files.batch_upload_files",
+                new_callable=AsyncMock,
+                side_effect=self._fake_batch_upload_files,
+            ),
+            patch("nova.tools.builtins.browser.httpx.AsyncClient", new=_FakeBrowserAsyncClient),
+            patch(
+                "nova.external_files.download_file_content",
+                new_callable=AsyncMock,
+                side_effect=self._fake_download_file_content,
+            ),
+            patch("nova.tools.builtins.email.build_smtp_client") as mocked_build_smtp,
+            patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock) as mocked_get_imap,
+            patch("nova.tools.builtins.email.folder_exists", return_value=True),
+        ):
+            _message, payload = asyncio.run(
+                browser_tools.web_download_file(
+                    runtime_agent,
+                    "https://example.com/files/report.pdf",
+                )
+            )
+            final_message = self._process_tool_artifacts(
+                self._build_executor(source_message, payload["artifact_refs"], task_id=30),
+                "I downloaded the report and can send it now.",
+            )
+            cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
+
+            smtp_server = Mock()
+            mocked_build_smtp.return_value = smtp_server
+            mocked_get_imap.return_value = Mock()
+
+            result = asyncio.run(
+                email_tools.send_email(
+                    self.user,
+                    email_tool.id,
+                    to="bob@example.com",
+                    subject="Requested report",
+                    body="Here is the downloaded report.",
+                    artifact_ids=[cloned_artifact.id],
+                    thread=self.thread,
+                )
+            )
+
+        self.assertEqual(cloned_artifact.source_artifact.metadata.get("origin_type"), "web")
+        self.assertIn("Email sent successfully", result)
+        raw_message = smtp_server.sendmail.call_args.args[2]
+        parsed = message_from_string(raw_message)
+        attachment_names = [
+            part.get_filename()
+            for part in parsed.walk()
+            if part.get_filename()
+        ]
+        self.assertEqual(attachment_names, ["report.pdf"])
+
+    def test_imported_email_attachment_can_be_delegated_after_runtime_clone(self):
+        source_message = self.thread.add_message(
+            "Analyze the attachment from email 9.",
+            actor=Actor.USER,
+        )
+        email_tool = create_tool(
+            self.user,
+            name="Email",
+            tool_subtype="email",
+            python_path="nova.tools.builtins.email",
+        )
+        create_tool_credential(
+            self.user,
+            email_tool,
+            config={
+                "imap_server": "imap.example.com",
+                "username": "alice@example.com",
+                "password": "secret",
+                "enable_sending": False,
+            },
+        )
+
+        mail_message = MIMEMultipart()
+        mail_message.attach(MIMEText("Please review the attached report.", "plain", "utf-8"))
+        attachment = MIMEBase("application", "pdf")
+        attachment.set_payload(b"%PDF-1.4")
+        email_encoders.encode_base64(attachment)
+        attachment.add_header("Content-Disposition", "attachment", filename="report.pdf")
+        mail_message.attach(attachment)
+
+        class FakeLLMAgent:
+            instances = []
+
+            def __init__(self):
+                self.invoke_calls = []
+                self.cleanup_called = False
+                self.last_generated_tool_artifact_refs = []
+
+            @classmethod
+            async def create(
+                cls,
+                user,
+                thread,
+                agent_config,
+                callbacks=None,
+                tools_enabled=True,
+            ):
+                del user, thread, agent_config, callbacks, tools_enabled
+                inst = cls()
+                cls.instances.append(inst)
+                return inst
+
+            async def ainvoke(self, question):
+                self.invoke_calls.append(question)
+                return "Summary ready"
+
+            async def cleanup_runtime(self):
+                self.cleanup_called = True
+
+        subagent = create_agent(
+            self.user,
+            self.provider,
+            name="Attachment analyst",
+            is_tool=True,
+            tool_description="Analyze imported attachments",
+        )
+
+        with (
+            patch(
+                "nova.external_files.batch_upload_files",
+                new_callable=AsyncMock,
+                side_effect=self._fake_batch_upload_files,
+            ),
+            patch("nova.tools.builtins.email.get_imap_client", new_callable=AsyncMock) as mocked_get_imap,
+            patch("nova.tools.agent_tool_wrapper.LLMAgent", FakeLLMAgent),
+            patch(
+                "nova.tools.agent_tool_wrapper.invoke_native_provider_for_message",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "nova.tools.agent_tool_wrapper.download_file_content",
+                new_callable=AsyncMock,
+                side_effect=self._fake_download_file_content,
+            ),
+        ):
+            mocked_get_imap.return_value = Mock()
+            mocked_get_imap.return_value.fetch.return_value = {
+                9: {
+                    "ENVELOPE": SimpleNamespace(subject="Quarterly report"),
+                    "BODY[]": mail_message.as_bytes(),
+                    "UID": 123,
+                }
+            }
+
+            _message, payload = asyncio.run(
+                email_tools.import_email_attachments(
+                    self.user,
+                    email_tool.id,
+                    message_id=9,
+                    attachment_ids=["2"],
+                    folder="INBOX",
+                    agent=SimpleNamespace(user=self.user, thread=self.thread),
+                    mailbox="alice@example.com",
+                )
+            )
+            final_message = self._process_tool_artifacts(
+                self._build_executor(source_message, payload["artifact_refs"], task_id=31),
+                "I imported the requested email attachment.",
+            )
+            cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
+
+            from nova.tools.agent_tool_wrapper import AgentToolWrapper
+
+            wrapper = AgentToolWrapper(
+                agent_config=subagent,
+                thread=self.thread,
+                user=self.user,
+            )
+            with patch.object(
+                wrapper,
+                "_load_provider",
+                new_callable=AsyncMock,
+                return_value=self.provider,
+            ):
+                answer, artifact_payload = asyncio.run(
+                    wrapper.create_langchain_tool().coroutine(
+                        "Summarize this attachment.",
+                        artifact_ids=[cloned_artifact.id],
+                    )
+                )
+
+        self.assertEqual(answer, "Summary ready")
+        self.assertEqual(artifact_payload, {})
+        invoke_payload = FakeLLMAgent.instances[-1].invoke_calls[0]
+        self.assertIsInstance(invoke_payload, list)
+        self.assertEqual(invoke_payload[1]["type"], "file")
+        self.assertEqual(invoke_payload[1]["filename"], "report.pdf")
+        hidden_message = (
+            self.thread.get_messages()
+            .filter(actor=Actor.SYSTEM, internal_data__hidden_subagent_trace=True)
+            .latest("id")
+        )
+        cloned_input = MessageArtifact.objects.get(
+            message=hidden_message,
+            direction=ArtifactDirection.INPUT,
+            source_artifact=cloned_artifact,
+        )
+        self.assertEqual(cloned_input.metadata.get("origin_type"), "email")
+        self.assertEqual(cloned_input.metadata.get("origin_locator", {}).get("uid"), 123)
+
+    def test_webdav_imported_artifact_can_be_published_to_files_after_runtime_clone(self):
+        source_message = self.thread.add_message(
+            "Import the WebDAV report and keep it in Files.",
+            actor=Actor.USER,
+        )
+        webdav_tool = create_tool(
+            self.user,
+            name="WebDAV",
+            tool_subtype="webdav",
+            python_path="nova.tools.builtins.webdav",
+        )
+        create_tool_credential(
+            self.user,
+            webdav_tool,
+            config={
+                "server_url": "https://cloud.example.com",
+                "username": "alice",
+                "app_password": "secret",
+                "root_path": "/Documents",
+            },
+        )
+
+        with (
+            patch(
+                "nova.external_files.batch_upload_files",
+                new_callable=AsyncMock,
+                side_effect=self._fake_batch_upload_files,
+            ),
+            patch(
+                "nova.tools.builtins.webdav._webdav_request_binary",
+                new_callable=AsyncMock,
+                return_value=(200, b"%PDF-1.4", {"Content-Type": "application/pdf"}),
+            ),
+            patch(
+                "nova.message_artifacts.download_file_content",
+                new_callable=AsyncMock,
+                side_effect=self._fake_download_file_content,
+            ),
+            patch(
+                "nova.message_artifacts.batch_upload_files",
+                new_callable=AsyncMock,
+                side_effect=self._fake_batch_upload_files,
+            ),
+            patch("nova.tools.artifacts.publish_file_update", new_callable=AsyncMock),
+        ):
+            _message, payload = asyncio.run(
+                webdav_tools.import_file(
+                    webdav_tool,
+                    "/reports/q1.pdf",
+                    SimpleNamespace(user=self.user, thread=self.thread),
+                )
+            )
+            final_message = self._process_tool_artifacts(
+                self._build_executor(source_message, payload["artifact_refs"], task_id=32),
+                "I imported the WebDAV report.",
+            )
+            cloned_artifact = final_message.artifacts.get(direction=ArtifactDirection.OUTPUT)
+
+            result = asyncio.run(
+                artifact_publish_to_files(
+                    SimpleNamespace(user=self.user, thread=self.thread),
+                    cloned_artifact.id,
+                    filename="q1-shared.pdf",
+                )
+            )
+
+        cloned_artifact.refresh_from_db()
+        self.assertEqual(cloned_artifact.source_artifact.metadata.get("origin_type"), "webdav")
+        self.assertIn("file ID", result)
+        self.assertIsNotNone(cloned_artifact.published_file_id)
+        self.assertEqual(cloned_artifact.published_file.scope, UserFile.Scope.THREAD_SHARED)
+        self.assertEqual(cloned_artifact.published_file.original_filename, "/generated/q1-shared.pdf")
 
 
 class AgentTaskDispatchTests(TransactionTestCase):

@@ -47,6 +47,7 @@ def get_skill_instructions(agent=None, tools=None) -> list[str]:
         "Use file_read_image only for image/* mime types; use file_read_chunk for non-image files.",
         "Use file_attach to bring image, PDF, or audio thread files into the current multimodal turn.",
         "When delegating a thread file to a media sub-agent, pass file_ids directly to the sub-agent tool instead of reading the file first.",
+        "Imported mail/web/WebDAV files usually start as artifacts; promote them to Files only when long-term thread visibility is needed.",
     ]
 
 

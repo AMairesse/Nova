@@ -6,9 +6,11 @@ import smtplib
 import copy
 import re
 from urllib.parse import urlparse
+from email import encoders as email_encoders
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
-from typing import List, Optional
+from typing import Any, List, Optional
 from email.header import decode_header
 
 from asgiref.sync import sync_to_async  # For async-safe ORM accesses
@@ -18,6 +20,11 @@ from langchain_core.tools import StructuredTool
 
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Tool import Tool, ToolCredential
+from nova.external_files import (
+    build_artifact_tool_payload,
+    resolve_binary_attachments_for_ids,
+    stage_external_files_as_artifacts,
+)
 from nova.tools.multi_instance import (
     build_selector_schema,
     dedupe_instance_labels,
@@ -132,6 +139,120 @@ def safe_get(data, key):
         return data.get(key) or data.get(key.decode('utf-8'))
 
 
+def _iter_message_leaf_parts(message_obj, prefix: str = ""):
+    payload = message_obj.get_payload()
+    if isinstance(payload, list):
+        for index, part in enumerate(payload, start=1):
+            child_prefix = f"{prefix}.{index}" if prefix else str(index)
+            yield from _iter_message_leaf_parts(part, child_prefix)
+        return
+
+    yield prefix or "1", message_obj
+
+
+def _collect_email_attachments(email_message) -> list[dict[str, Any]]:
+    attachments: list[dict[str, Any]] = []
+    for attachment_id, part in _iter_message_leaf_parts(email_message):
+        filename = decode_str(part.get_filename() or "")
+        disposition = str(part.get_content_disposition() or "").strip().lower()
+        if not filename and disposition not in {"attachment", "inline"}:
+            continue
+
+        content = part.get_payload(decode=True) or b""
+        attachments.append(
+            {
+                "attachment_id": attachment_id,
+                "filename": filename or f"attachment-{attachment_id}",
+                "mime_type": str(part.get_content_type() or "application/octet-stream").strip().lower(),
+                "size": len(content),
+                "content": content,
+            }
+        )
+    return attachments
+
+
+async def _fetch_email_message_data(
+    user,
+    tool_id,
+    message_id: int,
+    *,
+    folder: str = "INBOX",
+):
+    client = await get_imap_client(user, tool_id)
+    try:
+        client.select_folder(folder)
+        messages = client.fetch([message_id], ['ENVELOPE', 'BODY.PEEK[]', 'UID'])
+        if message_id not in messages:
+            return None
+        return messages[message_id]
+    finally:
+        safe_imap_logout(client)
+
+
+async def _load_email_message_with_attachments(
+    user,
+    tool_id,
+    message_id: int,
+    *,
+    folder: str = "INBOX",
+):
+    msg_data = await _fetch_email_message_data(user, tool_id, message_id, folder=folder)
+    if not msg_data:
+        return None, None, None, []
+
+    envelope = safe_get(msg_data, 'ENVELOPE')
+    body = safe_get(msg_data, 'BODY[]')
+    uid = safe_get(msg_data, 'UID')
+    if not body:
+        return envelope, None, uid, []
+
+    import email
+
+    email_message = email.message_from_bytes(body)
+    return envelope, email_message, uid, _collect_email_attachments(email_message)
+
+
+def _mailbox_identity_from_credential(credential, alias: str = "") -> str:
+    config = getattr(credential, "config", {}) or {}
+    return (
+        str(config.get("from_address") or "").strip()
+        or str(config.get("username") or "").strip()
+        or str(alias or "").strip()
+    )
+
+
+def _build_email_attachment_manifest_lines(attachments: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    for item in attachments:
+        lines.append(
+            _(
+                "- attachment_id=%(attachment_id)s | name=%(filename)s | type=%(mime_type)s | size=%(size)s bytes"
+            ) % {
+                "attachment_id": item.get("attachment_id"),
+                "filename": item.get("filename"),
+                "mime_type": item.get("mime_type") or "application/octet-stream",
+                "size": int(item.get("size") or 0),
+            }
+        )
+    return lines
+
+
+def _attach_binary_parts(msg, attachments: list) -> None:
+    for attachment in list(attachments or []):
+        maintype, _, subtype = str(attachment.mime_type or "application/octet-stream").partition("/")
+        maintype = maintype or "application"
+        subtype = subtype or "octet-stream"
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(attachment.content)
+        email_encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=str(attachment.filename or "attachment"),
+        )
+        msg.attach(part)
+
+
 def has_capability(client, capability):
     """Check if IMAP server supports a specific capability"""
     return capability.upper() in getattr(client, '_server_capabilities', [])
@@ -206,81 +327,171 @@ async def list_emails(user, tool_id, folder: str = "INBOX", limit: int = 10) -> 
 
 async def read_email(user, tool_id, message_id: int, folder: str = "INBOX", preview_only: bool = True) -> str:
     """ Read email content by message ID. Use preview_only=True for headers + content preview. """
-    client = await get_imap_client(user, tool_id)
-    try:
-        client.select_folder(folder)
+    envelope, email_message, _uid, attachments = await _load_email_message_with_attachments(
+        user,
+        tool_id,
+        message_id,
+        folder=folder,
+    )
+    if envelope is None and email_message is None:
+        return _("Email with ID {id} not found.").format(id=message_id)
+    if email_message is None:
+        return _("Email body not available.")
 
-        # Use BODY.PEEK[] to avoid marking as read
-        messages = client.fetch([message_id], ['ENVELOPE', 'BODY.PEEK[]'])
-        if message_id not in messages:
-            return _("Email with ID {id} not found.").format(id=message_id)
+    result = _("Email Details:\n")
 
-        msg_data = messages[message_id]
-        envelope = safe_get(msg_data, 'ENVELOPE')
-        body = safe_get(msg_data, 'BODY[]')
-
-        if not body:
-            return _("Email body not available.")
-
-        # Parse email
-        import email
-        email_message = email.message_from_bytes(body)
-
-        # Format response
-        result = _("Email Details:\n")
-
-        if envelope:
-            sender = decode_str(getattr(envelope, 'sender', None))
-            to_addr = decode_str(getattr(envelope, 'to', [None])[0] if getattr(envelope, 'to', None) else None)
-            subject = decode_str(getattr(envelope, 'subject', None))
-            if hasattr(envelope, 'date') and envelope.date:
-                date = envelope.date.strftime('%Y-%m-%d %H:%M')
-            else:
-                date = "Unknown"
-
-            result += _("From: {sender}\n").format(sender=sender)
-            result += _("To: {to}\n").format(to=to_addr)
-            result += _("Subject: {subject}\n").format(subject=subject)
-            result += _("Date: {date}\n").format(date=date)
+    if envelope:
+        sender = decode_str(getattr(envelope, 'sender', None))
+        to_addr = decode_str(getattr(envelope, 'to', [None])[0] if getattr(envelope, 'to', None) else None)
+        subject = decode_str(getattr(envelope, 'subject', None))
+        if hasattr(envelope, 'date') and envelope.date:
+            date = envelope.date.strftime('%Y-%m-%d %H:%M')
         else:
-            result += _("From: [Not available]\nTo: [Not available]\nSubject: [Not available]\nDate: [Not available]\n")
+            date = "Unknown"
 
-        if preview_only:
-            result += "\n" + _("Content Preview (first 500 characters):\n")
-            # Extract text content preview
-            content = ""
-            if email_message.is_multipart():
-                for part in email_message.walk():
-                    if part.get_content_type() == "text/plain":
-                        charset = part.get_content_charset() or 'utf-8'
-                        content = part.get_payload(decode=True).decode(charset, errors='ignore')
-                        break
-            else:
-                charset = email_message.get_content_charset() or 'utf-8'
-                content = email_message.get_payload(decode=True).decode(charset, errors='ignore')
+        result += _("From: {sender}\n").format(sender=sender)
+        result += _("To: {to}\n").format(to=to_addr)
+        result += _("Subject: {subject}\n").format(subject=subject)
+        result += _("Date: {date}\n").format(date=date)
+    else:
+        result += _("From: [Not available]\nTo: [Not available]\nSubject: [Not available]\nDate: [Not available]\n")
 
-            # Truncate to 500 characters
-            if len(content) > 500:
-                result += content[:500] + "..."
-                result += _("\n\n[Content truncated. Use preview_only=False to read full email]")
-            else:
-                result += content
+    if attachments:
+        result += "\n" + _("Attachments:\n")
+        result += "\n".join(_build_email_attachment_manifest_lines(attachments))
+    else:
+        result += "\n" + _("Attachments: none")
+
+    if preview_only:
+        result += "\n\n" + _("Content Preview (first 500 characters):\n")
+        content = ""
+        if email_message.is_multipart():
+            for part in email_message.walk():
+                if part.get_content_type() == "text/plain":
+                    charset = part.get_content_charset() or 'utf-8'
+                    content = part.get_payload(decode=True).decode(charset, errors='ignore')
+                    break
         else:
-            result += "\n" + _("Full Content:\n")
-            # Extract full text content
-            if email_message.is_multipart():
-                for part in email_message.walk():
-                    if part.get_content_type() == "text/plain":
-                        charset = part.get_content_charset() or 'utf-8'
-                        result += part.get_payload(decode=True).decode(charset, errors='ignore')
-                        break
-            else:
-                charset = email_message.get_content_charset() or 'utf-8'
-                result += email_message.get_payload(decode=True).decode(charset, errors='ignore')
+            charset = email_message.get_content_charset() or 'utf-8'
+            content = email_message.get_payload(decode=True).decode(charset, errors='ignore')
 
-        return result
-    finally:
-        safe_imap_logout(client)
+        if len(content) > 500:
+            result += content[:500] + "..."
+            result += _("\n\n[Content truncated. Use preview_only=False to read full email]")
+        else:
+            result += content
+    else:
+        result += "\n\n" + _("Full Content:\n")
+        if email_message.is_multipart():
+            for part in email_message.walk():
+                if part.get_content_type() == "text/plain":
+                    charset = part.get_content_charset() or 'utf-8'
+                    result += part.get_payload(decode=True).decode(charset, errors='ignore')
+                    break
+        else:
+            charset = email_message.get_content_charset() or 'utf-8'
+            result += email_message.get_payload(decode=True).decode(charset, errors='ignore')
+
+    return result
+
+
+async def list_email_attachments(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
+    envelope, email_message, _uid, attachments = await _load_email_message_with_attachments(
+        user,
+        tool_id,
+        message_id,
+        folder=folder,
+    )
+    if envelope is None and email_message is None:
+        return _("Email with ID {id} not found.").format(id=message_id)
+    if not attachments:
+        return _("No attachments found for email {id}.").format(id=message_id)
+
+    subject = decode_str(getattr(envelope, "subject", "") if envelope else "")
+    lines = [
+        _("Attachments for email {id} ({subject}):").format(
+            id=message_id,
+            subject=subject or _("no subject"),
+        )
+    ]
+    lines.extend(_build_email_attachment_manifest_lines(attachments))
+    return "\n".join(lines)
+
+
+async def import_email_attachments(
+    user,
+    tool_id,
+    message_id: int,
+    attachment_ids: list[str],
+    *,
+    folder: str = "INBOX",
+    agent: LLMAgent | None = None,
+    mailbox: str = "",
+):
+    if agent is None or getattr(agent, "thread", None) is None:
+        return _("Email attachment import requires an active conversation thread."), None
+
+    envelope, email_message, uid, attachments = await _load_email_message_with_attachments(
+        user,
+        tool_id,
+        message_id,
+        folder=folder,
+    )
+    if envelope is None and email_message is None:
+        return _("Email with ID {id} not found.").format(id=message_id), None
+    if not attachments:
+        return _("No attachments found for email {id}.").format(id=message_id), None
+
+    requested_ids = [str(item or "").strip() for item in list(attachment_ids or []) if str(item or "").strip()]
+    if not requested_ids:
+        return _("No attachment_ids provided."), None
+
+    attachment_map = {str(item.get("attachment_id")): item for item in attachments}
+    missing_ids = [attachment_id for attachment_id in requested_ids if attachment_id not in attachment_map]
+    if missing_ids:
+        return (
+            _("Unknown attachment_ids: {ids}. Use list_email_attachments first.").format(
+                ids=", ".join(missing_ids)
+            ),
+            None,
+        )
+
+    credential = await _get_credential(user, tool_id)
+    mailbox_identity = mailbox or _mailbox_identity_from_credential(credential)
+    staged_artifacts, errors = await stage_external_files_as_artifacts(
+        agent,
+        [
+            {
+                "filename": attachment_map[attachment_id]["filename"],
+                "content": attachment_map[attachment_id]["content"],
+                "mime_type": attachment_map[attachment_id]["mime_type"],
+                "origin_locator": {
+                    "mailbox": mailbox_identity,
+                    "folder": folder,
+                    "message_id": int(message_id),
+                    "uid": int(uid) if uid not in (None, "") else None,
+                    "attachment_id": attachment_id,
+                },
+            }
+            for attachment_id in requested_ids
+        ],
+        origin_type="email",
+        imported_by_tool="import_email_attachments",
+        source="email",
+    )
+    if errors and not staged_artifacts:
+        return _("Failed to import email attachment(s): {errors}").format(errors="; ".join(errors)), None
+
+    labels = ", ".join(
+        str(getattr(artifact, "filename", "") or getattr(artifact, "label", "") or artifact.id)
+        for artifact in staged_artifacts
+    )
+    message = _(
+        "Imported email attachment(s): {labels}. Continue using artifact_ids from the returned payload."
+    ).format(labels=labels or ", ".join(requested_ids))
+    if errors:
+        message += _(" Warnings: {errors}").format(errors="; ".join(errors))
+    return message, build_artifact_tool_payload(staged_artifacts, tool_output=True)
 
 
 async def search_emails(user, tool_id, query: str, folder: str = "INBOX", limit: int = 10) -> str:
@@ -353,7 +564,18 @@ async def get_server_capabilities(user, tool_id) -> str:
         safe_imap_logout(client)
 
 
-async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Optional[str] = None) -> str:
+async def send_email(
+    user,
+    tool_id,
+    to: str,
+    subject: str,
+    body: str,
+    cc: Optional[str] = None,
+    *,
+    artifact_ids: list[int] | None = None,
+    file_ids: list[int] | None = None,
+    thread=None,
+) -> str:
     """ Send an email via SMTP. """
     try:
         # Get SMTP configuration
@@ -377,6 +599,14 @@ async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Option
         # Add body
         msg.attach(MIMEText(body, 'plain'))
 
+        attachments = await resolve_binary_attachments_for_ids(
+            user=user,
+            thread=thread,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+        )
+        _attach_binary_parts(msg, attachments)
+
         server = None
         try:
             server = build_smtp_client(credential)
@@ -384,7 +614,9 @@ async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Option
             # Send email
             recipients = [to]
             if cc:
-                recipients.extend(cc.split(','))
+                recipients.extend(
+                    [item.strip() for item in cc.split(',') if str(item or "").strip()]
+                )
 
             server.sendmail(username, recipients, msg.as_string())
         finally:
@@ -428,10 +660,15 @@ async def send_email(user, tool_id, to: str, subject: str, body: str, cc: Option
 
     except ToolCredential.DoesNotExist:
         return _("No email credential found for tool {tool_id}").format(tool_id=tool_id)
+    except ValueError as exc:
+        return str(exc)
 
 
 async def save_draft(user, tool_id, to: str, subject: str, body: str,
-                     cc: Optional[str] = None, draft_folder: str = "Drafts") -> str:
+                     cc: Optional[str] = None, draft_folder: str = "Drafts",
+                     *, artifact_ids: list[int] | None = None,
+                     file_ids: list[int] | None = None,
+                     thread=None) -> str:
     """ Save an email as draft in the specified folder. """
     try:
         client = await get_imap_client(user, tool_id)
@@ -458,6 +695,14 @@ async def save_draft(user, tool_id, to: str, subject: str, body: str,
             # Add body
             msg.attach(MIMEText(body, 'plain'))
 
+            attachments = await resolve_binary_attachments_for_ids(
+                user=user,
+                thread=thread,
+                artifact_ids=artifact_ids,
+                file_ids=file_ids,
+            )
+            _attach_binary_parts(msg, attachments)
+
             # Save as draft using APPEND
             client.append(draft_folder, msg.as_string(), flags=[imapclient.DRAFT])
 
@@ -467,6 +712,8 @@ async def save_draft(user, tool_id, to: str, subject: str, body: str,
 
     except ToolCredential.DoesNotExist:
         return _("No email credential found for tool {tool_id}").format(tool_id=tool_id)
+    except ValueError as exc:
+        return str(exc)
 
 
 async def move_email_to_folder(user, tool_id, message_id: int,
@@ -702,6 +949,9 @@ METADATA = {
 def get_skill_instructions(agent=None, tools=None) -> list[str]:
     return [
         "Use preview-oriented reads first to keep context compact; read full content only when necessary.",
+        "Use list_email_attachments before importing or analyzing email attachments.",
+        "Import email attachments into the current conversation before delegating them to other agents.",
+        "Use artifact_ids or file_ids when sending email attachments from Nova.",
         "Never send an email when key details are missing (recipient, subject, or message body intent). Ask first.",
         "Use list_mailboxes before bulk organization to avoid invalid folder names and unintended moves.",
     ]
@@ -748,8 +998,56 @@ _EMAIL_TOOL_SPECS = [
                     "description": "mailbox folder name",
                     "default": "INBOX",
                 },
+                "preview_only": {
+                    "type": "boolean",
+                    "description": "when true, return only headers and a short preview",
+                    "default": True,
+                },
             },
             "required": ["message_id"],
+        },
+    ),
+    (
+        "list_email_attachments",
+        "List attachment identifiers and metadata for an email",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+            },
+            "required": ["message_id"],
+        },
+    ),
+    (
+        "import_email_attachments",
+        "Import selected email attachments into the current conversation as reusable artifacts",
+        {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "IMAP message ID",
+                },
+                "attachment_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "attachment identifiers returned by list_email_attachments",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "mailbox folder name",
+                    "default": "INBOX",
+                },
+            },
+            "required": ["message_id", "attachment_ids"],
         },
     ),
     (
@@ -898,6 +1196,16 @@ _EMAIL_TOOL_SPECS = [
                     "description": "CC recipients (comma-separated)",
                     "default": None,
                 },
+                "artifact_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "conversation artifact IDs to attach",
+                },
+                "file_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "thread file IDs to attach",
+                },
             },
             "required": ["to", "subject", "body"],
         },
@@ -929,6 +1237,16 @@ _EMAIL_TOOL_SPECS = [
                     "type": "string",
                     "description": "folder to save draft in",
                     "default": "Drafts",
+                },
+                "artifact_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "conversation artifact IDs to attach",
+                },
+                "file_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "thread file IDs to attach",
                 },
             },
             "required": ["to", "subject", "body"],
@@ -971,12 +1289,19 @@ def _build_toolset(
     result: list[StructuredTool] = []
     for name, description, args_schema in _EMAIL_TOOL_SPECS:
         full_description = f"{description_prefix} {description}".strip()
+        extra_kwargs = {}
+        if name == "import_email_attachments":
+            extra_kwargs = {
+                "return_direct": True,
+                "response_format": "content_and_artifact",
+            }
         result.append(
             StructuredTool.from_function(
                 coroutine=wrappers[name],
                 name=name,
                 description=full_description,
                 args_schema=_with_mailbox_selector(args_schema, mailbox_schema),
+                **extra_kwargs,
             )
         )
     return result
@@ -1209,11 +1534,45 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
             return err
         return await list_emails(user, entry["tool_id"], folder, limit)
 
-    async def read_email_wrapper(mailbox: str, message_id: int, folder: str = "INBOX") -> str:
+    async def read_email_wrapper(
+        mailbox: str,
+        message_id: int,
+        folder: str = "INBOX",
+        preview_only: bool = True,
+    ) -> str:
         entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
-        return await read_email(user, entry["tool_id"], message_id, folder)
+        return await read_email(user, entry["tool_id"], message_id, folder, preview_only)
+
+    async def list_email_attachments_wrapper(
+        mailbox: str,
+        message_id: int,
+        folder: str = "INBOX",
+    ) -> str:
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
+        if err:
+            return err
+        return await list_email_attachments(user, entry["tool_id"], message_id, folder)
+
+    async def import_email_attachments_wrapper(
+        mailbox: str,
+        message_id: int,
+        attachment_ids: list[str],
+        folder: str = "INBOX",
+    ):
+        entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
+        if err:
+            return err, None
+        return await import_email_attachments(
+            user,
+            entry["tool_id"],
+            message_id,
+            attachment_ids,
+            folder=folder,
+            agent=agent,
+            mailbox=str(entry["selector_email"] or mailbox),
+        )
 
     async def search_emails_wrapper(
         mailbox: str,
@@ -1279,6 +1638,8 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         subject: str,
         body: str,
         cc: Optional[str] = None,
+        artifact_ids: list[int] | None = None,
+        file_ids: list[int] | None = None,
     ) -> str:
         entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
@@ -1287,7 +1648,17 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
             return _(
                 "Sending is disabled for mailbox '{mailbox}'. Enable sending in this mailbox configuration."
             ).format(mailbox=entry["selector_email"] or entry["alias"])
-        return await send_email(user, entry["tool_id"], to, subject, body, cc)
+        return await send_email(
+            user,
+            entry["tool_id"],
+            to,
+            subject,
+            body,
+            cc,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+            thread=getattr(agent, "thread", None),
+        )
 
     async def save_draft_wrapper(
         mailbox: str,
@@ -1296,15 +1667,30 @@ async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[S
         body: str,
         cc: Optional[str] = None,
         draft_folder: str = "Drafts",
+        artifact_ids: list[int] | None = None,
+        file_ids: list[int] | None = None,
     ) -> str:
         entry, err = _resolve_mailbox(mailbox, lookup, selector_values)
         if err:
             return err
-        return await save_draft(user, entry["tool_id"], to, subject, body, cc, draft_folder)
+        return await save_draft(
+            user,
+            entry["tool_id"],
+            to,
+            subject,
+            body,
+            cc,
+            draft_folder,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+            thread=getattr(agent, "thread", None),
+        )
 
     wrappers = {
         "list_emails": list_emails_wrapper,
         "read_email": read_email_wrapper,
+        "list_email_attachments": list_email_attachments_wrapper,
+        "import_email_attachments": import_email_attachments_wrapper,
         "search_emails": search_emails_wrapper,
         "list_mailboxes": list_mailboxes_wrapper,
         "move_email_to_folder": move_email_to_folder_wrapper,
@@ -1339,6 +1725,9 @@ async def get_aggregated_prompt_instructions(tools: list[Tool], agent: LLMAgent)
     return [
         f"Email mailbox map: {'; '.join(mailbox_parts)}.",
         "Use mailbox email addresses exactly as listed when calling mail tools.",
+        "Use list_email_attachments before importing email attachments into the current conversation.",
+        "Use import_email_attachments to turn selected email attachments into artifact_ids.",
+        "Use artifact_ids or file_ids when sending Nova files by email.",
         "Do not send emails from a mailbox where sending is disabled.",
         "Reuse the same mailbox email address in a workflow unless the user asks to switch.",
     ]
@@ -1365,8 +1754,31 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def list_emails_wrapper(folder: str = "INBOX", limit: int = 10) -> str:
         return await list_emails(user, tool_id, folder, limit)
 
-    async def read_email_wrapper(message_id: int, folder: str = "INBOX") -> str:
-        return await read_email(user, tool_id, message_id, folder)
+    async def read_email_wrapper(
+        message_id: int,
+        folder: str = "INBOX",
+        preview_only: bool = True,
+    ) -> str:
+        return await read_email(user, tool_id, message_id, folder, preview_only)
+
+    async def list_email_attachments_wrapper(message_id: int, folder: str = "INBOX") -> str:
+        return await list_email_attachments(user, tool_id, message_id, folder)
+
+    async def import_email_attachments_wrapper(
+        message_id: int,
+        attachment_ids: list[str],
+        folder: str = "INBOX",
+    ):
+        credential = await _get_credential(user, tool_id)
+        return await import_email_attachments(
+            user,
+            tool_id,
+            message_id,
+            attachment_ids,
+            folder=folder,
+            agent=agent,
+            mailbox=_mailbox_identity_from_credential(credential, alias),
+        )
 
     async def search_emails_wrapper(query: str, folder: str = "INBOX", limit: int = 10) -> str:
         return await search_emails(user, tool_id, query, folder, limit)
@@ -1399,8 +1811,25 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def get_server_capabilities_wrapper() -> str:
         return await get_server_capabilities(user, tool_id)
 
-    async def send_email_wrapper(to: str, subject: str, body: str, cc: Optional[str] = None) -> str:
-        return await send_email(user, tool_id, to, subject, body, cc)
+    async def send_email_wrapper(
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        artifact_ids: list[int] | None = None,
+        file_ids: list[int] | None = None,
+    ) -> str:
+        return await send_email(
+            user,
+            tool_id,
+            to,
+            subject,
+            body,
+            cc,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+            thread=getattr(agent, "thread", None) if agent is not None else None,
+        )
 
     async def save_draft_wrapper(
         to: str,
@@ -1408,12 +1837,27 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
         body: str,
         cc: Optional[str] = None,
         draft_folder: str = "Drafts",
+        artifact_ids: list[int] | None = None,
+        file_ids: list[int] | None = None,
     ) -> str:
-        return await save_draft(user, tool_id, to, subject, body, cc, draft_folder)
+        return await save_draft(
+            user,
+            tool_id,
+            to,
+            subject,
+            body,
+            cc,
+            draft_folder,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+            thread=getattr(agent, "thread", None) if agent is not None else None,
+        )
 
     wrappers = {
         "list_emails": list_emails_wrapper,
         "read_email": read_email_wrapper,
+        "list_email_attachments": list_email_attachments_wrapper,
+        "import_email_attachments": import_email_attachments_wrapper,
         "search_emails": search_emails_wrapper,
         "list_mailboxes": list_mailboxes_wrapper,
         "move_email_to_folder": move_email_to_folder_wrapper,

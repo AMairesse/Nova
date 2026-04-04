@@ -104,6 +104,32 @@ class LLMAgentHelperTests(TestCase):
 
         self.assertEqual(values, (False, None, None, None))
 
+    def test_build_tool_artifact_followup_message_skips_refs_marked_non_auto_attach(self):
+        agent = self._make_agent()
+        tool_message = ToolMessage(
+            content="imported",
+            tool_call_id="call-1",
+            name="import_email_attachments",
+            artifact={
+                "artifact_refs": [
+                    {
+                        "artifact_id": 7,
+                        "kind": "annotation",
+                        "label": "report.csv",
+                        "mime_type": "text/csv",
+                        "tool_output": True,
+                        "auto_attach": False,
+                    }
+                ]
+            },
+        )
+
+        with patch.object(agent, "_hydrate_tool_ref", new=AsyncMock(return_value=("ignored", [{"type": "text", "text": "x"}]))) as mocked_hydrate:
+            followup = async_to_sync(agent._build_tool_artifact_followup_message)([tool_message])
+
+        self.assertIsNone(followup)
+        mocked_hydrate.assert_not_awaited()
+
     def test_fetch_agent_data_sync_returns_empty_contract_without_agent_config(self):
         values = llm_agent_mod.LLMAgent.fetch_agent_data_sync(None, self.user)
 
@@ -295,6 +321,7 @@ class LLMAgentHelperTests(TestCase):
                     "label": "img",
                     "mime_type": "image/png",
                     "tool_output": True,
+                    "auto_attach": True,
                 },
                 {
                     "ref_type": "artifact",
@@ -303,6 +330,7 @@ class LLMAgentHelperTests(TestCase):
                     "label": "img",
                     "mime_type": "image/png",
                     "tool_output": True,
+                    "auto_attach": True,
                 },
             ],
         )

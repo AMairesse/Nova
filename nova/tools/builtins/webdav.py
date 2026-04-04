@@ -8,6 +8,11 @@ from asgiref.sync import sync_to_async
 from django.utils.translation import gettext_lazy as _
 from langchain_core.tools import StructuredTool
 
+from nova.external_files import (
+    build_artifact_tool_payload,
+    resolve_binary_attachments_for_ids,
+    stage_external_files_as_artifacts,
+)
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Tool import Tool, ToolCredential
 
@@ -47,6 +52,8 @@ def get_skill_instructions(agent=None, tools=None) -> list[str]:
     del agent, tools
     return [
         "Start with webdav_stat_path or webdav_list_files before read/write/move/copy/delete actions.",
+        "Use webdav_import_file to bring an external binary into the current conversation as an artifact.",
+        "Use webdav_export_file with artifact_ids or file_ids to push Nova files back to WebDAV.",
         "Use webdav_batch_move_paths with dry_run=true first for large reorganization tasks.",
         "Configure root_path and mutation permissions narrowly to reduce accidental destructive actions.",
     ]
@@ -157,6 +164,37 @@ async def _webdav_request(
             return response.status, text
 
 
+async def _webdav_request_binary(
+    config: Dict[str, Any],
+    method: str,
+    path: str,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    data: Optional[str | bytes] = None,
+    expected_statuses: Optional[set[int]] = None,
+) -> tuple[int, bytes, Dict[str, str]]:
+    full_path = _join_paths(config["root_path"], path)
+    url = _build_webdav_url(config["server_url"], full_path)
+
+    req_headers = dict(headers or {})
+    auth = aiohttp.BasicAuth(config["username"], config["password"])
+    timeout = aiohttp.ClientTimeout(total=config["timeout"])
+
+    async with aiohttp.ClientSession(auth=auth, timeout=timeout) as session:
+        async with session.request(method, url, headers=req_headers, data=data) as response:
+            body = await response.read()
+            allowed = expected_statuses or {200, 201, 204, 207}
+            if response.status not in allowed:
+                preview = body.decode("utf-8", errors="ignore")[:500]
+                raise ValueError(
+                    _("WebDAV request failed ({status}): {body}").format(
+                        status=response.status,
+                        body=preview,
+                    )
+                )
+            return response.status, body, dict(response.headers)
+
+
 async def test_webdav_access(tool: Tool) -> Dict[str, str]:
     config = await _get_webdav_config(tool)
     await _webdav_request(
@@ -241,6 +279,45 @@ async def read_file(tool: Tool, path: str) -> str:
     return body
 
 
+async def import_file(tool: Tool, path: str, agent: LLMAgent):
+    if agent is None or getattr(agent, "thread", None) is None:
+        return _("WebDAV import requires an active conversation thread."), None
+
+    config = await _get_webdav_config(tool)
+    _status, body, headers = await _webdav_request_binary(
+        config,
+        "GET",
+        path,
+        expected_statuses={200},
+    )
+    filename = _normalize_path(path).rsplit("/", 1)[-1] or "webdav-file"
+    mime_type = str(headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    artifacts, errors = await stage_external_files_as_artifacts(
+        agent,
+        [
+            {
+                "filename": filename,
+                "content": body,
+                "mime_type": mime_type,
+                "origin_locator": {"path": path},
+            }
+        ],
+        origin_type="webdav",
+        imported_by_tool="webdav_import_file",
+        source="webdav",
+    )
+    if errors and not artifacts:
+        return _("Failed to import WebDAV file: {errors}").format(errors="; ".join(errors)), None
+
+    artifact = artifacts[0] if artifacts else None
+    message = _(
+        "Imported WebDAV file %(name)s into the current conversation."
+    ) % {"name": getattr(artifact, "filename", filename)}
+    if errors:
+        message += _(" Warnings: {errors}").format(errors="; ".join(errors))
+    return message, build_artifact_tool_payload(artifacts, tool_output=True)
+
+
 async def write_file(tool: Tool, path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:
     config = await _get_webdav_config(tool)
     headers = {"Overwrite": "T" if overwrite else "F"}
@@ -253,6 +330,55 @@ async def write_file(tool: Tool, path: str, content: str, overwrite: bool = True
         expected_statuses={201, 204},
     )
     return {"status": "ok", "http_status": status}
+
+
+async def export_file(
+    tool: Tool,
+    path: str,
+    *,
+    artifact_ids: list[int] | None = None,
+    file_ids: list[int] | None = None,
+    overwrite: bool = False,
+    agent: LLMAgent | None = None,
+) -> Dict[str, Any]:
+    if agent is None or getattr(agent, "thread", None) is None:
+        raise ValueError("WebDAV export requires an active conversation thread.")
+
+    attachments = await resolve_binary_attachments_for_ids(
+        user=agent.user,
+        thread=agent.thread,
+        artifact_ids=artifact_ids,
+        file_ids=file_ids,
+    )
+    if not attachments:
+        raise ValueError("No artifact_ids or file_ids resolved for WebDAV export.")
+    if len(attachments) != 1:
+        raise ValueError("webdav_export_file currently supports exporting exactly one source file.")
+
+    attachment = attachments[0]
+    destination_path = path
+    if destination_path.endswith("/"):
+        destination_path = _join_paths(destination_path, attachment.filename)
+
+    config = await _get_webdav_config(tool)
+    headers = {
+        "Overwrite": "T" if overwrite else "F",
+        "Content-Type": attachment.mime_type or "application/octet-stream",
+    }
+    status, _body, _response_headers = await _webdav_request_binary(
+        config,
+        "PUT",
+        destination_path,
+        headers=headers,
+        data=attachment.content,
+        expected_statuses={201, 204},
+    )
+    return {
+        "status": "ok",
+        "http_status": status,
+        "path": destination_path,
+        "filename": attachment.filename,
+    }
 
 
 async def create_folder(tool: Tool, path: str, recursive: bool = False) -> Dict[str, Any]:
@@ -357,8 +483,6 @@ async def batch_move_paths(
 
 
 async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
-    del agent
-
     config = await _get_webdav_config(tool)
 
     async def _list(path: str = "/", depth: int = 1) -> Dict[str, Any]:
@@ -370,8 +494,26 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
     async def _read(path: str) -> str:
         return await read_file(tool, path=path)
 
+    async def _import(path: str):
+        return await import_file(tool, path=path, agent=agent)
+
     async def _write(path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:
         return await write_file(tool, path=path, content=content, overwrite=overwrite)
+
+    async def _export(
+        path: str,
+        artifact_ids: list[int] | None = None,
+        file_ids: list[int] | None = None,
+        overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        return await export_file(
+            tool,
+            path=path,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+            overwrite=overwrite,
+            agent=agent,
+        )
 
     async def _mkdir(path: str, recursive: bool = False) -> Dict[str, Any]:
         return await create_folder(tool, path=path, recursive=recursive)
@@ -404,6 +546,13 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
             name="webdav_read_file",
             description="Read a text file from WebDAV.",
         ),
+        StructuredTool.from_function(
+            coroutine=_import,
+            name="webdav_import_file",
+            description="Import a WebDAV file into the current conversation as an artifact.",
+            return_direct=True,
+            response_format="content_and_artifact",
+        ),
     ]
 
     if config.get("allow_create_files"):
@@ -412,6 +561,13 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
                 coroutine=_write,
                 name="webdav_write_file",
                 description="Create/update text content in a WebDAV file.",
+            )
+        )
+        tools.append(
+            StructuredTool.from_function(
+                coroutine=_export,
+                name="webdav_export_file",
+                description="Export one Nova artifact or thread file to a WebDAV path.",
             )
         )
 

@@ -265,8 +265,12 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self._wait_for_selected_thread(new_thread.id)
 
         self.page.locator(
-            f"#threads-list #thread-item-{new_thread.id} .delete-thread-btn"
+            f'#threads-list [data-thread-item-id="{new_thread.id}"] .delete-thread-btn'
         ).click()
+        self.page.wait_for_selector(
+            f'#threads-list [data-thread-item-id="{new_thread.id}"]',
+            state="detached",
+        )
         self.page.wait_for_function(
             "() => document.querySelectorAll('#threads-list .thread-link').length === 1"
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from django.test import TransactionTestCase
@@ -206,7 +207,9 @@ class WebDAVBuiltinsTests(TransactionTestCase):
                 "webdav_list_files",
                 "webdav_stat_path",
                 "webdav_read_file",
+                "webdav_import_file",
                 "webdav_write_file",
+                "webdav_export_file",
                 "webdav_create_folder",
                 "webdav_move_path",
                 "webdav_copy_path",
@@ -235,6 +238,69 @@ class WebDAVBuiltinsTests(TransactionTestCase):
 
         self.assertEqual(result["items"][0]["type"], "directory")
         mocked_list_files.assert_awaited_once_with(self.tool, path="/", depth=1)
+
+    @patch("nova.tools.builtins.webdav.stage_external_files_as_artifacts", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.webdav._webdav_request_binary", new_callable=AsyncMock)
+    def test_import_file_returns_artifact_payload(self, mocked_request_binary, mocked_stage_artifacts):
+        mocked_request_binary.return_value = (200, b"%PDF-1.4", {"Content-Type": "application/pdf"})
+        mocked_stage_artifacts.return_value = (
+            [
+                SimpleNamespace(
+                    id=41,
+                    kind="pdf",
+                    filename="report.pdf",
+                    mime_type="application/pdf",
+                )
+            ],
+            [],
+        )
+        agent = SimpleNamespace(user=self.user, thread=SimpleNamespace(id=7))
+
+        message, payload = asyncio.run(webdav.import_file(self.tool, "/report.pdf", agent))
+
+        self.assertIn("Imported WebDAV file", message)
+        self.assertEqual(payload["artifact_refs"][0]["artifact_id"], 41)
+        mocked_request_binary.assert_awaited_once()
+
+    @patch("nova.tools.builtins.webdav.resolve_binary_attachments_for_ids", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.webdav._webdav_request_binary", new_callable=AsyncMock)
+    @patch("nova.tools.builtins.webdav._get_webdav_config", new_callable=AsyncMock)
+    def test_export_file_uploads_resolved_attachment(
+        self,
+        mocked_get_config,
+        mocked_request_binary,
+        mocked_resolve_attachments,
+    ):
+        mocked_get_config.return_value = {
+            "server_url": "https://cloud.example.com",
+            "username": "alice",
+            "password": "secret",
+            "root_path": "/Documents",
+            "timeout": 20,
+            "allow_create_files": True,
+        }
+        mocked_resolve_attachments.return_value = [
+            SimpleNamespace(
+                filename="report.pdf",
+                mime_type="application/pdf",
+                content=b"%PDF-1.4",
+            )
+        ]
+        mocked_request_binary.return_value = (201, b"", {})
+        agent = SimpleNamespace(user=self.user, thread=SimpleNamespace(id=7))
+
+        result = asyncio.run(
+            webdav.export_file(
+                self.tool,
+                "/exports/report.pdf",
+                artifact_ids=[5],
+                agent=agent,
+            )
+        )
+
+        self.assertEqual(result["status"], "ok")
+        mocked_resolve_attachments.assert_awaited_once()
+        mocked_request_binary.assert_awaited_once()
 
     def test_metadata_declares_skill_loading_permissions_and_instructions_exist(self):
         loading = webdav.METADATA.get("loading", {})
