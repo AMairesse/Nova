@@ -14,7 +14,9 @@ from django.test import TestCase, TransactionTestCase
 from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
 from nova.models.AgentThreadSession import AgentThreadSession
-from nova.models.Memory import MemoryItem, MemoryItemStatus, MemoryTheme
+from nova.models.MemoryDirectory import MemoryDirectory
+from nova.models.MemoryDocument import MemoryDocument
+from nova.models.memory_common import MemoryRecordStatus
 from nova.models.Message import Actor
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
@@ -339,76 +341,82 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         executor = self._build_executor()
 
         with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("mkdir /memory/preferences")
+            async_to_sync(executor.execute)("touch /memory/editor.md")
         with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)('tee /memory/preferences/editor.md --text "Vim"')
+            async_to_sync(executor.execute)('tee /memory/editor.md --text "Vim"')
 
     def test_memory_mount_supports_ls_cat_and_grep(self):
-        theme = MemoryTheme.objects.create(user=self.user, slug="preferences", display_name="Preferences")
-        item = MemoryItem.objects.create(
+        MemoryDirectory.objects.create(
             user=self.user,
-            theme=theme,
-            type="preference",
-            content="Preferred editor is Vim",
-            virtual_path="/memory/preferences/editor.md",
+            virtual_path="/memory/projects",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        document = MemoryDocument.objects.create(
+            user=self.user,
+            virtual_path="/memory/projects/editor.md",
+            title="Editor",
+            content_markdown="# Editor\n\nPreferred editor is Vim",
+            status=MemoryRecordStatus.ACTIVE,
         )
         executor = self._build_executor(
             TerminalCapabilities(memory_tool=object())
         )
 
         memory_root = async_to_sync(executor.execute)("ls /memory")
-        memory_theme = async_to_sync(executor.execute)("ls /memory/preferences")
-        memory_doc = async_to_sync(executor.execute)("cat /memory/preferences/editor.md")
+        memory_theme = async_to_sync(executor.execute)("ls /memory/projects")
+        memory_doc = async_to_sync(executor.execute)("cat /memory/projects/editor.md")
         grep_result = async_to_sync(executor.execute)('grep -r -n "Vim" /memory')
 
         self.assertIn("README.md", memory_root)
-        self.assertIn("preferences/", memory_root)
+        self.assertIn("projects/", memory_root)
         self.assertIn("editor.md", memory_theme)
         self.assertIn("Preferred editor is Vim", memory_doc)
-        self.assertIn("/memory/preferences/editor.md", grep_result)
-        self.assertIn("type: preference", memory_doc)
-        self.assertEqual(item.id, MemoryItem.objects.get(id=item.id).id)
+        self.assertIn("/memory/projects/editor.md", grep_result)
+        self.assertEqual(document.id, MemoryDocument.objects.get(id=document.id).id)
 
     def test_tee_and_rm_manage_memory_items(self):
         executor = self._build_executor(
             TerminalCapabilities(memory_tool=object())
         )
 
-        written = async_to_sync(executor.execute)(
-            'tee /memory/preferences/editor.md --text "---\\ntype: preference\\n---\\nVim"'
-        )
-        content = async_to_sync(executor.execute)("cat /memory/preferences/editor.md")
-        removed = async_to_sync(executor.execute)("rm /memory/preferences/editor.md")
+        written = async_to_sync(executor.execute)('tee /memory/editor.md --text "# Editor\\n\\nVim"')
+        content = async_to_sync(executor.execute)("cat /memory/editor.md")
+        removed = async_to_sync(executor.execute)("rm /memory/editor.md")
 
-        item = MemoryItem.objects.get(user=self.user, virtual_path="/memory/preferences/editor.md")
-        self.assertIn("/memory/preferences/editor.md", written)
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/editor.md")
+        self.assertIn("/memory/editor.md", written)
         self.assertIn("Vim", content)
-        self.assertEqual(removed, "Removed /memory/preferences/editor.md")
-        self.assertEqual(item.status, MemoryItemStatus.ARCHIVED)
+        self.assertEqual(removed, "Removed /memory/editor.md")
+        self.assertEqual(document.status, MemoryRecordStatus.ARCHIVED)
 
     def test_touch_and_mv_manage_memory_items(self):
         executor = self._build_executor(
             TerminalCapabilities(memory_tool=object())
         )
 
-        async_to_sync(executor.execute)("mkdir /memory/preferences")
-        created = async_to_sync(executor.execute)("touch /memory/preferences/editor.md")
-        moved = async_to_sync(executor.execute)("mv /memory/preferences/editor.md /memory/tools/editor.txt")
-        content = async_to_sync(executor.execute)("cat /memory/tools/editor.txt")
+        async_to_sync(executor.execute)("mkdir /memory/tools")
+        created = async_to_sync(executor.execute)("touch /memory/editor.md")
+        moved = async_to_sync(executor.execute)("mv /memory/editor.md /memory/tools/editor.md")
+        content = async_to_sync(executor.execute)("cat /memory/tools/editor.md")
 
-        item = MemoryItem.objects.get(user=self.user, virtual_path="/memory/tools/editor.txt")
-        self.assertEqual(created, "Created empty file /memory/preferences/editor.md")
-        self.assertEqual(moved, "Moved to /memory/tools/editor.txt")
-        self.assertIn("path: /memory/tools/editor.txt", content)
-        self.assertEqual(item.theme.slug, "tools")
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/tools/editor.md")
+        self.assertEqual(created, "Created empty file /memory/editor.md")
+        self.assertEqual(moved, "Moved to /memory/tools/editor.md")
+        self.assertEqual(content, "")
+        self.assertEqual(document.virtual_path, "/memory/tools/editor.md")
 
-    def test_memory_rejects_paths_deeper_than_one_theme_directory(self):
+    def test_memory_supports_nested_directories_when_created(self):
         executor = self._build_executor(
             TerminalCapabilities(memory_tool=object())
         )
 
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)('tee /memory/preferences/editors/vim.md --text "Vim"')
+        async_to_sync(executor.execute)("mkdir /memory/preferences")
+        async_to_sync(executor.execute)("mkdir /memory/preferences/editors")
+        written = async_to_sync(executor.execute)(
+            'tee /memory/preferences/editors/vim.md --text "# Vim\\n\\nFast editor"'
+        )
+
+        self.assertIn("/memory/preferences/editors/vim.md", written)
 
     def test_memory_search_formats_results_with_paths(self):
         executor = self._build_executor(
@@ -421,25 +429,23 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             return_value={
                 "results": [
                     {
-                        "id": 7,
-                        "path": "/memory/preferences/editor.md",
-                        "theme": "preferences",
-                        "type": "preference",
-                        "content_snippet": "Uses Vim",
+                        "path": "/memory/projects/editor.md",
+                        "section_heading": "Editor",
+                        "section_anchor": "editor",
+                        "snippet": "Uses Vim",
                     }
                 ],
                 "notes": [],
             },
         ) as mocked_search:
             result = async_to_sync(executor.execute)(
-                'memory search "editor preference" --limit 2 --theme preferences --type preference'
+                'memory search "editor preference" --limit 2 --under /memory/projects'
             )
 
-        self.assertIn("/memory/preferences/editor.md", result)
+        self.assertIn("/memory/projects/editor.md", result)
         self.assertIn("Uses Vim", result)
         self.assertEqual(mocked_search.await_args.kwargs["query"], "editor preference")
-        self.assertEqual(mocked_search.await_args.kwargs["theme"], "preferences")
-        self.assertEqual(mocked_search.await_args.kwargs["types"], ["preference"])
+        self.assertEqual(mocked_search.await_args.kwargs["under"], "/memory/projects")
 
     def test_search_command_formats_results_and_supports_output(self):
         searxng_tool = self._create_searxng_tool()
@@ -1455,11 +1461,11 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         async_to_sync(runtime_a.vfs.write_file)(
-            "/memory/preferences/editor.md",
-            b"---\ntype: preference\n---\nUses Vim",
+            "/memory/editor.md",
+            b"# Editor\n\nUses Vim",
             mime_type="text/markdown",
         )
-        content = async_to_sync(runtime_b.vfs.read_text)("/memory/preferences/editor.md")
+        content = async_to_sync(runtime_b.vfs.read_text)("/memory/editor.md")
 
         self.assertIn("Uses Vim", content)
         mocked_provider.assert_awaited()
@@ -1670,8 +1676,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
             del ephemeral_user_prompt, ensure_root_trace
             await self.vfs.write_file(
-                "/memory/preferences/editor.md",
-                b"---\ntype: preference\n---\nUses Vim",
+                "/memory/editor.md",
+                b"# Editor\n\nUses Vim",
                 mime_type="text/markdown",
             )
             return ReactTerminalRunResult(
@@ -1696,7 +1702,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 input_paths=[],
             )
 
-        content = async_to_sync(runtime.vfs.read_text)("/memory/preferences/editor.md")
+        content = async_to_sync(runtime.vfs.read_text)("/memory/editor.md")
         self.assertIn("Stored memory.", result)
         self.assertIn("Uses Vim", content)
         mocked_provider.assert_awaited()

@@ -2,7 +2,7 @@
 {% load i18n %}
 
 <div class="d-flex justify-content-between align-items-center mb-2">
-  <h6 class="mb-0">{% trans "Memory items" %}</h6>
+  <h6 class="mb-0">{% trans "Memory documents" %}</h6>
 
   <div class="d-flex align-items-center gap-2">
     <div class="form-check form-switch mb-0">
@@ -29,39 +29,37 @@
   <table class="table table-sm table-hover align-middle">
     <thead class="table-light">
       <tr>
-        <th>{% trans "Created" %}</th>
-        <th>{% trans "Theme" %}</th>
-        <th>{% trans "Type" %}</th>
-        <th>{% trans "Content" %}</th>
-        <th>{% trans "Embedding" %}</th>
+        <th>{% trans "Updated" %}</th>
+        <th>{% trans "Path" %}</th>
+        <th>{% trans "Title" %}</th>
+        <th>{% trans "Chunks" %}</th>
+        <th>{% trans "Embeddings" %}</th>
       </tr>
     </thead>
     <tbody>
-      {% for item in items %}
+      {% for row in documents %}
         <tr>
-          <td class="text-nowrap">{{ item.created_at|date:"Y-m-d H:i" }}</td>
-          <td>{% if item.theme %}<code>{{ item.theme.slug }}</code>{% endif %}</td>
-          <td><code>{{ item.type }}</code></td>
-          <td style="max-width: 520px;">
-            <div class="text-truncate" style="max-width: 520px;" title="{{ item.content }}">{{ item.content }}</div>
+          <td class="text-nowrap">{{ row.document.updated_at|date:"Y-m-d H:i" }}</td>
+          <td><code>{{ row.document.virtual_path }}</code></td>
+          <td style="max-width: 280px;">
+            <div class="text-truncate" style="max-width: 280px;" title="{{ row.document.title }}">{{ row.document.title|default:"—" }}</div>
           </td>
+          <td>{{ row.chunk_count }}</td>
           <td>
-            {% if item.status == 'archived' %}
+            {% if row.document.status == 'archived' %}
               <span class="badge bg-secondary">archived</span>
             {% endif %}
 
-            {% if item.embedding %}
-              <span class="badge bg-{% if item.embedding.state == 'ready' %}success{% elif item.embedding.state == 'error' %}danger{% else %}secondary{% endif %}">
-                {{ item.embedding.state }}
-              </span>
-            {% else %}
-              <span class="text-muted">—</span>
+            <span class="badge bg-success">{{ row.ready_embeddings }} ready</span>
+            <span class="badge bg-secondary">{{ row.pending_embeddings }} pending</span>
+            {% if row.error_embeddings %}
+              <span class="badge bg-danger">{{ row.error_embeddings }} error</span>
             {% endif %}
           </td>
         </tr>
       {% empty %}
         <tr>
-          <td colspan="5" class="text-muted">{% trans "No memory items." %}</td>
+          <td colspan="5" class="text-muted">{% trans "No memory documents." %}</td>
         </tr>
       {% endfor %}
     </tbody>

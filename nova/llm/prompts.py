@@ -9,10 +9,10 @@ from typing import Optional
 
 from langchain.agents.middleware import dynamic_prompt
 from langchain.agents.middleware.types import ModelRequest
-from django.db.models import Count, Q
+from django.db.models import Count
 from nova.models.MessageArtifact import MessageArtifact
 from nova.models.UserFile import UserFile
-from nova.models.Memory import MemoryTheme
+from nova.models.MemoryDocument import MemoryDocument
 from nova.models.Tool import Tool
 from nova.llm.skill_tool_filter import resolve_active_skills
 from asgiref.sync import sync_to_async
@@ -229,33 +229,26 @@ async def _get_user_memory(user) -> Optional[str]:
     Memory v2 is tool-driven: do NOT inject memory content, only compact discovery.
     """
     try:
-        # Include lightweight discovery hints: top themes + active item counts.
-        # NOTE: keep this intentionally small to avoid prompt bloat.
-        def _load_theme_hints():
-            themes_qs = (
-                MemoryTheme.objects.filter(user=user)
-                .annotate(active_count=Count("items", filter=Q(items__status="active")))
-                .order_by("-active_count", "slug")
+        def _load_document_hints():
+            queryset = MemoryDocument.objects.filter(user=user, status="active").order_by(
+                "-updated_at",
+                "virtual_path",
             )
-            return list(themes_qs.values_list("slug", "active_count"))
+            hints = list(queryset.values_list("virtual_path", flat=True)[:10])
+            total = queryset.count()
+            return hints, total
 
-        # NOTE: SQLite (tests) is prone to table locking when ORM runs in a separate
-        # worker thread. Keep DB access thread-sensitive.
-        theme_hints = await sync_to_async(_load_theme_hints, thread_sensitive=True)()
-
-        # Keep this block intentionally short to avoid prompt bloat.
-        lines = ["Long-term memory themes available:"]
-
-        if theme_hints:
-            # Limit how many themes we list.
-            shown = theme_hints[:10]
-            suffix = "" if len(theme_hints) <= 10 else f" (+{len(theme_hints) - 10} more)"
-            formatted = ", ".join([f"{slug} ({count})" for slug, count in shown])
-            lines.append(f"Known memory themes (active items): {formatted}{suffix}")
+        document_hints, total = await sync_to_async(_load_document_hints, thread_sensitive=True)()
+        lines = ["Long-term memory is available through user-scoped documents."]
+        if document_hints:
+            formatted = ", ".join(document_hints)
+            remainder = max(total - len(document_hints), 0)
+            suffix = f" (+{remainder} more)" if remainder else ""
+            lines.append(f"Known memory paths: {formatted}{suffix}")
 
         return "\n".join(lines)
     except Exception as e:
-        logger.warning(f"Failed to load memory themes: {e}")
+        logger.warning(f"Failed to load memory documents: {e}")
         return "Long-term memory is available."
 
 

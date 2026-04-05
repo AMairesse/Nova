@@ -2,13 +2,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from nova.models.Memory import (
-    MemoryEmbeddingState,
-    MemoryItem,
-    MemoryItemEmbedding,
-    MemoryItemStatus,
-    MemoryTheme,
-)
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.MemoryDocument import MemoryDocument
+from nova.models.memory_common import MemoryChunkEmbeddingState, MemoryRecordStatus
 
 
 User = get_user_model()
@@ -29,54 +26,69 @@ class MemoryBrowserViewTests(TestCase):
         self.client.login(username="memory-browser-user", password="pass123")
         self.url = reverse("user_settings:memory-items")
 
-        self.work_theme = MemoryTheme.objects.create(
+        self.active_document = MemoryDocument.objects.create(
             user=self.user,
-            slug="work",
-            display_name="Work",
+            virtual_path="/memory/work.md",
+            title="Work",
+            content_markdown="# Work\n\nParis office opens at 9am",
+            status=MemoryRecordStatus.ACTIVE,
         )
-        self.personal_theme = MemoryTheme.objects.create(
+        self.archived_document = MemoryDocument.objects.create(
             user=self.user,
-            slug="personal",
-            display_name="Personal",
+            virtual_path="/memory/personal.md",
+            title="Personal",
+            content_markdown="# Personal\n\nOld archived memory",
+            status=MemoryRecordStatus.ARCHIVED,
         )
-
-        self.active_item = MemoryItem.objects.create(
-            user=self.user,
-            theme=self.work_theme,
-            type="fact",
-            content="Paris office opens at 9am",
-            status=MemoryItemStatus.ACTIVE,
-        )
-        self.archived_item = MemoryItem.objects.create(
-            user=self.user,
-            theme=self.personal_theme,
-            type="instruction",
-            content="Old archived memory",
-            status=MemoryItemStatus.ARCHIVED,
-        )
-        self.other_user_item = MemoryItem.objects.create(
+        self.other_user_document = MemoryDocument.objects.create(
             user=self.other_user,
-            type="fact",
-            content="Other user memory",
-            status=MemoryItemStatus.ACTIVE,
+            virtual_path="/memory/other.md",
+            title="Other",
+            content_markdown="# Other\n\nOther user memory",
+            status=MemoryRecordStatus.ACTIVE,
         )
 
-        MemoryItemEmbedding.objects.create(
-            user=self.user,
-            item=self.active_item,
-            state=MemoryEmbeddingState.READY,
+        active_chunk = MemoryChunk.objects.create(
+            document=self.active_document,
+            heading="Work",
+            anchor="work",
+            position=0,
+            content_text="Paris office opens at 9am",
+            token_count=5,
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        archived_chunk = MemoryChunk.objects.create(
+            document=self.archived_document,
+            heading="Personal",
+            anchor="personal",
+            position=0,
+            content_text="Old archived memory",
+            token_count=3,
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        other_chunk = MemoryChunk.objects.create(
+            document=self.other_user_document,
+            heading="Other",
+            anchor="other",
+            position=0,
+            content_text="Other user memory",
+            token_count=3,
+            status=MemoryRecordStatus.ACTIVE,
+        )
+
+        MemoryChunkEmbedding.objects.create(
+            chunk=active_chunk,
+            state=MemoryChunkEmbeddingState.READY,
             vector=[0.1] * 1024,
         )
-        MemoryItemEmbedding.objects.create(
-            user=self.user,
-            item=self.archived_item,
-            state=MemoryEmbeddingState.ERROR,
+        MemoryChunkEmbedding.objects.create(
+            chunk=archived_chunk,
+            state=MemoryChunkEmbeddingState.ERROR,
             error="boom",
         )
-        MemoryItemEmbedding.objects.create(
-            user=self.other_user,
-            item=self.other_user_item,
-            state=MemoryEmbeddingState.PENDING,
+        MemoryChunkEmbedding.objects.create(
+            chunk=other_chunk,
+            state=MemoryChunkEmbeddingState.PENDING,
         )
 
     def test_login_required(self):
@@ -87,38 +99,39 @@ class MemoryBrowserViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response.url)
 
-    def test_default_view_lists_only_active_items_for_current_user(self):
+    def test_default_view_lists_only_active_documents_for_current_user(self):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/fragments/memory_items_table.html")
-        items = list(response.context["items"])
-        self.assertEqual(items, [self.active_item])
+        documents = [row["document"] for row in response.context["documents"]]
+        self.assertEqual(documents, [self.active_document])
         self.assertFalse(response.context["include_archived"])
-        self.assertContains(response, "Paris office opens at 9am")
-        self.assertNotContains(response, "Old archived memory")
-        self.assertNotContains(response, "Other user memory")
+        self.assertContains(response, "/memory/work.md")
+        self.assertNotContains(response, "/memory/personal.md")
+        self.assertNotContains(response, "/memory/other.md")
 
     def test_include_archived_accepts_truthy_flag_and_sets_context(self):
         response = self.client.get(self.url, {"include_archived": "yes"})
 
         self.assertEqual(response.status_code, 200)
-        items = list(response.context["items"])
-        self.assertEqual(items, [self.archived_item, self.active_item])
+        documents = [row["document"] for row in response.context["documents"]]
+        self.assertEqual(documents, [self.archived_document, self.active_document])
         self.assertTrue(response.context["include_archived"])
-        self.assertContains(response, "Old archived memory")
+        self.assertContains(response, "/memory/personal.md")
         self.assertContains(response, "archived")
 
-    def test_theme_filter_is_case_insensitive(self):
+    def test_query_filter_matches_path(self):
         response = self.client.get(
             self.url,
-            {"include_archived": "1", "theme": "WORK"},
+            {"include_archived": "1", "q": "work"},
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(list(response.context["items"]), [self.active_item])
-        self.assertContains(response, "Paris office opens at 9am")
-        self.assertNotContains(response, "Old archived memory")
+        documents = [row["document"] for row in response.context["documents"]]
+        self.assertEqual(documents, [self.active_document])
+        self.assertContains(response, "/memory/work.md")
+        self.assertNotContains(response, "/memory/personal.md")
 
     def test_query_filter_matches_content(self):
         response = self.client.get(
@@ -127,6 +140,7 @@ class MemoryBrowserViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(list(response.context["items"]), [self.archived_item])
-        self.assertContains(response, "Old archived memory")
-        self.assertNotContains(response, "Paris office opens at 9am")
+        documents = [row["document"] for row in response.context["documents"]]
+        self.assertEqual(documents, [self.archived_document])
+        self.assertContains(response, "/memory/personal.md")
+        self.assertNotContains(response, "/memory/work.md")

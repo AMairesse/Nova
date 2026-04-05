@@ -4,62 +4,62 @@ from celery import shared_task
 from django.db import transaction
 
 from nova.llm.embeddings import compute_embedding, get_embeddings_provider
-from nova.models.Memory import MemoryEmbeddingState, MemoryItemEmbedding
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.memory_common import MemoryChunkEmbeddingState
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, name="compute_memory_item_embedding")
-def compute_memory_item_embedding_task(self, embedding_id: int):
-    """Compute pgvector embedding for a MemoryItemEmbedding.
-
-    This is intentionally separate from the tool call to keep tool latency low.
-    """
+@shared_task(bind=True, name="compute_memory_chunk_embedding")
+def compute_memory_chunk_embedding_task(self, chunk_id: int):
+    """Compute pgvector embedding for a MemoryChunkEmbedding."""
 
     from asgiref.sync import async_to_sync
 
-    emb = (
-        MemoryItemEmbedding.objects.select_related("item")
-        .filter(id=embedding_id)
+    embedding = (
+        MemoryChunkEmbedding.objects.select_related("chunk__document__user")
+        .filter(chunk_id=chunk_id)
         .first()
     )
-    if not emb:
+    if not embedding:
         return
 
-    # Provider is user-scoped (DB-backed) and must be evaluated per-task.
-    # (Changes should apply immediately, even for queued jobs.)
-    provider = get_embeddings_provider(user_id=emb.user_id)
+    provider = get_embeddings_provider(user_id=embedding.chunk.document.user_id)
     if not provider:
-        logger.info("[compute_memory_item_embedding] embeddings disabled; skipping %s", embedding_id)
+        logger.info("[compute_memory_chunk_embedding] embeddings disabled; skipping %s", chunk_id)
         return
 
-    # idempotence
-    if emb.state == MemoryEmbeddingState.READY and emb.vector is not None:
+    if embedding.state == MemoryChunkEmbeddingState.READY and embedding.vector is not None:
         return
 
     try:
-        vec = async_to_sync(compute_embedding)(emb.item.content, user_id=emb.user_id)
+        vec = async_to_sync(compute_embedding)(
+            embedding.chunk.content_text,
+            user_id=embedding.chunk.document.user_id,
+        )
         if vec is None:
             return
 
         with transaction.atomic():
-            emb.provider_type = provider.provider_type
-            emb.model = provider.model
-            emb.dimensions = len(vec)
-            emb.vector = vec
-            emb.state = MemoryEmbeddingState.READY
-            emb.error = None
-            emb.save(update_fields=[
-                "provider_type",
-                "model",
-                "dimensions",
-                "vector",
-                "state",
-                "error",
-                "updated_at",
-            ])
-    except Exception as e:
-        logger.exception("[compute_memory_item_embedding] failed for %s", embedding_id)
-        emb.state = MemoryEmbeddingState.ERROR
-        emb.error = str(e)
-        emb.save(update_fields=["state", "error", "updated_at"])
+            embedding.provider_type = provider.provider_type
+            embedding.model = provider.model
+            embedding.dimensions = len(vec)
+            embedding.vector = vec
+            embedding.state = MemoryChunkEmbeddingState.READY
+            embedding.error = None
+            embedding.save(
+                update_fields=[
+                    "provider_type",
+                    "model",
+                    "dimensions",
+                    "vector",
+                    "state",
+                    "error",
+                    "updated_at",
+                ]
+            )
+    except Exception as exc:
+        logger.exception("[compute_memory_chunk_embedding] failed for %s", chunk_id)
+        embedding.state = MemoryChunkEmbeddingState.ERROR
+        embedding.error = str(exc)
+        embedding.save(update_fields=["state", "error", "updated_at"])

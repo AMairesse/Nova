@@ -4,14 +4,14 @@ import posixpath
 import re
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any
 
-import yaml
 from asgiref.sync import sync_to_async
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from django.utils.text import slugify
 
 from nova.llm.embeddings import aget_embeddings_provider
 from nova.llm.hybrid_search import (
@@ -21,35 +21,38 @@ from nova.llm.hybrid_search import (
     resolve_query_vector,
     semantic_similarity_from_distance,
 )
-from nova.models.Memory import (
-    MemoryItem,
-    MemoryItemEmbedding,
-    MemoryItemStatus,
-    MemoryItemType,
-    MemoryTheme,
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.MemoryDirectory import MemoryDirectory
+from nova.models.MemoryDocument import MemoryDocument
+from nova.models.memory_common import (
+    MEMORY_EMBEDDING_DIMENSIONS,
+    MemoryChunkEmbeddingState,
+    MemoryRecordStatus,
 )
 
 MEMORY_ROOT = "/memory"
 MEMORY_README_PATH = "/memory/README.md"
-MEMORY_ALLOWED_EXTENSIONS = {".md", ".txt"}
-FRONTMATTER_OPEN = "---\n"
-DEFAULT_MEMORY_EXTENSION = ".md"
+MEMORY_ALLOWED_EXTENSIONS = {".md"}
+MAX_MEMORY_SEARCH_LIMIT = 50
+MEMORY_CHUNK_MAX_WORDS = 280
+MEMORY_CHUNK_OVERLAP_WORDS = 40
 
 MEMORY_README_CONTENT = """# Memory
 
-`/memory` is a user-scoped virtual directory shared across the current user's
+`/memory` is a user-scoped virtual filesystem shared across the current user's
 React Terminal agents that have memory access.
 
 Use it like this:
 - `ls /memory`
-- `ls /memory/<theme>`
-- `cat /memory/<theme>/<file>.md`
-- `grep -r "term" /memory`
-- `memory search "conceptual query"`
-- `tee /memory/<theme>/<file>.md --text "..."`
+- `mkdir /memory/projects`
+- `touch /memory/projects/client-a.md`
+- `tee /memory/projects/client-a.md --text "# Client A\\n\\n## Constraints\\n..."`
+- `grep -r "deadline" /memory`
+- `memory search "client deadline" --under /memory/projects`
 
-Use `grep` for lexical text matching.
-Use `memory search` for hybrid lexical + embeddings retrieval.
+Use `grep` for lexical text matching on visible files.
+Use `memory search` for hybrid lexical + embeddings retrieval over memory chunks.
 """
 
 
@@ -57,9 +60,8 @@ Use `memory search` for hybrid lexical + embeddings retrieval.
 class MemoryPathSpec:
     kind: str
     normalized_path: str
-    theme_slug: str | None = None
-    filename: str | None = None
-    extension: str | None = None
+    parent_path: str | None = None
+    basename: str | None = None
 
 
 @dataclass(slots=True)
@@ -67,93 +69,51 @@ class MemoryVirtualEntry:
     path: str
     mime_type: str
     size: int
-    item_id: int | None = None
+    document_id: int | None = None
 
 
-def normalize_memory_theme_slug(theme: str) -> str:
-    theme_value = (theme or "").strip().lower()
-    if not theme_value:
-        raise ValidationError("theme must be a non-empty string")
-    return theme_value.replace(" ", "-")
-
-
-def get_default_memory_theme_slug() -> str:
-    return "general"
-
-
-def build_default_memory_virtual_path(theme_slug: str, item_id: int) -> str:
-    return posixpath.join(MEMORY_ROOT, theme_slug, f"{item_id}{DEFAULT_MEMORY_EXTENSION}")
-
-
-def ensure_memory_virtual_path(item: MemoryItem) -> str:
-    current = str(getattr(item, "virtual_path", "") or "").strip()
-    if current:
-        return current
-    theme_slug = getattr(getattr(item, "theme", None), "slug", None) or get_default_memory_theme_slug()
-    return build_default_memory_virtual_path(theme_slug, int(item.id))
-
-
-def _humanize_theme_display_name(theme_slug: str) -> str:
-    return str(theme_slug or "").replace("-", " ").strip().title() or get_default_memory_theme_slug().title()
-
-
-def _normalize_tags(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if isinstance(item, str) and str(item).strip()]
-    raise ValidationError("tags must be a string or a list of strings")
-
-
-def _normalize_item_type(value: Any) -> str:
-    item_type = str(value or "").strip().lower()
-    if not item_type:
-        raise ValidationError("type must be a non-empty string")
-    if item_type not in set(MemoryItemType.values):
-        raise ValidationError(f"Invalid memory item type: {item_type}")
-    return item_type
-
-
-def parse_memory_virtual_path(path: str) -> MemoryPathSpec:
+def _normalize_memory_path(path: str) -> str:
     normalized = posixpath.normpath(str(path or "").strip() or MEMORY_ROOT)
     if not normalized.startswith("/"):
         normalized = f"/{normalized}"
+    return normalized
+
+
+def parse_memory_virtual_path(path: str) -> MemoryPathSpec:
+    normalized = _normalize_memory_path(path)
     if normalized == MEMORY_ROOT:
         return MemoryPathSpec(kind="root", normalized_path=MEMORY_ROOT)
     if normalized == MEMORY_README_PATH:
-        return MemoryPathSpec(kind="readme", normalized_path=MEMORY_README_PATH)
+        return MemoryPathSpec(
+            kind="readme",
+            normalized_path=MEMORY_README_PATH,
+            parent_path=MEMORY_ROOT,
+            basename="README.md",
+        )
     if not normalized.startswith(f"{MEMORY_ROOT}/"):
         raise ValidationError("Not a memory path")
 
-    relative = normalized[len(f"{MEMORY_ROOT}/"):]
-    parts = [part for part in relative.split("/") if part]
-    if len(parts) == 1:
-        theme_slug = normalize_memory_theme_slug(parts[0])
-        if parts[0] != theme_slug:
-            raise ValidationError("Memory theme directory names must use normalized slugs")
-        return MemoryPathSpec(kind="theme_dir", normalized_path=normalized, theme_slug=theme_slug)
-    if len(parts) != 2:
-        raise ValidationError("Memory paths support only one theme directory level")
+    basename = posixpath.basename(normalized)
+    parent_path = posixpath.dirname(normalized)
+    if basename == "README.md":
+        raise ValidationError("README.md is reserved inside /memory")
 
-    theme_slug = normalize_memory_theme_slug(parts[0])
-    if parts[0] != theme_slug:
-        raise ValidationError("Memory theme directory names must use normalized slugs")
+    if posixpath.splitext(basename)[1].lower() in MEMORY_ALLOWED_EXTENSIONS:
+        return MemoryPathSpec(
+            kind="item",
+            normalized_path=normalized,
+            parent_path=parent_path,
+            basename=basename,
+        )
 
-    filename = parts[1]
-    basename, extension = posixpath.splitext(filename)
-    if not basename:
-        raise ValidationError("Memory item filenames must not be empty")
-    if extension.lower() not in MEMORY_ALLOWED_EXTENSIONS:
-        raise ValidationError("Memory item files must use .md or .txt")
+    if "." in basename:
+        raise ValidationError("Memory files must use the .md extension")
 
     return MemoryPathSpec(
-        kind="item",
+        kind="dir",
         normalized_path=normalized,
-        theme_slug=theme_slug,
-        filename=filename,
-        extension=extension.lower(),
+        parent_path=parent_path,
+        basename=basename,
     )
 
 
@@ -165,435 +125,316 @@ def is_memory_path(path: str) -> bool:
         return False
 
 
-def _split_frontmatter_and_body(text: str) -> tuple[dict[str, Any], str]:
-    source = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    if not source.startswith(FRONTMATTER_OPEN):
-        return {}, source
-
-    match = re.match(r"^---\n(.*?)\n---\n?(.*)$", source, flags=re.DOTALL)
-    if not match:
-        return {}, source
-
-    raw_frontmatter, body = match.groups()
-    parsed = yaml.safe_load(raw_frontmatter) or {}
-    if not isinstance(parsed, dict):
-        raise ValidationError("Memory frontmatter must be a YAML mapping")
-    return parsed, body
+def _humanize_basename(path: str) -> str:
+    basename = posixpath.basename(path).rsplit(".", 1)[0]
+    return re.sub(r"[-_]+", " ", basename).strip().title() or "Memory"
 
 
-def render_memory_document(item: MemoryItem) -> str:
-    path = ensure_memory_virtual_path(item)
-    theme_slug = getattr(getattr(item, "theme", None), "slug", None) or get_default_memory_theme_slug()
-    frontmatter = {
-        "id": item.id,
-        "theme": str(theme_slug),
-        "type": str(item.type),
-        "tags": list(item.tags or []),
-        "status": str(item.status),
-        "created_at": item.created_at.isoformat() if item.created_at else None,
-        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-        "source_thread_id": getattr(item, "source_thread_id", None),
-        "source_message_id": getattr(item, "source_message_id", None),
-        "path": str(path),
-    }
-    rendered_frontmatter = yaml.safe_dump(
-        frontmatter,
-        sort_keys=False,
-        allow_unicode=True,
-        default_flow_style=False,
-    ).strip()
-    body = str(item.content or "")
-    if body:
-        return f"---\n{rendered_frontmatter}\n---\n{body}"
-    return f"---\n{rendered_frontmatter}\n---\n"
+def _normalize_markdown(text: str) -> str:
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _editable_fields_from_document(text: str) -> tuple[dict[str, Any], str]:
-    frontmatter, body = _split_frontmatter_and_body(text)
-    editable: dict[str, Any] = {}
-    if "type" in frontmatter:
-        editable["type"] = _normalize_item_type(frontmatter.get("type"))
-    if "tags" in frontmatter:
-        editable["tags"] = _normalize_tags(frontmatter.get("tags"))
-    return editable, body
+def _extract_title(markdown: str, *, fallback_path: str) -> str:
+    source = _normalize_markdown(markdown)
+    for line in source.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# "):
+            return stripped[2:].strip()[:255] or _humanize_basename(fallback_path)
+        break
+    return _humanize_basename(fallback_path)
 
 
-def _ensure_embedding_state(item: MemoryItem, *, embeddings_enabled: bool) -> str | None:
-    if embeddings_enabled:
-        embedding, _ = MemoryItemEmbedding.objects.get_or_create(
-            user=item.user,
-            item=item,
-            defaults={
-                "state": "pending",
-                "dimensions": 1024,
-            },
-        )
-        if embedding.state != "pending" or embedding.vector is not None or embedding.error:
-            embedding.state = "pending"
-            embedding.error = ""
-            embedding.vector = None
-            embedding.save(update_fields=["state", "error", "vector", "updated_at"])
-        try:
-            from nova.tasks.memory_tasks import compute_memory_item_embedding_task
-
-            compute_memory_item_embedding_task.delay(embedding.id)
-        except Exception:
-            pass
-        return embedding.state
-
-    existing = getattr(item, "embedding", None)
-    if existing is not None:
-        existing.state = "pending"
-        existing.error = ""
-        existing.vector = None
-        existing.save(update_fields=["state", "error", "vector", "updated_at"])
-        return existing.state
-    return None
+def _slug_from_heading(heading: str, fallback: str) -> str:
+    value = slugify(str(heading or "").strip())
+    return value or fallback
 
 
-def _get_or_create_theme(*, user, theme_slug: str) -> MemoryTheme:
-    theme, _ = MemoryTheme.objects.get_or_create(
-        user=user,
-        slug=theme_slug,
-        defaults={"display_name": _humanize_theme_display_name(theme_slug)},
-    )
-    return theme
+def _split_paragraphs(text: str) -> list[str]:
+    source = _normalize_markdown(text).strip()
+    if not source:
+        return []
+    return [chunk.strip() for chunk in re.split(r"\n\s*\n", source) if chunk.strip()]
 
 
-async def list_themes_for_user(user, status: Optional[str] = None) -> dict[str, Any]:
-    def _impl():
-        status_value = (status or "").strip().lower() or MemoryItemStatus.ACTIVE
-        valid_statuses = set(MemoryItemStatus.values)
-        item_filter = Q(items__user=user)
-        if status_value != "any":
-            if status_value not in valid_statuses:
-                status_value = MemoryItemStatus.ACTIVE
-            item_filter &= Q(items__status=status_value)
-
-        themes = (
-            MemoryTheme.objects.filter(user=user)
-            .filter(item_filter)
-            .distinct()
-            .order_by("slug")
-        )
-        return {
-            "themes": [
-                {
-                    "slug": theme.slug,
-                    "display_name": theme.display_name,
-                    "description": theme.description,
-                    "updated_at": theme.updated_at.isoformat() if theme.updated_at else None,
-                }
-                for theme in themes
-            ]
-        }
-
-    return await sync_to_async(_impl, thread_sensitive=True)()
+def _word_count(text: str) -> int:
+    return len(str(text or "").split())
 
 
-async def add_memory_item(
-    *,
-    user,
-    item_type: str,
-    content: str,
-    theme: Optional[str] = None,
-    tags: Optional[list[str]] = None,
-    source_thread=None,
-    source_message=None,
-    virtual_path: str | None = None,
-    allow_empty: bool = False,
-) -> dict[str, Any]:
-    embeddings_enabled = await aget_embeddings_provider(user_id=user.id) is not None
-
-    def _impl():
-        normalized_type = _normalize_item_type(item_type)
-        body = str(content or "")
-        if not allow_empty and not body.strip():
-            raise ValidationError("content must be a non-empty string")
-
-        theme_value = (theme or "").strip() or get_default_memory_theme_slug()
-        theme_slug = normalize_memory_theme_slug(theme_value)
-        theme_obj = _get_or_create_theme(user=user, theme_slug=theme_slug)
-
-        item = MemoryItem.objects.create(
-            user=user,
-            theme=theme_obj,
-            type=normalized_type,
-            content=body,
-            tags=_normalize_tags(tags),
-            source_thread=source_thread,
-            source_message=source_message,
-            virtual_path=str(virtual_path or "").strip(),
-        )
-        if not item.virtual_path:
-            item.virtual_path = build_default_memory_virtual_path(theme_slug, int(item.id))
-            item.save(update_fields=["virtual_path", "updated_at"])
-
-        embedding_state = _ensure_embedding_state(item, embeddings_enabled=embeddings_enabled)
-        return {
-            "id": item.id,
-            "embedding_state": embedding_state,
-            "path": ensure_memory_virtual_path(item),
-        }
-
-    return await sync_to_async(_impl, thread_sensitive=True)()
-
-
-async def get_memory_item(item_id: int, *, user) -> dict[str, Any]:
-    def _impl():
-        item = (
-            MemoryItem.objects.select_related("theme")
-            .filter(user=user, id=item_id)
-            .first()
-        )
-        if not item:
-            return {"error": "not_found"}
-
-        embedding = getattr(item, "embedding", None)
-        return {
-            "id": item.id,
-            "path": ensure_memory_virtual_path(item),
-            "theme": item.theme.slug if item.theme else None,
-            "type": item.type,
-            "content": item.content,
-            "tags": item.tags,
-            "status": item.status,
-            "created_at": item.created_at.isoformat() if item.created_at else None,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-            "embedding": {
-                "state": getattr(embedding, "state", None),
-                "provider_type": getattr(embedding, "provider_type", ""),
-                "model": getattr(embedding, "model", ""),
-                "dimensions": getattr(embedding, "dimensions", None),
-                "error": getattr(embedding, "error", None),
-                "has_vector": getattr(embedding, "vector", None) is not None,
-            },
-        }
-
-    return await sync_to_async(_impl, thread_sensitive=True)()
-
-
-async def archive_memory_item(item_id: int, *, user) -> dict[str, Any]:
-    def _impl():
-        item = MemoryItem.objects.filter(user=user, id=item_id).first()
-        if not item:
-            return {"error": "not_found"}
-        item.status = MemoryItemStatus.ARCHIVED
-        item.save(update_fields=["status", "updated_at"])
-        return {"id": item.id, "status": item.status}
-
-    return await sync_to_async(_impl, thread_sensitive=True)()
-
-
-async def search_memory_items(
-    *,
-    query: str,
-    user,
-    limit: int = 10,
-    theme: Optional[str] = None,
-    types: Optional[list[str]] = None,
-    recency_days: Optional[int] = None,
-    status: Optional[str] = None,
-) -> dict[str, Any]:
-    query = (query or "").strip()
-    match_all = (query == "" or query == "*")
-
-    try:
-        limit = int(limit)
-    except Exception as exc:
-        raise ValidationError("limit must be an integer") from exc
-    limit = max(1, min(limit, 50))
-
-    query_vec = await resolve_query_vector(user_id=user.id, query=query)
-
-    def _impl(vec: Optional[list[float]]):
-        qs = MemoryItem.objects.select_related("theme").filter(user=user)
-
-        status_value = (status or "").strip().lower() or MemoryItemStatus.ACTIVE
-        if status_value != "any":
-            valid_statuses = set(MemoryItemStatus.values)
-            if status_value in valid_statuses:
-                qs = qs.filter(status=status_value)
-            else:
-                qs = qs.filter(status=MemoryItemStatus.ACTIVE)
-
-        if theme:
-            qs = qs.filter(theme__slug=normalize_memory_theme_slug(theme))
-
-        if types:
-            valid_types = set(MemoryItemType.values)
-            requested = [value for value in types if value in valid_types]
-            if requested:
-                qs = qs.filter(type__in=requested)
-
-        if recency_days is not None:
-            cutoff = timezone.now() - timedelta(days=int(recency_days))
-            qs = qs.filter(created_at__gte=cutoff)
-
-        results: list[dict[str, Any]] = []
-        engine = connection.vendor
-
-        if match_all:
-            recent = qs.order_by(F("created_at").desc())
-            for item in recent[:limit]:
-                results.append(
-                    {
-                        "id": item.id,
-                        "path": ensure_memory_virtual_path(item),
-                        "theme": item.theme.slug if item.theme else None,
-                        "type": item.type,
-                        "content_snippet": item.content[:240],
-                        "created_at": item.created_at.isoformat() if item.created_at else None,
-                        "score": None,
-                        "signals": {"fts": False, "semantic": False},
-                    }
-                )
-            return {
-                "results": results,
-                "notes": ["match-all mode: empty query or '*' returns most recent items"],
+def _chunk_words(text: str, *, heading: str, anchor: str) -> list[dict[str, Any]]:
+    words = str(text or "").split()
+    if not words:
+        return []
+    chunks: list[dict[str, Any]] = []
+    start = 0
+    index = 1
+    while start < len(words):
+        end = min(start + MEMORY_CHUNK_MAX_WORDS, len(words))
+        chunk_text = " ".join(words[start:end]).strip()
+        chunk_anchor = anchor if index == 1 else f"{anchor}-{index}"
+        chunks.append(
+            {
+                "heading": heading,
+                "anchor": chunk_anchor,
+                "content_text": chunk_text,
+                "token_count": _word_count(chunk_text),
             }
+        )
+        if end >= len(words):
+            break
+        start = max(end - MEMORY_CHUNK_OVERLAP_WORDS, start + 1)
+        index += 1
+    return chunks
 
-        if engine == "postgresql":
-            from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-            from pgvector.django import CosineDistance
 
-            vector = SearchVector("content", config="english")
-            search_query = SearchQuery(query)
-            candidate_limit = 50
+def _chunk_section_text(*, heading: str, anchor: str, text: str) -> list[dict[str, Any]]:
+    paragraphs = _split_paragraphs(text)
+    if not paragraphs:
+        return []
 
-            fts_qs = (
-                qs.annotate(fts_rank=SearchRank(vector, search_query))
-                .filter(fts_rank__gt=0.0)
-                .order_by(F("fts_rank").desc(), F("created_at").desc())
+    emitted: list[dict[str, Any]] = []
+    buffer: list[str] = []
+    buffer_words = 0
+    anchor_index = 1
+
+    def _flush() -> None:
+        nonlocal buffer, buffer_words, anchor_index
+        if not buffer:
+            return
+        chunk_text = "\n\n".join(buffer).strip()
+        chunk_anchor = anchor if anchor_index == 1 else f"{anchor}-{anchor_index}"
+        emitted.append(
+            {
+                "heading": heading,
+                "anchor": chunk_anchor,
+                "content_text": chunk_text,
+                "token_count": _word_count(chunk_text),
+            }
+        )
+        buffer = []
+        buffer_words = 0
+        anchor_index += 1
+
+    for paragraph in paragraphs:
+        paragraph_words = _word_count(paragraph)
+        if paragraph_words > MEMORY_CHUNK_MAX_WORDS:
+            _flush()
+            for chunk in _chunk_words(paragraph, heading=heading, anchor=f"{anchor}-{anchor_index}"):
+                emitted.append(chunk)
+                anchor_index += 1
+            continue
+        if buffer and buffer_words + paragraph_words > MEMORY_CHUNK_MAX_WORDS:
+            _flush()
+        buffer.append(paragraph)
+        buffer_words += paragraph_words
+
+    _flush()
+    return emitted
+
+
+def _parse_markdown_sections(markdown: str, *, path: str) -> tuple[str, list[dict[str, Any]]]:
+    source = _normalize_markdown(markdown).strip()
+    title = _extract_title(source, fallback_path=path)
+    lines = source.split("\n") if source else []
+
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index < len(lines) and lines[index].strip().startswith("# "):
+        index += 1
+
+    sections: list[tuple[str, list[str]]] = []
+    current_heading = title
+    current_lines: list[str] = []
+
+    for line in lines[index:]:
+        heading_match = re.match(r"^##\s+(.+?)\s*$", line.strip())
+        if heading_match:
+            if current_lines:
+                sections.append((current_heading, current_lines))
+            current_heading = heading_match.group(1).strip() or title
+            current_lines = []
+            continue
+        current_lines.append(line)
+
+    if current_lines:
+        sections.append((current_heading, current_lines))
+
+    if not sections and source:
+        sections = [(title, lines[index:])]
+
+    chunk_specs: list[dict[str, Any]] = []
+    position = 0
+    for heading, section_lines in sections:
+        section_text = "\n".join(section_lines).strip()
+        anchor = _slug_from_heading(heading, fallback=f"section-{position + 1}")
+        for chunk in _chunk_section_text(heading=heading, anchor=anchor, text=section_text):
+            chunk["position"] = position
+            chunk_specs.append(chunk)
+            position += 1
+
+    return title, chunk_specs
+
+
+def _iter_parent_directories(path: str) -> list[str]:
+    normalized = _normalize_memory_path(path)
+    parents: list[str] = []
+    current = posixpath.dirname(normalized)
+    while current.startswith(f"{MEMORY_ROOT}/") or current == MEMORY_ROOT:
+        parents.append(current)
+        if current == MEMORY_ROOT:
+            break
+        current = posixpath.dirname(current)
+    parents.reverse()
+    return parents
+
+
+def _load_active_paths(*, user) -> tuple[list[str], list[tuple[str, int]]]:
+    directories = list(
+        MemoryDirectory.objects.filter(
+            user=user,
+            status=MemoryRecordStatus.ACTIVE,
+        ).values_list("virtual_path", flat=True)
+    )
+    documents = list(
+        MemoryDocument.objects.filter(
+            user=user,
+            status=MemoryRecordStatus.ACTIVE,
+        ).values_list("virtual_path", "id")
+    )
+    return directories, documents
+
+
+def _collect_existing_directories(*, directories: list[str], document_paths: list[str]) -> set[str]:
+    existing = {MEMORY_ROOT}
+    for directory in directories:
+        for parent in _iter_parent_directories(directory):
+            existing.add(parent)
+        existing.add(directory)
+    for document_path in document_paths:
+        for parent in _iter_parent_directories(document_path):
+            existing.add(parent)
+    return existing
+
+
+def _memory_dir_has_children(*, user, path: str) -> bool:
+    prefix = path.rstrip("/") + "/"
+    return (
+        MemoryDirectory.objects.filter(
+            user=user,
+            status=MemoryRecordStatus.ACTIVE,
+            virtual_path__startswith=prefix,
+        ).exists()
+        or MemoryDocument.objects.filter(
+            user=user,
+            status=MemoryRecordStatus.ACTIVE,
+            virtual_path__startswith=prefix,
+        ).exists()
+    )
+
+
+def _schedule_chunk_embeddings(chunk_ids: list[int]) -> None:
+    if not chunk_ids:
+        return
+    try:
+        from nova.tasks.memory_tasks import compute_memory_chunk_embedding_task
+
+        for chunk_id in chunk_ids:
+            compute_memory_chunk_embedding_task.delay(chunk_id)
+    except Exception:
+        return
+
+
+def _rebuild_document_chunks(*, document: MemoryDocument, embeddings_enabled: bool) -> None:
+    MemoryChunk.objects.filter(
+        document=document,
+        status=MemoryRecordStatus.ACTIVE,
+    ).update(status=MemoryRecordStatus.ARCHIVED, updated_at=timezone.now())
+
+    _title, chunk_specs = _parse_markdown_sections(document.content_markdown, path=document.virtual_path)
+    created_chunk_ids: list[int] = []
+    for chunk_spec in chunk_specs:
+        chunk = MemoryChunk.objects.create(
+            document=document,
+            heading=chunk_spec["heading"],
+            anchor=chunk_spec["anchor"],
+            position=chunk_spec["position"],
+            content_text=chunk_spec["content_text"],
+            token_count=chunk_spec["token_count"],
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        if embeddings_enabled:
+            MemoryChunkEmbedding.objects.create(
+                chunk=chunk,
+                state=MemoryChunkEmbeddingState.PENDING,
+                dimensions=MEMORY_EMBEDDING_DIMENSIONS,
             )
-            fts_ids = list(fts_qs.values_list("id", flat=True)[:candidate_limit])
+            created_chunk_ids.append(chunk.id)
+    _schedule_chunk_embeddings(created_chunk_ids)
 
-            semantic_ids: list[int] = []
-            if vec is not None:
-                semantic_qs = (
-                    qs.filter(embedding__state="ready")
-                    .annotate(distance=CosineDistance("embedding__vector", vec))
-                    .order_by(F("distance").asc(), F("created_at").desc())
-                )
-                semantic_ids = list(semantic_qs.values_list("id", flat=True)[:candidate_limit])
 
-            candidate_ids = list(dict.fromkeys([*semantic_ids, *fts_ids]))
-            if not candidate_ids:
-                return {"results": [], "notes": ["no matches"]}
-
-            candidate_qs = (
-                qs.filter(id__in=candidate_ids)
-                .select_related("theme")
-                .select_related("embedding")
-                .annotate(fts_rank=SearchRank(vector, search_query))
+async def list_memory_documents_overview(*, user, include_archived: bool = False, q: str = "") -> list[dict[str, Any]]:
+    def _impl():
+        queryset = MemoryDocument.objects.filter(user=user)
+        if not include_archived:
+            queryset = queryset.filter(status=MemoryRecordStatus.ACTIVE)
+        if q:
+            queryset = queryset.filter(
+                Q(virtual_path__icontains=q) | Q(content_markdown__icontains=q)
             )
-            if vec is not None:
-                candidate_qs = candidate_qs.annotate(distance=CosineDistance("embedding__vector", vec))
-            else:
-                candidate_qs = candidate_qs.annotate(distance=F("id") * 0.0)
+        queryset = queryset.order_by("-updated_at", "virtual_path").prefetch_related("chunks__embedding")
 
-            candidates = list(candidate_qs)
-
-            def _semantic_sim(item) -> Optional[float]:
-                if vec is None:
-                    return None
-                distance = getattr(item, "distance", None)
-                if distance is None:
-                    return None
-                return semantic_similarity_from_distance(distance, enabled=True)
-
-            def _fts_score(item) -> float:
-                return float(getattr(item, "fts_rank", 0.0) or 0.0)
-
-            semantic_values = [value for value in (_semantic_sim(item) for item in candidates) if value is not None]
-            fts_values = [_fts_score(item) for item in candidates]
-            sem_min, sem_max = minmax_bounds(semantic_values)
-            fts_min, fts_max = minmax_bounds(fts_values)
-
-            scored: list[dict[str, Any]] = []
-            for item in candidates:
-                semantic_value = _semantic_sim(item)
-                semantic_norm = minmax_normalize(semantic_value, vmin=sem_min, vmax=sem_max) if semantic_value is not None else 0.0
-                fts_value = _fts_score(item)
-                fts_norm = minmax_normalize(fts_value, vmin=fts_min, vmax=fts_max)
-                final_score = blend_semantic_fts(semantic=semantic_norm, fts=fts_norm)
-                cosine_distance = None
-                if vec is not None and getattr(item, "distance", None) is not None:
-                    cosine_distance = float(getattr(item, "distance", 0.0))
-                scored.append(
-                    {
-                        "item": item,
-                        "final_score": final_score,
-                        "fts_rank": fts_value,
-                        "cosine_distance": cosine_distance,
-                    }
-                )
-
-            scored.sort(
-                key=lambda row: (
-                    -row["final_score"],
-                    -(row["item"].created_at.timestamp() if getattr(row["item"], "created_at", None) else 0.0),
-                    row["item"].id,
-                )
+        rows: list[dict[str, Any]] = []
+        for document in queryset:
+            active_chunks = [
+                chunk for chunk in list(document.chunks.all())
+                if chunk.status == MemoryRecordStatus.ACTIVE
+            ]
+            ready = sum(1 for chunk in active_chunks if getattr(getattr(chunk, "embedding", None), "state", None) == MemoryChunkEmbeddingState.READY)
+            pending = sum(1 for chunk in active_chunks if getattr(getattr(chunk, "embedding", None), "state", None) == MemoryChunkEmbeddingState.PENDING)
+            errored = sum(1 for chunk in active_chunks if getattr(getattr(chunk, "embedding", None), "state", None) == MemoryChunkEmbeddingState.ERROR)
+            rows.append(
+                {
+                    "document": document,
+                    "chunk_count": len(active_chunks),
+                    "ready_embeddings": ready,
+                    "pending_embeddings": pending,
+                    "error_embeddings": errored,
+                }
             )
+        return rows
 
-            for row in scored[:limit]:
-                item = row["item"]
-                results.append(
-                    {
-                        "id": item.id,
-                        "path": ensure_memory_virtual_path(item),
-                        "theme": item.theme.slug if item.theme else None,
-                        "type": item.type,
-                        "content_snippet": item.content[:240],
-                        "created_at": item.created_at.isoformat() if item.created_at else None,
-                        "score": {
-                            "final": float(row["final_score"]),
-                            "fts_rank": float(row["fts_rank"]),
-                            "cosine_distance": row["cosine_distance"],
-                        },
-                        "signals": {"fts": True, "semantic": vec is not None},
-                    }
-                )
-        else:
-            filtered = qs.filter(Q(content__icontains=query)).order_by(F("created_at").desc())
-            for item in filtered[:limit]:
-                results.append(
-                    {
-                        "id": item.id,
-                        "path": ensure_memory_virtual_path(item),
-                        "theme": item.theme.slug if item.theme else None,
-                        "type": item.type,
-                        "content_snippet": item.content[:240],
-                        "created_at": item.created_at.isoformat() if item.created_at else None,
-                        "score": None,
-                        "signals": {"fts": True, "semantic": False},
-                    }
-                )
-
-        return {
-            "results": results,
-            "notes": [
-                "semantic ranking is enabled only when embeddings provider is configured and vectors are ready",
-            ],
-        }
-
-    return await sync_to_async(_impl, thread_sensitive=True)(query_vec)
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
-async def get_memory_item_by_path(*, user, path: str, include_archived: bool = False) -> MemoryItem | None:
+async def memory_document_has_content(*, user, path: str) -> bool:
     spec = parse_memory_virtual_path(path)
     if spec.kind != "item":
-        return None
+        return False
 
     def _impl():
-        queryset = MemoryItem.objects.select_related("theme").filter(
-            user=user,
-            virtual_path=spec.normalized_path,
+        document = (
+            MemoryDocument.objects.filter(
+                user=user,
+                virtual_path=spec.normalized_path,
+                status=MemoryRecordStatus.ACTIVE,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
         )
-        if not include_archived:
-            queryset = queryset.filter(status=MemoryItemStatus.ACTIVE)
-        return queryset.order_by("-updated_at", "-id").first()
+        return bool(document and str(document.content_markdown or "").strip())
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
+
+
+async def count_memory_chunk_embeddings(*, user) -> int:
+    def _impl():
+        return MemoryChunkEmbedding.objects.filter(
+            chunk__document__user=user,
+            chunk__document__status=MemoryRecordStatus.ACTIVE,
+            chunk__status=MemoryRecordStatus.ACTIVE,
+        ).count()
 
     return await sync_to_async(_impl, thread_sensitive=True)()
 
@@ -609,67 +450,113 @@ async def read_memory_document(*, user, path: str) -> MemoryVirtualEntry:
     if spec.kind != "item":
         raise ValidationError("Memory path does not reference a file")
 
-    item = await get_memory_item_by_path(user=user, path=spec.normalized_path, include_archived=False)
-    if item is None:
-        raise ValidationError("Memory item not found")
-    rendered = render_memory_document(item)
-    mime_type = "text/plain" if spec.extension == ".txt" else "text/markdown"
-    return MemoryVirtualEntry(
-        path=spec.normalized_path,
-        mime_type=mime_type,
-        size=len(rendered.encode("utf-8")),
-        item_id=item.id,
-    )
+    def _impl():
+        document = (
+            MemoryDocument.objects.filter(
+                user=user,
+                virtual_path=spec.normalized_path,
+                status=MemoryRecordStatus.ACTIVE,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        if document is None:
+            raise ValidationError("Memory document not found")
+        content = str(document.content_markdown or "")
+        return MemoryVirtualEntry(
+            path=spec.normalized_path,
+            mime_type="text/markdown",
+            size=len(content.encode("utf-8")),
+            document_id=document.id,
+        )
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def read_memory_text(*, user, path: str) -> str:
     spec = parse_memory_virtual_path(path)
     if spec.kind == "readme":
         return MEMORY_README_CONTENT
-    item = await get_memory_item_by_path(user=user, path=spec.normalized_path, include_archived=False)
-    if item is None:
-        raise ValidationError("Memory item not found")
-    return render_memory_document(item)
+    if spec.kind != "item":
+        raise ValidationError("Memory path does not reference a file")
+
+    def _impl():
+        document = (
+            MemoryDocument.objects.filter(
+                user=user,
+                virtual_path=spec.normalized_path,
+                status=MemoryRecordStatus.ACTIVE,
+            )
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        if document is None:
+            raise ValidationError("Memory document not found")
+        return str(document.content_markdown or "")
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def list_memory_dir_entries(*, user, path: str) -> list[dict[str, Any]]:
     spec = parse_memory_virtual_path(path)
+    if spec.kind not in {"root", "dir"}:
+        raise ValidationError("Memory path does not reference a directory")
 
-    def _root_entries():
-        entries = [
-            {"name": "README.md", "path": MEMORY_README_PATH, "type": "file", "mime_type": "text/markdown", "size": len(MEMORY_README_CONTENT.encode("utf-8"))},
-        ]
-        for theme in MemoryTheme.objects.filter(user=user).order_by("slug"):
-            entries.append({"name": theme.slug, "path": f"{MEMORY_ROOT}/{theme.slug}", "type": "dir"})
-        return entries
-
-    def _theme_entries():
-        queryset = (
-            MemoryItem.objects.select_related("theme")
-            .filter(user=user, status=MemoryItemStatus.ACTIVE, theme__slug=spec.theme_slug)
-            .order_by("virtual_path", "id")
+    def _impl():
+        directories, documents = _load_active_paths(user=user)
+        document_paths = [path_value for path_value, _doc_id in documents]
+        existing_dirs = _collect_existing_directories(
+            directories=directories,
+            document_paths=document_paths,
         )
-        entries = []
-        for item in queryset:
-            item_path = ensure_memory_virtual_path(item)
-            mime_type = "text/plain" if item_path.endswith(".txt") else "text/markdown"
-            rendered = render_memory_document(item)
-            entries.append(
-                {
-                    "name": posixpath.basename(item_path),
-                    "path": item_path,
-                    "type": "file",
-                    "mime_type": mime_type,
-                    "size": len(rendered.encode("utf-8")),
-                }
-            )
-        return entries
+        if spec.normalized_path not in existing_dirs:
+            raise ValidationError("Memory directory not found")
 
-    if spec.kind == "root":
-        return await sync_to_async(_root_entries, thread_sensitive=True)()
-    if spec.kind == "theme_dir":
-        return await sync_to_async(_theme_entries, thread_sensitive=True)()
-    raise ValidationError("Memory path does not reference a directory")
+        entries: dict[str, dict[str, Any]] = {}
+        if spec.kind == "root":
+            entries["README.md"] = {
+                "name": "README.md",
+                "path": MEMORY_README_PATH,
+                "type": "file",
+                "mime_type": "text/markdown",
+                "size": len(MEMORY_README_CONTENT.encode("utf-8")),
+            }
+
+        prefix = spec.normalized_path.rstrip("/") + "/"
+
+        for directory in sorted(existing_dirs):
+            if directory in {spec.normalized_path, MEMORY_ROOT}:
+                continue
+            if not directory.startswith(prefix):
+                continue
+            relative = directory[len(prefix):]
+            if "/" in relative or not relative:
+                continue
+            entries[relative] = {
+                "name": relative,
+                "path": directory,
+                "type": "dir",
+            }
+
+        for document_path, document_id in documents:
+            if not document_path.startswith(prefix):
+                continue
+            relative = document_path[len(prefix):]
+            if "/" in relative or not relative:
+                continue
+            document = MemoryDocument.objects.get(id=document_id)
+            content = str(document.content_markdown or "")
+            entries[relative] = {
+                "name": relative,
+                "path": document_path,
+                "type": "file",
+                "mime_type": "text/markdown",
+                "size": len(content.encode("utf-8")),
+            }
+
+        return [entries[key] for key in sorted(entries.keys())]
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def memory_path_exists(*, user, path: str) -> bool:
@@ -680,12 +567,19 @@ async def memory_path_exists(*, user, path: str) -> bool:
 
     if spec.kind in {"root", "readme"}:
         return True
-    if spec.kind == "theme_dir":
-        def _theme_exists():
-            return MemoryTheme.objects.filter(user=user, slug=spec.theme_slug).exists()
 
-        return await sync_to_async(_theme_exists, thread_sensitive=True)()
-    return await get_memory_item_by_path(user=user, path=spec.normalized_path, include_archived=False) is not None
+    def _impl():
+        directories, documents = _load_active_paths(user=user)
+        document_paths = [path_value for path_value, _doc_id in documents]
+        if spec.kind == "item":
+            return spec.normalized_path in set(document_paths)
+        existing_dirs = _collect_existing_directories(
+            directories=directories,
+            document_paths=document_paths,
+        )
+        return spec.normalized_path in existing_dirs
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def memory_is_dir(*, user, path: str) -> bool:
@@ -693,22 +587,51 @@ async def memory_is_dir(*, user, path: str) -> bool:
         spec = parse_memory_virtual_path(path)
     except ValidationError:
         return False
-    if spec.kind in {"root", "theme_dir"}:
-        if spec.kind == "theme_dir":
-            return await memory_path_exists(user=user, path=spec.normalized_path)
+    if spec.kind == "readme":
+        return False
+    if spec.kind == "root":
         return True
-    return False
+    if spec.kind != "dir":
+        return False
+    return await memory_path_exists(user=user, path=spec.normalized_path)
 
 
-async def mkdir_memory_theme(*, user, path: str) -> str:
+async def mkdir_memory_dir(*, user, path: str) -> str:
     spec = parse_memory_virtual_path(path)
     if spec.kind == "root":
         return MEMORY_ROOT
-    if spec.kind != "theme_dir":
-        raise ValidationError("mkdir only supports /memory/<theme>")
+    if spec.kind != "dir":
+        raise ValidationError("mkdir only supports memory directories")
 
     def _impl():
-        _get_or_create_theme(user=user, theme_slug=spec.theme_slug or get_default_memory_theme_slug())
+        if spec.parent_path and spec.parent_path != MEMORY_ROOT:
+            directories, documents = _load_active_paths(user=user)
+            existing_dirs = _collect_existing_directories(
+                directories=directories,
+                document_paths=[path_value for path_value, _doc_id in documents],
+            )
+            if spec.parent_path not in existing_dirs:
+                raise ValidationError("Parent memory directory does not exist")
+        if MemoryDocument.objects.filter(
+            user=user,
+            virtual_path=spec.normalized_path,
+            status=MemoryRecordStatus.ACTIVE,
+        ).exists():
+            raise ValidationError("Cannot create memory directory over an existing file")
+        directory = (
+            MemoryDirectory.objects.filter(user=user, virtual_path=spec.normalized_path)
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+        if directory is None:
+            MemoryDirectory.objects.create(
+                user=user,
+                virtual_path=spec.normalized_path,
+                status=MemoryRecordStatus.ACTIVE,
+            )
+        elif directory.status != MemoryRecordStatus.ACTIVE:
+            directory.status = MemoryRecordStatus.ACTIVE
+            directory.save(update_fields=["status", "updated_at"])
         return spec.normalized_path
 
     return await sync_to_async(_impl, thread_sensitive=True)()
@@ -724,81 +647,179 @@ async def write_memory_document(
 ) -> MemoryVirtualEntry:
     spec = parse_memory_virtual_path(path)
     if spec.kind != "item":
-        raise ValidationError("Memory writes must target /memory/<theme>/<file>.md or .txt")
+        raise ValidationError("Memory writes must target Markdown files under /memory")
 
-    editable_fields, body = _editable_fields_from_document(text)
+    markdown = _normalize_markdown(text)
     embeddings_enabled = await aget_embeddings_provider(user_id=user.id) is not None
 
     def _impl():
-        theme_obj = _get_or_create_theme(user=user, theme_slug=spec.theme_slug or get_default_memory_theme_slug())
-        item = (
-            MemoryItem.objects.select_related("theme")
-            .filter(user=user, virtual_path=spec.normalized_path, status=MemoryItemStatus.ACTIVE)
-            .first()
-        )
-        if item is None:
-            item_type = editable_fields.get("type", MemoryItemType.OTHER)
-            item_tags = editable_fields.get("tags", [])
-            item = MemoryItem.objects.create(
-                user=user,
-                theme=theme_obj,
-                type=item_type,
-                content=body,
-                tags=item_tags,
-                source_thread=source_thread,
-                source_message=source_message,
-                virtual_path=spec.normalized_path,
+        if spec.parent_path and spec.parent_path != MEMORY_ROOT:
+            directories, documents = _load_active_paths(user=user)
+            existing_dirs = _collect_existing_directories(
+                directories=directories,
+                document_paths=[path_value for path_value, _doc_id in documents],
             )
-        else:
-            item.theme = theme_obj
-            item.virtual_path = spec.normalized_path
-            item.content = body
-            if "type" in editable_fields:
-                item.type = editable_fields["type"]
-            if "tags" in editable_fields:
-                item.tags = editable_fields["tags"]
-            item.save(update_fields=["theme", "virtual_path", "content", "type", "tags", "updated_at"])
+            if spec.parent_path not in existing_dirs:
+                raise ValidationError("Parent memory directory does not exist")
 
-        embedding_state = _ensure_embedding_state(item, embeddings_enabled=embeddings_enabled)
-        rendered = render_memory_document(item)
-        mime_type = "text/plain" if spec.extension == ".txt" else "text/markdown"
-        return MemoryVirtualEntry(
-            path=spec.normalized_path,
-            mime_type=mime_type,
-            size=len(rendered.encode("utf-8")),
-            item_id=item.id,
-        ), embedding_state
+        title = _extract_title(markdown, fallback_path=spec.normalized_path)
+        with transaction.atomic():
+            document = (
+                MemoryDocument.objects.select_for_update()
+                .filter(user=user, virtual_path=spec.normalized_path)
+                .order_by("-updated_at", "-id")
+                .first()
+            )
+            if document is None:
+                document = MemoryDocument.objects.create(
+                    user=user,
+                    virtual_path=spec.normalized_path,
+                    title=title,
+                    content_markdown=markdown,
+                    source_thread=source_thread,
+                    source_message=source_message,
+                    status=MemoryRecordStatus.ACTIVE,
+                )
+            else:
+                document.title = title
+                document.content_markdown = markdown
+                if document.status != MemoryRecordStatus.ACTIVE:
+                    document.status = MemoryRecordStatus.ACTIVE
+                if document.source_thread_id is None and source_thread is not None:
+                    document.source_thread = source_thread
+                if document.source_message_id is None and source_message is not None:
+                    document.source_message = source_message
+                document.save(
+                    update_fields=[
+                        "title",
+                        "content_markdown",
+                        "status",
+                        "source_thread",
+                        "source_message",
+                        "updated_at",
+                    ]
+                )
 
-    entry, _embedding_state = await sync_to_async(_impl, thread_sensitive=True)()
-    return entry
+            _rebuild_document_chunks(document=document, embeddings_enabled=embeddings_enabled)
+            return MemoryVirtualEntry(
+                path=spec.normalized_path,
+                mime_type="text/markdown",
+                size=len(markdown.encode("utf-8")),
+                document_id=document.id,
+            )
+
+    return await sync_to_async(_impl, thread_sensitive=True)()
 
 
 async def move_memory_path(*, user, source_path: str, destination_path: str) -> str:
     source_spec = parse_memory_virtual_path(source_path)
     destination_spec = parse_memory_virtual_path(destination_path)
-    if source_spec.kind != "item" or destination_spec.kind != "item":
-        raise ValidationError("Memory moves must target memory files")
+    if source_spec.kind == "readme" or destination_spec.kind == "readme":
+        raise ValidationError("README.md cannot be moved")
+    if source_spec.kind != destination_spec.kind:
+        raise ValidationError("Memory moves must preserve the source kind")
 
     def _impl():
-        item = (
-            MemoryItem.objects.select_related("theme")
-            .filter(user=user, virtual_path=source_spec.normalized_path, status=MemoryItemStatus.ACTIVE)
-            .first()
-        )
-        if item is None:
-            raise ValidationError("Memory item not found")
-        if source_spec.normalized_path == destination_spec.normalized_path:
-            return destination_spec.normalized_path
-        if MemoryItem.objects.filter(
-            user=user,
-            virtual_path=destination_spec.normalized_path,
-            status=MemoryItemStatus.ACTIVE,
-        ).exclude(id=item.id).exists():
-            raise ValidationError("A memory item already exists at the destination path")
+        if destination_spec.parent_path and destination_spec.parent_path != MEMORY_ROOT:
+            directories, documents = _load_active_paths(user=user)
+            existing_dirs = _collect_existing_directories(
+                directories=directories,
+                document_paths=[path_value for path_value, _doc_id in documents],
+            )
+            if destination_spec.parent_path not in existing_dirs:
+                raise ValidationError("Destination parent directory does not exist")
 
-        item.theme = _get_or_create_theme(user=user, theme_slug=destination_spec.theme_slug or get_default_memory_theme_slug())
-        item.virtual_path = destination_spec.normalized_path
-        item.save(update_fields=["theme", "virtual_path", "updated_at"])
+        if source_spec.kind == "item":
+            document = (
+                MemoryDocument.objects.filter(
+                    user=user,
+                    virtual_path=source_spec.normalized_path,
+                    status=MemoryRecordStatus.ACTIVE,
+                )
+                .order_by("-updated_at", "-id")
+                .first()
+            )
+            if document is None:
+                raise ValidationError("Memory document not found")
+            if MemoryDocument.objects.filter(
+                user=user,
+                virtual_path=destination_spec.normalized_path,
+                status=MemoryRecordStatus.ACTIVE,
+            ).exclude(id=document.id).exists():
+                raise ValidationError("A memory document already exists at the destination path")
+            document.virtual_path = destination_spec.normalized_path
+            document.save(update_fields=["virtual_path", "updated_at"])
+            return destination_spec.normalized_path
+
+        if source_spec.normalized_path == MEMORY_ROOT:
+            raise ValidationError("The /memory root cannot be moved")
+        if destination_spec.normalized_path.startswith(f"{source_spec.normalized_path}/"):
+            raise ValidationError("Cannot move a directory inside itself")
+
+        directories, documents = _load_active_paths(user=user)
+        existing_dirs = _collect_existing_directories(
+            directories=directories,
+            document_paths=[path_value for path_value, _doc_id in documents],
+        )
+        if source_spec.normalized_path not in existing_dirs:
+            raise ValidationError("Memory directory not found")
+
+        source_prefix = source_spec.normalized_path.rstrip("/")
+        destination_prefix = destination_spec.normalized_path.rstrip("/")
+        doc_conflicts = []
+        dir_conflicts = []
+        for path_value, _doc_id in documents:
+            if path_value == source_prefix or path_value.startswith(f"{source_prefix}/"):
+                new_path = path_value.replace(source_prefix, destination_prefix, 1)
+                doc_conflicts.append(new_path)
+        for directory in directories:
+            if directory == source_prefix or directory.startswith(f"{source_prefix}/"):
+                new_path = directory.replace(source_prefix, destination_prefix, 1)
+                dir_conflicts.append(new_path)
+        if MemoryDocument.objects.filter(
+            user=user,
+            virtual_path__in=doc_conflicts,
+            status=MemoryRecordStatus.ACTIVE,
+        ).exclude(virtual_path__startswith=f"{source_prefix}/").exclude(virtual_path=source_prefix).exists():
+            raise ValidationError("A memory document already exists under the destination directory")
+        if MemoryDirectory.objects.filter(
+            user=user,
+            virtual_path__in=dir_conflicts,
+            status=MemoryRecordStatus.ACTIVE,
+        ).exclude(virtual_path__startswith=f"{source_prefix}/").exclude(virtual_path=source_prefix).exists():
+            raise ValidationError("A memory directory already exists under the destination directory")
+
+        with transaction.atomic():
+            for document in MemoryDocument.objects.filter(
+                user=user,
+                status=MemoryRecordStatus.ACTIVE,
+                virtual_path__startswith=f"{source_prefix}/",
+            ):
+                document.virtual_path = document.virtual_path.replace(source_prefix, destination_prefix, 1)
+                document.save(update_fields=["virtual_path", "updated_at"])
+            for document in MemoryDocument.objects.filter(
+                user=user,
+                status=MemoryRecordStatus.ACTIVE,
+                virtual_path=source_prefix,
+            ):
+                document.virtual_path = destination_prefix
+                document.save(update_fields=["virtual_path", "updated_at"])
+
+            for directory in MemoryDirectory.objects.filter(
+                user=user,
+                status=MemoryRecordStatus.ACTIVE,
+                virtual_path__startswith=f"{source_prefix}/",
+            ):
+                directory.virtual_path = directory.virtual_path.replace(source_prefix, destination_prefix, 1)
+                directory.save(update_fields=["virtual_path", "updated_at"])
+            for directory in MemoryDirectory.objects.filter(
+                user=user,
+                status=MemoryRecordStatus.ACTIVE,
+                virtual_path=source_prefix,
+            ):
+                directory.virtual_path = destination_prefix
+                directory.save(update_fields=["virtual_path", "updated_at"])
+
         return destination_spec.normalized_path
 
     return await sync_to_async(_impl, thread_sensitive=True)()
@@ -806,22 +827,48 @@ async def move_memory_path(*, user, source_path: str, destination_path: str) -> 
 
 async def archive_memory_path(*, user, path: str) -> str:
     spec = parse_memory_virtual_path(path)
-    if spec.kind != "item":
-        raise ValidationError("Only memory files can be archived")
+    if spec.kind == "readme":
+        raise ValidationError("README.md cannot be removed")
 
     def _impl():
-        item = (
-            MemoryItem.objects.filter(
+        if spec.kind == "item":
+            document = (
+                MemoryDocument.objects.filter(
+                    user=user,
+                    virtual_path=spec.normalized_path,
+                    status=MemoryRecordStatus.ACTIVE,
+                )
+                .order_by("-updated_at", "-id")
+                .first()
+            )
+            if document is None:
+                raise ValidationError("Memory document not found")
+            with transaction.atomic():
+                document.status = MemoryRecordStatus.ARCHIVED
+                document.save(update_fields=["status", "updated_at"])
+                MemoryChunk.objects.filter(
+                    document=document,
+                    status=MemoryRecordStatus.ACTIVE,
+                ).update(status=MemoryRecordStatus.ARCHIVED, updated_at=timezone.now())
+            return spec.normalized_path
+
+        if spec.kind == "root":
+            raise ValidationError("The /memory root cannot be removed")
+        if _memory_dir_has_children(user=user, path=spec.normalized_path):
+            raise ValidationError("Directory not empty")
+        directory = (
+            MemoryDirectory.objects.filter(
                 user=user,
                 virtual_path=spec.normalized_path,
-                status=MemoryItemStatus.ACTIVE,
+                status=MemoryRecordStatus.ACTIVE,
             )
+            .order_by("-updated_at", "-id")
             .first()
         )
-        if item is None:
-            raise ValidationError("Memory item not found")
-        item.status = MemoryItemStatus.ARCHIVED
-        item.save(update_fields=["status", "updated_at"])
+        if directory is None:
+            raise ValidationError("Memory directory not found")
+        directory.status = MemoryRecordStatus.ARCHIVED
+        directory.save(update_fields=["status", "updated_at"])
         return spec.normalized_path
 
     return await sync_to_async(_impl, thread_sensitive=True)()
@@ -831,55 +878,224 @@ async def find_memory_paths(*, user, start_path: str, term: str = "") -> list[st
     spec = parse_memory_virtual_path(start_path)
     lowered_term = str(term or "").lower()
 
-    def _impl():
-        matches: list[str] = []
-        if spec.kind == "root":
-            if not lowered_term or "readme.md".find(lowered_term) >= 0:
-                matches.append(MEMORY_README_PATH)
-            for theme in MemoryTheme.objects.filter(user=user).order_by("slug"):
-                theme_path = f"{MEMORY_ROOT}/{theme.slug}"
-                if not lowered_term or theme.slug.lower().find(lowered_term) >= 0:
-                    matches.append(theme_path)
-            queryset = MemoryItem.objects.filter(user=user, status=MemoryItemStatus.ACTIVE).order_by("virtual_path", "id")
-            for item in queryset:
-                path_value = ensure_memory_virtual_path(item)
-                basename = posixpath.basename(path_value).lower()
-                if not lowered_term or lowered_term in basename:
-                    matches.append(path_value)
-            return sorted(set(matches))
+    def _matches(path_value: str) -> bool:
+        if not lowered_term:
+            return True
+        return lowered_term in posixpath.basename(path_value).lower()
 
-        if spec.kind == "theme_dir":
-            matches.append(spec.normalized_path)
-            queryset = MemoryItem.objects.filter(
-                user=user,
-                status=MemoryItemStatus.ACTIVE,
-                theme__slug=spec.theme_slug,
-            ).order_by("virtual_path", "id")
-            for item in queryset:
-                path_value = ensure_memory_virtual_path(item)
-                basename = posixpath.basename(path_value).lower()
-                if not lowered_term or lowered_term in basename:
-                    matches.append(path_value)
-            return sorted(set(matches))
+    def _impl():
+        directories, documents = _load_active_paths(user=user)
+        document_paths = [path_value for path_value, _doc_id in documents]
+        existing_dirs = _collect_existing_directories(
+            directories=directories,
+            document_paths=document_paths,
+        )
 
         if spec.kind == "readme":
-            if not lowered_term or "readme.md".find(lowered_term) >= 0:
-                return [MEMORY_README_PATH]
-            return []
+            return [MEMORY_README_PATH] if _matches(MEMORY_README_PATH) else []
 
-        item = (
-            MemoryItem.objects.filter(
-                user=user,
-                status=MemoryItemStatus.ACTIVE,
-                virtual_path=spec.normalized_path,
-            )
-            .first()
-        )
-        if item is None:
-            return []
-        basename = posixpath.basename(spec.normalized_path).lower()
-        if lowered_term and lowered_term not in basename:
-            return []
-        return [spec.normalized_path]
+        if spec.kind == "item":
+            return [spec.normalized_path] if spec.normalized_path in set(document_paths) and _matches(spec.normalized_path) else []
+
+        matches: list[str] = []
+        if spec.normalized_path == MEMORY_ROOT and _matches(MEMORY_README_PATH):
+            matches.append(MEMORY_README_PATH)
+
+        prefix = spec.normalized_path.rstrip("/") + "/"
+        for directory in sorted(existing_dirs):
+            if directory == MEMORY_ROOT and spec.normalized_path != MEMORY_ROOT:
+                continue
+            if directory == spec.normalized_path or directory.startswith(prefix):
+                if _matches(directory):
+                    matches.append(directory)
+        for document_path in document_paths:
+            if document_path.startswith(prefix) or document_path == spec.normalized_path:
+                if _matches(document_path):
+                    matches.append(document_path)
+        return sorted(set(matches))
 
     return await sync_to_async(_impl, thread_sensitive=True)()
+
+
+async def search_memory_items(
+    *,
+    query: str,
+    user,
+    limit: int = 10,
+    under: str | None = None,
+) -> dict[str, Any]:
+    try:
+        limit_value = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("limit must be an integer") from exc
+    limit_value = max(1, min(limit_value, MAX_MEMORY_SEARCH_LIMIT))
+
+    query_text = str(query or "").strip()
+    match_all = query_text in {"", "*"}
+    query_vec = None
+    if not match_all:
+        query_vec = await resolve_query_vector(query=query_text, user_id=user.id)
+
+    under_spec = None
+    if under:
+        under_spec = parse_memory_virtual_path(under)
+        if under_spec.kind == "readme":
+            raise ValidationError("README.md cannot be used as a memory search scope")
+
+    def _apply_under_filter(queryset):
+        if not under_spec:
+            return queryset
+        if under_spec.kind == "item":
+            return queryset.filter(document__virtual_path=under_spec.normalized_path)
+        prefix = under_spec.normalized_path.rstrip("/") + "/"
+        if under_spec.normalized_path == MEMORY_ROOT:
+            return queryset.filter(document__virtual_path__startswith=f"{MEMORY_ROOT}/")
+        return queryset.filter(
+            Q(document__virtual_path=under_spec.normalized_path)
+            | Q(document__virtual_path__startswith=prefix)
+        )
+
+    def _impl(vec):
+        qs = (
+            MemoryChunk.objects.filter(
+                document__user=user,
+                document__status=MemoryRecordStatus.ACTIVE,
+                status=MemoryRecordStatus.ACTIVE,
+            )
+            .select_related("document", "embedding")
+            .order_by("-updated_at", "id")
+        )
+        qs = _apply_under_filter(qs)
+
+        results: list[dict[str, Any]] = []
+        engine = connection.vendor
+
+        if match_all:
+            for chunk in qs[:limit_value]:
+                results.append(
+                    {
+                        "path": chunk.document.virtual_path,
+                        "section_heading": chunk.heading,
+                        "section_anchor": chunk.anchor,
+                        "snippet": chunk.content_text[:240],
+                        "score": None,
+                        "signals": {"fts": False, "semantic": False},
+                    }
+                )
+            return {
+                "results": results,
+                "notes": ["match-all mode: empty query or '*' returns recent memory chunks"],
+            }
+
+        if engine == "postgresql":
+            from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+            from pgvector.django import CosineDistance
+
+            vector = SearchVector("content_text", config="english")
+            search_query = SearchQuery(query_text)
+            candidate_limit = 50
+
+            fts_qs = (
+                qs.annotate(fts_rank=SearchRank(vector, search_query))
+                .filter(fts_rank__gt=0.0)
+                .order_by(F("fts_rank").desc(), F("updated_at").desc())
+            )
+            fts_ids = list(fts_qs.values_list("id", flat=True)[:candidate_limit])
+
+            semantic_ids: list[int] = []
+            if vec is not None:
+                semantic_qs = (
+                    qs.filter(embedding__state=MemoryChunkEmbeddingState.READY)
+                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    .order_by(F("distance").asc(), F("updated_at").desc())
+                )
+                semantic_ids = list(semantic_qs.values_list("id", flat=True)[:candidate_limit])
+
+            candidate_ids = list(dict.fromkeys([*semantic_ids, *fts_ids]))
+            if not candidate_ids:
+                return {"results": [], "notes": ["no matches"]}
+
+            candidate_qs = (
+                qs.filter(id__in=candidate_ids)
+                .annotate(fts_rank=SearchRank(vector, search_query))
+            )
+            if vec is not None:
+                candidate_qs = candidate_qs.annotate(distance=CosineDistance("embedding__vector", vec))
+            else:
+                candidate_qs = candidate_qs.annotate(distance=F("id") * 0.0)
+
+            candidates = list(candidate_qs)
+
+            def _semantic_sim(chunk) -> float | None:
+                if vec is None:
+                    return None
+                distance = getattr(chunk, "distance", None)
+                if distance is None:
+                    return None
+                return semantic_similarity_from_distance(distance, enabled=True)
+
+            semantic_values = [value for value in (_semantic_sim(chunk) for chunk in candidates) if value is not None]
+            fts_values = [float(getattr(chunk, "fts_rank", 0.0) or 0.0) for chunk in candidates]
+            sem_min, sem_max = minmax_bounds(semantic_values)
+            fts_min, fts_max = minmax_bounds(fts_values)
+
+            scored: list[dict[str, Any]] = []
+            for chunk in candidates:
+                semantic_value = _semantic_sim(chunk)
+                semantic_norm = minmax_normalize(semantic_value, vmin=sem_min, vmax=sem_max) if semantic_value is not None else 0.0
+                fts_value = float(getattr(chunk, "fts_rank", 0.0) or 0.0)
+                fts_norm = minmax_normalize(fts_value, vmin=fts_min, vmax=fts_max)
+                final_score = blend_semantic_fts(semantic=semantic_norm, fts=fts_norm)
+                scored.append(
+                    {
+                        "chunk": chunk,
+                        "score": {
+                            "final": float(final_score),
+                            "fts_rank": fts_value,
+                            "cosine_distance": float(getattr(chunk, "distance", 0.0) or 0.0)
+                            if vec is not None and getattr(chunk, "distance", None) is not None
+                            else None,
+                        },
+                    }
+                )
+            scored.sort(
+                key=lambda row: (
+                    -row["score"]["final"],
+                    -(row["chunk"].updated_at.timestamp() if getattr(row["chunk"], "updated_at", None) else 0.0),
+                    row["chunk"].id,
+                )
+            )
+            for row in scored[:limit_value]:
+                chunk = row["chunk"]
+                results.append(
+                    {
+                        "path": chunk.document.virtual_path,
+                        "section_heading": chunk.heading,
+                        "section_anchor": chunk.anchor,
+                        "snippet": chunk.content_text[:240],
+                        "score": row["score"],
+                        "signals": {"fts": True, "semantic": vec is not None},
+                    }
+                )
+        else:
+            filtered = qs.filter(content_text__icontains=query_text).order_by(F("updated_at").desc())
+            for chunk in filtered[:limit_value]:
+                results.append(
+                    {
+                        "path": chunk.document.virtual_path,
+                        "section_heading": chunk.heading,
+                        "section_anchor": chunk.anchor,
+                        "snippet": chunk.content_text[:240],
+                        "score": None,
+                        "signals": {"fts": True, "semantic": False},
+                    }
+                )
+
+        return {
+            "results": results,
+            "notes": [
+                "semantic ranking is enabled only when embeddings provider is configured and vectors are ready",
+            ],
+        }
+
+    return await sync_to_async(_impl, thread_sensitive=True)(query_vec)

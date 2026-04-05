@@ -520,11 +520,12 @@ class TerminalExecutor:
 
         lines: list[str] = []
         for index, result in enumerate(results, start=1):
-            lines.append(
-                f"{index}. {result.get('path') or '?'} "
-                f"(theme={result.get('theme') or '?'}, type={result.get('type') or '?'})"
-            )
-            lines.append(str(result.get("content_snippet") or "").strip() or "(empty snippet)")
+            section_heading = str(result.get("section_heading") or "").strip()
+            label = str(result.get("path") or "?")
+            if section_heading:
+                label = f"{label} :: {section_heading}"
+            lines.append(f"{index}. {label}")
+            lines.append(str(result.get("snippet") or "").strip() or "(empty snippet)")
         if notes:
             lines.append("")
             lines.extend(f"Note: {note}" for note in notes)
@@ -535,14 +536,11 @@ class TerminalExecutor:
             raise TerminalCommandError("Memory commands are not enabled for this agent.")
         if not args or str(args[0] or "").strip().lower() != "search":
             raise TerminalCommandError(
-                "Usage: memory search <query> [--limit N] [--theme slug] [--type value ...] [--recency-days N] [--status active|archived|any]"
+                "Usage: memory search <query> [--limit N] [--under /memory/path]"
             )
 
         query_tokens: list[str] = []
-        theme = None
-        types: list[str] = []
-        recency_days = None
-        status = None
+        under = None
         limit = 10
         index = 1
         while index < len(args):
@@ -552,26 +550,11 @@ class TerminalExecutor:
                 if index >= len(args):
                     raise TerminalCommandError("Missing value after --limit")
                 limit = self._parse_int_flag("--limit", args[index])
-            elif token == "--theme":
+            elif token == "--under":
                 index += 1
                 if index >= len(args):
-                    raise TerminalCommandError("Missing value after --theme")
-                theme = args[index]
-            elif token == "--type":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after --type")
-                types.append(args[index])
-            elif token == "--recency-days":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after --recency-days")
-                recency_days = self._parse_int_flag("--recency-days", args[index])
-            elif token == "--status":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after --status")
-                status = args[index]
+                    raise TerminalCommandError("Missing value after --under")
+                under = normalize_vfs_path(args[index], cwd=self.vfs.cwd)
             else:
                 query_tokens.append(token)
             index += 1
@@ -579,17 +562,14 @@ class TerminalExecutor:
         query = " ".join(query_tokens).strip()
         if not query:
             raise TerminalCommandError(
-                "Usage: memory search <query> [--limit N] [--theme slug] [--type value ...] [--recency-days N] [--status active|archived|any]"
+                "Usage: memory search <query> [--limit N] [--under /memory/path]"
             )
 
         payload = await search_memory_items(
             query=query,
             user=self.vfs.user,
             limit=limit,
-            theme=theme,
-            types=types or None,
-            recency_days=recency_days,
-            status=status,
+            under=under,
         )
         return self._format_memory_search_payload(payload)
 

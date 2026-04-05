@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+from urllib.parse import unquote
 from unittest.mock import patch
 
 from django.test import TestCase
 from django.urls import reverse
 
+from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.models.UserObjects import UserProfile
 from nova.tasks.template_registry import (
-    THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
-    THEMATIC_WATCH_MEMORY_THEME_TOPICS,
-    THEMATIC_WATCH_MEMORY_TYPE,
+    THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
+    THEMATIC_WATCH_MEMORY_PATH_TOPICS,
 )
 from nova.tests.factories import (
     create_agent,
@@ -29,6 +30,8 @@ class UserSettingsTasksViewsTests(TestCase):
         self.other = create_user(username="tasks-bob", email="tasks-bob@example.com")
         self.provider = create_provider(self.user, name="provider-main")
         self.agent = create_agent(self.user, self.provider, name="agent-main")
+        self.agent.runtime_engine = AgentConfig.RuntimeEngine.REACT_TERMINAL_V1
+        self.agent.save(update_fields=["runtime_engine"])
         self.client.login(username="tasks-alice", password="testpass123")
 
     def _create_agent_cron_task(self, name: str = "Cron agent", is_active: bool = True) -> TaskDefinition:
@@ -563,7 +566,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Add browser and memory tools directly or via sub-agents.",
+            "Use a React Terminal v2 agent with browser and memory access.",
         )
 
     def test_task_templates_list_marks_thematic_watch_available_with_direct_browser_tool(self):
@@ -589,7 +592,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertNotContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Add browser and memory tools directly or via sub-agents.",
+            "Use a React Terminal v2 agent with browser and memory access.",
         )
 
     def test_task_templates_list_marks_thematic_watch_available_with_subagent_browser_tool(self):
@@ -624,7 +627,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertNotContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Add browser and memory tools directly or via sub-agents.",
+            "Use a React Terminal v2 agent with browser and memory access.",
         )
 
     def test_task_template_apply_prefills_thematic_watch_weekly(self):
@@ -709,10 +712,10 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertIn(reverse("continuous_home"), response["Location"])
         self.assertNotIn("agent_id=", response["Location"])
         self.assertIn("prefill_message=", response["Location"])
-        self.assertIn("THEMATIC_WATCH_SETUP", response["Location"])
-        self.assertIn(THEMATIC_WATCH_MEMORY_THEME_TOPICS, response["Location"])
-        self.assertIn(THEMATIC_WATCH_MEMORY_THEME_LANGUAGE, response["Location"])
-        self.assertIn(THEMATIC_WATCH_MEMORY_TYPE, response["Location"])
+        decoded_location = unquote(response["Location"])
+        self.assertIn("THEMATIC_WATCH_SETUP", decoded_location)
+        self.assertIn(THEMATIC_WATCH_MEMORY_PATH_TOPICS, decoded_location)
+        self.assertIn(THEMATIC_WATCH_MEMORY_PATH_LANGUAGE, decoded_location)
 
     def test_task_templates_list_disables_guided_setup_when_default_agent_has_no_memory_tool(self):
         browser_tool = create_tool(

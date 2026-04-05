@@ -7,7 +7,10 @@ from nova.models.CheckpointLink import CheckpointLink
 from nova.models.ConversationEmbedding import DaySegmentEmbedding, TranscriptChunkEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction
-from nova.models.Memory import MemoryTheme, MemoryItem, MemoryItemEmbedding
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.MemoryDirectory import MemoryDirectory
+from nova.models.MemoryDocument import MemoryDocument
 from nova.models.MessageArtifact import MessageArtifact
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
@@ -74,10 +77,17 @@ class TranscriptChunkEmbeddingInline(admin.StackedInline):
 
 
 class MemoryEmbeddingInline(admin.StackedInline):
-    model = MemoryItemEmbedding
+    model = MemoryChunkEmbedding
     extra = 0
     can_delete = False
     readonly_fields = ("provider_type", "model", "dimensions", "state", "error", "created_at", "updated_at")
+
+
+class MemoryChunkInline(admin.TabularInline):
+    model = MemoryChunk
+    extra = 0
+    fields = ("position", "heading", "anchor", "token_count", "status", "updated_at")
+    readonly_fields = ("updated_at",)
 
 
 @admin.register(Thread)
@@ -223,27 +233,37 @@ class TranscriptChunkEmbeddingAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
-@admin.register(MemoryTheme)
-class MemoryThemeAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "slug", "display_name", "updated_at")
-    search_fields = ("user__username", "slug", "display_name")
-    ordering = ("user", "slug")
+@admin.register(MemoryDirectory)
+class MemoryDirectoryAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "virtual_path", "status", "updated_at")
+    list_filter = ("status", "updated_at")
+    search_fields = ("user__username", "virtual_path")
+    ordering = ("user", "virtual_path")
 
 
-@admin.register(MemoryItem)
-class MemoryItemAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "theme", "type", "status", "created_at", "updated_at")
-    list_filter = ("type", "status", "created_at")
-    search_fields = ("user__username", "content")
+@admin.register(MemoryDocument)
+class MemoryDocumentAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "virtual_path", "status", "created_at", "updated_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("user__username", "virtual_path", "title", "content_markdown")
     ordering = ("-updated_at",)
+    inlines = [MemoryChunkInline]
+
+
+@admin.register(MemoryChunk)
+class MemoryChunkAdmin(admin.ModelAdmin):
+    list_display = ("id", "document", "position", "heading", "status", "updated_at")
+    list_filter = ("status", "updated_at")
+    search_fields = ("document__virtual_path", "heading", "content_text")
+    ordering = ("document", "position")
     inlines = [MemoryEmbeddingInline]
 
 
-@admin.register(MemoryItemEmbedding)
-class MemoryItemEmbeddingAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "item", "state", "provider_type", "model", "dimensions", "updated_at")
+@admin.register(MemoryChunkEmbedding)
+class MemoryChunkEmbeddingAdmin(admin.ModelAdmin):
+    list_display = ("id", "chunk", "state", "provider_type", "model", "dimensions", "updated_at")
     list_filter = ("state", "provider_type", "updated_at")
-    search_fields = ("user__username", "item__content", "model", "error")
+    search_fields = ("chunk__document__virtual_path", "chunk__content_text", "model", "error")
     ordering = ("-updated_at",)
 
 

@@ -150,15 +150,17 @@ Long-term memory is mounted as `/memory` and is shared at the user level.
 
 Useful commands:
 - `ls /memory`
-- `ls /memory/<theme>`
-- `cat /memory/<theme>/<file>.md`
+- `mkdir /memory/projects`
+- `cat /memory/note.md`
+- `cat /memory/projects/client-a.md`
 - `grep -r "term" /memory`
 - `memory search "conceptual query"`
-- `tee /memory/<theme>/<file>.md --text "..."`
+- `memory search "conceptual query" --under /memory/projects`
+- `tee /memory/projects/client-a.md --text "# Client A\\n\\n## Constraints\\n..."`
 
+Use any directory structure that helps the task; `/memory` does not impose themes or types.
 Use `grep` for lexical text matching on visible memory documents.
 Use `memory search` when you need semantic retrieval or hybrid lexical + embeddings ranking.
-The theme comes from the path, not from the file frontmatter.
 """
 
     if capabilities.has_python:

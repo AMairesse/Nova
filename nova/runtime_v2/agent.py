@@ -138,7 +138,8 @@ class ReactTerminalRuntime:
             )
         if self.capabilities.has_memory:
             extra_guidance.append(
-                "Use `/memory` for user-scoped durable memory. "
+                "Use `/memory` for user-scoped durable memory stored as free-form Markdown files. "
+                "You may create directories there, but none are imposed by default. "
                 "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
             )
         if self.capabilities.has_search:

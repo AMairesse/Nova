@@ -1,4 +1,8 @@
 from .Memory import MemoryItem, MemoryItemEmbedding, MemoryTheme  # noqa: F401
+from .MemoryChunk import MemoryChunk  # noqa: F401
+from .MemoryChunkEmbedding import MemoryChunkEmbedding  # noqa: F401
+from .MemoryDirectory import MemoryDirectory  # noqa: F401
+from .MemoryDocument import MemoryDocument  # noqa: F401
 from .ConversationEmbedding import (  # noqa: F401
     ConversationEmbeddingState,
     DaySegmentEmbedding,

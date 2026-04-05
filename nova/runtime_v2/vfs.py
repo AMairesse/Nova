@@ -16,7 +16,7 @@ from nova.memory.service import (
     list_memory_dir_entries,
     memory_is_dir,
     memory_path_exists,
-    mkdir_memory_theme,
+    mkdir_memory_dir,
     move_memory_path,
     read_memory_document,
     read_memory_text,
@@ -478,7 +478,7 @@ class VirtualFileSystem:
                 raise VFSError("Invalid memory path.")
         if self._is_memory_enabled_path(normalized):
             try:
-                return await mkdir_memory_theme(user=self.user, path=normalized)
+                return await mkdir_memory_dir(user=self.user, path=normalized)
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
         webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
@@ -625,8 +625,6 @@ class VirtualFileSystem:
         if normalized in {"/", "/skills", "/tmp"}:
             raise VFSError(f"Cannot remove protected path: {normalized}")
         if self._is_memory_enabled_path(normalized):
-            if await memory_is_dir(user=self.user, path=normalized):
-                raise VFSError("Removing memory directories is not supported.")
             try:
                 await archive_memory_path(user=self.user, path=normalized)
                 return

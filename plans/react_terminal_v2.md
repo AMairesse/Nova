@@ -51,9 +51,10 @@ very small tool surface and a file-centric mental model.
 - Visible persistent root paths (`/foo.txt`, `/docs/report.md`, `/subagents/...`) are stored as:
   - `UserFile(scope=THREAD_SHARED)`
 - `/memory/...` is not stored in MinIO; it is projected from:
-  - `MemoryTheme`
-  - `MemoryItem`
-  - `MemoryItemEmbedding`
+  - `MemoryDirectory`
+  - `MemoryDocument`
+  - `MemoryChunk`
+  - `MemoryChunkEmbedding`
 - `/webdav/...` is not stored in MinIO; it is projected live from the configured
   WebDAV tools and remains hidden from the normal thread file UI
 - `/tmp/...` is stored in MinIO too, but as:
@@ -67,15 +68,22 @@ very small tool surface and a file-centric mental model.
 - `/memory` is also shared with sub-agents that have memory capability
 - Supported visible paths:
   - `/memory/README.md`
-  - `/memory/<theme>/<file>.md`
-  - `/memory/<theme>/<file>.txt`
-- Theme is determined by the directory name, not by file frontmatter
-- File reads project memory items as YAML frontmatter plus body content
+  - `/memory/<file>.md`
+  - `/memory/<dir>/<file>.md`
+  - arbitrary nested directories created explicitly with `mkdir`
+- There is no imposed type or theme hierarchy in `/memory`
+- Memory files are plain Markdown documents without YAML frontmatter
 - File writes support creation and editing through terminal-native commands such as
   `touch`, `tee`, `mv`, and `rm`
-- `rm /memory/...` archives the memory item instead of deleting a MinIO object
+- `rm /memory/<file>.md` archives the underlying memory document instead of deleting a MinIO object
+- `rm /memory/<dir>` is allowed only when the directory is empty
+- Markdown documents are chunked for retrieval:
+  - split by `##` sections first
+  - oversized sections are re-chunked into overlapping text windows
+- Embeddings are stored per chunk, never per whole file
 - `grep` is lexical only
-- `memory search ...` is the semantic/hybrid retrieval command
+- `memory search ...` is the semantic/hybrid retrieval command and returns file path plus matching section
+- Legacy callable memory tools are no longer part of the runtime surface
 
 ### WebDAV model
 
@@ -158,9 +166,12 @@ very small tool surface and a file-centric mental model.
 - Continuous recall through terminal-native `history search` and `history get`
 - Continuous-specific virtual skill documentation under `/skills/continuous.md`
 - Shared database-backed `/memory` mount with terminal read/write support
-- Thin shared memory service used by both the legacy memory builtin and the v2 runtime
+- Free-form Markdown memory files under `/memory` with no imposed type/theme hierarchy
+- Free-form memory documents and persistent empty memory directories
+- Chunk-based memory indexing and embeddings
 - Terminal-native `grep` for lexical search across real and virtual text files
 - Terminal-native `memory search` for hybrid lexical + embeddings retrieval
+- Legacy callable memory tools removed in favor of `/memory` + terminal commands
 - Shared WebDAV service used by both the legacy WebDAV builtin and the v2 runtime
 - Terminal-only `/webdav` mount with per-tool mounts derived from configured WebDAV builtins
 - WebDAV reads/writes/moves/copies through the existing filesystem commands while honoring the legacy `allow_*` flags
@@ -175,8 +186,9 @@ very small tool surface and a file-centric mental model.
 
 ## Next Steps
 
-- Add broader runtime coverage around memory path collisions, archived-item retrieval,
-  and cross-agent memory scenarios beyond the current focused tests
+- Run the broader full-suite validation after the memory migration lands cleanly in real data
+- Decide when to stop exposing the old legacy memory models/admin screens entirely, now that the canonical runtime path is document-based
+- Add broader runtime coverage around memory path collisions and more cross-agent memory scenarios beyond the current focused tests
 - Add or harden delegation-focused tests if edge cases remain around nested directories or modified input files
 - Decide which remaining legacy-only capabilities deserve a terminal-native v2 mapping next
 - Evaluate whether browser form entry, richer interactions, or screenshots are worth adding beyond the current targeted-reading scope

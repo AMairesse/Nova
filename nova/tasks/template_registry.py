@@ -6,7 +6,7 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.Memory import MemoryItem, MemoryItemStatus
+from nova.models.MemoryDocument import MemoryDocument
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserProfile
@@ -14,20 +14,17 @@ from nova.models.UserObjects import UserProfile
 
 SPAM_FILTER_TEMPLATE_ID = "email_spam_filter_basic"
 THEMATIC_WATCH_TEMPLATE_ID = "thematic_watch_weekly"
-THEMATIC_WATCH_MEMORY_THEME_TOPICS = "thematic_watch_topics"
-THEMATIC_WATCH_MEMORY_THEME_LANGUAGE = "thematic_watch_language"
-THEMATIC_WATCH_MEMORY_TYPE = "preference"
+THEMATIC_WATCH_MEMORY_PATH_TOPICS = "/memory/thematic-watch-topics.md"
+THEMATIC_WATCH_MEMORY_PATH_LANGUAGE = "/memory/thematic-watch-language.md"
 
 
-def _memory_has_thematic_item(user, theme_slug: str) -> bool:
-    """Return True when one strict thematic-watch memory item exists for theme+type."""
-    return MemoryItem.objects.filter(
+def _memory_has_thematic_document(user, path: str) -> bool:
+    return MemoryDocument.objects.filter(
         user=user,
-        status=MemoryItemStatus.ACTIVE,
-        type=THEMATIC_WATCH_MEMORY_TYPE,
-        theme__slug=theme_slug,
+        status="active",
+        virtual_path=path,
     ).exclude(
-        content__exact="",
+        content_markdown__exact="",
     ).exists()
 
 
@@ -85,6 +82,8 @@ def default_agent_has_memory_tool(user) -> bool:
         .first()
     )
     if not default_agent:
+        return False
+    if default_agent.runtime_engine != AgentConfig.RuntimeEngine.REACT_TERMINAL_V1:
         return False
     return _agent_has_tool_subtype(default_agent, "memory")
 
@@ -217,14 +216,16 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
         (
             agent
             for agent in agents
-            if _agent_has_tool_subtype(agent, "browser") and _agent_has_tool_subtype(agent, "memory")
+            if agent.runtime_engine == AgentConfig.RuntimeEngine.REACT_TERMINAL_V1
+            and _agent_has_tool_subtype(agent, "browser")
+            and _agent_has_tool_subtype(agent, "memory")
         ),
         None,
     )
     has_browser_capable_agent = matched_agent is not None
 
-    has_topics_memory = _memory_has_thematic_item(user, THEMATIC_WATCH_MEMORY_THEME_TOPICS)
-    has_language_memory = _memory_has_thematic_item(user, THEMATIC_WATCH_MEMORY_THEME_LANGUAGE)
+    has_topics_memory = _memory_has_thematic_document(user, THEMATIC_WATCH_MEMORY_PATH_TOPICS)
+    has_language_memory = _memory_has_thematic_document(user, THEMATIC_WATCH_MEMORY_PATH_LANGUAGE)
 
     prerequisites = [
         TemplatePrerequisite(
@@ -242,10 +243,9 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
         TemplatePrerequisite(
             label=str(
                 _(
-                    "Memory item present with theme='%(theme)s' and type='%(type)s'"
+                    "Memory document present at '%(path)s'"
                 ) % {
-                    "theme": THEMATIC_WATCH_MEMORY_THEME_TOPICS,
-                    "type": THEMATIC_WATCH_MEMORY_TYPE,
+                    "path": THEMATIC_WATCH_MEMORY_PATH_TOPICS,
                 }
             ),
             met=has_topics_memory,
@@ -253,10 +253,9 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
         TemplatePrerequisite(
             label=str(
                 _(
-                    "Memory item present with theme='%(theme)s' and type='%(type)s'"
+                    "Memory document present at '%(path)s'"
                 ) % {
-                    "theme": THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
-                    "type": THEMATIC_WATCH_MEMORY_TYPE,
+                    "path": THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
                 }
             ),
             met=has_language_memory,
@@ -270,7 +269,7 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
         reason = str(
             _(
                 "No selectable agent can both browse the web and access memory. "
-                "Add browser and memory tools directly or via sub-agents."
+                "Use a React Terminal v2 agent with browser and memory access."
             )
         )
         return TemplateAvailability(False, reason, prerequisites)
@@ -347,9 +346,9 @@ def build_template_prefill_payload(
             "prompt": (
                 "Run a weekly thematic web watch for this user. "
                 "Coverage window is the last 7 full days before execution time (not only today). "
-                "First, retrieve two strict memory items (type='preference'): "
-                f"theme='{THEMATIC_WATCH_MEMORY_THEME_TOPICS}' (topics) and "
-                f"theme='{THEMATIC_WATCH_MEMORY_THEME_LANGUAGE}' (language). "
+                "First, read two strict memory files: "
+                f"'{THEMATIC_WATCH_MEMORY_PATH_TOPICS}' (topics) and "
+                f"'{THEMATIC_WATCH_MEMORY_PATH_LANGUAGE}' (language). "
                 "If memory is incomplete, continue with a generic watch and start your output with: "
                 "'profile incomplete'. Then provide one concise weekly digest with key updates and links."
             ),

@@ -7,7 +7,10 @@ from django.http import HttpResponse
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 
-from nova.models.Memory import MemoryItem, MemoryItemEmbedding
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.MemoryDocument import MemoryDocument
+from nova.models.memory_common import MemoryRecordStatus
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from user_settings.views.memory import MemorySettingsView
 
@@ -51,12 +54,23 @@ class MemorySettingsViewTests(TestCase):
         return data
 
     def _create_embedding(self, *, content="remember this"):
-        item = MemoryItem.objects.create(
+        document = MemoryDocument.objects.create(
             user=self.user,
-            type="fact",
-            content=content,
+            virtual_path=f"/memory/{content.replace(' ', '-')}.md",
+            title="Memory",
+            content_markdown=f"# Memory\n\n{content}",
+            status=MemoryRecordStatus.ACTIVE,
         )
-        return MemoryItemEmbedding.objects.create(user=self.user, item=item)
+        chunk = MemoryChunk.objects.create(
+            document=document,
+            heading="Memory",
+            anchor="memory",
+            position=0,
+            content_text=content,
+            token_count=len(content.split()),
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        return MemoryChunkEmbedding.objects.create(chunk=chunk)
 
     def _messages(self, response):
         return [message.message for message in get_messages(response.wsgi_request)]

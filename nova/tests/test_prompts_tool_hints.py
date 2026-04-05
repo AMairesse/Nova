@@ -18,7 +18,8 @@ from nova.llm.prompts import (
     _is_memory_tool_enabled,
     build_nova_system_prompt,
 )
-from nova.models.Memory import MemoryItem, MemoryItemStatus, MemoryTheme
+from nova.models.MemoryDocument import MemoryDocument
+from nova.models.memory_common import MemoryRecordStatus
 from nova.models.Message import Actor
 from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
@@ -248,28 +249,24 @@ class PromptHelpersDbTests(DjangoTestCase):
             scope=scope,
         )
 
-    def test_get_user_memory_lists_themes_and_truncates(self):
+    def test_get_user_memory_lists_paths_and_truncates(self):
         for index in range(12):
-            theme = MemoryTheme.objects.create(
+            MemoryDocument.objects.create(
                 user=self.user,
-                slug=f"theme-{index}",
-                display_name=f"Theme {index}",
-            )
-            MemoryItem.objects.create(
-                user=self.user,
-                theme=theme,
-                type="fact",
-                content=f"Fact {index}",
-                status=MemoryItemStatus.ACTIVE,
+                virtual_path=f"/memory/theme-{index}.md",
+                title=f"Theme {index}",
+                content_markdown=f"# Theme {index}\n\nFact {index}",
+                status=MemoryRecordStatus.ACTIVE,
             )
 
         rendered = async_to_sync(_get_user_memory)(self.user)
 
-        self.assertIn("Long-term memory themes available:", rendered)
+        self.assertIn("Long-term memory is available through user-scoped documents.", rendered)
+        self.assertIn("Known memory paths:", rendered)
         self.assertIn("(+2 more)", rendered)
 
     def test_get_user_memory_falls_back_when_loading_fails(self):
-        with patch("nova.llm.prompts.MemoryTheme.objects.filter", side_effect=RuntimeError("boom")):
+        with patch("nova.llm.prompts.MemoryDocument.objects.filter", side_effect=RuntimeError("boom")):
             rendered = async_to_sync(_get_user_memory)(self.user)
 
         self.assertEqual(rendered, "Long-term memory is available.")
