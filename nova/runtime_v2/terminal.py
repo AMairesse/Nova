@@ -1,23 +1,24 @@
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 import shlex
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
 
-import httpx
 from django.utils import timezone
 
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
-from nova.file_utils import MAX_FILE_SIZE
 from nova.memory.service import search_memory_items
 from nova.models.Thread import Thread
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.vfs import VFSError, VirtualFileSystem, normalize_vfs_path
-from nova.tools.builtins import browser as browser_builtin
 from nova.tools.builtins import code_execution as code_builtin
 from nova.tools.builtins import email as email_builtin
+from nova.web.browser_service import BrowserSession, BrowserSessionError
+from nova.web.download_service import download_http_file
+from nova.web.search_service import SEARXNG_MAX_RESULTS, search_web
 
 
 class TerminalCommandError(Exception):
@@ -29,6 +30,8 @@ class TerminalExecutor:
         self.vfs = vfs
         self.capabilities = capabilities
         self._mailbox_registry_cache = None
+        self._last_search_results: list[dict] = []
+        self._browser_session: BrowserSession | None = None
 
     def _parse(self, command: str) -> list[str]:
         raw = str(command or "").strip()
@@ -77,6 +80,10 @@ class TerminalExecutor:
             return await self._cmd_find(tokens[1:])
         if name == "grep":
             return await self._cmd_grep(tokens[1:])
+        if name == "search":
+            return await self._cmd_search(tokens[1:])
+        if name == "browse":
+            return await self._cmd_browse(tokens[1:])
         if name == "history":
             return await self._cmd_history(tokens[1:])
         if name == "date":
@@ -630,16 +637,244 @@ class TerminalExecutor:
         return output_path, remaining
 
     async def _download_http(self, url: str) -> tuple[bytes, str, str]:
-        timeout = httpx.Timeout(60.0, connect=10.0)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            content = response.content
-            if len(content) > MAX_FILE_SIZE:
-                raise TerminalCommandError(f"Downloaded file exceeds the {MAX_FILE_SIZE} byte limit.")
-            mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-            inferred_name = browser_builtin._infer_download_filename(url, response.headers)
-            return content, mime_type or "application/octet-stream", inferred_name
+        try:
+            payload = await download_http_file(url)
+        except ValueError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return payload["content"], payload["mime_type"], payload["filename"]
+
+    async def _write_json_output(self, output_path: str, payload: object) -> str:
+        try:
+            resolved_output = await self.vfs.resolve_output_path(output_path)
+            written = await self.vfs.write_file(
+                resolved_output,
+                json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                mime_type="application/json",
+            )
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return written.path
+
+    @staticmethod
+    def _truncate_output(content: str, limit: int = 8000) -> str:
+        text = str(content or "")
+        return text if len(text) <= limit else f"{text[:limit]}\n...[truncated]"
+
+    async def _get_browser_session(self) -> BrowserSession:
+        if self._browser_session is None:
+            self._browser_session = BrowserSession()
+        return self._browser_session
+
+    async def close(self) -> None:
+        if self._browser_session is not None:
+            await self._browser_session.close()
+            self._browser_session = None
+
+    async def _cmd_search(self, args: list[str]) -> str:
+        if not self.capabilities.has_search:
+            raise TerminalCommandError("Search commands are not enabled for this agent.")
+
+        output_path, remaining = self._parse_output_path(args)
+        limit = None
+        query_tokens: list[str] = []
+        index = 0
+        while index < len(remaining):
+            token = remaining[index]
+            if token == "--limit":
+                index += 1
+                if index >= len(remaining):
+                    raise TerminalCommandError("Missing value after --limit")
+                limit = self._parse_int_flag("--limit", remaining[index])
+            else:
+                query_tokens.append(token)
+            index += 1
+
+        query = " ".join(query_tokens).strip()
+        if not query:
+            raise TerminalCommandError("Usage: search <query> [--limit N] [--output /path.json]")
+
+        try:
+            effective_limit = None if limit is None else max(1, min(limit, SEARXNG_MAX_RESULTS))
+            payload = await search_web(self.capabilities.searxng_tool, query=query, limit=effective_limit)
+        except Exception as exc:
+            raise TerminalCommandError(str(exc)) from exc
+
+        self._last_search_results = list(payload.get("results") or [])
+
+        if output_path:
+            written_path = await self._write_json_output(output_path, payload)
+            return f"Wrote search results to {written_path}"
+
+        lines: list[str] = []
+        for index, result in enumerate(self._last_search_results, start=1):
+            title = str(result.get("title") or "").strip() or "(untitled)"
+            url = str(result.get("url") or "").strip() or "(missing url)"
+            snippet = str(result.get("snippet") or "").strip()
+            line = f"{index}. {title} / {url}"
+            if snippet:
+                line += f" / {snippet}"
+            lines.append(line)
+        return "\n".join(lines) if lines else "No search results."
+
+    async def _cmd_browse(self, args: list[str]) -> str:
+        if not self.capabilities.has_web:
+            raise TerminalCommandError("Browse commands are not enabled for this agent.")
+        if not args:
+            raise TerminalCommandError(
+                "Usage: browse <open|current|back|text|links|elements|click> ..."
+            )
+        action = args[0]
+        remainder = args[1:]
+        if action == "open":
+            return await self._cmd_browse_open(remainder)
+        if action == "current":
+            return await self._cmd_browse_current(remainder)
+        if action == "back":
+            return await self._cmd_browse_back(remainder)
+        if action == "text":
+            return await self._cmd_browse_text(remainder)
+        if action == "links":
+            return await self._cmd_browse_links(remainder)
+        if action == "elements":
+            return await self._cmd_browse_elements(remainder)
+        if action == "click":
+            return await self._cmd_browse_click(remainder)
+        raise TerminalCommandError(
+            "Usage: browse <open|current|back|text|links|elements|click> ..."
+        )
+
+    async def _cmd_browse_open(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError("Usage: browse open <url> | browse open --result N")
+
+        result_index = None
+        remaining: list[str] = []
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token == "--result":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --result")
+                result_index = self._parse_int_flag("--result", args[index])
+            else:
+                remaining.append(token)
+            index += 1
+
+        session = await self._get_browser_session()
+        try:
+            if result_index is not None:
+                if remaining:
+                    raise TerminalCommandError("Usage: browse open <url> | browse open --result N")
+                if not self._last_search_results:
+                    raise TerminalCommandError(
+                        "No cached search results are available in this run. Use `search` first."
+                    )
+                opened = await session.open_search_result(result_index, self._last_search_results)
+            else:
+                if len(remaining) != 1:
+                    raise TerminalCommandError("Usage: browse open <url> | browse open --result N")
+                opened = await session.open(remaining[0])
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+
+        status = opened.get("status")
+        url = str(opened.get("url") or "")
+        if status is None:
+            return f"Opened {url}"
+        return f"Opened {url} (status {status})"
+
+    async def _cmd_browse_current(self, args: list[str]) -> str:
+        if args:
+            raise TerminalCommandError("Usage: browse current")
+        session = await self._get_browser_session()
+        try:
+            return await session.current()
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+
+    async def _cmd_browse_back(self, args: list[str]) -> str:
+        if args:
+            raise TerminalCommandError("Usage: browse back")
+        session = await self._get_browser_session()
+        try:
+            payload = await session.back()
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return f"Went back to {payload['url']} (status {payload['status']})"
+
+    async def _cmd_browse_text(self, args: list[str]) -> str:
+        output_path, remaining = self._parse_output_path(args)
+        if remaining:
+            raise TerminalCommandError("Usage: browse text [--output /path.txt]")
+        session = await self._get_browser_session()
+        try:
+            content = await session.extract_text()
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        if output_path:
+            try:
+                resolved_output = await self.vfs.resolve_output_path(output_path)
+                written = await self.vfs.write_file(
+                    resolved_output,
+                    content.encode("utf-8"),
+                    mime_type="text/plain",
+                )
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return f"Wrote page text to {written.path}"
+        return self._truncate_output(content)
+
+    async def _cmd_browse_links(self, args: list[str]) -> str:
+        output_path, remaining = self._parse_output_path(args)
+        absolute = False
+        for token in remaining:
+            if token == "--absolute":
+                absolute = True
+            else:
+                raise TerminalCommandError("Usage: browse links [--absolute] [--output /path.json]")
+        session = await self._get_browser_session()
+        try:
+            links = await session.extract_links(absolute=absolute)
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        if output_path:
+            written_path = await self._write_json_output(output_path, links)
+            return f"Wrote page links to {written_path}"
+        return self._truncate_output(json.dumps(links, ensure_ascii=False, indent=2))
+
+    async def _cmd_browse_elements(self, args: list[str]) -> str:
+        output_path, remaining = self._parse_output_path(args)
+        attributes, remaining = self._parse_multi_flag(remaining, "--attr")
+        if len(remaining) != 1:
+            raise TerminalCommandError(
+                "Usage: browse elements <selector> [--attr NAME ...] [--output /path.json]"
+            )
+        selector = remaining[0]
+        attrs = attributes or ["innerText"]
+        session = await self._get_browser_session()
+        try:
+            elements = await session.get_elements(selector, attrs)
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        payload = {
+            "selector": selector,
+            "attributes": attrs,
+            "elements": elements,
+        }
+        if output_path:
+            written_path = await self._write_json_output(output_path, payload)
+            return f"Wrote selected elements to {written_path}"
+        return self._truncate_output(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    async def _cmd_browse_click(self, args: list[str]) -> str:
+        if len(args) != 1:
+            raise TerminalCommandError("Usage: browse click <selector>")
+        session = await self._get_browser_session()
+        try:
+            return await session.click(args[0])
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
 
     async def _cmd_wget(self, args: list[str]) -> str:
         if not self.capabilities.has_web:

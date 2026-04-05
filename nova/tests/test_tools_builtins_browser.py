@@ -70,7 +70,7 @@ class BrowserBuiltinsTests(TestCase):
         self.assertTrue(any("web_download_file" in line for line in instructions))
 
     @patch("nova.tools.builtins.browser.stage_external_files_as_artifacts", new_callable=AsyncMock)
-    @patch("nova.tools.builtins.browser.httpx.AsyncClient", new=_FakeAsyncClient)
+    @patch("nova.web.download_service.httpx.AsyncClient", new=_FakeAsyncClient)
     def test_web_download_file_returns_artifact_payload(self, mocked_stage_artifacts):
         mocked_stage_artifacts.return_value = (
             [
@@ -108,4 +108,3 @@ class BrowserBuiltinsTests(TestCase):
         names = [tool.name for tool in tools]
 
         self.assertEqual(names, ["browser_navigate", "web_download_file"])
-

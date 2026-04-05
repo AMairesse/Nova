@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from types import SimpleNamespace
@@ -36,6 +37,7 @@ from nova.runtime_v2.terminal import TerminalCommandError, TerminalExecutor
 from nova.runtime_v2.vfs import VirtualFileSystem
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 from nova.thread_titles import build_default_thread_subject
+from nova.web.browser_service import BrowserSessionError
 
 
 class _FakeChannelLayer:
@@ -44,6 +46,19 @@ class _FakeChannelLayer:
 
     async def group_send(self, group_name, payload):
         self.messages.append({"group": group_name, "message": payload["message"]})
+
+
+class _FakeBrowserSession:
+    def __init__(self):
+        self.open = AsyncMock(return_value={"url": "https://example.com", "status": 200})
+        self.open_search_result = AsyncMock(return_value={"url": "https://example.com/result", "status": 200})
+        self.current = AsyncMock(return_value="https://example.com/result")
+        self.back = AsyncMock(return_value={"url": "https://example.com/previous", "status": 200})
+        self.extract_text = AsyncMock(return_value="Page text " * 500)
+        self.extract_links = AsyncMock(return_value=[{"href": "https://example.com/a", "text": "A"}])
+        self.get_elements = AsyncMock(return_value=[{"href": "https://example.com/a", "innerText": "A"}])
+        self.click = AsyncMock(return_value="Clicked element 'a.link'.")
+        self.close = AsyncMock(return_value=None)
 
 
 class RuntimeV2SupportTests(TestCase):
@@ -177,6 +192,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             "date": "nova.tools.builtins.date",
             "browser": "nova.tools.builtins.browser",
             "memory": "nova.tools.builtins.memory",
+            "searxng": "nova.tools.builtins.searxng",
             "webdav": "nova.tools.builtins.webdav",
         }
         return Tool.objects.create(
@@ -250,6 +266,32 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 "allow_copy": allow_copy,
                 "allow_delete": allow_delete,
             },
+        )
+        return tool
+
+    def _create_browser_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="Browser",
+            description="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+
+    def _create_searxng_tool(self) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name="SearXNG",
+            description="Search",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.tools.builtins.searxng",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"searxng_url": "https://search.example.com", "num_results": 5},
         )
         return tool
 
@@ -398,6 +440,130 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(mocked_search.await_args.kwargs["query"], "editor preference")
         self.assertEqual(mocked_search.await_args.kwargs["theme"], "preferences")
         self.assertEqual(mocked_search.await_args.kwargs["types"], ["preference"])
+
+    def test_search_command_formats_results_and_supports_output(self):
+        searxng_tool = self._create_searxng_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(searxng_tool=searxng_tool)
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.search_web",
+            new_callable=AsyncMock,
+            return_value={
+                "query": "nova privacy",
+                "results": [
+                    {
+                        "title": "Nova docs",
+                        "url": "https://example.com/nova",
+                        "snippet": "Privacy-first agent platform",
+                        "engine": "searx",
+                        "score": 0.9,
+                    }
+                ],
+                "limit": 1,
+            },
+        ) as mocked_search:
+            listing = async_to_sync(executor.execute)("search nova privacy --limit 1")
+            written = async_to_sync(executor.execute)(
+                "search nova privacy --limit 1 --output /search/results.json"
+            )
+
+        self.assertIn("1. Nova docs / https://example.com/nova / Privacy-first agent platform", listing)
+        self.assertIn("/search/results.json", written)
+        stored = async_to_sync(executor.execute)("cat /search/results.json")
+        self.assertEqual(json.loads(stored)["query"], "nova privacy")
+        self.assertEqual(mocked_search.await_args.kwargs["limit"], 1)
+
+    def test_browse_open_result_requires_search_and_browse_session_is_run_local(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        searxng_tool = self._create_searxng_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool, searxng_tool=searxng_tool)
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("browse open --result 1")
+        executor._browser_session = None
+
+        fake_session = _FakeBrowserSession()
+        with (
+            patch(
+                "nova.runtime_v2.terminal.search_web",
+                new_callable=AsyncMock,
+                return_value={
+                    "query": "nova",
+                    "results": [
+                        {
+                            "title": "Nova docs",
+                            "url": "https://example.com/nova",
+                            "snippet": "Docs",
+                            "engine": "searx",
+                            "score": None,
+                        }
+                    ],
+                    "limit": 1,
+                },
+            ),
+            patch("nova.runtime_v2.terminal.BrowserSession", return_value=fake_session),
+        ):
+            search_result = async_to_sync(executor.execute)("search nova")
+            opened = async_to_sync(executor.execute)("browse open --result 1")
+            current = async_to_sync(executor.execute)("browse current")
+
+        self.assertIn("Nova docs", search_result)
+        self.assertIn("https://example.com/result", opened)
+        self.assertEqual(current, "https://example.com/result")
+        fake_session.open_search_result.assert_awaited_once()
+
+        next_run_executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fresh_session = _FakeBrowserSession()
+        fresh_session.current = AsyncMock(
+            side_effect=BrowserSessionError(
+                "No active page in the current browser session. Use `browse open` first."
+            )
+        )
+        with patch(
+            "nova.runtime_v2.terminal.BrowserSession",
+            return_value=fresh_session,
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(next_run_executor.execute)("browse current")
+
+    def test_browse_text_links_elements_and_click_support_output(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+
+        with patch("nova.runtime_v2.terminal.BrowserSession", return_value=fake_session):
+            opened = async_to_sync(executor.execute)("browse open https://example.com")
+            text_preview = async_to_sync(executor.execute)("browse text")
+            text_written = async_to_sync(executor.execute)("browse text --output /page.txt")
+            links_preview = async_to_sync(executor.execute)("browse links --absolute")
+            links_written = async_to_sync(executor.execute)("browse links --absolute --output /links.json")
+            elements_preview = async_to_sync(executor.execute)(
+                'browse elements "a" --attr href --attr innerText'
+            )
+            elements_written = async_to_sync(executor.execute)(
+                'browse elements "a" --attr href --attr innerText --output /elements.json'
+            )
+            clicked = async_to_sync(executor.execute)('browse click "a.link"')
+
+        self.assertIn("Opened https://example.com", opened)
+        self.assertIn("Page text", text_preview)
+        self.assertIn("/page.txt", text_written)
+        self.assertIn("https://example.com/a", links_preview)
+        self.assertIn("/links.json", links_written)
+        self.assertIn('"selector": "a"', elements_preview)
+        self.assertIn("/elements.json", elements_written)
+        self.assertIn("Clicked element", clicked)
+        self.assertIn("Page text", async_to_sync(executor.execute)("cat /page.txt"))
+        self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /links.json"))[0]["href"], "https://example.com/a")
+        self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /elements.json"))["selector"], "a")
 
     def test_webdav_mount_is_visible_only_when_capability_is_enabled(self):
         plain_executor = self._build_executor()
@@ -837,6 +1003,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("cp /report.txt /webdav/<mount>/report.txt", skills["webdav.md"])
         self.assertIn("permissions", skills["webdav.md"])
 
+    def test_skill_registry_adds_search_and_browse_guides_when_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(searxng_tool=object(), browser_tool=object())
+        )
+
+        self.assertIn("search.md", skills)
+        self.assertIn("browse.md", skills)
+        self.assertIn("browse open --result 1", skills["search.md"])
+        self.assertIn("browse click", skills["browse.md"])
+
     def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
         skills = build_skill_registry(
             TerminalCapabilities(),
@@ -903,6 +1079,32 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 "allow_copy": allow_copy,
                 "allow_delete": allow_delete,
             },
+        )
+        return tool
+
+    def _create_browser_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="Browser",
+            description="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.tools.builtins.browser",
+        )
+
+    def _create_searxng_tool(self) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name="SearXNG",
+            description="Search",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.tools.builtins.searxng",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"searxng_url": "https://search.example.com", "num_results": 5},
         )
         return tool
 
@@ -991,6 +1193,40 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("progress_update", event_types)
         self.assertIn("The current directory is /.", task.streamed_markdown)
         self.assertIsNotNone(task.current_response)
+
+    def test_runtime_closes_browser_session_on_success(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            return_value={"content": "Done.", "tool_calls": []}
+        )
+        runtime.terminal.close = AsyncMock()
+
+        result = async_to_sync(runtime.run)()
+
+        self.assertEqual(result.final_answer, "Done.")
+        runtime.terminal.close.assert_awaited_once()
+
+    def test_runtime_closes_browser_session_on_error(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(side_effect=RuntimeError("boom"))
+        runtime.terminal.close = AsyncMock()
+
+        with self.assertRaises(RuntimeError):
+            async_to_sync(runtime.run)()
+
+        runtime.terminal.close.assert_awaited_once()
 
     def test_runtime_loads_compacted_history_summary(self):
         first = self.thread.add_message("Initial requirement", Actor.USER)
@@ -1167,6 +1403,26 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("/webdav", prompt)
         self.assertIn("remote WebDAV mounts", prompt)
 
+    def test_system_prompt_mentions_search_browse_and_non_persistence(self):
+        browser_tool = self._create_browser_tool()
+        searxng_tool = self._create_searxng_tool()
+        self.agent.tools.add(browser_tool, searxng_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("search", prompt)
+        self.assertIn("browse", prompt)
+        self.assertIn("do not persist", prompt)
+        self.assertIn("curl", prompt)
+        self.assertIn("wget", prompt)
+
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):
         memory_tool = Tool.objects.create(
@@ -1338,6 +1594,53 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         self.assertIn("Saw WebDAV.", result)
         self.assertTrue(seen["webdav"])
+
+    def test_subagent_with_browser_capability_sees_browse_commands(self):
+        browser_tool = self._create_browser_tool()
+        self.agent.tools.add(browser_tool)
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Browser Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child browser tool",
+        )
+        child_agent.tools.add(browser_tool)
+        self.agent.agent_tools.add(child_agent)
+        seen = {}
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            try:
+                await self.terminal.execute("browse current")
+            except TerminalCommandError as exc:
+                seen["browse_error"] = str(exc)
+            return ReactTerminalRunResult(
+                final_answer="Saw browse.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime_v2.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Check browser commands.",
+                input_paths=[],
+            )
+
+        self.assertIn("Saw browse.", result)
+        self.assertIn("No active page", seen["browse_error"])
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):

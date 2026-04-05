@@ -1,19 +1,16 @@
-import re
 from typing import List
-from urllib.parse import urlparse
 
-import httpx
 from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
 from langchain_core.tools import StructuredTool
 from playwright.async_api import async_playwright
 
 from nova.external_files import (
     build_artifact_tool_payload,
-    get_external_file_import_max_size_bytes,
     stage_external_files_as_artifacts,
 )
 from nova.llm.llm_agent import LLMAgent
 from nova.models.Tool import Tool
+from nova.web.download_service import download_http_file, infer_download_filename
 
 
 METADATA = {
@@ -26,9 +23,6 @@ METADATA = {
 }
 
 
-_FILENAME_RE = re.compile(r'filename\*?=(?:UTF-8\'\')?"?([^\";]+)"?')
-
-
 def get_prompt_instructions() -> List[str]:
     return [
         "Use web_download_file when the user needs the actual file, not just a page summary.",
@@ -37,55 +31,25 @@ def get_prompt_instructions() -> List[str]:
 
 
 def _infer_download_filename(url: str, headers, explicit_filename: str = "") -> str:
-    provided = str(explicit_filename or "").strip()
-    if provided:
-        return provided
-
-    content_disposition = str(headers.get("content-disposition") or "").strip()
-    if content_disposition:
-        match = _FILENAME_RE.search(content_disposition)
-        if match:
-            candidate = str(match.group(1) or "").strip().strip('"')
-            if candidate:
-                return candidate
-
-    path = urlparse(str(url or "")).path
-    candidate = path.rsplit("/", 1)[-1] if path else ""
-    return candidate or "downloaded-file"
+    return infer_download_filename(url, headers, explicit_filename)
 
 
 async def web_download_file(agent: LLMAgent, url: str, filename: str = ""):
     if getattr(agent, "thread", None) is None:
         return "Web download requires an active conversation thread.", None
 
-    max_size = get_external_file_import_max_size_bytes()
-    timeout = httpx.Timeout(60.0, connect=10.0)
-    bytes_read = 0
-    chunks: list[bytes] = []
-
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
-            inferred_name = _infer_download_filename(url, response.headers, filename)
-            mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-            async for chunk in response.aiter_bytes():
-                if not chunk:
-                    continue
-                bytes_read += len(chunk)
-                if bytes_read > max_size:
-                    return (
-                        f"Downloaded file exceeds the {max_size} byte limit.",
-                        None,
-                    )
-                chunks.append(chunk)
+    try:
+        downloaded = await download_http_file(url, filename=filename)
+    except ValueError as exc:
+        return str(exc), None
 
     artifacts, errors = await stage_external_files_as_artifacts(
         agent,
         [
             {
-                "filename": inferred_name,
-                "content": b"".join(chunks),
-                "mime_type": mime_type,
+                "filename": downloaded["filename"],
+                "content": downloaded["content"],
+                "mime_type": downloaded["mime_type"],
                 "origin_locator": {"url": url},
             }
         ],
@@ -98,7 +62,7 @@ async def web_download_file(agent: LLMAgent, url: str, filename: str = ""):
 
     artifact = artifacts[0] if artifacts else None
     message = (
-        f"Downloaded file {getattr(artifact, 'filename', inferred_name)} from {url}."
+        f"Downloaded file {getattr(artifact, 'filename', downloaded['filename'])} from {url}."
         if artifact is not None
         else f"Downloaded file from {url}."
     )

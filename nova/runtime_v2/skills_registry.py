@@ -83,6 +83,46 @@ Use `curl` without `--output` only when you want a text preview.
 Use `wget` or `curl --output` when you need a reusable file.
 """
 
+        skills["browse.md"] = """# Browse
+
+Interactive browser reading is exposed through `browse` commands.
+
+Useful commands:
+- `browse open https://example.com`
+- `browse open --result 1`
+- `browse current`
+- `browse back`
+- `browse text`
+- `browse text --output /page.txt`
+- `browse links --absolute`
+- `browse links --absolute --output /links.json`
+- `browse elements "a" --attr href --attr innerText`
+- `browse click "button.submit"`
+
+The browser session only exists for the current run. It does not persist across later thread messages.
+Use `--output` when you want to keep extracted text, links, or elements in the filesystem.
+Use `curl` or `wget` when you need direct downloads rather than page interaction.
+"""
+
+    if capabilities.has_search:
+        browse_note = (
+            "\nUse `search` to discover candidate pages, then open a result during the same run with:\n"
+            "- `browse open --result 1`\n"
+            if capabilities.has_web
+            else ""
+        )
+        skills["search.md"] = f"""# Search
+
+Web search is exposed through the `search` command.
+
+Useful commands:
+- `search climate summit`
+- `search climate summit --limit 3`
+- `search climate summit --output /search/results.json`
+{browse_note}
+`search` results do not persist across later thread messages unless you write them to a file with `--output`.
+"""
+
     if capabilities.has_webdav:
         skills["webdav.md"] = """# WebDAV
 

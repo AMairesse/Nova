@@ -90,6 +90,26 @@ very small tool surface and a file-centric mental model.
 - Recursive `find`/`grep -r` traversals over WebDAV are capped at 500 remote paths per command
 - Cross-boundary directory copy/move between local storage and WebDAV is intentionally unsupported in v1
 
+### Web access model
+
+- Direct HTTP(S) downloads stay terminal-native through:
+  - `curl`
+  - `wget`
+- Web search is exposed through:
+  - `search <query> [--limit N] [--output /path.json]`
+- Interactive page reading is exposed through:
+  - `browse open`
+  - `browse current`
+  - `browse back`
+  - `browse text`
+  - `browse links`
+  - `browse elements`
+  - `browse click`
+- Playwright browser state is ephemeral and exists only for the current run
+- Cached `search` results also exist only for the current run and can be reopened with:
+  - `browse open --result N`
+- Persisted outputs from `search` or `browse` must be written explicitly through `--output`
+
 ### Sub-agents
 
 - Delegation stays on the dedicated `delegate_to_agent(...)` tool
@@ -111,11 +131,12 @@ very small tool surface and a file-centric mental model.
   - `grep ...`
   - `memory search ...`
 - Optional command families enabled by configured tools:
-  - browser builtin -> `curl`, `wget`
+  - browser builtin -> `curl`, `wget`, `browse ...`
   - email builtin -> `mail ...`
   - code execution builtin -> `python ...`
   - date builtin -> `date`
   - memory builtin -> `/memory` mount + `memory search`
+  - searxng builtin -> `search ...`
   - webdav builtin -> `/webdav` mount through existing filesystem commands
 
 ## Implemented
@@ -145,6 +166,12 @@ very small tool surface and a file-centric mental model.
 - WebDAV reads/writes/moves/copies through the existing filesystem commands while honoring the legacy `allow_*` flags
 - Reserved `/webdav` paths when WebDAV capability is absent
 - Recursive WebDAV traversal guardrail at 500 examined remote paths per command
+- Shared HTTP download service used by the legacy browser builtin and by v2 `curl` / `wget`
+- Shared SearXNG service used by the legacy SearXNG builtin and by v2 `search`
+- Terminal-native `search` command with per-run cached results and optional JSON persistence
+- Terminal-native `browse` command family backed by a native Playwright service
+- Lazy Playwright session creation and guaranteed browser cleanup at the end of each v2 run
+- Browser-specific skill docs under `/skills/search.md` and `/skills/browse.md`
 
 ## Next Steps
 
@@ -152,6 +179,7 @@ very small tool surface and a file-centric mental model.
   and cross-agent memory scenarios beyond the current focused tests
 - Add or harden delegation-focused tests if edge cases remain around nested directories or modified input files
 - Decide which remaining legacy-only capabilities deserve a terminal-native v2 mapping next
+- Evaluate whether browser form entry, richer interactions, or screenshots are worth adding beyond the current targeted-reading scope
 - Sweep remaining product/UI text for any stale `/thread` or `/workspace` wording outside the v2 runtime package
 - Consider whether the file sidebar should eventually surface `/subagents/...` differently from other root files
 - Evaluate whether more terminal-native commands are worth adding without bloating the command language

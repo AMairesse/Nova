@@ -954,7 +954,7 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
                 new_callable=AsyncMock,
                 side_effect=self._fake_batch_upload_files,
             ),
-            patch("nova.tools.builtins.browser.httpx.AsyncClient", new=_FakeBrowserAsyncClient),
+            patch("nova.web.download_service.httpx.AsyncClient", new=_FakeBrowserAsyncClient),
             patch(
                 "nova.external_files.download_file_content",
                 new_callable=AsyncMock,

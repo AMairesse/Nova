@@ -8,6 +8,7 @@ from .constants import RUNTIME_ENGINE_REACT_TERMINAL_V1
 @dataclass(slots=True)
 class TerminalCapabilities:
     email_tools: list = field(default_factory=list)
+    searxng_tool: object | None = None
     webdav_tools: list = field(default_factory=list)
     browser_tool: object | None = None
     code_execution_tool: object | None = None
@@ -26,6 +27,10 @@ class TerminalCapabilities:
     @property
     def has_web(self) -> bool:
         return self.browser_tool is not None
+
+    @property
+    def has_search(self) -> bool:
+        return self.searxng_tool is not None
 
     @property
     def has_webdav(self) -> bool:
@@ -49,8 +54,10 @@ class TerminalCapabilities:
 
     def enabled_command_families(self) -> list[str]:
         families = ["filesystem", "skills"]
+        if self.has_search:
+            families.append("search")
         if self.has_web:
-            families.append("web")
+            families.extend(["browse", "downloads"])
         if self.has_webdav:
             families.append("webdav")
         if self.has_email:
@@ -74,6 +81,7 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
     )
 
     email_tools = [tool for tool in tools if tool.tool_subtype == "email"]
+    searxng_tool = next((tool for tool in tools if tool.tool_subtype == "searxng"), None)
     webdav_tools = [tool for tool in tools if tool.tool_subtype == "webdav"]
     browser_tool = next((tool for tool in tools if tool.tool_subtype == "browser"), None)
     code_execution_tool = next((tool for tool in tools if tool.tool_subtype == "code_execution"), None)
@@ -82,6 +90,7 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
 
     return TerminalCapabilities(
         email_tools=email_tools,
+        searxng_tool=searxng_tool,
         webdav_tools=webdav_tools,
         browser_tool=browser_tool,
         code_execution_tool=code_execution_tool,

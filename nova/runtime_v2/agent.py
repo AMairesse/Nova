@@ -141,6 +141,20 @@ class ReactTerminalRuntime:
                 "Use `/memory` for user-scoped durable memory. "
                 "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
             )
+        if self.capabilities.has_search:
+            search_guidance = "Use `search` for web discovery."
+            if self.capabilities.has_web:
+                search_guidance += (
+                    " It returns search results only and caches them for this run so "
+                    "you can open one with `browse open --result N`."
+                )
+            extra_guidance.append(search_guidance)
+        if self.capabilities.has_web:
+            extra_guidance.append(
+                "Use `browse` for interactive page reading within the current run only. Browser state and cached "
+                "search results do not persist across later thread messages. Write outputs to the VFS with `--output` "
+                "when you need to keep them. Use `curl` or `wget` for direct HTTP(S) downloads."
+            )
         if self.capabilities.has_webdav:
             extra_guidance.append(
                 "Use `/webdav` as a remote filesystem mount. Reuse normal file commands there and expect "
@@ -570,75 +584,79 @@ class ReactTerminalRuntime:
             return response
 
     async def run(self, *, ephemeral_user_prompt: str | None = None, ensure_root_trace: bool = True) -> ReactTerminalRunResult:
-        if ensure_root_trace and self.trace_handler:
-            await self.trace_handler.ensure_root_run(
-                label=getattr(self.agent_config, "name", "") or "React Terminal agent",
-                source_message_id=self.source_message_id,
-                agent_id=getattr(self.agent_config, "id", None),
-            )
+        try:
+            if ensure_root_trace and self.trace_handler:
+                await self.trace_handler.ensure_root_run(
+                    label=getattr(self.agent_config, "name", "") or "React Terminal agent",
+                    source_message_id=self.source_message_id,
+                    agent_id=getattr(self.agent_config, "id", None),
+                )
 
-        messages = [{"role": "system", "content": self.build_system_prompt()}]
-        messages.extend(await self._load_history_messages())
-        if ephemeral_user_prompt:
-            messages.append({"role": "user", "content": str(ephemeral_user_prompt or "")})
+            messages = [{"role": "system", "content": self.build_system_prompt()}]
+            messages.extend(await self._load_history_messages())
+            if ephemeral_user_prompt:
+                messages.append({"role": "user", "content": str(ephemeral_user_prompt or "")})
 
-        await self._record_progress("Preparing React Terminal context")
+            await self._record_progress("Preparing React Terminal context")
 
-        max_iterations = max(int(getattr(self.agent_config, "recursion_limit", 8) or 8), 1)
-        final_answer = ""
-        real_tokens = None
-        approx_tokens = None
+            max_iterations = max(int(getattr(self.agent_config, "recursion_limit", 8) or 8), 1)
+            final_answer = ""
+            real_tokens = None
+            approx_tokens = None
 
-        for iteration in range(max_iterations):
-            await self._record_progress(f"Generating model response ({iteration + 1}/{max_iterations})")
-            response = await self._create_model_response(messages)
-            assistant_message = {
-                "role": "assistant",
-                "content": str(response.get("content") or ""),
-            }
-            tool_calls = list(response.get("tool_calls") or [])
-            if tool_calls:
-                assistant_message["tool_calls"] = [
-                    {
-                        "id": item["id"],
-                        "type": "function",
-                        "function": {
-                            "name": item["name"],
-                            "arguments": item["arguments"],
-                        },
-                    }
-                    for item in tool_calls
-                ]
-            messages.append(assistant_message)
-
-            if tool_calls:
-                await self._complete_stream()
-                for tool_call in tool_calls:
-                    tool_result = await self._execute_tool_call(tool_call)
-                    messages.append(
+            for iteration in range(max_iterations):
+                await self._record_progress(f"Generating model response ({iteration + 1}/{max_iterations})")
+                response = await self._create_model_response(messages)
+                assistant_message = {
+                    "role": "assistant",
+                    "content": str(response.get("content") or ""),
+                }
+                tool_calls = list(response.get("tool_calls") or [])
+                if tool_calls:
+                    assistant_message["tool_calls"] = [
                         {
-                            "role": "tool",
-                            "tool_call_id": tool_result["tool_call_id"],
-                            "content": tool_result["content"],
+                            "id": item["id"],
+                            "type": "function",
+                            "function": {
+                                "name": item["name"],
+                                "arguments": item["arguments"],
+                            },
                         }
-                    )
-                continue
+                        for item in tool_calls
+                    ]
+                messages.append(assistant_message)
 
-            final_answer = assistant_message["content"].strip()
-            real_tokens = response.get("total_tokens")
-            approx_tokens = self._approximate_tokens(messages)
-            break
+                if tool_calls:
+                    await self._complete_stream()
+                    for tool_call in tool_calls:
+                        tool_result = await self._execute_tool_call(tool_call)
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_result["tool_call_id"],
+                                "content": tool_result["content"],
+                            }
+                        )
+                    continue
 
-        if not final_answer:
-            final_answer = "No final response produced."
-            approx_tokens = self._approximate_tokens(messages, final_answer=final_answer)
+                final_answer = assistant_message["content"].strip()
+                real_tokens = response.get("total_tokens")
+                approx_tokens = self._approximate_tokens(messages)
+                break
 
-        await self._complete_stream()
-        await self._record_progress("Finalizing response")
+            if not final_answer:
+                final_answer = "No final response produced."
+                approx_tokens = self._approximate_tokens(messages, final_answer=final_answer)
 
-        return ReactTerminalRunResult(
-            final_answer=final_answer,
-            real_tokens=real_tokens,
-            approx_tokens=approx_tokens,
-            max_context=self.provider_client.max_context_tokens,
-        )
+            await self._complete_stream()
+            await self._record_progress("Finalizing response")
+
+            return ReactTerminalRunResult(
+                final_answer=final_answer,
+                real_tokens=real_tokens,
+                approx_tokens=approx_tokens,
+                max_context=self.provider_client.max_context_tokens,
+            )
+        finally:
+            if self.terminal is not None:
+                await self.terminal.close()
