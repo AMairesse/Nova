@@ -42,6 +42,7 @@ very small tool surface and a file-centric mental model.
 - `/skills`: virtual readonly recipes
 - `/memory`: virtual user-scoped durable memory shared across v2 agents that have
   memory capability
+- `/webdav`: terminal-only remote WebDAV mounts when the agent has WebDAV capability
 - `/tmp`: scratch files visible in the terminal but hidden from the normal file UI
 - `/subagents/<agent-id>-<run-id>/`: outputs copied back automatically from delegated sub-agents
 
@@ -53,6 +54,8 @@ very small tool surface and a file-centric mental model.
   - `MemoryTheme`
   - `MemoryItem`
   - `MemoryItemEmbedding`
+- `/webdav/...` is not stored in MinIO; it is projected live from the configured
+  WebDAV tools and remains hidden from the normal thread file UI
 - `/tmp/...` is stored in MinIO too, but as:
   - `UserFile(scope=MESSAGE_ATTACHMENT)`
   - under a hidden runtime prefix
@@ -73,6 +76,19 @@ very small tool surface and a file-centric mental model.
 - `rm /memory/...` archives the memory item instead of deleting a MinIO object
 - `grep` is lexical only
 - `memory search ...` is the semantic/hybrid retrieval command
+
+### WebDAV model
+
+- `/webdav` is mounted only when at least one WebDAV builtin is configured on the agent
+- Each configured WebDAV tool appears under:
+  - `/webdav/<mount-name>`
+- Mount names are derived from the tool name, with `-<tool_id>` suffixes only on collisions
+- The WebDAV tool `root_path` becomes the visible root of the mount
+- The v2 runtime never lets the agent escape above that configured root
+- Reads and writes reuse the normal terminal filesystem commands rather than a separate
+  `webdav ...` command family
+- Recursive `find`/`grep -r` traversals over WebDAV are capped at 500 remote paths per command
+- Cross-boundary directory copy/move between local storage and WebDAV is intentionally unsupported in v1
 
 ### Sub-agents
 
@@ -100,6 +116,7 @@ very small tool surface and a file-centric mental model.
   - code execution builtin -> `python ...`
   - date builtin -> `date`
   - memory builtin -> `/memory` mount + `memory search`
+  - webdav builtin -> `/webdav` mount through existing filesystem commands
 
 ## Implemented
 
@@ -123,12 +140,18 @@ very small tool surface and a file-centric mental model.
 - Thin shared memory service used by both the legacy memory builtin and the v2 runtime
 - Terminal-native `grep` for lexical search across real and virtual text files
 - Terminal-native `memory search` for hybrid lexical + embeddings retrieval
+- Shared WebDAV service used by both the legacy WebDAV builtin and the v2 runtime
+- Terminal-only `/webdav` mount with per-tool mounts derived from configured WebDAV builtins
+- WebDAV reads/writes/moves/copies through the existing filesystem commands while honoring the legacy `allow_*` flags
+- Reserved `/webdav` paths when WebDAV capability is absent
+- Recursive WebDAV traversal guardrail at 500 examined remote paths per command
 
 ## Next Steps
 
 - Add broader runtime coverage around memory path collisions, archived-item retrieval,
   and cross-agent memory scenarios beyond the current focused tests
 - Add or harden delegation-focused tests if edge cases remain around nested directories or modified input files
+- Decide which remaining legacy-only capabilities deserve a terminal-native v2 mapping next
 - Sweep remaining product/UI text for any stale `/thread` or `/workspace` wording outside the v2 runtime package
 - Consider whether the file sidebar should eventually surface `/subagents/...` differently from other root files
 - Evaluate whether more terminal-native commands are worth adding without bloating the command language

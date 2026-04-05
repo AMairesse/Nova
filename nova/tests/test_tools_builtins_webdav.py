@@ -27,6 +27,12 @@ class WebDAVBuiltinsTests(TransactionTestCase):
                 "username": "alice",
                 "app_password": "secret",
                 "root_path": "/Documents",
+                "allow_move": True,
+                "allow_copy": True,
+                "allow_batch_move": True,
+                "allow_create_files": True,
+                "allow_create_directories": True,
+                "allow_delete": True,
             },
         )
 
@@ -47,7 +53,7 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         self.assertFalse(webdav._coerce_bool("false"))
         self.assertFalse(webdav._coerce_bool("0"))
 
-    @patch("nova.tools.builtins.webdav._webdav_request", new_callable=AsyncMock)
+    @patch("nova.webdav.service.webdav_request", new_callable=AsyncMock)
     def test_list_files_parses_propfind_xml(self, mocked_request):
         mocked_request.return_value = (
             207,
@@ -70,7 +76,7 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         self.assertEqual(result["items"][1]["type"], "file")
         self.assertEqual(result["items"][1]["size"], 42)
 
-    @patch("nova.tools.builtins.webdav._webdav_request", new_callable=AsyncMock)
+    @patch("nova.webdav.service.webdav_request", new_callable=AsyncMock)
     def test_stat_path_returns_single_entry(self, mocked_request):
         mocked_request.return_value = (
             207,
@@ -89,7 +95,7 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         self.assertEqual(result["type"], "file")
         self.assertEqual(result["size"], 42)
 
-    @patch("nova.tools.builtins.webdav._webdav_request", new_callable=AsyncMock)
+    @patch("nova.webdav.service.webdav_request", new_callable=AsyncMock)
     def test_create_folder_recursive_calls_mkcol_for_each_segment(self, mocked_request):
         mocked_request.return_value = (201, "")
 
@@ -98,7 +104,7 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(mocked_request.await_count, 3)
 
-    @patch("nova.tools.builtins.webdav._webdav_request", new_callable=AsyncMock)
+    @patch("nova.webdav.service.webdav_request", new_callable=AsyncMock)
     def test_move_path_uses_destination_header(self, mocked_request):
         mocked_request.return_value = (201, "")
 
@@ -116,7 +122,7 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         self.assertEqual(kwargs["headers"]["Overwrite"], "T")
         self.assertIn("/archive/new.txt", kwargs["headers"]["Destination"])
 
-    @patch("nova.tools.builtins.webdav._webdav_request", new_callable=AsyncMock)
+    @patch("nova.webdav.service.webdav_request", new_callable=AsyncMock)
     def test_copy_path_uses_destination_header(self, mocked_request):
         mocked_request.return_value = (201, "")
 
@@ -240,9 +246,14 @@ class WebDAVBuiltinsTests(TransactionTestCase):
         mocked_list_files.assert_awaited_once_with(self.tool, path="/", depth=1)
 
     @patch("nova.tools.builtins.webdav.stage_external_files_as_artifacts", new_callable=AsyncMock)
-    @patch("nova.tools.builtins.webdav._webdav_request_binary", new_callable=AsyncMock)
-    def test_import_file_returns_artifact_payload(self, mocked_request_binary, mocked_stage_artifacts):
-        mocked_request_binary.return_value = (200, b"%PDF-1.4", {"Content-Type": "application/pdf"})
+    @patch("nova.webdav.service.read_binary_file", new_callable=AsyncMock)
+    def test_import_file_returns_artifact_payload(self, mocked_read_binary, mocked_stage_artifacts):
+        mocked_read_binary.return_value = {
+            "path": "/report.pdf",
+            "content": b"%PDF-1.4",
+            "mime_type": "application/pdf",
+            "size": 8,
+        }
         mocked_stage_artifacts.return_value = (
             [
                 SimpleNamespace(
@@ -260,25 +271,15 @@ class WebDAVBuiltinsTests(TransactionTestCase):
 
         self.assertIn("Imported WebDAV file", message)
         self.assertEqual(payload["artifact_refs"][0]["artifact_id"], 41)
-        mocked_request_binary.assert_awaited_once()
+        mocked_read_binary.assert_awaited_once()
 
     @patch("nova.tools.builtins.webdav.resolve_binary_attachments_for_ids", new_callable=AsyncMock)
-    @patch("nova.tools.builtins.webdav._webdav_request_binary", new_callable=AsyncMock)
-    @patch("nova.tools.builtins.webdav._get_webdav_config", new_callable=AsyncMock)
+    @patch("nova.webdav.service.write_bytes", new_callable=AsyncMock)
     def test_export_file_uploads_resolved_attachment(
         self,
-        mocked_get_config,
-        mocked_request_binary,
+        mocked_write_bytes,
         mocked_resolve_attachments,
     ):
-        mocked_get_config.return_value = {
-            "server_url": "https://cloud.example.com",
-            "username": "alice",
-            "password": "secret",
-            "root_path": "/Documents",
-            "timeout": 20,
-            "allow_create_files": True,
-        }
         mocked_resolve_attachments.return_value = [
             SimpleNamespace(
                 filename="report.pdf",
@@ -286,7 +287,13 @@ class WebDAVBuiltinsTests(TransactionTestCase):
                 content=b"%PDF-1.4",
             )
         ]
-        mocked_request_binary.return_value = (201, b"", {})
+        mocked_write_bytes.return_value = {
+            "status": "ok",
+            "http_status": 201,
+            "path": "/exports/report.pdf",
+            "mime_type": "application/pdf",
+            "size": 8,
+        }
         agent = SimpleNamespace(user=self.user, thread=SimpleNamespace(id=7))
 
         result = asyncio.run(
@@ -300,7 +307,7 @@ class WebDAVBuiltinsTests(TransactionTestCase):
 
         self.assertEqual(result["status"], "ok")
         mocked_resolve_attachments.assert_awaited_once()
-        mocked_request_binary.assert_awaited_once()
+        mocked_write_bytes.assert_awaited_once()
 
     def test_metadata_declares_skill_loading_permissions_and_instructions_exist(self):
         loading = webdav.METADATA.get("loading", {})

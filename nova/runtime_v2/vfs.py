@@ -24,6 +24,24 @@ from nova.memory.service import (
 )
 from nova.models.Message import Message
 from nova.models.UserFile import UserFile
+from nova.webdav.service import (
+    WEBDAV_MAX_RECURSIVE_PATHS,
+    WEBDAV_VFS_ROOT,
+    WebDAVMount,
+    build_webdav_mounts,
+    copy_path as webdav_copy_path,
+    create_folder as webdav_create_folder,
+    delete_path as webdav_delete_path,
+    find_paths as find_webdav_paths,
+    list_directory as list_webdav_directory,
+    move_path as webdav_move_path,
+    normalize_webdav_path,
+    read_binary_file as read_webdav_binary_file,
+    read_text_file as read_webdav_text_file,
+    stat_path as stat_webdav_path,
+    walk_paths as walk_webdav_paths,
+    write_bytes as write_webdav_bytes,
+)
 
 from .constants import RUNTIME_STORAGE_ROOT
 
@@ -62,6 +80,7 @@ class VirtualFileSystem:
         session_state: dict,
         skill_registry: dict[str, str],
         memory_enabled: bool = False,
+        webdav_tools: list | None = None,
         source_message_id: int | None = None,
         persistent_root_scope: str = UserFile.Scope.THREAD_SHARED,
         persistent_root_prefix: str | None = None,
@@ -74,6 +93,8 @@ class VirtualFileSystem:
         self.session_state = session_state
         self.skill_registry = dict(skill_registry or {})
         self.memory_enabled = bool(memory_enabled)
+        self.webdav_mounts = build_webdav_mounts(list(webdav_tools or []))
+        self._webdav_mounts_by_name = {mount.name: mount for mount in self.webdav_mounts}
         self.source_message_id = source_message_id
         self.persistent_root_scope = str(persistent_root_scope or UserFile.Scope.THREAD_SHARED)
         self.persistent_root_prefix = (
@@ -96,8 +117,31 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd="/")
         return normalized == MEMORY_ROOT or normalized.startswith(f"{MEMORY_ROOT}/")
 
+    @staticmethod
+    def _is_reserved_webdav_path(path: str) -> bool:
+        normalized = normalize_vfs_path(path, cwd="/")
+        return normalized == WEBDAV_VFS_ROOT or normalized.startswith(f"{WEBDAV_VFS_ROOT}/")
+
     def _is_memory_enabled_path(self, path: str) -> bool:
         return self.memory_enabled and is_memory_path(path)
+
+    def _resolve_webdav_path(self, path: str) -> tuple[str, WebDAVMount | None, str | None]:
+        normalized = normalize_vfs_path(path, cwd=self.cwd)
+        if normalized == WEBDAV_VFS_ROOT:
+            return "root", None, "/"
+        if not normalized.startswith(f"{WEBDAV_VFS_ROOT}/"):
+            return "none", None, None
+        relative = normalized[len(f"{WEBDAV_VFS_ROOT}/"):]
+        parts = [part for part in relative.split("/") if part]
+        if not parts:
+            return "root", None, "/"
+        mount = self._webdav_mounts_by_name.get(parts[0])
+        if mount is None:
+            return "unknown", None, None
+        if len(parts) == 1:
+            return "mount", mount, "/"
+        remote_path = normalize_webdav_path("/" + "/".join(parts[1:]))
+        return "mount", mount, remote_path
 
     @property
     def cwd(self) -> str:
@@ -133,6 +177,10 @@ class VirtualFileSystem:
                 raise VFSError("Memory is not enabled for this agent.")
             if not is_memory_path(normalized):
                 raise VFSError("Invalid memory path.")
+        if self._is_reserved_webdav_path(normalized):
+            if not self.webdav_mounts:
+                raise VFSError("WebDAV is not enabled for this agent.")
+            raise VFSError("Direct storage mapping is not available for /webdav paths.")
         if normalized == "/tmp" or normalized.startswith("/tmp/"):
             suffix = normalized[len("/tmp"):] or "/"
             return UserFile.Scope.MESSAGE_ATTACHMENT, f"{self.tmp_storage_prefix}{suffix}"
@@ -146,13 +194,13 @@ class VirtualFileSystem:
         raw_path = str(original_path or "").strip()
         if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
             normalized = normalize_vfs_path(raw_path or "/", cwd="/")
-            if self._is_reserved_memory_path(normalized):
+            if self._is_reserved_memory_path(normalized) or self._is_reserved_webdav_path(normalized):
                 return None
             return normalized
         if self.persistent_root_prefix and raw_path.startswith(self.persistent_root_prefix):
             suffix = raw_path[len(self.persistent_root_prefix):] or "/"
             normalized = normalize_vfs_path(suffix, cwd="/")
-            if self._is_reserved_memory_path(normalized):
+            if self._is_reserved_memory_path(normalized) or self._is_reserved_webdav_path(normalized):
                 return None
             return normalized
         return None
@@ -221,12 +269,24 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             return True
+        if normalized == WEBDAV_VFS_ROOT:
+            return bool(self.webdav_mounts)
         if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
             return False
         if self._is_reserved_memory_path(normalized) and not is_memory_path(normalized):
             return False
+        if self._is_reserved_webdav_path(normalized) and not self.webdav_mounts:
+            return False
         if self._is_memory_enabled_path(normalized):
             return await memory_path_exists(user=self.user, path=normalized)
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "unknown":
+            return False
+        if webdav_kind == "mount":
+            if webdav_path == "/":
+                return True
+            metadata = await stat_webdav_path(webdav_mount.tool, webdav_path)
+            return bool(metadata.get("exists"))
         if normalized.startswith("/skills/"):
             skill_name = posixpath.basename(normalized)
             return skill_name in self.skill_registry
@@ -243,12 +303,24 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             return True
+        if normalized == WEBDAV_VFS_ROOT:
+            return bool(self.webdav_mounts)
         if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
             return False
         if self._is_reserved_memory_path(normalized) and not is_memory_path(normalized):
             return False
+        if self._is_reserved_webdav_path(normalized) and not self.webdav_mounts:
+            return False
         if self._is_memory_enabled_path(normalized):
             return await memory_is_dir(user=self.user, path=normalized)
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "unknown":
+            return False
+        if webdav_kind == "mount":
+            if webdav_path == "/":
+                return True
+            metadata = await stat_webdav_path(webdav_mount.tool, webdav_path)
+            return metadata.get("exists") and metadata.get("type") == "directory"
         if normalized in self._get_session_dirs():
             return True
         for item in await self._load_real_files():
@@ -263,13 +335,36 @@ class VirtualFileSystem:
                 {"name": name, "path": f"/skills/{name}", "type": "file"}
                 for name in sorted(self.skill_registry.keys())
             ]
+        if normalized == WEBDAV_VFS_ROOT:
+            return [
+                {"name": mount.name, "path": f"{WEBDAV_VFS_ROOT}/{mount.name}", "type": "dir"}
+                for mount in self.webdav_mounts
+            ]
         if self._is_memory_enabled_path(normalized):
             return await list_memory_dir_entries(user=self.user, path=normalized)
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "mount":
+            return [
+                {
+                    "name": entry["name"],
+                    "path": (
+                        f"{WEBDAV_VFS_ROOT}/{webdav_mount.name}"
+                        if entry["path"] == "/"
+                        else f"{WEBDAV_VFS_ROOT}/{webdav_mount.name}{entry['path']}"
+                    ),
+                    "type": "dir" if entry["type"] == "directory" else "file",
+                    "mime_type": entry.get("mime_type"),
+                    "size": entry.get("size"),
+                }
+                for entry in await list_webdav_directory(webdav_mount.tool, webdav_path)
+            ]
 
         entries: dict[str, dict] = {}
         if normalized == "/":
             entries["skills"] = {"name": "skills", "path": "/skills", "type": "dir"}
             entries["tmp"] = {"name": "tmp", "path": "/tmp", "type": "dir"}
+            if self.webdav_mounts:
+                entries["webdav"] = {"name": "webdav", "path": WEBDAV_VFS_ROOT, "type": "dir"}
             if self.memory_enabled:
                 entries["memory"] = {"name": "memory", "path": MEMORY_ROOT, "type": "dir"}
 
@@ -332,6 +427,12 @@ class VirtualFileSystem:
                 return await read_memory_text(user=self.user, path=normalized)
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "mount":
+            try:
+                return await read_webdav_text_file(webdav_mount.tool, webdav_path)
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
 
         item = await self.get_real_file(normalized)
         if item is None or item.user_file is None:
@@ -354,6 +455,13 @@ class VirtualFileSystem:
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
             return text.encode("utf-8"), entry.mime_type
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "mount":
+            try:
+                payload = await read_webdav_binary_file(webdav_mount.tool, webdav_path)
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+            return payload["content"], payload["mime_type"]
         item = await self.get_real_file(normalized)
         if item is None or item.user_file is None:
             raise VFSError(f"File not found: {normalized}")
@@ -373,6 +481,19 @@ class VirtualFileSystem:
                 return await mkdir_memory_theme(user=self.user, path=normalized)
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "mount":
+            if webdav_path == "/":
+                return normalized
+            try:
+                await webdav_create_folder(webdav_mount.tool, webdav_path, recursive=False)
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+            return normalized
+        if self._is_reserved_webdav_path(normalized):
+            if not self.webdav_mounts:
+                raise VFSError("WebDAV is not enabled for this agent.")
+            raise VFSError("Invalid WebDAV path.")
         if normalized in {"/", "/tmp"}:
             return normalized
         existing_file = await self.get_real_file(normalized)
@@ -427,6 +548,28 @@ class VirtualFileSystem:
                 mime_type=entry.mime_type,
                 size=entry.size,
             )
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "mount":
+            try:
+                result = await write_webdav_bytes(
+                    webdav_mount.tool,
+                    webdav_path,
+                    content,
+                    mime_type=mime_type,
+                    overwrite=overwrite,
+                )
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+            return VFSFile(
+                path=normalized,
+                user_file=None,
+                mime_type=result["mime_type"],
+                size=result["size"],
+            )
+        if self._is_reserved_webdav_path(normalized):
+            if not self.webdav_mounts:
+                raise VFSError("WebDAV is not enabled for this agent.")
+            raise VFSError("Invalid WebDAV path.")
         scope, storage_path = self._storage_path_for_vfs_path(normalized)
         existing = await self.get_real_file(normalized)
         if existing and existing.user_file is not None:
@@ -489,6 +632,19 @@ class VirtualFileSystem:
                 return
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
+        if webdav_kind == "mount":
+            if webdav_path == "/":
+                raise VFSError(f"Cannot remove protected path: {normalized}")
+            try:
+                await webdav_delete_path(webdav_mount.tool, webdav_path)
+                return
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+        if self._is_reserved_webdav_path(normalized):
+            if not self.webdav_mounts:
+                raise VFSError("WebDAV is not enabled for this agent.")
+            raise VFSError("Path not found: {normalized}".format(normalized=normalized))
 
         item = await self.get_real_file(normalized)
         if item and item.user_file is not None:
@@ -527,6 +683,39 @@ class VirtualFileSystem:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
         source_name = posixpath.basename(normalized_source) or "file"
         resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
+        source_webdav_kind, source_webdav_mount, source_webdav_path = self._resolve_webdav_path(normalized_source)
+        destination_webdav_kind, destination_webdav_mount, destination_webdav_path = self._resolve_webdav_path(resolved_destination)
+        source_is_webdav = source_webdav_kind == "mount"
+        destination_is_webdav = destination_webdav_kind == "mount"
+
+        if source_is_webdav and destination_is_webdav and source_webdav_mount.name == destination_webdav_mount.name:
+            source_metadata = await stat_webdav_path(source_webdav_mount.tool, source_webdav_path)
+            if source_metadata.get("type") == "directory":
+                raise VFSError("Copying WebDAV directories within the same mount is not supported.")
+            try:
+                result = await webdav_copy_path(
+                    source_webdav_mount.tool,
+                    source_webdav_path,
+                    destination_webdav_path,
+                    overwrite=True,
+                )
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+            copied_path = (
+                f"{WEBDAV_VFS_ROOT}/{source_webdav_mount.name}"
+                if result["path"] == "/"
+                else f"{WEBDAV_VFS_ROOT}/{source_webdav_mount.name}{result['path']}"
+            )
+            return VFSFile(
+                path=copied_path,
+                user_file=None,
+                mime_type=str(source_metadata.get("mime_type") or "application/octet-stream"),
+                size=int(source_metadata.get("size") or 0),
+            )
+
+        if (source_is_webdav or destination_is_webdav) and await self.is_dir(normalized_source):
+            raise VFSError("Copying directories across WebDAV boundaries is not supported.")
+
         if normalized_source.startswith("/skills/"):
             content = (await self.read_text(normalized_source)).encode("utf-8")
             return await self.write_file(resolved_destination, content, mime_type="text/markdown")
@@ -537,6 +726,26 @@ class VirtualFileSystem:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
         source_name = posixpath.basename(normalized_source) or "file"
         resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
+        source_webdav_kind, source_webdav_mount, source_webdav_path = self._resolve_webdav_path(normalized_source)
+        destination_webdav_kind, destination_webdav_mount, destination_webdav_path = self._resolve_webdav_path(resolved_destination)
+        source_is_webdav = source_webdav_kind == "mount"
+        destination_is_webdav = destination_webdav_kind == "mount"
+
+        if source_is_webdav and destination_is_webdav and source_webdav_mount.name == destination_webdav_mount.name:
+            try:
+                result = await webdav_move_path(
+                    source_webdav_mount.tool,
+                    source_webdav_path,
+                    destination_webdav_path,
+                    overwrite=True,
+                )
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+            return f"{WEBDAV_VFS_ROOT}/{source_webdav_mount.name}{result['path']}"
+
+        if (source_is_webdav or destination_is_webdav) and await self.is_dir(normalized_source):
+            raise VFSError("Moving directories across WebDAV boundaries is not supported.")
+
         source_is_memory = self._is_memory_enabled_path(normalized_source)
         destination_is_memory = self._is_memory_enabled_path(resolved_destination)
         if source_is_memory and destination_is_memory:
@@ -549,6 +758,10 @@ class VirtualFileSystem:
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
         if source_is_memory or destination_is_memory:
+            await self.copy(normalized_source, resolved_destination)
+            await self.remove(normalized_source)
+            return resolved_destination
+        if source_is_webdav or destination_is_webdav:
             await self.copy(normalized_source, resolved_destination)
             await self.remove(normalized_source)
             return resolved_destination
@@ -580,11 +793,47 @@ class VirtualFileSystem:
     async def find(self, start_path: str, term: str = "") -> list[str]:
         normalized_start = normalize_vfs_path(start_path, cwd=self.cwd)
         matches: list[str] = []
+        if normalized_start == WEBDAV_VFS_ROOT:
+            lowered_term = str(term or "").lower()
+            remaining = WEBDAV_MAX_RECURSIVE_PATHS
+            for mount in self.webdav_mounts:
+                mount_root = f"{WEBDAV_VFS_ROOT}/{mount.name}"
+                if not lowered_term or lowered_term in mount.name.lower():
+                    matches.append(mount_root)
+                mount_matches, examined = await walk_webdav_paths(
+                    mount.tool,
+                    start_path="/",
+                    term=term,
+                    limit=remaining,
+                )
+                remaining -= examined
+                matches.extend(
+                    mount_root if path == "/" else f"{WEBDAV_VFS_ROOT}/{mount.name}{path}"
+                    for path in mount_matches
+                )
+            return sorted(set(matches))
         if self._is_memory_enabled_path(normalized_start):
             try:
                 return await find_memory_paths(user=self.user, start_path=normalized_start, term=term)
             except ValidationError as exc:
                 raise VFSError(str(exc)) from exc
+        webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized_start)
+        if webdav_kind == "mount":
+            try:
+                results = await find_webdav_paths(
+                    webdav_mount.tool,
+                    start_path=webdav_path,
+                    term=term,
+                    limit=WEBDAV_MAX_RECURSIVE_PATHS,
+                )
+            except ValueError as exc:
+                raise VFSError(str(exc)) from exc
+            return [
+                f"{WEBDAV_VFS_ROOT}/{webdav_mount.name}"
+                if path == "/"
+                else f"{WEBDAV_VFS_ROOT}/{webdav_mount.name}{path}"
+                for path in results
+            ]
 
         if normalized_start in {"/skills", "/"}:
             for name in sorted(self.skill_registry.keys()):
@@ -607,6 +856,8 @@ class VirtualFileSystem:
         if normalized_start == "/" and self.memory_enabled:
             memory_matches = await find_memory_paths(user=self.user, start_path=MEMORY_ROOT, term=term)
             matches.extend(memory_matches)
+        if normalized_start == "/" and self.webdav_mounts:
+            matches.append(WEBDAV_VFS_ROOT)
 
         return sorted(set(matches))
 

@@ -245,7 +245,10 @@ class TerminalExecutor:
     async def _cmd_find(self, args: list[str]) -> str:
         start = args[0] if args else self.vfs.cwd
         term = args[1] if len(args) > 1 else ""
-        results = await self.vfs.find(start, term)
+        try:
+            results = await self.vfs.find(start, term)
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
         return "\n".join(results)
 
     async def _cmd_grep(self, args: list[str]) -> str:
@@ -277,7 +280,10 @@ class TerminalExecutor:
         if await self.vfs.is_dir(normalized_path):
             if not recursive:
                 raise TerminalCommandError("grep on directories requires -r")
-            candidates = await self.vfs.find(normalized_path, "")
+            try:
+                candidates = await self.vfs.find(normalized_path, "")
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
         else:
             candidates = [normalized_path]
 

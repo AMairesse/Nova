@@ -1183,9 +1183,14 @@ class AgentTaskExecutorArtifactTests(TransactionTestCase):
                 side_effect=self._fake_batch_upload_files,
             ),
             patch(
-                "nova.tools.builtins.webdav._webdav_request_binary",
+                "nova.webdav.service.read_binary_file",
                 new_callable=AsyncMock,
-                return_value=(200, b"%PDF-1.4", {"Content-Type": "application/pdf"}),
+                return_value={
+                    "path": "/reports/q1.pdf",
+                    "content": b"%PDF-1.4",
+                    "mime_type": "application/pdf",
+                    "size": 8,
+                },
             ),
             patch(
                 "nova.message_artifacts.download_file_content",

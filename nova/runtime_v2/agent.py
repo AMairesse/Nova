@@ -104,6 +104,7 @@ class ReactTerminalRuntime:
             session_state=session_state,
             skill_registry=skill_registry,
             memory_enabled=self.capabilities.has_memory,
+            webdav_tools=self.capabilities.webdav_tools,
             source_message_id=self.source_message_id,
             persistent_root_scope=self.persistent_root_scope,
             persistent_root_prefix=self.persistent_root_prefix,
@@ -140,6 +141,11 @@ class ReactTerminalRuntime:
                 "Use `/memory` for user-scoped durable memory. "
                 "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
             )
+        if self.capabilities.has_webdav:
+            extra_guidance.append(
+                "Use `/webdav` as a remote filesystem mount. Reuse normal file commands there and expect "
+                "permissions to depend on the configured WebDAV tool flags."
+            )
         if self.capabilities.has_multiple_mailboxes:
             extra_guidance.append(
                 "When using mail commands, always pass `--mailbox <email>` to choose the mailbox explicitly."
@@ -152,6 +158,8 @@ class ReactTerminalRuntime:
         ]
         if self.capabilities.has_memory:
             filesystem_lines.insert(2, "- /memory: shared user-scoped long-term memory")
+        if self.capabilities.has_webdav:
+            filesystem_lines.insert(2, "- /webdav: remote WebDAV mounts configured for this agent")
         base_prompt = (
             "You are Nova running in React Terminal V1.\n"
             "Your main action surface is the `terminal` tool.\n"

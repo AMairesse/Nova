@@ -83,6 +83,26 @@ Use `curl` without `--output` only when you want a text preview.
 Use `wget` or `curl --output` when you need a reusable file.
 """
 
+    if capabilities.has_webdav:
+        skills["webdav.md"] = """# WebDAV
+
+Remote WebDAV storage is exposed as a filesystem mount under `/webdav`.
+
+Start with:
+- `ls /webdav`
+- `ls /webdav/<mount>`
+- `cat /webdav/<mount>/notes.txt`
+- `cp /report.txt /webdav/<mount>/report.txt`
+- `cp /webdav/<mount>/report.txt /report.txt`
+- `tee /webdav/<mount>/notes.txt --text "hello"`
+- `mkdir /webdav/<mount>/archive`
+- `mv /webdav/<mount>/draft.txt /webdav/<mount>/archive/draft.txt`
+- `rm /webdav/<mount>/old.txt`
+
+Use the normal filesystem commands rather than expecting dedicated WebDAV commands.
+Whether writes, moves, copies, or deletes succeed depends on the permissions flags configured on the WebDAV tool.
+"""
+
     if capabilities.has_memory:
         skills["memory.md"] = """# Memory
 

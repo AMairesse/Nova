@@ -149,6 +149,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             session_state=dict(self.base_state),
             skill_registry={},
             memory_enabled=resolved_capabilities.has_memory,
+            webdav_tools=resolved_capabilities.webdav_tools,
         )
         return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
@@ -165,6 +166,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             session_state=dict(self.base_state),
             skill_registry={},
             memory_enabled=resolved_capabilities.has_memory,
+            webdav_tools=resolved_capabilities.webdav_tools,
         )
         return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
@@ -175,6 +177,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             "date": "nova.tools.builtins.date",
             "browser": "nova.tools.builtins.browser",
             "memory": "nova.tools.builtins.memory",
+            "webdav": "nova.tools.builtins.webdav",
         }
         return Tool.objects.create(
             user=self.user,
@@ -220,6 +223,35 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
     def _create_memory_tool(self) -> Tool:
         return self._create_builtin_tool("memory", name="Memory")
+
+    def _create_webdav_tool(
+        self,
+        *,
+        name: str = "Nextcloud Docs",
+        root_path: str = "/Documents",
+        allow_create_files: bool = True,
+        allow_create_directories: bool = True,
+        allow_move: bool = True,
+        allow_copy: bool = True,
+        allow_delete: bool = True,
+    ) -> Tool:
+        tool = self._create_builtin_tool("webdav", name=name)
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "server_url": "https://cloud.example.com/remote.php/dav/files/alice",
+                "username": "alice",
+                "app_password": "secret",
+                "root_path": root_path,
+                "allow_create_files": allow_create_files,
+                "allow_create_directories": allow_create_directories,
+                "allow_move": allow_move,
+                "allow_copy": allow_copy,
+                "allow_delete": allow_delete,
+            },
+        )
+        return tool
 
     def test_touch_and_tee_create_and_append_root_files(self):
         executor = self._build_executor()
@@ -366,6 +398,212 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(mocked_search.await_args.kwargs["query"], "editor preference")
         self.assertEqual(mocked_search.await_args.kwargs["theme"], "preferences")
         self.assertEqual(mocked_search.await_args.kwargs["types"], ["preference"])
+
+    def test_webdav_mount_is_visible_only_when_capability_is_enabled(self):
+        plain_executor = self._build_executor()
+        webdav_tool = self._create_webdav_tool()
+        webdav_executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        plain_listing = async_to_sync(plain_executor.execute)("ls /")
+        webdav_listing = async_to_sync(webdav_executor.execute)("ls /")
+
+        self.assertNotIn("webdav/", plain_listing)
+        self.assertIn("webdav/", webdav_listing)
+
+    def test_webdav_root_lists_mounts_and_suffixes_collisions(self):
+        first_tool = self._create_webdav_tool(name="Docs")
+        second_tool = self._create_webdav_tool(name="Docs")
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[first_tool, second_tool])
+        )
+
+        listing = async_to_sync(executor.execute)("ls /webdav")
+
+        self.assertIn("docs/", listing)
+        self.assertIn(f"docs-{second_tool.id}/", listing)
+
+    def test_webdav_paths_are_reserved_without_capability(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("ls /webdav")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)('tee /webdav/docs/report.txt --text "hello"')
+
+    def test_webdav_listing_and_cat_use_filesystem_commands(self):
+        webdav_tool = self._create_webdav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        with (
+            patch(
+                "nova.runtime_v2.vfs.list_webdav_directory",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "name": "notes.txt",
+                        "path": "/notes.txt",
+                        "type": "file",
+                        "mime_type": "text/plain",
+                        "size": 12,
+                    },
+                    {
+                        "name": "archive",
+                        "path": "/archive",
+                        "type": "directory",
+                        "mime_type": None,
+                        "size": None,
+                    },
+                ],
+            ),
+            patch(
+                "nova.runtime_v2.vfs.read_webdav_text_file",
+                new_callable=AsyncMock,
+                return_value="hello from remote",
+            ),
+        ):
+            listing = async_to_sync(executor.execute)("ls /webdav/nextcloud-docs")
+            content = async_to_sync(executor.execute)("cat /webdav/nextcloud-docs/notes.txt")
+
+        self.assertIn("notes.txt", listing)
+        self.assertIn("archive/", listing)
+        self.assertEqual(content, "hello from remote")
+
+    def test_webdav_cat_reports_binary_files_cleanly(self):
+        webdav_tool = self._create_webdav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        with patch(
+            "nova.runtime_v2.vfs.read_webdav_text_file",
+            new_callable=AsyncMock,
+            side_effect=ValueError(
+                "Binary file cannot be displayed as text: /report.pdf (application/pdf, 8 bytes)"
+            ),
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)("cat /webdav/nextcloud-docs/report.pdf")
+
+        self.assertIn("Binary file cannot be displayed as text", str(cm.exception))
+
+    def test_webdav_tee_mkdir_rm_and_same_mount_copy_honor_permissions(self):
+        write_blocked = self._create_webdav_tool(name="Write Blocked", allow_create_files=False)
+        dir_blocked = self._create_webdav_tool(name="Dir Blocked", allow_create_directories=False)
+        delete_blocked = self._create_webdav_tool(name="Delete Blocked", allow_delete=False)
+        copy_blocked = self._create_webdav_tool(name="Copy Blocked", allow_copy=False)
+
+        write_executor = self._build_executor(TerminalCapabilities(webdav_tools=[write_blocked]))
+        dir_executor = self._build_executor(TerminalCapabilities(webdav_tools=[dir_blocked]))
+        delete_executor = self._build_executor(TerminalCapabilities(webdav_tools=[delete_blocked]))
+        copy_executor = self._build_executor(TerminalCapabilities(webdav_tools=[copy_blocked]))
+
+        with patch(
+            "nova.runtime_v2.vfs.stat_webdav_path",
+            new_callable=AsyncMock,
+            return_value={"exists": False, "path": "/report.txt"},
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(write_executor.execute)('tee /webdav/write-blocked/report.txt --text "hello"')
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(dir_executor.execute)("mkdir /webdav/dir-blocked/archive")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(delete_executor.execute)("rm /webdav/delete-blocked/report.txt")
+        with (
+            patch(
+                "nova.runtime_v2.vfs.stat_webdav_path",
+                new_callable=AsyncMock,
+                return_value={"exists": True, "type": "file", "path": "/a.txt", "mime_type": "text/plain"},
+            ),
+            patch(
+                "nova.runtime_v2.vfs.webdav_copy_path",
+                new_callable=AsyncMock,
+                side_effect=ValueError("This WebDAV tool does not allow copying paths."),
+            ),
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(copy_executor.execute)(
+                    "cp /webdav/copy-blocked/a.txt /webdav/copy-blocked/b.txt"
+                )
+
+    def test_webdav_cross_boundary_copy_and_move_use_local_filesystem_semantics(self):
+        webdav_tool = self._create_webdav_tool(name="Docs")
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+        async_to_sync(executor.execute)('tee /report.txt --text "hello remote"')
+
+        def _fake_stat(_tool, path):
+            normalized = str(path)
+            if normalized == "/remote.txt":
+                return {"exists": True, "type": "file", "path": normalized, "mime_type": "text/plain"}
+            return {"exists": False, "path": normalized}
+
+        with (
+            patch(
+                "nova.runtime_v2.vfs.write_webdav_bytes",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "ok",
+                    "http_status": 201,
+                    "path": "/report.txt",
+                    "mime_type": "text/plain",
+                    "size": 12,
+                },
+            ) as mocked_remote_write,
+            patch(
+                "nova.runtime_v2.vfs.stat_webdav_path",
+                new_callable=AsyncMock,
+                side_effect=_fake_stat,
+            ),
+            patch(
+                "nova.runtime_v2.vfs.read_webdav_binary_file",
+                new_callable=AsyncMock,
+                return_value={
+                    "path": "/remote.txt",
+                    "content": b"from remote",
+                    "mime_type": "text/plain",
+                    "size": 11,
+                },
+            ),
+            patch(
+                "nova.runtime_v2.vfs.webdav_delete_path",
+                new_callable=AsyncMock,
+                return_value={"status": "ok", "http_status": 204, "path": "/remote.txt"},
+            ) as mocked_remote_delete,
+        ):
+            copied_remote = async_to_sync(executor.execute)("cp /report.txt /webdav/docs/report.txt")
+            copied_local = async_to_sync(executor.execute)("cp /webdav/docs/remote.txt /local.txt")
+            moved_local = async_to_sync(executor.execute)("mv /webdav/docs/remote.txt /moved.txt")
+
+        self.assertIn("/webdav/docs/report.txt", copied_remote)
+        self.assertIn("/local.txt", copied_local)
+        self.assertIn("/moved.txt", moved_local)
+        self.assertEqual(async_to_sync(executor.execute)("cat /local.txt"), "from remote")
+        self.assertEqual(async_to_sync(executor.execute)("cat /moved.txt"), "from remote")
+        mocked_remote_write.assert_awaited()
+        mocked_remote_delete.assert_awaited_once()
+
+    def test_webdav_find_and_grep_surface_recursive_limit_errors(self):
+        webdav_tool = self._create_webdav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        with patch(
+            "nova.runtime_v2.vfs.find_webdav_paths",
+            new_callable=AsyncMock,
+            side_effect=ValueError(
+                "WebDAV recursive traversal exceeded 500 paths. Please target a smaller sub-directory."
+            ),
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)('grep -r "note" /webdav/nextcloud-docs')
+
+        self.assertIn("500 paths", str(cm.exception))
 
     def test_copy_and_move_preserve_source_basename_for_directory_destinations(self):
         executor = self._build_executor()
@@ -589,6 +827,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("memory search", skills["memory.md"])
         self.assertIn("grep", skills["memory.md"])
 
+    def test_skill_registry_adds_webdav_guide_when_webdav_is_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(webdav_tools=[object()])
+        )
+
+        self.assertIn("webdav.md", skills)
+        self.assertIn("ls /webdav", skills["webdav.md"])
+        self.assertIn("cp /report.txt /webdav/<mount>/report.txt", skills["webdav.md"])
+        self.assertIn("permissions", skills["webdav.md"])
+
     def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
         skills = build_skill_registry(
             TerminalCapabilities(),
@@ -621,6 +869,42 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )
         self.thread = Thread.objects.create(user=self.user, subject="Test thread")
         self.thread.add_message("Check the current directory.", Actor.USER)
+
+    def _create_webdav_tool(
+        self,
+        *,
+        name: str = "Nextcloud Docs",
+        root_path: str = "/Documents",
+        allow_create_files: bool = True,
+        allow_create_directories: bool = True,
+        allow_move: bool = True,
+        allow_copy: bool = True,
+        allow_delete: bool = True,
+    ) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="WebDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webdav",
+            python_path="nova.tools.builtins.webdav",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "server_url": "https://cloud.example.com/remote.php/dav/files/alice",
+                "username": "alice",
+                "app_password": "secret",
+                "root_path": root_path,
+                "allow_create_files": allow_create_files,
+                "allow_create_directories": allow_create_directories,
+                "allow_move": allow_move,
+                "allow_copy": allow_copy,
+                "allow_delete": allow_delete,
+            },
+        )
+        return tool
 
     def test_runtime_executes_terminal_tool_loop(self):
         runtime = async_to_sync(
@@ -867,6 +1151,22 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("grep", prompt)
         self.assertIn("memory search", prompt)
 
+    def test_system_prompt_mentions_webdav_mount(self):
+        webdav_tool = self._create_webdav_tool()
+        self.agent.tools.add(webdav_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("/webdav", prompt)
+        self.assertIn("remote WebDAV mounts", prompt)
+
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):
         memory_tool = Tool.objects.create(
@@ -994,6 +1294,50 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
         self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
         self.assertEqual(copied_answer, "answer")
+
+    def test_subagent_with_webdav_capability_sees_webdav_mount(self):
+        webdav_tool = self._create_webdav_tool()
+        self.agent.tools.add(webdav_tool)
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="WebDAV Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child WebDAV tool",
+        )
+        child_agent.tools.add(webdav_tool)
+        self.agent.agent_tools.add(child_agent)
+        seen = {}
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            seen["webdav"] = await self.vfs.path_exists("/webdav/nextcloud-docs")
+            return ReactTerminalRunResult(
+                final_answer="Saw WebDAV.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime_v2.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Check the remote mount.",
+                input_paths=[],
+            )
+
+        self.assertIn("Saw WebDAV.", result)
+        self.assertTrue(seen["webdav"])
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):
