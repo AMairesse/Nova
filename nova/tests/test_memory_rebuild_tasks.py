@@ -1,8 +1,10 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from nova.memory.service import write_memory_document
 from nova.models.MemoryChunk import MemoryChunk
 from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
 from nova.models.MemoryDocument import MemoryDocument
@@ -112,3 +114,32 @@ class MemoryRebuildTasksTests(TestCase):
             ).count(),
             3,
         )
+
+    @patch("nova.tasks.memory_rebuild_tasks.rebuild_user_memory_embeddings_task.delay")
+    @patch("nova.tasks.memory_rebuild_tasks.compute_memory_chunk_embedding_task.delay")
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_rebuild_queues_pending_embeddings_created_while_provider_was_unavailable(
+        self,
+        mocked_provider,
+        mocked_compute_delay,
+        mocked_rebuild_delay,
+    ):
+        async_to_sync(write_memory_document)(
+            user=self.user,
+            path="/memory/offline.md",
+            text="# Offline\n\n## Follow-up\nQueue later",
+        )
+
+        embeddings = list(
+            MemoryChunkEmbedding.objects.filter(chunk__document__user=self.user).order_by("chunk_id")
+        )
+        self.assertEqual(len(embeddings), 1)
+        self.assertEqual(embeddings[0].state, MemoryChunkEmbeddingState.PENDING)
+        mocked_compute_delay.assert_not_called()
+
+        rebuild_user_memory_embeddings_task.run(self.user.id, batch_size=10)
+
+        queued_ids = {call.args[0] for call in mocked_compute_delay.call_args_list}
+        self.assertEqual(queued_ids, {embeddings[0].chunk_id})
+        mocked_rebuild_delay.assert_not_called()
+        mocked_provider.assert_awaited()

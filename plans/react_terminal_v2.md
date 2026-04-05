@@ -81,6 +81,9 @@ very small tool surface and a file-centric mental model.
   - split by `##` sections first
   - oversized sections are re-chunked into overlapping text windows
 - Embeddings are stored per chunk, never per whole file
+- Memory writes always create the chunk and `MemoryChunkEmbedding` records immediately
+- If an embeddings provider is available at write time, chunk computation is queued immediately
+- If no provider is available, or if queueing fails, embeddings stay `pending` and are picked up later by the rebuild flow
 - `grep` is lexical only
 - `memory search ...` is the semantic/hybrid retrieval command and returns file path plus matching section
 - Legacy callable memory tools are no longer part of the runtime surface
@@ -169,6 +172,7 @@ very small tool surface and a file-centric mental model.
 - Free-form Markdown memory files under `/memory` with no imposed type/theme hierarchy
 - Free-form memory documents and persistent empty memory directories
 - Chunk-based memory indexing and embeddings
+- Immediate memory-embedding scheduling when available, with pending fallback and surfaced warnings when queueing fails
 - Terminal-native `grep` for lexical search across real and virtual text files
 - Terminal-native `memory search` for hybrid lexical + embeddings retrieval
 - Legacy callable memory tools removed in favor of `/memory` + terminal commands

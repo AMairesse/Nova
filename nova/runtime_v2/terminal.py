@@ -185,7 +185,7 @@ class TerminalExecutor:
             return f"Touched {normalized}"
         try:
             written = await self.vfs.write_file(normalized, b"", mime_type="text/plain")
-            return f"Created empty file {written.path}"
+            return self._format_write_result(f"Created empty file {written.path}", written)
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
@@ -220,7 +220,10 @@ class TerminalExecutor:
             )
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
-        return f"Wrote {len(str(text).encode('utf-8'))} bytes to {written.path}"
+        return self._format_write_result(
+            f"Wrote {len(str(text).encode('utf-8'))} bytes to {written.path}",
+            written,
+        )
 
     async def _cmd_cp(self, args: list[str]) -> str:
         if len(args) != 2:
@@ -623,7 +626,7 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
         return payload["content"], payload["mime_type"], payload["filename"]
 
-    async def _write_json_output(self, output_path: str, payload: object) -> str:
+    async def _write_json_output(self, output_path: str, payload: object):
         try:
             resolved_output = await self.vfs.resolve_output_path(output_path)
             written = await self.vfs.write_file(
@@ -633,7 +636,7 @@ class TerminalExecutor:
             )
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
-        return written.path
+        return written
 
     @staticmethod
     def _truncate_output(content: str, limit: int = 8000) -> str:
@@ -649,6 +652,16 @@ class TerminalExecutor:
         if self._browser_session is not None:
             await self._browser_session.close()
             self._browser_session = None
+
+    @staticmethod
+    def _append_warnings(message: str, warnings: tuple[str, ...] | list[str]) -> str:
+        extra = [str(item).strip() for item in (warnings or []) if str(item).strip()]
+        if not extra:
+            return message
+        return "\n".join([message, *extra])
+
+    def _format_write_result(self, message: str, written) -> str:
+        return self._append_warnings(message, getattr(written, "warnings", ()))
 
     async def _cmd_search(self, args: list[str]) -> str:
         if not self.capabilities.has_search:
@@ -682,8 +695,8 @@ class TerminalExecutor:
         self._last_search_results = list(payload.get("results") or [])
 
         if output_path:
-            written_path = await self._write_json_output(output_path, payload)
-            return f"Wrote search results to {written_path}"
+            written = await self._write_json_output(output_path, payload)
+            return self._format_write_result(f"Wrote search results to {written.path}", written)
 
         lines: list[str] = []
         for index, result in enumerate(self._last_search_results, start=1):
@@ -802,7 +815,7 @@ class TerminalExecutor:
                 )
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
-            return f"Wrote page text to {written.path}"
+            return self._format_write_result(f"Wrote page text to {written.path}", written)
         return self._truncate_output(content)
 
     async def _cmd_browse_links(self, args: list[str]) -> str:
@@ -819,8 +832,8 @@ class TerminalExecutor:
         except BrowserSessionError as exc:
             raise TerminalCommandError(str(exc)) from exc
         if output_path:
-            written_path = await self._write_json_output(output_path, links)
-            return f"Wrote page links to {written_path}"
+            written = await self._write_json_output(output_path, links)
+            return self._format_write_result(f"Wrote page links to {written.path}", written)
         return self._truncate_output(json.dumps(links, ensure_ascii=False, indent=2))
 
     async def _cmd_browse_elements(self, args: list[str]) -> str:
@@ -843,8 +856,8 @@ class TerminalExecutor:
             "elements": elements,
         }
         if output_path:
-            written_path = await self._write_json_output(output_path, payload)
-            return f"Wrote selected elements to {written_path}"
+            written = await self._write_json_output(output_path, payload)
+            return self._format_write_result(f"Wrote selected elements to {written.path}", written)
         return self._truncate_output(json.dumps(payload, ensure_ascii=False, indent=2))
 
     async def _cmd_browse_click(self, args: list[str]) -> str:
@@ -870,7 +883,7 @@ class TerminalExecutor:
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
         written = await self.vfs.write_file(destination, content, mime_type=mime_type)
-        return f"Downloaded {url} to {written.path}"
+        return self._format_write_result(f"Downloaded {url} to {written.path}", written)
 
     async def _cmd_curl(self, args: list[str]) -> str:
         if not self.capabilities.has_web:
@@ -886,7 +899,7 @@ class TerminalExecutor:
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
             written = await self.vfs.write_file(resolved_output, content, mime_type=mime_type)
-            return f"Downloaded {url} to {written.path}"
+            return self._format_write_result(f"Downloaded {url} to {written.path}", written)
         if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
             try:
                 return content.decode("utf-8")[:8000]
@@ -1065,7 +1078,7 @@ class TerminalExecutor:
                 bytes(selected.get("content") or b""),
                 mime_type=str(selected.get("mime_type") or "application/octet-stream"),
             )
-            return f"Imported attachment to {written.path}"
+            return self._format_write_result(f"Imported attachment to {written.path}", written)
 
         if subcommand == "send":
             to, remainder = self._parse_flag_value(remainder, "--to")
@@ -1193,11 +1206,12 @@ class TerminalExecutor:
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
             stdout = self._extract_python_stdout(result)
-            await self.vfs.write_file(
+            written = await self.vfs.write_file(
                 resolved_output,
                 stdout.encode("utf-8"),
                 mime_type="text/plain",
                 overwrite=True,
             )
+            return self._append_warnings(result, written.warnings)
 
         return result

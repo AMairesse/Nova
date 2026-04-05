@@ -56,6 +56,7 @@ class VFSFile:
     user_file: UserFile | None
     mime_type: str
     size: int
+    warnings: tuple[str, ...] = ()
 
 
 def normalize_vfs_path(raw_path: str, *, cwd: str = "/") -> str:
@@ -547,6 +548,7 @@ class VirtualFileSystem:
                 user_file=None,
                 mime_type=entry.mime_type,
                 size=entry.size,
+                warnings=entry.warnings,
             )
         webdav_kind, webdav_mount, webdav_path = self._resolve_webdav_path(normalized)
         if webdav_kind == "mount":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import posixpath
 import re
 from dataclasses import dataclass
@@ -37,6 +38,12 @@ MEMORY_ALLOWED_EXTENSIONS = {".md"}
 MAX_MEMORY_SEARCH_LIMIT = 50
 MEMORY_CHUNK_MAX_WORDS = 280
 MEMORY_CHUNK_OVERLAP_WORDS = 40
+MEMORY_EMBEDDINGS_QUEUE_WARNING = (
+    "Warning: memory embeddings remain pending because background calculation "
+    "could not be queued immediately."
+)
+
+logger = logging.getLogger(__name__)
 
 MEMORY_README_CONTENT = """# Memory
 
@@ -70,6 +77,7 @@ class MemoryVirtualEntry:
     mime_type: str
     size: int
     document_id: int | None = None
+    warnings: tuple[str, ...] = ()
 
 
 def _normalize_memory_path(path: str) -> str:
@@ -334,19 +342,41 @@ def _memory_dir_has_children(*, user, path: str) -> bool:
     )
 
 
-def _schedule_chunk_embeddings(chunk_ids: list[int]) -> None:
+def _schedule_chunk_embeddings(*, user_id: int, document_path: str, chunk_ids: list[int]) -> tuple[str, ...]:
     if not chunk_ids:
-        return
+        return ()
     try:
         from nova.tasks.memory_tasks import compute_memory_chunk_embedding_task
-
-        for chunk_id in chunk_ids:
-            compute_memory_chunk_embedding_task.delay(chunk_id)
     except Exception:
-        return
+        logger.warning(
+            "[memory_embedding_enqueue_failed] user=%s document=%s chunk_ids=%s",
+            user_id,
+            document_path,
+            chunk_ids,
+            exc_info=True,
+        )
+        return (MEMORY_EMBEDDINGS_QUEUE_WARNING,)
+
+    failed_chunk_ids: list[int] = []
+    for chunk_id in chunk_ids:
+        try:
+            compute_memory_chunk_embedding_task.delay(chunk_id)
+        except Exception:
+            failed_chunk_ids.append(chunk_id)
+            logger.warning(
+                "[memory_embedding_enqueue_failed] user=%s document=%s chunk_id=%s",
+                user_id,
+                document_path,
+                chunk_id,
+                exc_info=True,
+            )
+
+    if failed_chunk_ids:
+        return (MEMORY_EMBEDDINGS_QUEUE_WARNING,)
+    return ()
 
 
-def _rebuild_document_chunks(*, document: MemoryDocument, embeddings_enabled: bool) -> None:
+def _rebuild_document_chunks(*, document: MemoryDocument) -> list[int]:
     MemoryChunk.objects.filter(
         document=document,
         status=MemoryRecordStatus.ACTIVE,
@@ -364,14 +394,13 @@ def _rebuild_document_chunks(*, document: MemoryDocument, embeddings_enabled: bo
             token_count=chunk_spec["token_count"],
             status=MemoryRecordStatus.ACTIVE,
         )
-        if embeddings_enabled:
-            MemoryChunkEmbedding.objects.create(
-                chunk=chunk,
-                state=MemoryChunkEmbeddingState.PENDING,
-                dimensions=MEMORY_EMBEDDING_DIMENSIONS,
-            )
-            created_chunk_ids.append(chunk.id)
-    _schedule_chunk_embeddings(created_chunk_ids)
+        MemoryChunkEmbedding.objects.create(
+            chunk=chunk,
+            state=MemoryChunkEmbeddingState.PENDING,
+            dimensions=MEMORY_EMBEDDING_DIMENSIONS,
+        )
+        created_chunk_ids.append(chunk.id)
+    return created_chunk_ids
 
 
 async def list_memory_documents_overview(*, user, include_archived: bool = False, q: str = "") -> list[dict[str, Any]]:
@@ -700,13 +729,22 @@ async def write_memory_document(
                     ]
                 )
 
-            _rebuild_document_chunks(document=document, embeddings_enabled=embeddings_enabled)
-            return MemoryVirtualEntry(
-                path=spec.normalized_path,
-                mime_type="text/markdown",
-                size=len(markdown.encode("utf-8")),
-                document_id=document.id,
+            created_chunk_ids = _rebuild_document_chunks(document=document)
+
+        warnings: tuple[str, ...] = ()
+        if embeddings_enabled and created_chunk_ids:
+            warnings = _schedule_chunk_embeddings(
+                user_id=user.id,
+                document_path=spec.normalized_path,
+                chunk_ids=created_chunk_ids,
             )
+        return MemoryVirtualEntry(
+            path=spec.normalized_path,
+            mime_type="text/markdown",
+            size=len(markdown.encode("utf-8")),
+            document_id=document.id,
+            warnings=warnings,
+        )
 
     return await sync_to_async(_impl, thread_sensitive=True)()
 

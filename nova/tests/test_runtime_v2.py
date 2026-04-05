@@ -389,6 +389,28 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(removed, "Removed /memory/editor.md")
         self.assertEqual(document.status, MemoryRecordStatus.ARCHIVED)
 
+    def test_memory_write_surfaces_embedding_queue_warning_in_terminal_output(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+        executor.vfs.write_file = AsyncMock(
+            return_value=SimpleNamespace(
+                path="/memory/editor.md",
+                warnings=(
+                    "Warning: memory embeddings remain pending because background calculation could not be queued immediately.",
+                ),
+            )
+        )
+
+        result = async_to_sync(executor.execute)(
+            'tee /memory/editor.md --text "# Editor\\n\\nVim"'
+        )
+
+        self.assertIn("Wrote", result)
+        self.assertIn("/memory/editor.md", result)
+        self.assertIn("memory embeddings remain pending", result)
+        executor.vfs.write_file.assert_awaited_once()
+
     def test_touch_and_mv_manage_memory_items(self):
         executor = self._build_executor(
             TerminalCapabilities(memory_tool=object())

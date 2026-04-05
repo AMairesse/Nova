@@ -19,7 +19,9 @@ from nova.memory.service import (
     write_memory_document,
 )
 from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
 from nova.models.MemoryDocument import MemoryDocument
+from nova.models.memory_common import MemoryChunkEmbeddingState
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
 from nova.tools.builtins.memory import get_functions, get_prompt_instructions
@@ -212,3 +214,96 @@ class MemoryDocumentServiceTests(TestCase):
         self.assertTrue(all(isinstance(chunk, MemoryChunk) for chunk in chunks))
         self.assertTrue(all(chunk.token_count > 0 for chunk in chunks))
         mocked_provider.assert_awaited()
+
+    @patch("nova.tasks.memory_tasks.compute_memory_chunk_embedding_task.delay")
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock)
+    def test_write_memory_document_creates_embeddings_and_queues_immediately_when_provider_is_available(
+        self,
+        mocked_provider,
+        mocked_delay,
+    ):
+        mocked_provider.return_value = object()
+
+        written = async_to_sync(write_memory_document)(
+            user=self.user,
+            path="/memory/queued.md",
+            text="# Queued\n\n## Constraints\nNeed follow-up",
+            source_thread=self.thread,
+            source_message=self.source_message,
+        )
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/queued.md")
+        chunks = list(document.chunks.filter(status="active").order_by("position"))
+        embeddings = list(
+            MemoryChunkEmbedding.objects.filter(chunk__document=document).order_by("chunk__position")
+        )
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(len(embeddings), 1)
+        self.assertEqual(embeddings[0].state, MemoryChunkEmbeddingState.PENDING)
+        self.assertEqual(mocked_delay.call_count, 1)
+        self.assertEqual(mocked_delay.call_args.args[0], chunks[0].id)
+        self.assertEqual(written.warnings, ())
+
+    @patch("nova.tasks.memory_tasks.compute_memory_chunk_embedding_task.delay")
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_write_memory_document_creates_pending_embeddings_without_immediate_queue_when_provider_is_unavailable(
+        self,
+        mocked_provider,
+        mocked_delay,
+    ):
+        written = async_to_sync(write_memory_document)(
+            user=self.user,
+            path="/memory/pending.md",
+            text="# Pending\n\n## Notes\nWait for embeddings provider",
+            source_thread=self.thread,
+            source_message=self.source_message,
+        )
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/pending.md")
+        chunks = list(document.chunks.filter(status="active"))
+        embeddings = list(MemoryChunkEmbedding.objects.filter(chunk__document=document))
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(len(embeddings), 1)
+        self.assertEqual(embeddings[0].state, MemoryChunkEmbeddingState.PENDING)
+        mocked_delay.assert_not_called()
+        self.assertEqual(written.warnings, ())
+        mocked_provider.assert_awaited()
+
+    @patch(
+        "nova.tasks.memory_tasks.compute_memory_chunk_embedding_task.delay",
+        side_effect=RuntimeError("broker down"),
+    )
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock)
+    def test_write_memory_document_logs_and_returns_warning_when_enqueue_fails(
+        self,
+        mocked_provider,
+        mocked_delay,
+    ):
+        mocked_provider.return_value = object()
+
+        with self.assertLogs("nova.memory.service", level="WARNING") as captured:
+            written = async_to_sync(write_memory_document)(
+                user=self.user,
+                path="/memory/warn.md",
+                text="# Warn\n\nQueue failure should not block writes",
+                source_thread=self.thread,
+                source_message=self.source_message,
+            )
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/warn.md")
+        embeddings = list(MemoryChunkEmbedding.objects.filter(chunk__document=document))
+
+        self.assertEqual(len(embeddings), 1)
+        self.assertEqual(embeddings[0].state, MemoryChunkEmbeddingState.PENDING)
+        self.assertEqual(mocked_delay.call_count, 1)
+        self.assertEqual(
+            written.warnings,
+            (
+                "Warning: memory embeddings remain pending because background calculation could not be queued immediately.",
+            ),
+        )
+        self.assertTrue(
+            any("memory_embedding_enqueue_failed" in message for message in captured.output)
+        )
