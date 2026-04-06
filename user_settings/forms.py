@@ -484,6 +484,7 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         self.user = user
         self.tool = kw.pop("tool", tool)
         super().__init__(*args, **kw)
+        self._previous_auth_type = str(getattr(self.instance, "auth_type", "") or "").strip().lower()
 
         # Crispy helper
         self.helper = FormHelper()
@@ -495,8 +496,7 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
                 ("none", _("No Authentication")),
                 ("basic", _("Basic Auth")),
                 ("token", _("Token Auth")),
-                ("oauth", _("OAuth")),
-                ("oauth_managed", _("Managed OAuth (MCP)")),
+                ("oauth", _("OAuth Bearer Token (Manual)")),
                 ("api_key", _("API Key")),
                 ("custom", _("Custom")),
             ]
@@ -505,10 +505,12 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
                 ("none", _("No Authentication")),
                 ("basic", _("Basic Auth")),
                 ("token", _("Token Auth")),
-                ("oauth", _("OAuth")),
+                ("oauth", _("OAuth Bearer Token (Manual)")),
                 ("api_key", _("API Key")),
                 ("custom", _("Custom")),
             ]
+        if self.tool and self.tool.tool_type == Tool.ToolType.MCP and self._previous_auth_type == "oauth_managed":
+            self.initial["auth_type"] = "none"
 
         # Pre-fill config
         if self.instance.pk and self.instance.config:
@@ -544,11 +546,48 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         else:
             self.fields["caldav_url"].widget = forms.HiddenInput()
 
+    def _should_preserve_managed_oauth(self) -> bool:
+        if not self.tool or self.tool.tool_type != Tool.ToolType.MCP:
+            return False
+        if self._previous_auth_type != "oauth_managed":
+            return False
+        auth_type = str(self.cleaned_data.get("auth_type") or "").strip().lower()
+        if auth_type not in {"", "none"}:
+            return False
+        manual_fields = (
+            "username",
+            "password",
+            "token",
+            "token_type",
+            "api_key_name",
+        )
+        return not any(str(self.cleaned_data.get(name) or "").strip() for name in manual_fields)
+
+    def _clear_managed_oauth_state(self, instance: ToolCredential) -> None:
+        config = dict(instance.config or {})
+        oauth_config = config.get("mcp_oauth")
+        if isinstance(oauth_config, dict):
+            updated_oauth_config = dict(oauth_config)
+            updated_oauth_config["status"] = "disabled"
+            updated_oauth_config["last_error"] = ""
+            config["mcp_oauth"] = updated_oauth_config
+            instance.config = config
+        instance.access_token = None
+        instance.refresh_token = None
+        instance.expires_at = None
+
     # ------------------------------------------------------------------ #
     #  Save                                                               #
     # ------------------------------------------------------------------ #
     def save(self, commit: bool = True):
         instance: ToolCredential = super().save(commit=False)
+        preserve_managed_oauth = self._should_preserve_managed_oauth()
+        if preserve_managed_oauth:
+            instance.auth_type = "oauth_managed"
+        elif self.tool and self.tool.tool_type == Tool.ToolType.MCP and self._previous_auth_type == "oauth_managed":
+            selected_auth_type = str(self.cleaned_data.get("auth_type") or "").strip().lower()
+            if selected_auth_type and selected_auth_type != "oauth_managed":
+                self._clear_managed_oauth_state(instance)
 
         # Persist tool-specific config
         config = instance.config or {}
@@ -581,8 +620,6 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             api_key_in = str(cleaned.get("api_key_in") or "").strip().lower()
             if api_key_in not in {"header", "query"}:
                 self.add_error("api_key_in", _("Choose where to send the API key."))
-        if auth_type == "oauth_managed" and self.tool and self.tool.tool_type != Tool.ToolType.MCP:
-            self.add_error("auth_type", _("Managed OAuth is only available for MCP tools."))
         return cleaned
 
 

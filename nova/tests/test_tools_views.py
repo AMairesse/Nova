@@ -464,7 +464,7 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "success")
         mock_instance.alist_tools.assert_awaited()
 
-    def test_tool_credential_form_exposes_managed_oauth_only_for_mcp(self):
+    def test_tool_credential_form_keeps_managed_oauth_out_of_manual_choices(self):
         mcp_tool = create_tool(
             self.user,
             tool_type=Tool.ToolType.MCP,
@@ -481,7 +481,8 @@ class ToolsViewsTests(TestCase):
 
         mcp_choices = {value for value, _label in mcp_form.fields["auth_type"].choices}
         api_choices = {value for value, _label in api_form.fields["auth_type"].choices}
-        self.assertIn("oauth_managed", mcp_choices)
+        self.assertIn("oauth", mcp_choices)
+        self.assertNotIn("oauth_managed", mcp_choices)
         self.assertNotIn("oauth_managed", api_choices)
 
     @patch("user_settings.views.tool.mcp_oauth_service.start_mcp_oauth_flow", new_callable=AsyncMock)
@@ -507,7 +508,11 @@ class ToolsViewsTests(TestCase):
 
         response = self.client.post(
             reverse("user_settings:tool-test", args=[tool.id]),
-            data={"auth_type": "oauth_managed", "client_id": "preset-client"},
+            data={
+                "auth_type": "none",
+                "client_id": "preset-client",
+                "mcp_oauth_action": "connect",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -517,6 +522,34 @@ class ToolsViewsTests(TestCase):
         credential = ToolCredential.objects.get(user=self.user, tool=tool)
         self.assertEqual(credential.auth_type, "oauth_managed")
         self.assertEqual(credential.client_id, "preset-client")
+
+    @patch("user_settings.views.tool.mcp_oauth_service.get_valid_mcp_access_token", new_callable=AsyncMock)
+    def test_tool_test_connection_for_managed_oauth_tells_user_to_use_dedicated_button(
+        self,
+        mock_get_token,
+    ):
+        mock_get_token.side_effect = mcp_oauth_service.MCPReconnectRequired("Reconnect")
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+            transport_type="http",
+        )
+        create_tool_credential(
+            self.user,
+            tool,
+            auth_type="oauth_managed",
+            config={"mcp_oauth": {"status": "reconnect_required"}},
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-test", args=[tool.id]),
+            data={"auth_type": "none"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "error")
+        self.assertIn("Managed OAuth", response.json()["message"])
 
     @patch("user_settings.views.tool.MCPClient")
     def test_tool_test_connection_saves_posted_credential_on_first_create(self, mock_client):
@@ -624,3 +657,83 @@ class ToolsViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response["Location"], reverse("user_settings:tools"))
+
+    def test_tool_configure_shows_managed_oauth_status_card(self):
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+        )
+        create_tool_credential(
+            self.user,
+            tool,
+            auth_type="oauth_managed",
+            config={"mcp_oauth": {"status": "connected"}},
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Managed OAuth")
+        self.assertContains(response, "Reconnect with OAuth")
+
+    def test_tool_credential_form_preserves_existing_managed_oauth_on_plain_save(self):
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+        )
+        credential = create_tool_credential(
+            self.user,
+            tool,
+            auth_type="oauth_managed",
+            config={"mcp_oauth": {"status": "connected"}},
+        )
+
+        form = ToolCredentialForm(
+            data={
+                "auth_type": "none",
+                "username": "",
+                "password": "",
+                "token": "",
+                "token_type": "",
+                "client_id": "",
+                "client_secret": "",
+                "api_key_name": "",
+                "api_key_in": "header",
+            },
+            instance=credential,
+            user=self.user,
+            tool=tool,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        saved = form.save()
+        self.assertEqual(saved.auth_type, "oauth_managed")
+
+    @patch("user_settings.views.tool.MCPClient")
+    def test_tool_test_connection_preserves_existing_managed_oauth_state(self, mock_client):
+        mock_client.return_value.alist_tools = AsyncMock(return_value=[])
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+        )
+        credential = create_tool_credential(
+            self.user,
+            tool,
+            auth_type="oauth_managed",
+            config={"mcp_oauth": {"status": "connected"}},
+        )
+        credential.client_id = "existing-client"
+        credential.save()
+
+        response = self.client.post(
+            reverse("user_settings:tool-test", args=[tool.id]),
+            data={"auth_type": "none"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        credential.refresh_from_db()
+        self.assertEqual(credential.auth_type, "oauth_managed")
+        self.assertEqual(credential.client_id, "existing-client")

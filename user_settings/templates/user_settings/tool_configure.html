@@ -12,6 +12,49 @@
   <h2 class="mb-3">
     {% blocktrans %}Configure {{ tool.name }}{% endblocktrans %}
   </h2>
+
+  {% if tool.tool_type == 'mcp' and mcp_oauth %}
+    <div class="card border-0 bg-body-tertiary mb-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <h3 class="h6 mb-2">{% trans "Managed OAuth" %}</h3>
+            <p class="small text-muted mb-2">
+              {% trans "Use this for MCP servers that open a browser-based OAuth flow, like You.com. If you already have a bearer token, keep using the credential mode selector below." %}
+            </p>
+            <div class="small mb-2">
+              {% trans "Status" %}:
+              <span class="badge {{ mcp_oauth.badge_class }}">{{ mcp_oauth.status_label }}</span>
+            </div>
+            {% if mcp_oauth.last_error %}
+              <div class="small text-danger mb-2">{{ mcp_oauth.last_error }}</div>
+            {% endif %}
+            <div class="small text-muted">
+              {% trans "Optional" %}: {% trans "show advanced OAuth settings if the server gave you a pre-registered client ID or secret." %}
+            </div>
+          </div>
+          <div class="d-flex gap-2 flex-wrap">
+            <button
+              type="button"
+              class="btn btn-outline-primary btn-sm"
+              id="oauthConnectBtn"
+              data-test-url="{% url 'user_settings:tool-test' tool.pk %}"
+            >
+              {{ mcp_oauth.action_label }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-link btn-sm"
+              id="oauthAdvancedToggle"
+              aria-expanded="{% if mcp_oauth.has_advanced_credentials %}true{% else %}false{% endif %}"
+            >
+              {% trans "Advanced OAuth settings" %}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
   
   <form id="configForm" method="post" class="mb-3">
     {% csrf_token %}

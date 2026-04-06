@@ -103,6 +103,19 @@ document.addEventListener("DOMContentLoaded", () => {
   // 1. Auth-type field switch (only for generic credentials)
   //------------------------------------------------------------
   const authSelect = document.querySelector('[name="auth_type"]');
+  let managedOAuthAdvancedVisible = false;
+  const managedOAuthFieldNames = new Set(["client_id", "client_secret"]);
+  const managedOAuthContainers = Array.from(
+    document.querySelectorAll('[data-auth-field="client_id"], [data-auth-field="client_secret"]')
+  ).map((field) => field.closest(".mb-3") || field.parentElement).filter(Boolean);
+  const applyManagedOAuthVisibility = () => {
+    managedOAuthContainers.forEach((container) => {
+      container.style.display = managedOAuthAdvancedVisible ? "" : "none";
+      container.querySelectorAll("input").forEach((input) => {
+        input.required = false;
+      });
+    });
+  };
   if (authSelect) {
     const mapping = {
       none: [],
@@ -110,11 +123,13 @@ document.addEventListener("DOMContentLoaded", () => {
       token: ["token", "token_type"],
       api_key: ["token", "api_key_name", "api_key_in"],
       oauth: ["token", "token_type"],
-      oauth_managed: ["client_id", "client_secret"],
       custom: [],
     };
     const hideAll = () =>
       document.querySelectorAll("[data-auth-field]").forEach((c) => {
+        if (managedOAuthFieldNames.has(c.dataset.authField || "")) {
+          return;
+        }
         const container = c.closest('.mb-3') || c.parentElement;
         if (container) container.style.display = "none";
         c.querySelectorAll("input").forEach((i) => {
@@ -132,9 +147,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const toggle = () => {
       hideAll();
       show(mapping[authSelect.value] || []);
+      applyManagedOAuthVisibility();
     };
     toggle();
     authSelect.addEventListener("change", toggle);
+  }
+
+  const oauthAdvancedToggle = document.getElementById("oauthAdvancedToggle");
+  if (oauthAdvancedToggle) {
+    managedOAuthAdvancedVisible = oauthAdvancedToggle.getAttribute("aria-expanded") === "true";
+    applyManagedOAuthVisibility();
+    oauthAdvancedToggle.addEventListener("click", () => {
+      managedOAuthAdvancedVisible = !managedOAuthAdvancedVisible;
+      oauthAdvancedToggle.setAttribute("aria-expanded", managedOAuthAdvancedVisible ? "true" : "false");
+      applyManagedOAuthVisibility();
+    });
+  } else {
+    applyManagedOAuthVisibility();
   }
 
   //------------------------------------------------------------
@@ -150,6 +179,42 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const url = testBtn.dataset.testUrl;
       const formData = new FormData(document.getElementById("configForm"));
+
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "X-CSRFToken": formData.get("csrfmiddlewaretoken") },
+          body: formData,
+        });
+        const data = await resp.json();
+        if (data.status === "oauth_redirect" && data.authorization_url) {
+          window.location.href = data.authorization_url;
+          return;
+        }
+        resultBox.textContent = data.message || data.status;
+        resultBox.className =
+          "alert " + (data.status === "success" ? "alert-success" : "alert-danger");
+      } catch (e) {
+        resultBox.textContent = e;
+        resultBox.className = "alert alert-danger";
+      }
+    });
+  }
+
+  //------------------------------------------------------------
+  // 3. Managed OAuth connect / reconnect
+  //------------------------------------------------------------
+  const oauthConnectBtn = document.getElementById("oauthConnectBtn");
+  if (oauthConnectBtn) {
+    const resultBox = document.getElementById("testResult");
+    oauthConnectBtn.addEventListener("click", async () => {
+      resultBox.className = "alert alert-info";
+      resultBox.textContent = "Preparing OAuth…";
+      resultBox.classList.remove("d-none");
+
+      const url = oauthConnectBtn.dataset.testUrl;
+      const formData = new FormData(document.getElementById("configForm"));
+      formData.set("mcp_oauth_action", "connect");
 
       try {
         const resp = await fetch(url, {

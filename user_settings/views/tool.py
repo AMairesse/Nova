@@ -39,6 +39,46 @@ from nova.mcp import oauth_service as mcp_oauth_service
 logger = logging.getLogger(__name__)
 
 
+def _build_mcp_oauth_context(credential: ToolCredential | None) -> dict | None:
+    if credential is None:
+        return None
+    oauth_config = {}
+    if isinstance(credential.config, dict):
+        oauth_config = credential.config.get("mcp_oauth") or {}
+    if not isinstance(oauth_config, dict):
+        oauth_config = {}
+
+    status = str(oauth_config.get("status") or "").strip().lower()
+    last_error = str(oauth_config.get("last_error") or "").strip()
+    auth_type = str(credential.auth_type or "").strip().lower()
+    is_connected = auth_type == "oauth_managed" and status == "connected"
+    needs_reconnect = auth_type == "oauth_managed" and status == "reconnect_required"
+
+    if is_connected:
+        badge_class = "text-bg-success"
+        status_label = "Connected"
+        action_label = "Reconnect with OAuth"
+    elif needs_reconnect:
+        badge_class = "text-bg-warning"
+        status_label = "Reconnect required"
+        action_label = "Reconnect with OAuth"
+    else:
+        badge_class = "text-bg-secondary"
+        status_label = "Not connected"
+        action_label = "Connect with OAuth"
+
+    return {
+        "is_connected": is_connected,
+        "needs_reconnect": needs_reconnect,
+        "status_label": status_label,
+        "badge_class": badge_class,
+        "action_label": action_label,
+        "last_error": last_error,
+        "using_managed_oauth": auth_type == "oauth_managed",
+        "has_advanced_credentials": bool(credential.client_id or credential.client_secret),
+    }
+
+
 class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
     model = Tool
     template_name = "user_settings/tool_list.html"
@@ -310,6 +350,7 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
                 tool=self.tool,
                 defaults={"auth_type": "basic"},
             )
+            self.credential = credential
             kw["instance"] = credential
             kw["tool"] = self.tool
         else:
@@ -346,6 +387,14 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
             ctx["api_operations"] = list(
                 APIToolOperation.objects.filter(tool=self.tool).order_by("name", "id")
             )
+        if self.tool.tool_type == Tool.ToolType.MCP:
+            credential = getattr(self, "credential", None)
+            if credential is None:
+                credential = ToolCredential.objects.filter(
+                    user=self.request.user,
+                    tool=self.tool,
+                ).first()
+            ctx["mcp_oauth"] = _build_mcp_oauth_context(credential)
         return ctx
 
 
@@ -504,6 +553,7 @@ async def tool_test_connection(request, pk: int):
                 await sync_to_async(cred.save)()
         else:
             # For MCP/API tools, use existing logic
+            oauth_action = str(payload.get("mcp_oauth_action") or "").strip().lower()
             auth_type = payload.get("auth_type", "basic")
             username = payload.get("username", "")
             password = payload.get("password", "")
@@ -511,8 +561,24 @@ async def tool_test_connection(request, pk: int):
             client_id = payload.get("client_id", "")
             client_secret = payload.get("client_secret", "")
             token_type = payload.get("token_type", "")
+            previous_auth_type = str(cred.auth_type or "").strip().lower()
+            preserve_managed_oauth = (
+                tool.tool_type == Tool.ToolType.MCP
+                and previous_auth_type == "oauth_managed"
+                and oauth_action != "connect"
+                and str(auth_type or "").strip().lower() in {"", "none"}
+                and not any(
+                    str(value or "").strip()
+                    for value in (username, password, token, token_type)
+                )
+            )
 
-            cred.auth_type = auth_type
+            if tool.tool_type == Tool.ToolType.MCP and oauth_action == "connect":
+                cred.auth_type = "oauth_managed"
+            elif preserve_managed_oauth:
+                cred.auth_type = "oauth_managed"
+            else:
+                cred.auth_type = auth_type
             cred.username = username or None
             if password:
                 cred.password = password
@@ -530,11 +596,11 @@ async def tool_test_connection(request, pk: int):
                 cred.token_type = None
             if client_id:
                 cred.client_id = client_id
-            elif auth_type != "oauth_managed":
+            elif cred.auth_type != "oauth_managed":
                 cred.client_id = None
             if client_secret:
                 cred.client_secret = client_secret
-            elif auth_type != "oauth_managed":
+            elif cred.auth_type != "oauth_managed":
                 cred.client_secret = None
             await sync_to_async(cred.save)()
 
@@ -568,7 +634,8 @@ async def tool_test_connection(request, pk: int):
         # MCP
         if tool.tool_type == Tool.ToolType.MCP:
             try:
-                if cred.auth_type == "oauth_managed":
+                oauth_action = str(payload.get("mcp_oauth_action") or "").strip().lower()
+                if oauth_action == "connect":
                     try:
                         await mcp_oauth_service.get_valid_mcp_access_token(
                             tool=tool,
@@ -593,6 +660,23 @@ async def tool_test_connection(request, pk: int):
                                 "status": "oauth_redirect",
                                 "message": "OAuth authorization required.",
                                 "authorization_url": flow.authorization_url,
+                            }
+                        )
+                elif cred.auth_type == "oauth_managed":
+                    try:
+                        await mcp_oauth_service.get_valid_mcp_access_token(
+                            tool=tool,
+                            credential=cred,
+                            user=request.user,
+                        )
+                    except (
+                        mcp_oauth_service.MCPOAuthConnectionRequired,
+                        mcp_oauth_service.MCPReconnectRequired,
+                    ):
+                        return JsonResponse(
+                            {
+                                "status": "error",
+                                "message": "Managed OAuth is configured for this server. Use the Managed OAuth button to reconnect it.",
                             }
                         )
                 client = MCPClient(
