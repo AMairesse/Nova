@@ -31,7 +31,7 @@ class CaldavBuiltinsTests(TransactionTestCase):
             },
         )
 
-    @patch("nova.tools.builtins.caldav.ToolCredential.objects.get")
+    @patch("nova.caldav.service.ToolCredential.objects.get")
     def test_get_caldav_client_requires_complete_config(self, mocked_get_credential):
         mocked_get_credential.return_value = SimpleNamespace(
             config={"caldav_url": "https://cal.example.com", "username": "alice"}
@@ -40,10 +40,9 @@ class CaldavBuiltinsTests(TransactionTestCase):
         with self.assertRaisesMessage(ValueError, "Incomplete CalDav configuration"):
             asyncio.run(caldav_tools.get_caldav_client(self.user, self.tool.id))
 
-    @patch("nova.tools.builtins.caldav.get_caldav_client", new_callable=AsyncMock)
-    def test_list_events_returns_calendar_not_found(self, mocked_client):
-        principal = SimpleNamespace(calendars=lambda: [SimpleNamespace(name="Personal")])
-        mocked_client.return_value = SimpleNamespace(principal=lambda: principal)
+    @patch("nova.tools.builtins.caldav.caldav_service.list_events", new_callable=AsyncMock)
+    def test_list_events_returns_calendar_not_found(self, mocked_list_events):
+        mocked_list_events.side_effect = ValueError("Calendar 'Work' not found.")
 
         result = asyncio.run(
             caldav_tools.list_events(
@@ -56,6 +55,7 @@ class CaldavBuiltinsTests(TransactionTestCase):
         )
 
         self.assertIn("Calendar 'Work' not found.", result)
+        mocked_list_events.assert_awaited_once()
 
     def test_describe_events_formats_vevent(self):
         component = SimpleNamespace(

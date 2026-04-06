@@ -69,6 +69,32 @@ Imported attachments become normal files in the terminal filesystem.
 {mailbox_note}Reuse the same mailbox throughout a workflow unless the user explicitly asks you to switch.
 """
 
+    if capabilities.has_calendar:
+        account_note = (
+            "\nWhen several calendar accounts are configured, always pass `--account <selector>`.\n"
+            if capabilities.has_multiple_calendar_accounts
+            else "\nIf only one calendar account is configured, `--account` is optional.\n"
+        )
+        skills["calendar.md"] = f"""# Calendar
+
+CalDAV calendars are accessed through `calendar` commands:
+
+- `calendar accounts`
+- `calendar calendars`
+- `calendar upcoming --days 7`
+- `calendar list --from 2026-04-01 --to 2026-04-07`
+- `calendar search roadmap --days 30`
+- `calendar show <event-id>`
+- `calendar create --calendar Work --title "Planning" --start 2026-04-06T09:00:00+02:00`
+- `calendar update <event-id> --calendar Work --title "Updated title"`
+- `calendar delete <event-id> --confirm`
+
+Use `calendar accounts` first if you are unsure which account to target.
+Use `--description-file /path.md` for long descriptions.
+Recurring events are visible in read commands, but update/delete only work on non-recurring events in v1.
+{account_note}Use `--output /path.json` or `--output /path.md` on read commands when you need a reusable export.
+"""
+
     if capabilities.has_web:
         skills["web.md"] = """# Web
 

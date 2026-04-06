@@ -1,8 +1,5 @@
-# nova/tools/builtins/caldav.py
-import caldav
 import copy
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from icalendar import Event as iCalEvent
 from typing import Optional, List
@@ -13,52 +10,19 @@ from django.utils.translation import gettext_lazy as _, ngettext
 
 from langchain_core.tools import StructuredTool
 
+from nova.caldav import service as caldav_service
 from nova.llm.llm_agent import LLMAgent
-from nova.models.Tool import Tool, ToolCredential
+from nova.models.Tool import Tool
 from nova.tools.multi_instance import (
     build_selector_schema,
-    dedupe_instance_labels,
-    format_invalid_instance_message,
-    normalize_instance_key,
 )
 
 
 logger = logging.getLogger(__name__)
-EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
 async def get_caldav_client(user, tool_id):
-    try:
-        # Wrap ORM access in sync_to_async
-        credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
-        caldav_url = credential.config.get('caldav_url')
-        username = credential.config.get('username')
-        password = credential.config.get('password')
-
-        if not all([caldav_url, username, password]):
-            raise ValueError(_("Incomplete CalDav configuration: missing URL, username, or password"))
-
-        client = caldav.DAVClient(
-            url=caldav_url,
-            username=username,
-            password=password
-        )
-
-        # Test auth (caldav is sync, but safe in async context)
-        try:
-            client.principal()  # Early auth check
-        except caldav.lib.error.AuthorizationError as e:
-            raise ValueError(f"CalDav authorization failed: {str(e)}")
-        except Exception as e:
-            raise ConnectionError(f"CalDav connection failed: {str(e)}")
-
-        return client
-
-    except ToolCredential.DoesNotExist:
-        raise ValueError(_("No CalDav credential found for tool {tool_id}").format(tool_id=tool_id))
-    except Exception as e:  # Catch-all
-        logger.error(f"CalDav client error: {str(e)}")
-        raise
+    return await caldav_service.get_caldav_client(user, tool_id)
 
 
 async def list_calendars(user, tool_id) -> str:
@@ -70,16 +34,14 @@ async def list_calendars(user, tool_id) -> str:
     Returns:
         Formatted list of calendars
     """
-    client = await get_caldav_client(user, tool_id)
-    principal = client.principal()
-    calendars = principal.calendars()
+    calendars = await caldav_service.list_calendars(user, tool_id)
 
     if not calendars:
         return _("No calendars available.")
 
     result = _("Available calendars :\n")
     for cal in calendars:
-        result += f"- {cal.name}\n"
+        result += f"- {cal}\n"
 
     return result
 
@@ -114,6 +76,27 @@ def describe_events(events: List[iCalEvent]) -> List[str]:
     return all_events
 
 
+def _format_event_payload(payload: dict) -> str:
+    lines = [f"Event name :{payload.get('summary') or ''}"]
+    description = str(payload.get("description") or "").strip()
+    if description:
+        lines.append(f"Event description :{description}")
+    lines.append(f"Start : {payload.get('start') or ''}")
+    if payload.get("end"):
+        lines.append(f"End : {payload['end']}")
+    else:
+        lines.append("End date is not set")
+    if payload.get("location"):
+        lines.append(f"Location : {payload['location']}")
+    if payload.get("uid"):
+        lines.append(f"UID : {payload['uid']}")
+    return "\n".join(lines)
+
+
+def _describe_normalized_events(events: list[dict]) -> list[str]:
+    return [_format_event_payload(payload) for payload in events]
+
+
 async def list_events_to_come(user, tool_id, days_ahead: int = 7, calendar_name: Optional[str] = None) -> str:
     """ List events for the next days_ahead.
     Args:
@@ -125,11 +108,15 @@ async def list_events_to_come(user, tool_id, days_ahead: int = 7, calendar_name:
     Returns:
         Formatted list of events
     """
-    start_date = datetime.now(timezone.utc)
-    end_date = start_date + timedelta(days=days_ahead)
-
-    return await list_events(user, tool_id, start_date.strftime('%Y-%m-%d'),
-                             end_date.strftime('%Y-%m-%d'), calendar_name)
+    events = await caldav_service.list_events_to_come(
+        user,
+        tool_id,
+        days_ahead=days_ahead,
+        calendar_name=calendar_name,
+    )
+    if not events:
+        return _("No events found")
+    return str(_describe_normalized_events(events))
 
 
 async def list_events(user, tool_id, start_date: str, end_date: str, calendar_name: Optional[str] = None) -> str:
@@ -144,38 +131,19 @@ async def list_events(user, tool_id, start_date: str, end_date: str, calendar_na
     Returns:
         Formatted list of events between start_date and end_date
     """
-    client = await get_caldav_client(user, tool_id)
-    principal = client.principal()
-
-    if calendar_name:
-        calendars = [cal for cal in principal.calendars() if cal.name == calendar_name]
-        if not calendars:
-            return _("Calendar '{calendar_name}' not found.").format(calendar_name=calendar_name)
-    else:
-        calendars = principal.calendars()
-
-    if not calendars:
-        return _("No calendars available.")
-
-    # Define search period
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')
-    # Set start_date to the beginning of the day
-    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    # Set end_date to the end of the day
-    end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-    all_events = []
-
-    for cal in calendars:
-        events_fetched = cal.search(start=start_date, end=end_date, event=True, expand=True)
-        all_events.extend(describe_events(events_fetched))
-
-    # If the list is empty, return a message for the LLM
-    if not all_events:
-        all_events.append(_("No events found"))
-    return str(all_events)
+    try:
+        events = await caldav_service.list_events(
+            user,
+            tool_id,
+            start_date=start_date,
+            end_date=end_date,
+            calendar_name=calendar_name,
+        )
+    except ValueError as exc:
+        return str(exc)
+    if not events:
+        return _("No events found")
+    return str(_describe_normalized_events(events))
 
 
 async def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional[str] = None) -> str:
@@ -189,24 +157,16 @@ async def get_event_detail(user, tool_id, event_id: str, calendar_name: Optional
     Returns:
         A string containing the event's details
     """
-    client = await get_caldav_client(user, tool_id)
-    principal = client.principal()
-
-    if calendar_name:
-        calendars = [cal for cal in principal.calendars() if cal.name == calendar_name]
-        if not calendars:
-            return _("Calendar '{calendar_name}' not found.").format(calendar_name=calendar_name)
-    else:
-        calendars = principal.calendars()
-
-    if not calendars:
-        return _("No calendars available.")
-
-    for calendar in calendars:
-        event = calendar.search(uid=event_id, event=True, expand=False)
-        if event:
-            return str(event)
-    return _("Event not found.")
+    try:
+        payload = await caldav_service.get_event_detail(
+            user,
+            tool_id,
+            event_id=event_id,
+            calendar_name=calendar_name,
+        )
+    except ValueError as exc:
+        return str(exc)
+    return _format_event_payload(payload)
 
 
 async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
@@ -220,30 +180,17 @@ async def search_events(user, tool_id, query: str, days_range: int = 30) -> str:
     Returns:
         Formatted list of events
     """
-    client = await get_caldav_client(user, tool_id)
-    principal = client.principal()
-    calendars = principal.calendars()
-
-    if not calendars:
-        return _("No calendars available.")
-
-    # Define search period
-    start_date = datetime.now(timezone.utc) - timedelta(days=days_range)
-    end_date = datetime.now(timezone.utc) + timedelta(days=days_range)
-
-    matching_events = []
-
-    for calendar in calendars:
-        try:
-            # TODO: filter on summary seems to be broken, to investigate
-            events = calendar.search(start=start_date, end=end_date,
-                                     summary=query,
-                                     event=True, expand=True)
-            matching_events.extend(describe_events(events))
-        except Exception as e:
-            error_message = _("Error when searching events : {}")
-            return error_message.format(e)
-    return str(matching_events)
+    try:
+        events = await caldav_service.search_events(
+            user,
+            tool_id,
+            query=query,
+            days_range=days_range,
+        )
+    except Exception as exc:
+        error_message = _("Error when searching events : {}")
+        return error_message.format(exc)
+    return str(_describe_normalized_events(events))
 
 
 async def test_caldav_access(user, tool_id):
@@ -418,128 +365,8 @@ def _build_toolset(*, wrappers: dict[str, object], selector_schema: dict | None 
     return result
 
 
-async def _resolve_user_for_tool(tool: Tool, agent: LLMAgent | None):
-    user = getattr(agent, "user", None) if agent else None
-    if user:
-        return user
-    return await sync_to_async(lambda: tool.user, thread_sensitive=False)()
-
-
-async def _get_credential(user, tool_id: int) -> ToolCredential | None:
-    try:
-        return await sync_to_async(
-            ToolCredential.objects.get,
-            thread_sensitive=False,
-        )(user=user, tool_id=tool_id)
-    except ToolCredential.DoesNotExist:
-        return None
-
-
-def _extract_email_address(value: str | None) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    match = EMAIL_ADDRESS_RE.search(text)
-    return match.group(0).strip() if match else ""
-
-
-def _select_calendar_account(config: dict) -> str:
-    username = str(config.get("username") or "").strip()
-    email = _extract_email_address(username)
-    return email or username
-
-
-def _build_calendar_display_label(alias: str | None, calendar_account: str) -> str:
-    cleaned = str(alias or "").strip()
-    if not cleaned:
-        return ""
-    if normalize_instance_key(cleaned) == normalize_instance_key(calendar_account):
-        return ""
-    return cleaned
-
-
 async def _build_calendar_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
-    if not tools:
-        raise ValueError("No CalDAV tools provided for aggregation.")
-
-    user = getattr(agent, "user", None) or getattr(tools[0], "user", None)
-    if not user:
-        raise ValueError("Cannot resolve user for aggregated CalDAV tools.")
-
-    raw_aliases = [((tool.name or "").strip() or "CalDav") for tool in tools]
-    deduped_aliases = dedupe_instance_labels(raw_aliases, default_label="CalDav")
-
-    entries = []
-    for tool, base_alias, alias in zip(tools, raw_aliases, deduped_aliases):
-        tool_id = getattr(tool, "id", None)
-        if not tool_id:
-            continue
-
-        if alias != base_alias:
-            logger.warning(
-                "Duplicate or empty CalDAV alias '%s' detected for tool_id=%s; using '%s'.",
-                base_alias,
-                tool_id,
-                alias,
-            )
-
-        credential = await _get_credential(user, tool_id)
-        if not credential:
-            logger.warning(
-                "Skipping CalDAV alias '%s' (tool_id=%s): no credential configured for user_id=%s.",
-                alias,
-                tool_id,
-                getattr(user, "id", "unknown"),
-            )
-            continue
-
-        config = credential.config or {}
-        if not all([config.get("caldav_url"), config.get("username"), config.get("password")]):
-            logger.warning(
-                "Skipping CalDAV alias '%s' (tool_id=%s): incomplete CalDAV configuration.",
-                alias,
-                tool_id,
-            )
-            continue
-
-        calendar_account = _select_calendar_account(config)
-        if not calendar_account:
-            logger.warning(
-                "Skipping CalDAV alias '%s' (tool_id=%s): could not derive calendar account.",
-                alias,
-                tool_id,
-            )
-            continue
-
-        entries.append(
-            {
-                "alias": alias,
-                "tool_id": tool_id,
-                "calendar_account": calendar_account,
-            }
-        )
-
-    if not entries:
-        raise ValueError("No configured CalDAV account available for aggregation.")
-
-    for entry in entries:
-        entry["display_label"] = _build_calendar_display_label(
-            entry.get("alias"),
-            str(entry.get("calendar_account") or ""),
-        )
-
-    selector_values: List[str] = []
-    for entry in entries:
-        selector = str(entry.get("calendar_account") or "").strip()
-        if selector and selector not in selector_values:
-            selector_values.append(selector)
-
-    lookup: dict[str, list[dict]] = {}
-    for entry in entries:
-        key = normalize_instance_key(entry.get("calendar_account"))
-        if key:
-            lookup.setdefault(key, []).append(entry)
-
+    user, entries, lookup, selector_values = await caldav_service.build_calendar_registry(tools, agent)
     selector_schema = build_selector_schema(
         selector_name="calendar_account",
         labels=selector_values,
@@ -548,7 +375,14 @@ async def _build_calendar_registry(tools: list[Tool], agent: LLMAgent) -> tuple:
             f"Available accounts: {', '.join(selector_values)}."
         ),
     )
-    return user, entries, lookup, selector_schema, selector_values
+    normalized_entries = [
+        {
+            **entry,
+            "calendar_account": entry.get("account"),
+        }
+        for entry in entries
+    ]
+    return user, normalized_entries, lookup, selector_schema, selector_values
 
 
 def _resolve_calendar_account(
@@ -556,23 +390,7 @@ def _resolve_calendar_account(
     lookup: dict[str, list[dict]],
     selector_values: List[str],
 ) -> tuple:
-    normalized = normalize_instance_key(calendar_account)
-    matches = lookup.get(normalized, [])
-    if len(matches) == 1:
-        return matches[0], None
-
-    if len(matches) > 1:
-        requested = str(calendar_account or "").strip() or "<empty>"
-        return None, (
-            f"Ambiguous calendar_account '{requested}'. Multiple CalDAV tools share this identifier. "
-            "Use a unique calendar_account value."
-        )
-
-    return None, format_invalid_instance_message(
-        selector_name="calendar_account",
-        value=calendar_account,
-        available_labels=selector_values,
-    )
+    return caldav_service.resolve_calendar_account(calendar_account, lookup, selector_values)
 
 
 async def get_aggregated_functions(tools: list[Tool], agent: LLMAgent) -> List[StructuredTool]:
@@ -665,7 +483,7 @@ async def get_functions(tool: Tool, agent: LLMAgent) -> List[StructuredTool]:
         raise ValueError("Tool instance missing required data (user or id).")
 
     # Wrap ORM accesses for user/id
-    user = await _resolve_user_for_tool(tool, agent)
+    user = await caldav_service._resolve_user_for_tool(tool, agent)
     if not user:
         raise ValueError("Tool instance missing required data (user).")
     tool_id = await sync_to_async(lambda: tool.id, thread_sensitive=False)()

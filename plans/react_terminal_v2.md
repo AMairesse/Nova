@@ -135,6 +135,8 @@ very small tool surface and a file-centric mental model.
 
 - Base shell-like commands:
   - `pwd`, `ls`, `cd`, `cat`, `head`, `tail`, `mkdir`, `touch`, `tee`, `cp`, `mv`, `rm`, `find`
+- Calendar command family:
+  - `calendar accounts`, `calendar calendars`, `calendar upcoming`, `calendar list`, `calendar search`, `calendar show`, `calendar create`, `calendar update`, `calendar delete`
 - Continuous mode command family:
   - `history search ...`
   - `history get ...`
@@ -142,6 +144,7 @@ very small tool surface and a file-centric mental model.
   - `grep ...`
   - `memory search ...`
 - Optional command families enabled by configured tools:
+  - caldav builtin -> `calendar ...`
   - browser builtin -> `curl`, `wget`, `browse ...`
   - email builtin -> `mail ...`
   - code execution builtin -> `python ...`
@@ -183,6 +186,10 @@ very small tool surface and a file-centric mental model.
 - Recursive WebDAV traversal guardrail at 500 examined remote paths per command
 - Shared HTTP download service used by the legacy browser builtin and by v2 `curl` / `wget`
 - Shared SearXNG service used by the legacy SearXNG builtin and by v2 `search`
+- Shared CalDAV service used by both the legacy CalDAV builtin and the v2 runtime
+- Terminal-native `calendar` command family with multi-account selection through `--account`
+- JSON/Markdown export support for calendar read commands through `--output`
+- Recurring CalDAV events exposed in read flows but treated as read-only for create/update/delete
 - Terminal-native `search` command with per-run cached results and optional JSON persistence
 - Terminal-native `browse` command family backed by a native Playwright service
 - Lazy Playwright session creation and guaranteed browser cleanup at the end of each v2 run

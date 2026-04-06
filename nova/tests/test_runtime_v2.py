@@ -242,6 +242,19 @@ class TerminalExecutorCommandTests(TransactionTestCase):
     def _create_memory_tool(self) -> Tool:
         return self._create_builtin_tool("memory", name="Memory")
 
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = self._create_builtin_tool("caldav", name=name)
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
     def _create_webdav_tool(
         self,
         *,
@@ -267,6 +280,66 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 "allow_move": allow_move,
                 "allow_copy": allow_copy,
                 "allow_delete": allow_delete,
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
             },
         )
         return tool
@@ -964,6 +1037,122 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         mocked_send.assert_awaited_once()
         self.assertEqual(mocked_send.await_args.kwargs["tool_id"], personal_tool.id)
 
+    def test_calendar_accounts_and_calendars_use_account_registry(self):
+        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.caldav_service.list_calendars",
+            new_callable=AsyncMock,
+            return_value=["Work", "Personal"],
+        ) as mocked_list:
+            accounts = async_to_sync(executor.execute)("calendar accounts")
+            calendars = async_to_sync(executor.execute)("calendar calendars --account work@example.com")
+
+        self.assertIn("work@example.com", accounts)
+        self.assertIn("personal@example.com", accounts)
+        self.assertIn("Available calendars:", calendars)
+        self.assertIn("- Work", calendars)
+        mocked_list.assert_awaited_once_with(self.user, work_tool.id)
+
+    def test_calendar_command_requires_account_when_multiple_accounts_are_configured(self):
+        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("calendar upcoming")
+
+    def test_calendar_show_supports_json_output(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.caldav_service.get_event_detail",
+            new_callable=AsyncMock,
+            return_value={
+                "uid": "evt-1",
+                "calendar_name": "Work",
+                "summary": "Planning",
+                "start": "2026-04-10T09:00:00+00:00",
+                "end": "2026-04-10T10:00:00+00:00",
+                "all_day": False,
+                "location": "Room A",
+                "description": "Roadmap review",
+                "is_recurring": False,
+            },
+        ):
+            result = async_to_sync(executor.execute)("calendar show evt-1 --output /calendar.json")
+
+        content = async_to_sync(executor.execute)("cat /calendar.json")
+        self.assertIn("Wrote calendar output to /calendar.json", result)
+        self.assertIn('"uid": "evt-1"', content)
+
+    def test_calendar_create_reads_description_file(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/details.md",
+            b"Long meeting description",
+            mime_type="text/markdown",
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.caldav_service.create_event",
+            new_callable=AsyncMock,
+            return_value={
+                "uid": "evt-2",
+                "calendar_name": "Work",
+                "summary": "Planning",
+                "start": "2026-04-10T09:00:00+00:00",
+                "end": None,
+                "all_day": False,
+                "location": "",
+                "description": "Long meeting description",
+                "is_recurring": False,
+            },
+        ) as mocked_create:
+            result = async_to_sync(executor.execute)(
+                'calendar create --calendar Work --title "Planning" --start 2026-04-10T09:00:00+00:00 --description-file /details.md'
+            )
+
+        self.assertIn("Created event evt-2", result)
+        self.assertEqual(mocked_create.await_args.kwargs["description"], "Long meeting description")
+
+    def test_calendar_delete_requires_confirm(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("calendar delete evt-1")
+
+    def test_calendar_update_rejects_recurring_events_from_service(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.caldav_service.update_event",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Recurring events are read-only in React Terminal v2."),
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(executor.execute)(
+                    'calendar update evt-1 --calendar Work --title "Updated"'
+                )
+
     def test_python_output_writes_stdout_file_and_preserves_terminal_result(self):
         code_tool = self._create_code_execution_tool()
         executor = self._build_executor(
@@ -1011,6 +1200,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("date +%F", skills["date.md"])
+
+    def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(caldav_tools=[object(), object()])
+        )
+
+        self.assertIn("calendar.md", skills)
+        self.assertIn("calendar accounts", skills["calendar.md"])
+        self.assertIn("--account <selector>", skills["calendar.md"])
+        self.assertIn("Recurring events", skills["calendar.md"])
 
     def test_skill_registry_adds_memory_guide_when_memory_is_enabled(self):
         skills = build_skill_registry(
@@ -1106,6 +1305,26 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 "allow_move": allow_move,
                 "allow_copy": allow_copy,
                 "allow_delete": allow_delete,
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.tools.builtins.caldav",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
             },
         )
         return tool
@@ -1414,6 +1633,25 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("/memory", prompt)
         self.assertIn("grep", prompt)
         self.assertIn("memory search", prompt)
+
+    def test_system_prompt_mentions_calendar_commands(self):
+        first_calendar = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        second_calendar = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        self.agent.tools.add(first_calendar, second_calendar)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("calendar", prompt)
+        self.assertIn("calendar accounts", prompt)
+        self.assertIn("--account <selector>", prompt)
+        self.assertIn("Recurring events are readable", prompt)
 
     def test_system_prompt_mentions_webdav_mount(self):
         webdav_tool = self._create_webdav_tool()

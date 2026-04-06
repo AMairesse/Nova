@@ -142,6 +142,17 @@ class ReactTerminalRuntime:
                 "You may create directories there, but none are imposed by default. "
                 "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
             )
+        if self.capabilities.has_calendar:
+            calendar_guidance = (
+                "Use `calendar` commands for CalDAV accounts and events. "
+                "Use `calendar accounts` first when account selection is unclear."
+            )
+            if self.capabilities.has_multiple_calendar_accounts:
+                calendar_guidance += " When several accounts exist, pass `--account <selector>` explicitly."
+            calendar_guidance += (
+                " Recurring events are readable, but create/update/delete only support non-recurring events."
+            )
+            extra_guidance.append(calendar_guidance)
         if self.capabilities.has_search:
             search_guidance = "Use `search` for web discovery."
             if self.capabilities.has_web:

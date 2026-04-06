@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from django.utils import timezone
 
+from nova.caldav import service as caldav_service
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
 from nova.memory.service import search_memory_items
 from nova.models.Thread import Thread
@@ -30,6 +31,7 @@ class TerminalExecutor:
         self.vfs = vfs
         self.capabilities = capabilities
         self._mailbox_registry_cache = None
+        self._calendar_registry_cache = None
         self._last_search_results: list[dict] = []
         self._browser_session: BrowserSession | None = None
 
@@ -92,6 +94,8 @@ class TerminalExecutor:
             return await self._cmd_wget(tokens[1:])
         if name == "curl":
             return await self._cmd_curl(tokens[1:])
+        if name == "calendar":
+            return await self._cmd_calendar(tokens[1:])
         if name == "mail":
             return await self._cmd_mail(tokens[1:])
         if name == "memory":
@@ -941,6 +945,368 @@ class TerminalExecutor:
                 remaining.append(token)
             index += 1
         return values, remaining
+
+    async def _write_calendar_output(self, output_path: str, payload: object, markdown: str) -> str:
+        try:
+            resolved_output = await self.vfs.resolve_output_path(output_path)
+            if resolved_output.endswith(".json"):
+                written = await self.vfs.write_file(
+                    resolved_output,
+                    json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                    mime_type="application/json",
+                )
+            elif resolved_output.endswith(".md"):
+                written = await self.vfs.write_file(
+                    resolved_output,
+                    markdown.encode("utf-8"),
+                    mime_type="text/markdown",
+                )
+            else:
+                raise TerminalCommandError("Calendar output paths must end with .json or .md")
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return self._format_write_result(f"Wrote calendar output to {written.path}", written)
+
+    async def _get_calendar_registry(self):
+        if self._calendar_registry_cache is None:
+            agent = SimpleNamespace(user=self.vfs.user, thread=self.vfs.thread)
+            self._calendar_registry_cache = await caldav_service.build_calendar_registry(
+                list(self.capabilities.caldav_tools or []),
+                agent=agent,
+            )
+        return self._calendar_registry_cache
+
+    async def _resolve_terminal_calendar_account(self, account: str | None):
+        _user, entries, lookup, selector_values = await self._get_calendar_registry()
+        requested = str(account or "").strip()
+        if not requested:
+            if len(entries) == 1:
+                return entries[0], selector_values
+            raise TerminalCommandError(
+                "The --account selector is required when multiple calendar accounts are configured. "
+                f"Available accounts: {', '.join(selector_values)}."
+            )
+        entry, err = caldav_service.resolve_calendar_account(requested, lookup, selector_values)
+        if err:
+            raise TerminalCommandError(err)
+        return entry, selector_values
+
+    @staticmethod
+    def _format_calendar_accounts(entries: list[dict]) -> str:
+        lines = ["Configured calendar accounts:"]
+        for entry in entries:
+            label = str(entry.get("display_label") or "").strip()
+            label_part = f", label: {label}" if label else ""
+            lines.append(f"- {entry['account']}{label_part}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_calendar_event(event: dict, *, index: int | None = None, detailed: bool = False) -> str:
+        prefix = f"{index}. " if index is not None else ""
+        summary = str(event.get("summary") or "").strip() or "(untitled)"
+        uid = str(event.get("uid") or "").strip() or "unknown"
+        details = [
+            f"uid={uid}",
+            f"calendar={event.get('calendar_name') or ''}",
+            f"start={event.get('start') or ''}",
+        ]
+        if event.get("end"):
+            details.append(f"end={event['end']}")
+        if event.get("all_day"):
+            details.append("all_day=yes")
+        if event.get("is_recurring"):
+            details.append("recurring=yes")
+        if event.get("location"):
+            details.append(f"location={event['location']}")
+        lines = [f"{prefix}{summary} [{uid}]", f"   {' '.join(details)}".rstrip()]
+        description = str(event.get("description") or "").strip()
+        if detailed and description:
+            lines.append(description)
+        return "\n".join(lines)
+
+    def _format_calendar_event_list(
+        self,
+        events: list[dict],
+        *,
+        heading: str,
+        detailed: bool = False,
+    ) -> str:
+        if not events:
+            return "No calendar events found."
+        lines = [heading]
+        for index, event in enumerate(events, start=1):
+            lines.append(self._format_calendar_event(event, index=index, detailed=detailed))
+        return "\n".join(lines)
+
+    def _render_calendar_markdown(
+        self,
+        *,
+        heading: str,
+        events: list[dict] | None = None,
+        event: dict | None = None,
+    ) -> str:
+        lines = [f"# {heading}"]
+        if event is not None:
+            lines.append(f"## {event.get('summary') or '(untitled)'}")
+            lines.append(f"- UID: `{event.get('uid') or ''}`")
+            lines.append(f"- Calendar: {event.get('calendar_name') or ''}")
+            lines.append(f"- Start: {event.get('start') or ''}")
+            if event.get("end"):
+                lines.append(f"- End: {event['end']}")
+            lines.append(f"- All day: {'yes' if event.get('all_day') else 'no'}")
+            lines.append(f"- Recurring: {'yes' if event.get('is_recurring') else 'no'}")
+            if event.get("location"):
+                lines.append(f"- Location: {event['location']}")
+            description = str(event.get("description") or "").strip()
+            if description:
+                lines.append("")
+                lines.append(description)
+            return "\n".join(lines)
+
+        for item in events or []:
+            lines.append(f"## {item.get('summary') or '(untitled)'}")
+            lines.append(f"- UID: `{item.get('uid') or ''}`")
+            lines.append(f"- Calendar: {item.get('calendar_name') or ''}")
+            lines.append(f"- Start: {item.get('start') or ''}")
+            if item.get("end"):
+                lines.append(f"- End: {item['end']}")
+            lines.append(f"- All day: {'yes' if item.get('all_day') else 'no'}")
+            lines.append(f"- Recurring: {'yes' if item.get('is_recurring') else 'no'}")
+            if item.get("location"):
+                lines.append(f"- Location: {item['location']}")
+            description = str(item.get("description") or "").strip()
+            if description:
+                lines.append("")
+                lines.append(description)
+            lines.append("")
+        return "\n".join(line for line in lines if line is not None).rstrip()
+
+    async def _cmd_calendar(self, args: list[str]) -> str:
+        if not self.capabilities.has_calendar:
+            raise TerminalCommandError("Calendar commands are not enabled for this agent.")
+        if not args:
+            raise TerminalCommandError(
+                "Usage: calendar <accounts|calendars|upcoming|list|search|show|create|update|delete> ..."
+            )
+        subcommand = args[0]
+        remainder = args[1:]
+        account, remainder = self._parse_flag_value(remainder, "--account")
+
+        if subcommand == "accounts":
+            if remainder:
+                raise TerminalCommandError("Usage: calendar accounts")
+            _user, entries, _lookup, selector_values = await self._get_calendar_registry()
+            lines = [self._format_calendar_accounts(entries)]
+            if len(selector_values) > 1:
+                lines.append("Pass --account <selector> on calendar commands to choose an account explicitly.")
+            return "\n".join(lines)
+
+        entry, _selector_values = await self._resolve_terminal_calendar_account(account)
+        tool_id = int(entry["tool_id"])
+
+        if subcommand == "calendars":
+            if remainder:
+                raise TerminalCommandError("Usage: calendar calendars [--account <selector>]")
+            calendars = await caldav_service.list_calendars(self.vfs.user, tool_id)
+            if not calendars:
+                return "No calendars available."
+            return "\n".join(["Available calendars:", *[f"- {item}" for item in calendars]])
+
+        if subcommand == "upcoming":
+            output_path, remainder = self._parse_output_path(remainder)
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            days_value, remainder = self._parse_flag_value(remainder, "--days")
+            if remainder:
+                raise TerminalCommandError(
+                    "Usage: calendar upcoming [--account <selector>] [--calendar <name>] [--days N] [--output /path.md|json]"
+                )
+            days = self._parse_int_flag("--days", days_value or "7")
+            try:
+                events = await caldav_service.list_events_to_come(
+                    self.vfs.user,
+                    tool_id,
+                    days_ahead=days,
+                    calendar_name=calendar_name,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            if output_path:
+                return await self._write_calendar_output(
+                    output_path,
+                    {"events": events, "days": days, "account": entry["account"], "calendar": calendar_name},
+                    self._render_calendar_markdown(heading="Upcoming Events", events=events),
+                )
+            return self._format_calendar_event_list(events, heading="Upcoming events:")
+
+        if subcommand == "list":
+            output_path, remainder = self._parse_output_path(remainder)
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            start_value, remainder = self._parse_flag_value(remainder, "--from")
+            end_value, remainder = self._parse_flag_value(remainder, "--to")
+            if remainder or not start_value or not end_value:
+                raise TerminalCommandError(
+                    "Usage: calendar list --from <iso> --to <iso> [--account <selector>] [--calendar <name>] [--output /path.md|json]"
+                )
+            try:
+                events = await caldav_service.list_events(
+                    self.vfs.user,
+                    tool_id,
+                    start_date=start_value,
+                    end_date=end_value,
+                    calendar_name=calendar_name,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            if output_path:
+                return await self._write_calendar_output(
+                    output_path,
+                    {"events": events, "from": start_value, "to": end_value, "account": entry["account"], "calendar": calendar_name},
+                    self._render_calendar_markdown(heading="Calendar Events", events=events),
+                )
+            return self._format_calendar_event_list(events, heading="Calendar events:")
+
+        if subcommand == "search":
+            output_path, remainder = self._parse_output_path(remainder)
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            days_value, remainder = self._parse_flag_value(remainder, "--days")
+            query = " ".join(remainder).strip()
+            if not query:
+                raise TerminalCommandError(
+                    "Usage: calendar search <query> [--account <selector>] [--calendar <name>] [--days N] [--output /path.md|json]"
+                )
+            days = self._parse_int_flag("--days", days_value or "30")
+            try:
+                events = await caldav_service.search_events(
+                    self.vfs.user,
+                    tool_id,
+                    query=query,
+                    days_range=days,
+                    calendar_name=calendar_name,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            if output_path:
+                return await self._write_calendar_output(
+                    output_path,
+                    {"events": events, "query": query, "days": days, "account": entry["account"], "calendar": calendar_name},
+                    self._render_calendar_markdown(heading=f"Calendar Search: {query}", events=events),
+                )
+            return self._format_calendar_event_list(events, heading="Matching calendar events:")
+
+        if subcommand == "show":
+            output_path, remainder = self._parse_output_path(remainder)
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            if len(remainder) != 1:
+                raise TerminalCommandError(
+                    "Usage: calendar show <event-id> [--account <selector>] [--calendar <name>] [--output /path.md|json]"
+                )
+            try:
+                event = await caldav_service.get_event_detail(
+                    self.vfs.user,
+                    tool_id,
+                    event_id=remainder[0],
+                    calendar_name=calendar_name,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            if output_path:
+                return await self._write_calendar_output(
+                    output_path,
+                    {"event": event, "account": entry["account"], "calendar": calendar_name},
+                    self._render_calendar_markdown(heading="Calendar Event", event=event),
+                )
+            return self._format_calendar_event(event, detailed=True)
+
+        if subcommand == "create":
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            title, remainder = self._parse_flag_value(remainder, "--title")
+            start_value, remainder = self._parse_flag_value(remainder, "--start")
+            end_value, remainder = self._parse_flag_value(remainder, "--end")
+            location, remainder = self._parse_flag_value(remainder, "--location")
+            description_file, remainder = self._parse_flag_value(remainder, "--description-file")
+            all_day = "--all-day" in remainder
+            remainder = [item for item in remainder if item != "--all-day"]
+            if remainder or not calendar_name or not title or not start_value:
+                raise TerminalCommandError(
+                    "Usage: calendar create --title <text> --start <iso> [--end <iso>] [--all-day] --calendar <name> [--account <selector>] [--location <text>] [--description-file /path.md]"
+                )
+            description = await self.vfs.read_text(description_file) if description_file else None
+            try:
+                event = await caldav_service.create_event(
+                    self.vfs.user,
+                    tool_id,
+                    calendar_name=calendar_name,
+                    summary=title,
+                    start=start_value,
+                    end=end_value,
+                    all_day=all_day,
+                    location=location,
+                    description=description,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return f"Created event {event['uid']} in calendar {event['calendar_name']}"
+
+        if subcommand == "update":
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            title, remainder = self._parse_flag_value(remainder, "--title")
+            start_value, remainder = self._parse_flag_value(remainder, "--start")
+            end_value, remainder = self._parse_flag_value(remainder, "--end")
+            location, remainder = self._parse_flag_value(remainder, "--location")
+            description_file, remainder = self._parse_flag_value(remainder, "--description-file")
+            all_day = "--all-day" in remainder
+            remainder = [item for item in remainder if item != "--all-day"]
+            if len(remainder) != 1 or not calendar_name:
+                raise TerminalCommandError(
+                    "Usage: calendar update <event-id> [--account <selector>] --calendar <name> [--title <text>] [--start <iso>] [--end <iso>] [--all-day] [--location <text>] [--description-file /path.md]"
+                )
+            description = await self.vfs.read_text(description_file) if description_file else None
+            if not any(
+                value is not None
+                for value in [title, start_value, end_value, location, description]
+            ) and not all_day:
+                raise TerminalCommandError("calendar update requires at least one field to change.")
+            try:
+                event = await caldav_service.update_event(
+                    self.vfs.user,
+                    tool_id,
+                    event_id=remainder[0],
+                    calendar_name=calendar_name,
+                    summary=title,
+                    start=start_value,
+                    end=end_value,
+                    all_day=True if all_day else None,
+                    location=location,
+                    description=description,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return f"Updated event {event['uid']} in calendar {event['calendar_name']}"
+
+        if subcommand == "delete":
+            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
+            confirm = "--confirm" in remainder
+            remainder = [item for item in remainder if item != "--confirm"]
+            if len(remainder) != 1:
+                raise TerminalCommandError(
+                    "Usage: calendar delete <event-id> [--account <selector>] [--calendar <name>] --confirm"
+                )
+            if not confirm:
+                raise TerminalCommandError("calendar delete requires --confirm")
+            try:
+                event = await caldav_service.delete_event(
+                    self.vfs.user,
+                    tool_id,
+                    event_id=remainder[0],
+                    calendar_name=calendar_name,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return f"Deleted event {event['uid']} from calendar {event['calendar_name']}"
+
+        raise TerminalCommandError(
+            "Usage: calendar <accounts|calendars|upcoming|list|search|show|create|update|delete> ..."
+        )
 
     async def _get_mailbox_registry(self):
         if self._mailbox_registry_cache is None:
