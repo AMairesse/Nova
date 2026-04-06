@@ -165,7 +165,6 @@ document.addEventListener("DOMContentLoaded", () => {
       basic: ["username", "password"],
       token: ["token"],
       api_key: ["token", "api_key_name", "api_key_in"],
-      custom: [],
       oauth_managed: [],
     };
     const hideAll = () =>

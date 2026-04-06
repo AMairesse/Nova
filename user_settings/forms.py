@@ -493,12 +493,6 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
         },
         {
-            "key": "custom",
-            "label": _("Custom"),
-            "description": _("Reserved for custom authentication flows not covered by the built-in modes."),
-            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
-        },
-        {
             "key": "oauth_managed",
             "label": _("Managed OAuth"),
             "description": _("Complete a browser-based OAuth flow and let Nova refresh tokens automatically."),

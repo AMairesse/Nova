@@ -482,6 +482,8 @@ class ToolsViewsTests(TestCase):
         self.assertIn("oauth_managed", mcp_choices)
         self.assertIn("token", mcp_choices)
         self.assertNotIn("oauth_managed", api_choices)
+        self.assertNotIn("custom", mcp_choices)
+        self.assertNotIn("custom", api_choices)
         self.assertNotIn("token_type", mcp_form.fields)
         self.assertNotIn("token_type", api_form.fields)
 
@@ -770,3 +772,19 @@ class ToolsViewsTests(TestCase):
         form = ToolCredentialForm(instance=credential, user=self.user, tool=tool)
 
         self.assertEqual(form.initial["connection_mode"], "token")
+
+    def test_tool_credential_form_maps_legacy_custom_auth_to_none_mode(self):
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+        credential = create_tool_credential(
+            self.user,
+            tool,
+            auth_type="custom",
+        )
+
+        form = ToolCredentialForm(instance=credential, user=self.user, tool=tool)
+
+        self.assertEqual(form.initial["connection_mode"], "none")
