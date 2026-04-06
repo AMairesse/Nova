@@ -13,5 +13,4 @@ class DashboardView(LoginRequiredMixin, TemplateView):
             tool_subtype="memory",
             is_active=True
         ).exists()
-        context["has_admin_dashboard"] = bool(getattr(self.request.user, "is_staff", False))
         return context

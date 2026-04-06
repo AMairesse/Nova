@@ -2,7 +2,11 @@
 from django.urls import path
 
 from user_settings.views.dashboard import DashboardView
-from user_settings.views.admin_terminal_failures import AdminTerminalFailuresView
+from user_settings.views.admin_metrics import (
+    AdminMetricsDeleteView,
+    AdminMetricsPurgeView,
+    AdminMetricsView,
+)
 from user_settings.views.provider import (
     ProviderListView,
     ProviderCreateView,
@@ -58,7 +62,9 @@ urlpatterns = [
 ]
 
 urlpatterns += [
-    path("admin/terminal-failures/", AdminTerminalFailuresView.as_view(), name="admin-terminal-failures"),
+    path("admin-metrics/", AdminMetricsView.as_view(), name="admin-metrics"),
+    path("admin-metrics/purge/", AdminMetricsPurgeView.as_view(), name="admin-metrics-purge"),
+    path("admin-metrics/<int:pk>/delete/", AdminMetricsDeleteView.as_view(), name="admin-metrics-delete"),
 ]
 
 urlpatterns += [

@@ -58,6 +58,15 @@ body {
     -webkit-overflow-scrolling: touch;
 }
 
+/* Dedicated wide admin pages should keep full-width layout and remain scrollable. */
+.main-container>.admin-metrics-page {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 /* ============================================
    MOBILE UNIFIED NAVBAR STYLES
    ============================================ */

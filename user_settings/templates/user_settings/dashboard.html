@@ -55,16 +55,6 @@
       </button>
     </li>
     {% endif %}
-    {% if has_admin_dashboard %}
-    <li class="nav-item" role="presentation">
-      <button class="nav-link" id="tab-admin"
-              data-bs-toggle="tab"
-              data-bs-target="#pane-admin"
-              type="button" role="tab">
-        {% trans "Admin" %}
-      </button>
-    </li>
-    {% endif %}
   </ul>
 
   <div class="tab-content pt-3">
@@ -117,18 +107,6 @@
         hx-target="this"
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading memory…" %}</div>
-    </div>
-    {% endif %}
-
-    {% if has_admin_dashboard %}
-    <div class="tab-pane fade htmx-pane"
-        id="pane-admin"
-        role="tabpanel"
-        hx-get="{% url 'user_settings:admin-terminal-failures' %}?partial=1"
-        hx-trigger="load"
-        hx-target="#pane-admin"
-        hx-swap="innerHTML">
-      <div class="text-muted">{% trans "Loading admin dashboard…" %}</div>
     </div>
     {% endif %}
   </div>
