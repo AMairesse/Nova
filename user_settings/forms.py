@@ -439,6 +439,12 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
     secret_fields = ("password", "token", "client_secret",
                      "refresh_token", "access_token")
 
+    connection_mode = forms.ChoiceField(
+        required=True,
+        label=_("Connection mode"),
+        help_text=_("Choose how Nova should authenticate to this tool."),
+    )
+
     # Example of a tool-specific config field
     caldav_url = forms.URLField(
         required=False,
@@ -459,14 +465,53 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         help_text=_("Where to send the API key when auth type is API Key."),
     )
 
+    _CONNECTION_MODE_REGISTRY = (
+        {
+            "key": "none",
+            "label": _("No Authentication"),
+            "description": _("Use this when the remote service accepts anonymous requests."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "basic",
+            "label": _("Basic Auth"),
+            "description": _("Send a username and password with each request."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "token",
+            "label": _("Access token"),
+            "description": _(
+                "Send a bearer token manually. Use this too when a service gives you an OAuth access token to paste."
+            ),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "api_key",
+            "label": _("API Key"),
+            "description": _("Send a static API key in a header or query parameter."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "custom",
+            "label": _("Custom"),
+            "description": _("Reserved for custom authentication flows not covered by the built-in modes."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "oauth_managed",
+            "label": _("Managed OAuth"),
+            "description": _("Complete a browser-based OAuth flow and let Nova refresh tokens automatically."),
+            "tool_types": {Tool.ToolType.MCP},
+        },
+    )
+
     class Meta:
         model = ToolCredential
         fields = [
-            "auth_type",
             "username",
             "password",
             "token",
-            "token_type",
             "client_id",
             "client_secret",
             "api_key_name",
@@ -485,32 +530,29 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         self.tool = kw.pop("tool", tool)
         super().__init__(*args, **kw)
         self._previous_auth_type = str(getattr(self.instance, "auth_type", "") or "").strip().lower()
+        self.connection_mode_definitions = self._get_connection_mode_definitions()
 
         # Crispy helper
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.disable_csrf = True
 
-        if self.tool and self.tool.tool_type == Tool.ToolType.MCP:
-            self.fields["auth_type"].choices = [
-                ("none", _("No Authentication")),
-                ("basic", _("Basic Auth")),
-                ("token", _("Token Auth")),
-                ("oauth", _("OAuth Bearer Token (Manual)")),
-                ("api_key", _("API Key")),
-                ("custom", _("Custom")),
-            ]
-        elif self.tool and self.tool.tool_type == Tool.ToolType.API:
-            self.fields["auth_type"].choices = [
-                ("none", _("No Authentication")),
-                ("basic", _("Basic Auth")),
-                ("token", _("Token Auth")),
-                ("oauth", _("OAuth Bearer Token (Manual)")),
-                ("api_key", _("API Key")),
-                ("custom", _("Custom")),
-            ]
-        if self.tool and self.tool.tool_type == Tool.ToolType.MCP and self._previous_auth_type == "oauth_managed":
-            self.initial["auth_type"] = "none"
+        self.fields["connection_mode"].choices = [
+            (mode["key"], mode["label"]) for mode in self.connection_mode_definitions
+        ]
+        self.fields["token"].label = _("Credential value")
+        self.fields["token"].help_text = _(
+            "Enter the bearer token, OAuth access token, or API key value for the selected mode."
+        )
+        self.fields["client_id"].label = _("Client ID")
+        self.fields["client_secret"].label = _("Client secret")
+        self.fields["client_id"].help_text = _(
+            "Optional. Only use this if the remote OAuth provider gave you a pre-registered client ID."
+        )
+        self.fields["client_secret"].help_text = _(
+            "Optional. Only use this if the remote OAuth provider gave you a pre-registered client secret."
+        )
+        self.initial["connection_mode"] = self._initial_connection_mode()
 
         # Pre-fill config
         if self.instance.pk and self.instance.config:
@@ -528,7 +570,6 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             "username",
             "password",
             "token",
-            "token_type",
             "client_id",
             "client_secret",
             "api_key_name",
@@ -546,24 +587,46 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         else:
             self.fields["caldav_url"].widget = forms.HiddenInput()
 
-    def _should_preserve_managed_oauth(self) -> bool:
-        if not self.tool or self.tool.tool_type != Tool.ToolType.MCP:
-            return False
-        if self._previous_auth_type != "oauth_managed":
-            return False
-        auth_type = str(self.cleaned_data.get("auth_type") or "").strip().lower()
-        if auth_type not in {"", "none"}:
-            return False
-        manual_fields = (
-            "username",
-            "password",
-            "token",
-            "token_type",
-            "api_key_name",
+        self.helper.layout = Layout(
+            Div(Field("connection_mode"), css_class="mb-3"),
+            Div(Field("username"), css_class="mb-3"),
+            Div(Field("password"), css_class="mb-3"),
+            Div(Field("token"), css_class="mb-3"),
+            Div(Field("api_key_name"), css_class="mb-3"),
+            Div(Field("api_key_in"), css_class="mb-3"),
+            Div(
+                Div(Field("client_id"), css_class="mb-3"),
+                Div(Field("client_secret"), css_class="mb-3"),
+                css_id="oauthAdvancedFieldsGroup",
+                css_class="d-none",
+            ),
+            Div(Field("caldav_url"), css_class="mb-3"),
         )
-        return not any(str(self.cleaned_data.get(name) or "").strip() for name in manual_fields)
 
-    def _clear_managed_oauth_state(self, instance: ToolCredential) -> None:
+    def _get_connection_mode_definitions(self) -> list[dict[str, Any]]:
+        if not self.tool:
+            return [dict(mode) for mode in self._CONNECTION_MODE_REGISTRY]
+        return [
+            dict(mode)
+            for mode in self._CONNECTION_MODE_REGISTRY
+            if self.tool.tool_type in mode["tool_types"]
+        ]
+
+    def _initial_connection_mode(self) -> str:
+        auth_type = self._previous_auth_type
+        if auth_type == "oauth":
+            return "token"
+        available_modes = {mode["key"] for mode in self.connection_mode_definitions}
+        if auth_type in available_modes:
+            return auth_type
+        return "none"
+
+    def _clear_managed_oauth_state(
+        self,
+        instance: ToolCredential,
+        *,
+        clear_client_registration: bool = False,
+    ) -> None:
         config = dict(instance.config or {})
         oauth_config = config.get("mcp_oauth")
         if isinstance(oauth_config, dict):
@@ -575,19 +638,31 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         instance.access_token = None
         instance.refresh_token = None
         instance.expires_at = None
+        instance.token_type = None
+        if clear_client_registration:
+            instance.client_id = None
+            instance.client_secret = None
 
     # ------------------------------------------------------------------ #
     #  Save                                                               #
     # ------------------------------------------------------------------ #
     def save(self, commit: bool = True):
         instance: ToolCredential = super().save(commit=False)
-        preserve_managed_oauth = self._should_preserve_managed_oauth()
-        if preserve_managed_oauth:
+        connection_mode = str(self.cleaned_data.get("connection_mode") or "").strip().lower()
+
+        if connection_mode == "oauth_managed":
             instance.auth_type = "oauth_managed"
-        elif self.tool and self.tool.tool_type == Tool.ToolType.MCP and self._previous_auth_type == "oauth_managed":
-            selected_auth_type = str(self.cleaned_data.get("auth_type") or "").strip().lower()
-            if selected_auth_type and selected_auth_type != "oauth_managed":
-                self._clear_managed_oauth_state(instance)
+            instance.username = None
+            instance.password = None
+            instance.token = None
+        else:
+            instance.auth_type = connection_mode or "none"
+            self._clear_managed_oauth_state(instance, clear_client_registration=True)
+            if connection_mode != "basic":
+                instance.username = None
+                instance.password = None
+            if connection_mode not in {"token", "api_key"}:
+                instance.token = None
 
         # Persist tool-specific config
         config = instance.config or {}
@@ -595,11 +670,11 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             config["caldav_url"] = self.cleaned_data["caldav_url"]
         api_key_name = str(self.cleaned_data.get("api_key_name") or "").strip()
         api_key_in = str(self.cleaned_data.get("api_key_in") or "").strip().lower()
-        if api_key_name:
+        if connection_mode == "api_key" and api_key_name:
             config["api_key_name"] = api_key_name
         else:
             config.pop("api_key_name", None)
-        if api_key_in in {"header", "query"}:
+        if connection_mode == "api_key" and api_key_in in {"header", "query"}:
             config["api_key_in"] = api_key_in
         else:
             config.pop("api_key_in", None)
@@ -611,8 +686,13 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        auth_type = str(cleaned.get("auth_type") or "").strip().lower()
-        if auth_type == "api_key":
+        connection_mode = str(cleaned.get("connection_mode") or "").strip().lower()
+        allowed_modes = {mode["key"] for mode in self.connection_mode_definitions}
+        if connection_mode not in allowed_modes:
+            self.add_error("connection_mode", _("Choose a valid connection mode."))
+            return cleaned
+
+        if connection_mode == "api_key":
             if not str(cleaned.get("token") or "").strip() and not getattr(self.instance, "token", None):
                 self.add_error("token", _("This field is required for API key authentication."))
             if not str(cleaned.get("api_key_name") or "").strip():
@@ -620,6 +700,10 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             api_key_in = str(cleaned.get("api_key_in") or "").strip().lower()
             if api_key_in not in {"header", "query"}:
                 self.add_error("api_key_in", _("Choose where to send the API key."))
+        elif connection_mode == "oauth_managed" and (
+            not self.tool or self.tool.tool_type != Tool.ToolType.MCP
+        ):
+            self.add_error("connection_mode", _("Managed OAuth is only available for MCP servers."))
         return cleaned
 
 

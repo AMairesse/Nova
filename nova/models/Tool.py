@@ -123,8 +123,7 @@ class ToolCredential(models.Model):
         choices=[
             ('none', _('No Authentication')),
             ('basic', _('Basic Auth')),
-            ('token', _('Token Auth')),
-            ('oauth', _('OAuth')),
+            ('token', _('Access Token')),
             ('oauth_managed', _('Managed OAuth (MCP)')),
             ('api_key', _('API Key')),
             ('custom', _('Custom')),

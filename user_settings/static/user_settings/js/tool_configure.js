@@ -100,30 +100,73 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   //------------------------------------------------------------
-  // 1. Auth-type field switch (only for generic credentials)
+  // 1. Connection mode switch (only for generic credentials)
   //------------------------------------------------------------
-  const authSelect = document.querySelector('[name="auth_type"]');
+  const connectionModeSelect = document.querySelector('[name="connection_mode"]');
   let managedOAuthAdvancedVisible = false;
   const managedOAuthFieldNames = new Set(["client_id", "client_secret"]);
-  const managedOAuthContainers = Array.from(
-    document.querySelectorAll('[data-auth-field="client_id"], [data-auth-field="client_secret"]')
-  ).map((field) => field.closest(".mb-3") || field.parentElement).filter(Boolean);
+  const managedOAuthFieldsGroup = document.getElementById("oauthAdvancedFieldsGroup");
+  const managedOAuthPanel = document.getElementById("managedOAuthPanel");
+  const manualTestButton = document.getElementById("testBtn");
+  const oauthConnectBtn = document.getElementById("oauthConnectBtn");
+  const oauthVerifyBtn = document.getElementById("oauthVerifyBtn");
+  const oauthAdvancedDetails = document.getElementById("oauthAdvancedDetails");
+  const oauthAdvancedFieldsMount = document.getElementById("oauthAdvancedFieldsMount");
+  const connectionModeHelpBlocks = Array.from(
+    document.querySelectorAll("[data-connection-mode-help]")
+  );
+
+  if (managedOAuthFieldsGroup && oauthAdvancedFieldsMount) {
+    oauthAdvancedFieldsMount.appendChild(managedOAuthFieldsGroup);
+  }
+
   const applyManagedOAuthVisibility = () => {
-    managedOAuthContainers.forEach((container) => {
-      container.style.display = managedOAuthAdvancedVisible ? "" : "none";
-      container.querySelectorAll("input").forEach((input) => {
+    const managedModeSelected =
+      connectionModeSelect && connectionModeSelect.value === "oauth_managed";
+
+    if (managedOAuthPanel) {
+      managedOAuthPanel.classList.toggle("d-none", !managedModeSelected);
+    }
+    if (manualTestButton) {
+      manualTestButton.classList.toggle("d-none", managedModeSelected);
+    }
+    if (oauthConnectBtn) {
+      oauthConnectBtn.classList.toggle("d-none", !managedModeSelected);
+    }
+    if (oauthVerifyBtn) {
+      oauthVerifyBtn.classList.toggle("d-none", !managedModeSelected);
+    }
+    if (oauthAdvancedDetails) {
+      oauthAdvancedDetails.classList.toggle("d-none", !managedModeSelected);
+    }
+
+    if (managedOAuthFieldsGroup) {
+      managedOAuthFieldsGroup.classList.toggle(
+        "d-none",
+        !(managedModeSelected && managedOAuthAdvancedVisible)
+      );
+      managedOAuthFieldsGroup.querySelectorAll("input").forEach((input) => {
         input.required = false;
       });
+    }
+  };
+  const applyConnectionModeHelp = () => {
+    if (!connectionModeSelect) return;
+    connectionModeHelpBlocks.forEach((block) => {
+      block.classList.toggle(
+        "d-none",
+        block.dataset.connectionModeHelp !== connectionModeSelect.value
+      );
     });
   };
-  if (authSelect) {
+  if (connectionModeSelect) {
     const mapping = {
       none: [],
       basic: ["username", "password"],
-      token: ["token", "token_type"],
+      token: ["token"],
       api_key: ["token", "api_key_name", "api_key_in"],
-      oauth: ["token", "token_type"],
       custom: [],
+      oauth_managed: [],
     };
     const hideAll = () =>
       document.querySelectorAll("[data-auth-field]").forEach((c) => {
@@ -146,20 +189,19 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     const toggle = () => {
       hideAll();
-      show(mapping[authSelect.value] || []);
+      show(mapping[connectionModeSelect.value] || []);
+      applyConnectionModeHelp();
       applyManagedOAuthVisibility();
     };
     toggle();
-    authSelect.addEventListener("change", toggle);
+    connectionModeSelect.addEventListener("change", toggle);
   }
 
-  const oauthAdvancedToggle = document.getElementById("oauthAdvancedToggle");
-  if (oauthAdvancedToggle) {
-    managedOAuthAdvancedVisible = oauthAdvancedToggle.getAttribute("aria-expanded") === "true";
+  if (oauthAdvancedDetails) {
+    managedOAuthAdvancedVisible = oauthAdvancedDetails.open;
     applyManagedOAuthVisibility();
-    oauthAdvancedToggle.addEventListener("click", () => {
-      managedOAuthAdvancedVisible = !managedOAuthAdvancedVisible;
-      oauthAdvancedToggle.setAttribute("aria-expanded", managedOAuthAdvancedVisible ? "true" : "false");
+    oauthAdvancedDetails.addEventListener("toggle", () => {
+      managedOAuthAdvancedVisible = oauthAdvancedDetails.open;
       applyManagedOAuthVisibility();
     });
   } else {
@@ -167,73 +209,70 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   //------------------------------------------------------------
-  // 2. Test connection
+  // 2. Shared test/verify actions
   //------------------------------------------------------------
+  const resultBox = document.getElementById("testResult");
+  const runConnectionAction = async ({ button, action, pendingText }) => {
+    if (!button || !resultBox) return;
+    resultBox.className = "alert alert-info";
+    resultBox.textContent = pendingText;
+    resultBox.classList.remove("d-none");
+
+    const url = button.dataset.testUrl;
+    const formData = new FormData(document.getElementById("configForm"));
+    formData.set("connection_action", action);
+
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "X-CSRFToken": formData.get("csrfmiddlewaretoken") },
+        body: formData,
+      });
+      const data = await resp.json();
+      if (data.status === "oauth_redirect" && data.authorization_url) {
+        window.location.href = data.authorization_url;
+        return;
+      }
+      resultBox.textContent = data.message || data.status;
+      resultBox.className =
+        "alert " + (data.status === "success" ? "alert-success" : "alert-danger");
+    } catch (e) {
+      resultBox.textContent = e;
+      resultBox.className = "alert alert-danger";
+    }
+  };
+
   const testBtn = document.getElementById("testBtn");
   if (testBtn) {
-    const resultBox = document.getElementById("testResult");
     testBtn.addEventListener("click", async () => {
-      resultBox.className = "alert alert-info";
-      resultBox.textContent = "Testing…";
-      resultBox.classList.remove("d-none");
-
-      const url = testBtn.dataset.testUrl;
-      const formData = new FormData(document.getElementById("configForm"));
-
-      try {
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: { "X-CSRFToken": formData.get("csrfmiddlewaretoken") },
-          body: formData,
-        });
-        const data = await resp.json();
-        if (data.status === "oauth_redirect" && data.authorization_url) {
-          window.location.href = data.authorization_url;
-          return;
-        }
-        resultBox.textContent = data.message || data.status;
-        resultBox.className =
-          "alert " + (data.status === "success" ? "alert-success" : "alert-danger");
-      } catch (e) {
-        resultBox.textContent = e;
-        resultBox.className = "alert alert-danger";
-      }
+      await runConnectionAction({
+        button: testBtn,
+        action: "test",
+        pendingText: "Testing…",
+      });
     });
   }
 
   //------------------------------------------------------------
-  // 3. Managed OAuth connect / reconnect
+  // 3. Managed OAuth actions
   //------------------------------------------------------------
-  const oauthConnectBtn = document.getElementById("oauthConnectBtn");
   if (oauthConnectBtn) {
-    const resultBox = document.getElementById("testResult");
     oauthConnectBtn.addEventListener("click", async () => {
-      resultBox.className = "alert alert-info";
-      resultBox.textContent = "Preparing OAuth…";
-      resultBox.classList.remove("d-none");
+      await runConnectionAction({
+        button: oauthConnectBtn,
+        action: "connect_oauth",
+        pendingText: "Preparing OAuth…",
+      });
+    });
+  }
 
-      const url = oauthConnectBtn.dataset.testUrl;
-      const formData = new FormData(document.getElementById("configForm"));
-      formData.set("mcp_oauth_action", "connect");
-
-      try {
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: { "X-CSRFToken": formData.get("csrfmiddlewaretoken") },
-          body: formData,
-        });
-        const data = await resp.json();
-        if (data.status === "oauth_redirect" && data.authorization_url) {
-          window.location.href = data.authorization_url;
-          return;
-        }
-        resultBox.textContent = data.message || data.status;
-        resultBox.className =
-          "alert " + (data.status === "success" ? "alert-success" : "alert-danger");
-      } catch (e) {
-        resultBox.textContent = e;
-        resultBox.className = "alert alert-danger";
-      }
+  if (oauthVerifyBtn) {
+    oauthVerifyBtn.addEventListener("click", async () => {
+      await runConnectionAction({
+        button: oauthVerifyBtn,
+        action: "verify",
+        pendingText: "Verifying connection…",
+      });
     });
   }
 });
