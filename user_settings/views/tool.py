@@ -28,7 +28,8 @@ from user_settings.mixins import (
     SuccessMessageMixin,
     DashboardRedirectMixin,
 )
-from user_settings.forms import ToolForm, ToolCredentialForm
+from user_settings.forms import APIToolOperationForm, ToolForm, ToolCredentialForm
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.Tool import Tool, ToolCredential
 from nova.tools import get_metadata, import_module
 from nova.models.Tool import check_and_create_searxng_tool, check_and_create_judge0_tool
@@ -340,6 +341,112 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
         ctx["tool"] = self.tool
         if self.tool.tool_type == Tool.ToolType.BUILTIN:
             ctx["metadata"] = get_metadata(self.tool.python_path)
+        if self.tool.tool_type == Tool.ToolType.API:
+            ctx["api_operations"] = list(
+                APIToolOperation.objects.filter(tool=self.tool).order_by("name", "id")
+            )
+        return ctx
+
+
+class _APIToolOperationViewBase(DashboardRedirectMixin, LoginRequiredMixin):
+    dashboard_tab = "tools"
+    template_name = "user_settings/api_tool_operation_form.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        self.tool = Tool.objects.get(
+            pk=kwargs["tool_pk"],
+            user=request.user,
+            tool_type=Tool.ToolType.API,
+        )
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_success_url(self):
+        return reverse("user_settings:tool-configure", args=[self.tool.pk])
+
+
+class APIToolOperationCreateView(_APIToolOperationViewBase, FormView):
+    form_class = APIToolOperationForm
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["tool"] = self.tool
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def form_valid(self, form):
+        form.save()
+        messages.success(self.request, "API operation created.")
+        return HttpResponseRedirect(self.get_success_url())
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["tool"] = self.tool
+        ctx["operation"] = None
+        return ctx
+
+
+class APIToolOperationUpdateView(_APIToolOperationViewBase, FormView):
+    form_class = APIToolOperationForm
+
+    def dispatch(self, request, *args, **kwargs):
+        self.tool = Tool.objects.get(
+            pk=kwargs["tool_pk"],
+            user=request.user,
+            tool_type=Tool.ToolType.API,
+        )
+        self.operation = APIToolOperation.objects.get(
+            pk=kwargs["pk"],
+            tool=self.tool,
+        )
+        return FormView.dispatch(self, request, *args, **kwargs)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["instance"] = self.operation
+        kwargs["tool"] = self.tool
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def form_valid(self, form):
+        form.save()
+        messages.success(self.request, "API operation updated.")
+        return HttpResponseRedirect(self.get_success_url())
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["tool"] = self.tool
+        ctx["operation"] = self.operation
+        return ctx
+
+
+class APIToolOperationDeleteView(
+    DashboardRedirectMixin,
+    LoginRequiredMixin,
+    SuccessMessageMixin,
+    DeleteView,
+):
+    model = APIToolOperation
+    template_name = "user_settings/api_tool_operation_confirm_delete.html"
+    dashboard_tab = "tools"
+    success_message = "API operation deleted."
+
+    def dispatch(self, request, *args, **kwargs):
+        self.tool = Tool.objects.get(
+            pk=kwargs["tool_pk"],
+            user=request.user,
+            tool_type=Tool.ToolType.API,
+        )
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return APIToolOperation.objects.filter(tool=self.tool)
+
+    def get_success_url(self):
+        return reverse("user_settings:tool-configure", args=[self.tool.pk])
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["tool"] = self.tool
         return ctx
 
 

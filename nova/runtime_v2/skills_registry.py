@@ -150,6 +150,43 @@ Useful commands:
 `search` results do not persist across later thread messages unless you write them to a file with `--output`.
 """
 
+    if capabilities.has_mcp:
+        skills["mcp.md"] = """# MCP
+
+Remote MCP servers are exposed through the `mcp` command family.
+
+Useful commands:
+- `mcp servers`
+- `mcp tools --server 12`
+- `mcp schema list_pages --server Notion MCP`
+- `mcp call list_pages --server Notion MCP query=\"roadmap\"`
+- `mcp call list_pages --server Notion MCP < /tmp/input.json`
+- `mcp call export_report --server Reports --extract-to /reports`
+
+Use `mcp schema` before `mcp call` when you do not already know the expected JSON input shape.
+When commands are piped or redirected, MCP emits normalized JSON to stdout.
+Use `--output` to save the normalized result, or `--extract-to` when the tool returns files or resources.
+"""
+
+    if capabilities.has_api:
+        skills["api.md"] = """# API
+
+Configured custom API services are exposed through the `api` command family.
+
+Useful commands:
+- `api services`
+- `api operations --service CRM`
+- `api schema create_invoice --service Billing`
+- `api call create_invoice --service Billing customer_id=42 amount=199`
+- `api call create_invoice --service Billing < /tmp/payload.json`
+- `api call export_pdf --service Billing --output /tmp/invoice.pdf`
+
+Each API service exposes declared operations with a fixed method, path template, and JSON schema.
+Use `api schema` before `api call` when you need the exact expected payload shape.
+When commands are piped or redirected, API commands emit normalized JSON to stdout.
+Binary API responses must be saved with `--output`.
+"""
+
     if capabilities.has_webdav:
         skills["webdav.md"] = """# WebDAV
 

@@ -26,12 +26,12 @@
               data-test-url="{% url 'user_settings:tool-test' tool.pk %}">
         <i class="bi bi-check2-circle me-1"></i> {% trans "Test connection" %}
       </button>
-    {% else %}
+    {% elif tool.tool_type == 'builtin' %}
       <p>{% trans "No configuration required for this tool." %}</p>
     {% endif %}
 
     <div class="mt-4">
-      {% if tool.tool_type == 'builtin' and metadata.requires_config or tool.tool_type == 'mcp' %}
+      {% if tool.tool_type != 'builtin' or metadata.requires_config %}
       <button class="btn btn-primary me-2" type="submit">
         <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
       </button>
@@ -48,6 +48,50 @@
       {% endif %}
     </div>
   </form>
+
+  {% if tool.tool_type == 'api' %}
+  <hr class="my-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="h5 mb-0">{% trans "API operations" %}</h3>
+    <a href="{% url 'user_settings:api-operation-add' tool.pk %}" class="btn btn-sm btn-outline-primary">
+      <i class="bi bi-plus-lg me-1"></i>{% trans "Add operation" %}
+    </a>
+  </div>
+  {% if api_operations %}
+    <div class="list-group">
+      {% for operation in api_operations %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between align-items-start gap-3">
+            <div>
+              <div class="fw-semibold">{{ operation.name }}</div>
+              <div class="small text-muted">
+                <code>{{ operation.http_method }}</code>
+                <code>{{ operation.path_template }}</code>
+                {% if operation.slug %}<span>· {{ operation.slug }}</span>{% endif %}
+              </div>
+              {% if operation.description %}
+                <div class="small mt-1">{{ operation.description }}</div>
+              {% endif %}
+              {% if not operation.is_active %}
+                <div class="small text-warning mt-1">{% trans "Inactive" %}</div>
+              {% endif %}
+            </div>
+            <div class="d-flex gap-2">
+              <a href="{% url 'user_settings:api-operation-edit' tool.pk operation.pk %}" class="btn btn-sm btn-outline-secondary">
+                {% trans "Edit" %}
+              </a>
+              <a href="{% url 'user_settings:api-operation-delete' tool.pk operation.pk %}" class="btn btn-sm btn-outline-danger">
+                {% trans "Delete" %}
+              </a>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="text-muted mb-0">{% trans "No API operations configured yet." %}</p>
+  {% endif %}
+  {% endif %}
 
   <div id="testResult" class="alert d-none"></div>
 </div>

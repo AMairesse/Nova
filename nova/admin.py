@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
 from nova.models.CheckpointLink import CheckpointLink
 from nova.models.ConversationEmbedding import DaySegmentEmbedding, TranscriptChunkEmbedding
@@ -340,6 +341,13 @@ class ToolCredentialAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "tool", "auth_type", "updated_at")
     list_filter = ("auth_type", "updated_at")
     search_fields = ("user__username", "tool__name")
+
+
+@admin.register(APIToolOperation)
+class APIToolOperationAdmin(admin.ModelAdmin):
+    list_display = ("id", "tool", "name", "slug", "http_method", "is_active", "updated_at")
+    list_filter = ("http_method", "is_active", "updated_at")
+    search_fields = ("tool__name", "name", "slug", "path_template", "description")
 
 
 @admin.register(Task)

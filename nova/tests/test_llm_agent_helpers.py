@@ -135,21 +135,12 @@ class LLMAgentHelperTests(TestCase):
 
         self.assertEqual(values, ([], [], [], False, None, None, None))
 
-    def test_fetch_agent_data_sync_collects_builtin_mcp_and_agent_tools(self):
+    def test_fetch_agent_data_sync_collects_builtin_and_agent_tools_without_mcp_runtime_data(self):
         builtin_tool = SimpleNamespace(name="builtin")
-        available_functions = MagicMock()
-        available_functions.values.return_value = [{"name": "list"}]
-        credential = SimpleNamespace(user=SimpleNamespace(id=99))
-        mcp_tool = SimpleNamespace(
-            credentials=MagicMock(),
-            available_functions=available_functions,
-        )
-        mcp_tool.credentials.filter.return_value.first.return_value = credential
         agent_tool = SimpleNamespace(name="sub-agent")
         tools_manager = MagicMock()
         tools_manager.filter.side_effect = [
             [builtin_tool],
-            [mcp_tool],
         ]
         agent_tools_manager = MagicMock()
         agent_tools_manager.filter.return_value = [agent_tool]
@@ -172,10 +163,7 @@ class LLMAgentHelperTests(TestCase):
         self.assertEqual(system_prompt, "Prompt")
         self.assertEqual(recursion_limit, 13)
         self.assertIs(llm_provider, self.provider)
-        self.assertEqual(
-            mcp_tools_data,
-            [(mcp_tool, credential, [{"name": "list"}], 99)],
-        )
+        self.assertEqual(mcp_tools_data, [])
 
     def test_init_adds_summarization_middleware_only_for_non_continuous_threads(self):
         agent_config = SimpleNamespace(auto_summarize=True)

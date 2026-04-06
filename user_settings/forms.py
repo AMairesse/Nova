@@ -16,6 +16,7 @@ from django.utils.translation import gettext_lazy as _
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Field
 
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
 from nova.providers import get_provider_defaults
@@ -318,20 +319,6 @@ class ToolForm(forms.ModelForm):
         help_text=_("Select a builtin tool subtype"),
     )
 
-    input_schema = forms.JSONField(
-        widget=forms.Textarea(attrs={"rows": 5, "class": "json-editor"}),
-        required=False,
-        initial={},
-        help_text=_("JSON schema describing the tool inputs"),
-    )
-
-    output_schema = forms.JSONField(
-        widget=forms.Textarea(attrs={"rows": 5, "class": "json-editor"}),
-        required=False,
-        initial={},
-        help_text=_("JSON schema describing the tool outputs"),
-    )
-
     class Meta:
         model = Tool
         fields = [
@@ -341,8 +328,6 @@ class ToolForm(forms.ModelForm):
             "tool_subtype",
             "endpoint",
             "transport_type",
-            "input_schema",
-            "output_schema",
             "is_active",
         ]
 
@@ -378,13 +363,6 @@ class ToolForm(forms.ModelForm):
         if ttype in {"python", "filesystem"} and "auth" in self.fields:
             self.fields["auth"].required = False
 
-        # Pre-fill JSON editors when editing a non-builtin tool
-        if self.instance.pk and self.instance.tool_type != Tool.ToolType.BUILTIN:
-            if self.instance.input_schema:
-                self.fields["input_schema"].initial = self.instance.input_schema
-            if self.instance.output_schema:
-                self.fields["output_schema"].initial = self.instance.output_schema
-
     # ------------------------------------------------------------------ #
     #  Validation                                                         #
     # ------------------------------------------------------------------ #
@@ -408,12 +386,6 @@ class ToolForm(forms.ModelForm):
                 if not (cleaned.get("description") or "").strip():
                     cleaned["description"] = meta["description"]
                 cleaned["python_path"] = meta["python_path"]
-                cleaned["input_schema"] = (
-                    cleaned.get("input_schema") or meta.get("input_schema", {})
-                )
-                cleaned["output_schema"] = (
-                    cleaned.get("output_schema") or meta.get("output_schema", {})
-                )
 
             if (
                 self.user
@@ -474,6 +446,18 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         empty_value=None,
         assume_scheme='https',
     )
+    api_key_name = forms.CharField(
+        required=False,
+        help_text=_("Header or query parameter name for API key auth"),
+    )
+    api_key_in = forms.ChoiceField(
+        required=False,
+        choices=[
+            ("header", _("Header")),
+            ("query", _("Query parameter")),
+        ],
+        help_text=_("Where to send the API key when auth type is API Key."),
+    )
 
     class Meta:
         model = ToolCredential
@@ -485,6 +469,8 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             "token_type",
             "client_id",
             "client_secret",
+            "api_key_name",
+            "api_key_in",
         ]
         widgets = {
             "password": forms.PasswordInput(render_value=True),
@@ -509,9 +495,23 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             self.fields["caldav_url"].initial = self.instance.config.get(
                 "caldav_url"
             )
+            self.fields["api_key_name"].initial = self.instance.config.get("api_key_name", "X-API-Key")
+            self.fields["api_key_in"].initial = self.instance.config.get("api_key_in", "header")
+        else:
+            self.fields["api_key_name"].initial = "X-API-Key"
+            self.fields["api_key_in"].initial = "header"
 
         # Add data-auth-field attributes for JS visibility control
-        auth_fields = ["username", "password", "token", "token_type", "client_id", "client_secret"]
+        auth_fields = [
+            "username",
+            "password",
+            "token",
+            "token_type",
+            "client_id",
+            "client_secret",
+            "api_key_name",
+            "api_key_in",
+        ]
         for field_name in auth_fields:
             if field_name in self.fields:
                 self.fields[field_name].widget.attrs.setdefault('data-auth-field', field_name)
@@ -534,8 +534,85 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         config = instance.config or {}
         if self.cleaned_data.get("caldav_url"):
             config["caldav_url"] = self.cleaned_data["caldav_url"]
+        api_key_name = str(self.cleaned_data.get("api_key_name") or "").strip()
+        api_key_in = str(self.cleaned_data.get("api_key_in") or "").strip().lower()
+        if api_key_name:
+            config["api_key_name"] = api_key_name
+        else:
+            config.pop("api_key_name", None)
+        if api_key_in in {"header", "query"}:
+            config["api_key_in"] = api_key_in
+        else:
+            config.pop("api_key_in", None)
         instance.config = config
 
+        if commit:
+            instance.save()
+        return instance
+
+    def clean(self):
+        cleaned = super().clean()
+        auth_type = str(cleaned.get("auth_type") or "").strip().lower()
+        if auth_type == "api_key":
+            if not str(cleaned.get("token") or "").strip() and not getattr(self.instance, "token", None):
+                self.add_error("token", _("This field is required for API key authentication."))
+            if not str(cleaned.get("api_key_name") or "").strip():
+                self.add_error("api_key_name", _("This field is required for API key authentication."))
+            api_key_in = str(cleaned.get("api_key_in") or "").strip().lower()
+            if api_key_in not in {"header", "query"}:
+                self.add_error("api_key_in", _("Choose where to send the API key."))
+        return cleaned
+
+
+class APIToolOperationForm(forms.ModelForm):
+    query_parameters_csv = forms.CharField(
+        required=False,
+        help_text=_("Comma-separated list of input field names to send as query parameters."),
+    )
+
+    class Meta:
+        model = APIToolOperation
+        fields = [
+            "name",
+            "slug",
+            "description",
+            "http_method",
+            "path_template",
+            "query_parameters_csv",
+            "body_parameter",
+            "input_schema",
+            "output_schema",
+            "is_active",
+        ]
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": 3}),
+            "input_schema": forms.Textarea(attrs={"rows": 6, "class": "json-editor"}),
+            "output_schema": forms.Textarea(attrs={"rows": 6, "class": "json-editor"}),
+        }
+
+    def __init__(self, *args: Any, user=None, tool: Tool | None = None, **kwargs: Any) -> None:
+        self.user = user
+        self.tool = tool
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        if self.instance.pk:
+            self.fields["query_parameters_csv"].initial = ", ".join(self.instance.query_parameters or [])
+
+    def clean_query_parameters_csv(self) -> list[str]:
+        raw = str(self.cleaned_data.get("query_parameters_csv") or "")
+        values: list[str] = []
+        for chunk in raw.replace("\n", ",").split(","):
+            item = chunk.strip()
+            if item and item not in values:
+                values.append(item)
+        return values
+
+    def save(self, commit: bool = True):
+        instance: APIToolOperation = super().save(commit=False)
+        instance.tool = self.tool or instance.tool
+        instance.query_parameters = list(self.cleaned_data.get("query_parameters_csv") or [])
         if commit:
             instance.save()
         return instance

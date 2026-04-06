@@ -20,6 +20,9 @@ from user_settings.views.agent import (
     bootstrap_defaults,
 )
 from user_settings.views.tool import (
+    APIToolOperationCreateView,
+    APIToolOperationDeleteView,
+    APIToolOperationUpdateView,
     ToolListView,
     ToolCreateView,
     ToolUpdateView,
@@ -93,6 +96,17 @@ urlpatterns += [
     path("tools/<int:pk>/delete/", ToolDeleteView.as_view(), name="tool-delete"),
     path("tools/<int:pk>/configure/", ToolConfigureView.as_view(), name="tool-configure"),
     path("tools/<int:pk>/test/", tool_test_connection, name="tool-test"),
+    path("tools/<int:tool_pk>/operations/add/", APIToolOperationCreateView.as_view(), name="api-operation-add"),
+    path(
+        "tools/<int:tool_pk>/operations/<int:pk>/edit/",
+        APIToolOperationUpdateView.as_view(),
+        name="api-operation-edit",
+    ),
+    path(
+        "tools/<int:tool_pk>/operations/<int:pk>/delete/",
+        APIToolOperationDeleteView.as_view(),
+        name="api-operation-delete",
+    ),
 ]
 
 urlpatterns += [

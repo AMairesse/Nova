@@ -94,23 +94,12 @@ class LLMAgent:
             return [], [], [], False, None, None, None
         builtin_tools = list(agent_config.tools.filter(is_active=True,
                                                        tool_type=Tool.ToolType.BUILTIN))
-        mcp_tools_data = []
-        mcp_tools = list(agent_config.tools.filter(tool_type=Tool.ToolType.MCP,
-                                                   is_active=True))
-        for tool in mcp_tools:
-            cred = tool.credentials.filter(user=user).first()
-            cred_user_id = cred.user.id if cred and cred.user else None
-            if tool.available_functions:
-                func_metas = list(tool.available_functions.values())
-            else:
-                func_metas = None
-            mcp_tools_data.append((tool, cred, func_metas, cred_user_id))
         agent_tools = list(agent_config.agent_tools.filter(is_tool=True))
         has_agent_tools = agent_config.agent_tools.exists()
         system_prompt = agent_config.system_prompt
         recursion_limit = agent_config.recursion_limit
         llm_provider = agent_config.llm_provider
-        return builtin_tools, mcp_tools_data, agent_tools, \
+        return builtin_tools, [], agent_tools, \
             has_agent_tools, system_prompt, recursion_limit, \
             llm_provider
 

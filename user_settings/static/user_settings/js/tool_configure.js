@@ -108,7 +108,7 @@ document.addEventListener("DOMContentLoaded", () => {
       none: [],
       basic: ["username", "password"],
       token: ["token", "token_type"],
-      api_key: ["token"],
+      api_key: ["token", "api_key_name", "api_key_in"],
       oauth: ["client_id", "client_secret"],
       custom: [],
     };

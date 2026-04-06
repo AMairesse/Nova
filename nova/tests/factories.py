@@ -1,6 +1,7 @@
 # nova/tests/factories.py
 from django.contrib.auth import get_user_model
 
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Tool import Tool, ToolCredential
@@ -72,4 +73,33 @@ def create_tool_credential(user, tool: Tool, auth_type="basic", username=None,
         password=password,
         token=token,
         config=config or {},
+    )
+
+
+def create_api_tool_operation(
+    tool: Tool,
+    *,
+    name="Get status",
+    slug="get-status",
+    http_method=APIToolOperation.HTTPMethod.GET,
+    path_template="/status",
+    query_parameters=None,
+    body_parameter="",
+    input_schema=None,
+    output_schema=None,
+    description="",
+    is_active=True,
+):
+    return APIToolOperation.objects.create(
+        tool=tool,
+        name=name,
+        slug=slug,
+        description=description,
+        http_method=http_method,
+        path_template=path_template,
+        query_parameters=list(query_parameters or []),
+        body_parameter=body_parameter,
+        input_schema=input_schema if input_schema is not None else {},
+        output_schema=output_schema if output_schema is not None else {},
+        is_active=is_active,
     )

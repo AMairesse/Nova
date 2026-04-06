@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.Tool import Tool, ToolCredential
 from nova.tests.factories import (
     create_agent,
@@ -194,8 +195,6 @@ class ToolsViewsTests(TestCase):
                 "tool_type": Tool.ToolType.API,
                 "endpoint": "https://api.example.com/v2",
                 "is_active": True,
-                "input_schema": {},
-                "output_schema": {},
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -203,6 +202,108 @@ class ToolsViewsTests(TestCase):
         tool.refresh_from_db()
         self.assertEqual(tool.name, "Updated")
         self.assertEqual(tool.endpoint, "https://api.example.com/v2")
+
+    def test_configure_api_tool_lists_operations_and_creates_api_key_credential(self):
+        tool = create_tool(
+            self.user,
+            name="CRM API",
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+        APIToolOperation.objects.create(
+            tool=tool,
+            name="Create contact",
+            slug="create-contact",
+            description="Create a CRM contact",
+            http_method=APIToolOperation.HTTPMethod.POST,
+            path_template="/contacts",
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "API operations")
+        self.assertContains(response, "Create contact")
+
+        response = self.client.post(
+            reverse("user_settings:tool-configure", args=[tool.id]),
+            data={
+                "auth_type": "api_key",
+                "username": "",
+                "password": "",
+                "token": "secret-key",
+                "token_type": "",
+                "client_id": "",
+                "client_secret": "",
+                "api_key_name": "X-Service-Key",
+                "api_key_in": "query",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        credential = ToolCredential.objects.get(user=self.user, tool=tool)
+        self.assertEqual(credential.auth_type, "api_key")
+        self.assertEqual(credential.token, "secret-key")
+        self.assertEqual(credential.config["api_key_name"], "X-Service-Key")
+        self.assertEqual(credential.config["api_key_in"], "query")
+
+    def test_api_operation_crud_views_work_under_api_tool(self):
+        tool = create_tool(
+            self.user,
+            name="Billing API",
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+
+        create_response = self.client.post(
+            reverse("user_settings:api-operation-add", args=[tool.id]),
+            data={
+                "name": "Create invoice",
+                "slug": "create-invoice",
+                "description": "Create an invoice",
+                "http_method": APIToolOperation.HTTPMethod.POST,
+                "path_template": "/invoices/{invoice_id}",
+                "query_parameters_csv": "mode, locale",
+                "body_parameter": "payload",
+                "input_schema": '{"type":"object","required":["invoice_id","payload"]}',
+                "output_schema": '{"type":"object"}',
+                "is_active": True,
+            },
+        )
+
+        self.assertEqual(create_response.status_code, 302)
+        operation = APIToolOperation.objects.get(tool=tool, slug="create-invoice")
+        self.assertEqual(operation.query_parameters, ["mode", "locale"])
+        self.assertEqual(operation.body_parameter, "payload")
+
+        update_response = self.client.post(
+            reverse("user_settings:api-operation-edit", args=[tool.id, operation.id]),
+            data={
+                "name": "Create invoice v2",
+                "slug": "create-invoice",
+                "description": "Updated invoice creation",
+                "http_method": APIToolOperation.HTTPMethod.PUT,
+                "path_template": "/invoices/{invoice_id}",
+                "query_parameters_csv": "mode",
+                "body_parameter": "",
+                "input_schema": '{"type":"object"}',
+                "output_schema": '{"type":"object","properties":{"ok":{"type":"boolean"}}}',
+                "is_active": True,
+            },
+        )
+
+        self.assertEqual(update_response.status_code, 302)
+        operation.refresh_from_db()
+        self.assertEqual(operation.name, "Create invoice v2")
+        self.assertEqual(operation.http_method, APIToolOperation.HTTPMethod.PUT)
+        self.assertEqual(operation.query_parameters, ["mode"])
+
+        delete_response = self.client.post(
+            reverse("user_settings:api-operation-delete", args=[tool.id, operation.id]),
+        )
+
+        self.assertEqual(delete_response.status_code, 302)
+        self.assertFalse(APIToolOperation.objects.filter(id=operation.id).exists())
 
     def test_delete_tool_requires_owner(self):
         tool = create_tool(self.user)

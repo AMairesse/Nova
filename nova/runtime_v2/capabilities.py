@@ -7,6 +7,8 @@ from .constants import RUNTIME_ENGINE_REACT_TERMINAL_V1
 
 @dataclass(slots=True)
 class TerminalCapabilities:
+    mcp_tools: list = field(default_factory=list)
+    api_tools: list = field(default_factory=list)
     email_tools: list = field(default_factory=list)
     caldav_tools: list = field(default_factory=list)
     searxng_tool: object | None = None
@@ -21,6 +23,14 @@ class TerminalCapabilities:
     @property
     def has_email(self) -> bool:
         return bool(self.email_tools)
+
+    @property
+    def has_mcp(self) -> bool:
+        return bool(self.mcp_tools)
+
+    @property
+    def has_api(self) -> bool:
+        return bool(self.api_tools)
 
     @property
     def has_multiple_mailboxes(self) -> bool:
@@ -68,6 +78,10 @@ class TerminalCapabilities:
 
     def enabled_command_families(self) -> list[str]:
         families = ["filesystem", "skills"]
+        if self.has_mcp:
+            families.append("mcp")
+        if self.has_api:
+            families.append("api")
         if self.has_search:
             families.append("search")
         if self.has_web:
@@ -98,6 +112,8 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
         ).select_related("llm_provider")
     )
 
+    mcp_tools = [tool for tool in tools if getattr(tool, "tool_type", "") == "mcp"]
+    api_tools = [tool for tool in tools if getattr(tool, "tool_type", "") == "api"]
     email_tools = [tool for tool in tools if tool.tool_subtype == "email"]
     caldav_tools = [tool for tool in tools if tool.tool_subtype == "caldav"]
     searxng_tool = next((tool for tool in tools if tool.tool_subtype == "searxng"), None)
@@ -109,6 +125,8 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
     memory_tool = next((tool for tool in tools if tool.tool_subtype == "memory"), None)
 
     return TerminalCapabilities(
+        mcp_tools=mcp_tools,
+        api_tools=api_tools,
         email_tools=email_tools,
         caldav_tools=caldav_tools,
         searxng_tool=searxng_tool,

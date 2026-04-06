@@ -1,4 +1,5 @@
 from .Memory import MemoryItem, MemoryItemEmbedding, MemoryTheme  # noqa: F401
+from .APIToolOperation import APIToolOperation  # noqa: F401
 from .MemoryChunk import MemoryChunk  # noqa: F401
 from .MemoryChunkEmbedding import MemoryChunkEmbedding  # noqa: F401
 from .MemoryDirectory import MemoryDirectory  # noqa: F401

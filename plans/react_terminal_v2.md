@@ -47,6 +47,7 @@ very small tool surface and a file-centric mental model.
 - `/subagents/<agent-id>-<run-id>/`: outputs copied back automatically from delegated sub-agents
 - Live webapp source directories live in the normal persistent root under `/`
   and are published explicitly with `webapp expose`
+- MCP and custom API integrations are terminal-native command families, not filesystems
 
 ### Storage mapping
 
@@ -123,6 +124,46 @@ very small tool surface and a file-centric mental model.
   - `browse open --result N`
 - Persisted outputs from `search` or `browse` must be written explicitly through `--output`
 
+### MCP model
+
+- MCP servers are configured as attached agent tools with `tool_type=mcp`
+- MCP is exposed terminal-natively through:
+  - `mcp servers`
+  - `mcp tools`
+  - `mcp schema`
+  - `mcp call`
+  - `mcp refresh`
+- MCP tools are discovered live from the configured server rather than loaded as model tools
+- Complex inputs can be provided inline, via `--input-file`, or through stdin JSON
+- When `mcp` output is piped or redirected, the command emits normalized JSON to stdout
+- `mcp call --output /path.json` writes the normalized payload to the VFS
+- `mcp call --extract-to /dir` materializes extractable files/resources returned by the MCP result
+- Binary/resource-like MCP results are not piped as raw binary in v1
+
+### Custom API model
+
+- Custom API services are configured as attached agent tools with `tool_type=api`
+- Each API service owns declared operations modeled as `APIToolOperation`
+- An operation defines:
+  - HTTP method
+  - path template
+  - query parameter names
+  - optional body parameter
+  - input and output schemas
+- API is exposed terminal-natively through:
+  - `api services`
+  - `api operations`
+  - `api schema`
+  - `api call`
+- Complex inputs can be provided inline, via `--input-file`, or through stdin JSON
+- When `api` output is piped or redirected, the command emits normalized JSON to stdout
+- Binary API responses must be saved explicitly with `--output`
+- Supported auth modes in v1:
+  - none
+  - basic
+  - bearer/token
+  - api_key in header or query
+
 ### WebApp model
 
 - Webapps are thread-scoped publications backed by a live source directory in the
@@ -171,12 +212,14 @@ very small tool surface and a file-centric mental model.
   - `grep ...`
   - `memory search ...`
 - Optional command families enabled by configured tools:
+  - API tool -> `api ...`
   - caldav builtin -> `calendar ...`
   - browser builtin -> `curl`, `wget`, `browse ...`
   - email builtin -> `mail ...`
   - code execution builtin -> `python ...`
   - date builtin -> `date`
   - memory builtin -> `/memory` mount + `memory search`
+  - MCP tool -> `mcp ...`
   - searxng builtin -> `search ...`
   - webapp builtin -> `webapp list`, `webapp expose`, `webapp show`, `webapp delete`
   - webdav builtin -> `/webdav` mount through existing filesystem commands
@@ -218,6 +261,10 @@ very small tool surface and a file-centric mental model.
 - Terminal-native `calendar` command family with multi-account selection through `--account`
 - JSON/Markdown export support for calendar read commands through `--output`
 - Recurring CalDAV events exposed in read flows but treated as read-only for create/update/delete
+- API tools modeled as declared `APIToolOperation` records under a configured API service
+- Terminal-native `api` command family with stdin, pipes, shell redirections, and explicit `--output` for binary responses
+- Terminal-native `mcp` command family with live tool discovery, schema inspection, input via files/stdin, and optional extraction through `--extract-to`
+- MCP tools removed from the legacy model-tool loading path; MCP and API are now terminal-only capabilities in v2
 - Terminal-native `search` command with per-run cached results and optional JSON persistence
 - Terminal-native `browse` command family backed by a native Playwright service
 - Lazy Playwright session creation and guaranteed browser cleanup at the end of each v2 run

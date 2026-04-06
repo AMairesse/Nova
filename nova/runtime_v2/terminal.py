@@ -8,12 +8,15 @@ import shlex
 from dataclasses import dataclass
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
+from typing import Any
 
 from django.utils import timezone
 
+from nova.api_tools import service as api_tools_service
 from nova.caldav import service as caldav_service
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
 from nova.memory.service import search_memory_items
+from nova.mcp import service as mcp_service
 from nova.models.Thread import Thread
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.vfs import VFSError, VirtualFileSystem, normalize_vfs_path
@@ -369,7 +372,7 @@ class TerminalExecutor:
         if name == "grep":
             return await self._cmd_grep(args, stdin_text=stdin_text)
         if name == "search":
-            return await self._cmd_search(args)
+            return await self._cmd_search(args, capture_output=capture_output)
         if name == "browse":
             return await self._cmd_browse(args, capture_output=capture_output)
         if name == "history":
@@ -386,6 +389,10 @@ class TerminalExecutor:
             return await self._cmd_mail(args)
         if name == "memory":
             return await self._cmd_memory(args)
+        if name == "mcp":
+            return await self._cmd_mcp(args, stdin_text=stdin_text, capture_output=capture_output)
+        if name == "api":
+            return await self._cmd_api(args, stdin_text=stdin_text, capture_output=capture_output)
         if name == "webapp":
             return await self._cmd_webapp(args)
         if name == "python":
@@ -1050,6 +1057,331 @@ class TerminalExecutor:
         )
         return self._format_memory_search_payload(payload)
 
+    async def _cmd_mcp(
+        self,
+        args: list[str],
+        *,
+        stdin_text: str | None = None,
+        capture_output: bool = False,
+    ) -> str:
+        if not self.capabilities.has_mcp:
+            raise TerminalCommandError("MCP commands are not enabled for this agent.")
+        if not args:
+            raise TerminalCommandError("Usage: mcp <servers|tools|schema|call|refresh> ...")
+
+        subcommand = str(args[0] or "").strip().lower()
+        remainder = args[1:]
+
+        if subcommand == "servers":
+            if remainder:
+                raise TerminalCommandError("Usage: mcp servers")
+            payload = [
+                {
+                    "id": tool.id,
+                    "name": tool.name,
+                    "endpoint": tool.endpoint,
+                    "transport_type": tool.transport_type,
+                }
+                for tool in self.capabilities.mcp_tools
+            ]
+            if capture_output:
+                return self._render_structured_stdout(payload, capture_output=True)
+            return self._format_remote_service_listing("MCP servers", payload)
+
+        if subcommand == "tools":
+            server_selector, remainder = self._parse_flag_value(remainder, "--server")
+            if remainder:
+                raise TerminalCommandError("Usage: mcp tools [--server <selector>]")
+            server = self._resolve_remote_tool(
+                selector=server_selector,
+                tools=self.capabilities.mcp_tools,
+                noun="MCP server",
+                flag_name="--server",
+            )
+            try:
+                payload = await mcp_service.list_mcp_tools(tool=server, user=self.vfs.user)
+            except mcp_service.MCPServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            if capture_output:
+                return self._render_structured_stdout(payload, capture_output=True)
+            if not payload:
+                return f"No MCP tools discovered on {server.name}."
+            lines = [f"Discovered MCP tools on {server.name}:"]
+            for item in payload:
+                line = f"- {item.get('name')}"
+                description = str(item.get("description") or "").strip()
+                if description:
+                    line += f" / {description}"
+                lines.append(line)
+            return "\n".join(lines)
+
+        if subcommand == "schema":
+            server_selector, remainder = self._parse_flag_value(remainder, "--server")
+            if len(remainder) != 1:
+                raise TerminalCommandError("Usage: mcp schema <tool-name> [--server <selector>]")
+            server = self._resolve_remote_tool(
+                selector=server_selector,
+                tools=self.capabilities.mcp_tools,
+                noun="MCP server",
+                flag_name="--server",
+            )
+            try:
+                payload = await mcp_service.describe_mcp_tool(
+                    tool=server,
+                    user=self.vfs.user,
+                    tool_name=remainder[0],
+                )
+            except mcp_service.MCPServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return self._render_structured_stdout(payload, capture_output=capture_output)
+
+        if subcommand == "refresh":
+            server_selector, remainder = self._parse_flag_value(remainder, "--server")
+            if remainder:
+                raise TerminalCommandError("Usage: mcp refresh [--server <selector>]")
+            servers = (
+                [self._resolve_remote_tool(
+                    selector=server_selector,
+                    tools=self.capabilities.mcp_tools,
+                    noun="MCP server",
+                    flag_name="--server",
+                )]
+                if server_selector is not None
+                else list(self.capabilities.mcp_tools)
+            )
+            payload: list[dict[str, Any]] = []
+            for server in servers:
+                try:
+                    tools = await mcp_service.list_mcp_tools(
+                        tool=server,
+                        user=self.vfs.user,
+                        force_refresh=True,
+                    )
+                except mcp_service.MCPServiceError as exc:
+                    raise TerminalCommandError(str(exc)) from exc
+                payload.append({"id": server.id, "name": server.name, "tool_count": len(tools)})
+            if capture_output:
+                return self._render_structured_stdout(payload, capture_output=True)
+            if len(payload) == 1:
+                entry = payload[0]
+                return f"Refreshed {entry['name']} ({entry['tool_count']} tools)."
+            return "\n".join(
+                [f"Refreshed {entry['name']} ({entry['tool_count']} tools)." for entry in payload]
+            )
+
+        if subcommand == "call":
+            server_selector, remainder = self._parse_flag_value(remainder, "--server")
+            output_path, remainder = self._parse_output_path(remainder)
+            extract_to, remainder = self._parse_flag_value(remainder, "--extract-to")
+            if not remainder:
+                raise TerminalCommandError(
+                    "Usage: mcp call <tool-name> [--server <selector>] [--input-file /path.json] "
+                    "[--output /path.json] [--extract-to /dir]"
+                )
+            server = self._resolve_remote_tool(
+                selector=server_selector,
+                tools=self.capabilities.mcp_tools,
+                noun="MCP server",
+                flag_name="--server",
+            )
+            tool_name = remainder[0]
+            inline_tokens = remainder[1:]
+            payload, leftover = await self._load_command_json_input(
+                remaining=inline_tokens,
+                stdin_text=stdin_text,
+            )
+            if leftover:
+                raise TerminalCommandError("Unexpected arguments after MCP input payload.")
+
+            try:
+                result = await mcp_service.call_mcp_tool(
+                    tool=server,
+                    user=self.vfs.user,
+                    tool_name=tool_name,
+                    payload=payload,
+                )
+            except mcp_service.MCPServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            artifacts = list(result.get("extractable_artifacts") or [])
+            if artifacts and not output_path and not extract_to:
+                raise TerminalCommandError(
+                    "This MCP result includes extractable files or resources. Use --output or --extract-to."
+                )
+
+            extracted_paths: list[str] = []
+            if extract_to:
+                try:
+                    await self._mkdir_and_notify(extract_to)
+                except VFSError:
+                    # Directory may already exist or be a special mount; resolve on writes below.
+                    pass
+                for artifact in artifacts:
+                    destination = posixpath.join(extract_to, artifact.path)
+                    written = await self._write_file_and_notify(
+                        destination,
+                        artifact.content,
+                        mime_type=artifact.mime_type,
+                    )
+                    extracted_paths.append(written.path)
+
+            if output_path:
+                written = await self._write_json_output(output_path, result["payload"])
+                message = self._format_write_result(f"Wrote MCP result to {written.path}", written)
+                if extracted_paths:
+                    message += "\nExtracted:\n" + "\n".join(f"- {path}" for path in extracted_paths)
+                return message
+
+            if capture_output:
+                return self._render_structured_stdout(result["payload"], capture_output=True)
+
+            message = self._truncate_output(self._render_mcp_call_interactive(result))
+            if extracted_paths:
+                message += "\nExtracted:\n" + "\n".join(f"- {path}" for path in extracted_paths)
+            return message
+
+        raise TerminalCommandError("Usage: mcp <servers|tools|schema|call|refresh> ...")
+
+    async def _cmd_api(
+        self,
+        args: list[str],
+        *,
+        stdin_text: str | None = None,
+        capture_output: bool = False,
+    ) -> str:
+        if not self.capabilities.has_api:
+            raise TerminalCommandError("API commands are not enabled for this agent.")
+        if not args:
+            raise TerminalCommandError("Usage: api <services|operations|schema|call> ...")
+
+        subcommand = str(args[0] or "").strip().lower()
+        remainder = args[1:]
+
+        if subcommand == "services":
+            if remainder:
+                raise TerminalCommandError("Usage: api services")
+            payload = [
+                {
+                    "id": tool.id,
+                    "name": tool.name,
+                    "endpoint": tool.endpoint,
+                }
+                for tool in self.capabilities.api_tools
+            ]
+            if capture_output:
+                return self._render_structured_stdout(payload, capture_output=True)
+            return self._format_remote_service_listing("API services", payload)
+
+        if subcommand == "operations":
+            service_selector, remainder = self._parse_flag_value(remainder, "--service")
+            if remainder:
+                raise TerminalCommandError("Usage: api operations [--service <selector>]")
+            service = self._resolve_remote_tool(
+                selector=service_selector,
+                tools=self.capabilities.api_tools,
+                noun="API service",
+                flag_name="--service",
+            )
+            try:
+                payload = await api_tools_service.list_api_operations(tool=service)
+            except api_tools_service.APIServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            if capture_output:
+                return self._render_structured_stdout(payload, capture_output=True)
+            return self._format_api_operation_listing(payload)
+
+        if subcommand == "schema":
+            service_selector, remainder = self._parse_flag_value(remainder, "--service")
+            if len(remainder) != 1:
+                raise TerminalCommandError("Usage: api schema <operation> [--service <selector>]")
+            service = self._resolve_remote_tool(
+                selector=service_selector,
+                tools=self.capabilities.api_tools,
+                noun="API service",
+                flag_name="--service",
+            )
+            try:
+                payload = await api_tools_service.describe_api_operation(
+                    tool=service,
+                    operation_selector=remainder[0],
+                )
+            except api_tools_service.APIServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return self._render_structured_stdout(payload, capture_output=capture_output)
+
+        if subcommand == "call":
+            service_selector, remainder = self._parse_flag_value(remainder, "--service")
+            output_path, remainder = self._parse_output_path(remainder)
+            if not remainder:
+                raise TerminalCommandError(
+                    "Usage: api call <operation> [--service <selector>] [--input-file /path.json] "
+                    "[--output /path.json|/path.txt|/path.bin]"
+                )
+            service = self._resolve_remote_tool(
+                selector=service_selector,
+                tools=self.capabilities.api_tools,
+                noun="API service",
+                flag_name="--service",
+            )
+            operation_selector = remainder[0]
+            inline_tokens = remainder[1:]
+            payload, leftover = await self._load_command_json_input(
+                remaining=inline_tokens,
+                stdin_text=stdin_text,
+            )
+            if leftover:
+                raise TerminalCommandError("Unexpected arguments after API input payload.")
+
+            try:
+                result = await api_tools_service.call_api_operation(
+                    tool=service,
+                    user=self.vfs.user,
+                    operation_selector=operation_selector,
+                    payload=payload,
+                )
+            except api_tools_service.APIServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+
+            if output_path:
+                if result["body_kind"] == "binary":
+                    try:
+                        resolved_output = await self.vfs.resolve_output_path(
+                            output_path,
+                            source_name=str(result.get("filename") or "response.bin"),
+                        )
+                    except VFSError as exc:
+                        raise TerminalCommandError(str(exc)) from exc
+                    written = await self._write_file_and_notify(
+                        resolved_output,
+                        result["binary_content"],
+                        mime_type=result["content_type"],
+                    )
+                    return self._format_write_result(f"Wrote API response to {written.path}", written)
+                if result["body_kind"] == "json" and result["payload"]["response"].get("json") is not None:
+                    written = await self._write_json_output(output_path, result["payload"]["response"]["json"])
+                    return self._format_write_result(f"Wrote API response to {written.path}", written)
+                written = await self._write_text_output(
+                    output_path,
+                    str(result["payload"]["response"].get("text") or ""),
+                    mime_type="text/plain",
+                )
+                return self._format_write_result(f"Wrote API response to {written.path}", written)
+
+            if result["body_kind"] == "binary":
+                if capture_output:
+                    raise TerminalCommandError(
+                        "Binary API responses cannot be piped or redirected without --output."
+                    )
+                return (
+                    f"Binary API response ({result['content_type']}, {len(result['binary_content'])} bytes). "
+                    "Use --output to save it."
+                )
+
+            if capture_output:
+                return self._render_structured_stdout(result["payload"], capture_output=True)
+            return self._truncate_output(self._render_api_call_interactive(result))
+
+        raise TerminalCommandError("Usage: api <services|operations|schema|call> ...")
+
     @staticmethod
     def _format_webapp_listing(items: list[dict]) -> str:
         if not items:
@@ -1218,10 +1550,169 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
         return written
 
+    async def _write_text_output(self, output_path: str, content: str, *, mime_type: str = "text/plain"):
+        try:
+            resolved_output = await self.vfs.resolve_output_path(output_path)
+            written = await self._write_file_and_notify(
+                resolved_output,
+                str(content or "").encode("utf-8"),
+                mime_type=mime_type,
+            )
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return written
+
     @staticmethod
     def _truncate_output(content: str, limit: int = 8000) -> str:
         text = str(content or "")
         return text if len(text) <= limit else f"{text[:limit]}\n...[truncated]"
+
+    @staticmethod
+    def _format_remote_service_listing(label: str, items: list[dict[str, Any]]) -> str:
+        if not items:
+            return f"No {label} are configured for this agent."
+        lines = [f"Configured {label}:"]
+        for item in items:
+            lines.append(
+                f"- {item.get('name')} [id={item.get('id')}] {item.get('endpoint') or ''}".rstrip()
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_api_operation_listing(items: list[dict[str, Any]]) -> str:
+        if not items:
+            return "No API operations are configured for this service."
+        lines = ["Configured API operations:"]
+        for item in items:
+            line = (
+                f"- {item.get('name')} [{item.get('slug')}] "
+                f"{item.get('http_method')} {item.get('path_template')}"
+            )
+            description = str(item.get("description") or "").strip()
+            if description:
+                line += f" / {description}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _render_structured_stdout(self, payload: object, *, capture_output: bool) -> str:
+        rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+        return rendered if capture_output else self._truncate_output(rendered)
+
+    @staticmethod
+    def _coerce_inline_value(raw_value: str) -> Any:
+        value = str(raw_value or "")
+        lowered = value.lower()
+        if lowered in {"true", "false", "null"}:
+            return json.loads(lowered)
+        if value and value[0] in {'{', '[', '"'}:
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value
+        if re.fullmatch(r"-?\d+", value):
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        if re.fullmatch(r"-?\d+\.\d+", value):
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        return value
+
+    def _parse_inline_key_values(self, tokens: list[str]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for token in list(tokens or []):
+            if "=" not in token:
+                raise TerminalCommandError(
+                    f"Invalid input token: {token}. Use key=value pairs, --input-file, or JSON stdin."
+                )
+            key, raw_value = token.split("=", 1)
+            key = str(key or "").strip()
+            if not key:
+                raise TerminalCommandError(f"Invalid input token: {token}")
+            payload[key] = self._coerce_inline_value(raw_value)
+        return payload
+
+    def _parse_json_text(self, raw_text: str | None, *, source_label: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(str(raw_text or "").strip())
+        except ValueError as exc:
+            raise TerminalCommandError(f"Invalid JSON provided via {source_label}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise TerminalCommandError(f"JSON input from {source_label} must be an object.")
+        return payload
+
+    async def _load_command_json_input(
+        self,
+        *,
+        remaining: list[str],
+        stdin_text: str | None = None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        input_file, reduced = self._parse_flag_value(remaining, "--input-file")
+        if input_file:
+            try:
+                payload_text = await self.vfs.read_text(input_file)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return self._parse_json_text(payload_text, source_label=input_file), reduced
+        if stdin_text is not None:
+            return self._parse_json_text(stdin_text, source_label="stdin"), reduced
+        return self._parse_inline_key_values(reduced), []
+
+    def _resolve_remote_tool(
+        self,
+        *,
+        selector: str | None,
+        tools: list,
+        noun: str,
+        flag_name: str,
+    ):
+        configured = list(tools or [])
+        if not configured:
+            raise TerminalCommandError(f"{noun.title()} commands are not enabled for this agent.")
+        if selector is None:
+            if len(configured) == 1:
+                return configured[0]
+            raise TerminalCommandError(
+                f"Multiple {noun} are configured. Use {flag_name} after running {noun.split()[0]} "
+                f"{'servers' if noun.startswith('MCP') else 'services'}."
+            )
+        normalized = str(selector or "").strip()
+        for tool in configured:
+            if str(getattr(tool, "id", "")) == normalized or str(getattr(tool, "name", "")) == normalized:
+                return tool
+        raise TerminalCommandError(f"Unknown {noun}: {normalized}")
+
+    @staticmethod
+    def _render_api_call_interactive(result: dict[str, Any]) -> str:
+        payload = dict(result.get("payload") or {})
+        operation = dict(payload.get("operation") or {})
+        response = dict(payload.get("response") or {})
+        lines = [
+            f"{operation.get('http_method')} {operation.get('slug')} -> {response.get('status_code')}",
+            f"content_type={response.get('content_type')}",
+        ]
+        body_kind = str(result.get("body_kind") or response.get("body_kind") or "")
+        if body_kind == "json" and response.get("json") is not None:
+            lines.append(json.dumps(response.get("json"), ensure_ascii=False, indent=2))
+        elif body_kind == "text" and response.get("text") is not None:
+            lines.append(str(response.get("text") or ""))
+        else:
+            lines.append(
+                f"Binary response ({response.get('size')} bytes, filename={response.get('filename')}). "
+                "Use --output to save it."
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_mcp_call_interactive(result: dict[str, Any]) -> str:
+        payload = dict(result.get("payload") or {})
+        tool_meta = dict(payload.get("tool") or {})
+        rendered = json.dumps(payload.get("result"), ensure_ascii=False, indent=2)
+        header = f"MCP {tool_meta.get('name')} returned:"
+        return f"{header}\n{rendered}"
 
     async def _get_browser_session(self) -> BrowserSession:
         if self._browser_session is None:
@@ -1304,7 +1795,7 @@ class TerminalExecutor:
         await self._notify_webapp_paths([normalized])
         return normalized
 
-    async def _cmd_search(self, args: list[str]) -> str:
+    async def _cmd_search(self, args: list[str], *, capture_output: bool = False) -> str:
         if not self.capabilities.has_search:
             raise TerminalCommandError("Search commands are not enabled for this agent.")
 
@@ -1338,6 +1829,8 @@ class TerminalExecutor:
         if output_path:
             written = await self._write_json_output(output_path, payload)
             return self._format_write_result(f"Wrote search results to {written.path}", written)
+        if capture_output:
+            return self._render_structured_stdout(payload, capture_output=True)
 
         lines: list[str] = []
         for index, result in enumerate(self._last_search_results, start=1):

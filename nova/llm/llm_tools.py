@@ -319,56 +319,6 @@ async def load_tools(agent, *, enabled: bool = True) -> List[StructuredTool]:
     except Exception as e:
         logger.warning(f"Failed to auto-load conversation builtin tools: {e}")
 
-    # Load MCP tools (pre-fetched data: (tool, cred, func_metas, cred_user_id))
-    for tool_obj, cred, cached_func_metas, cred_user_id in agent.mcp_tools_data:
-        try:
-            from nova.mcp.client import MCPClient
-            client = MCPClient(
-                endpoint=tool_obj.endpoint,
-                credential=cred,
-                transport_type=tool_obj.transport_type,
-                user_id=cred_user_id
-            )
-
-            # Use pre-fetched or fetch via client
-            if cached_func_metas is not None:
-                func_metas = cached_func_metas
-            else:
-                func_metas = await client.alist_tools(force_refresh=True)
-
-            for meta in func_metas:
-                func_name = meta["name"]
-                input_schema = meta.get("input_schema", {})
-                description = meta.get("description", "")
-
-                # ---------- safe factory captures current func_name & client -----------
-                def _remote_call_factory(_name: str, _client: MCPClient):
-                    async def _remote_call_async(**kwargs):
-                        return await _client.acall(_name, **kwargs)
-
-                    return _remote_call_async
-                # -----------------------------------------------------------------------
-
-                async_f = _remote_call_factory(func_name, client)
-
-                # Sanitize tool name: replace invalid characters with underscores
-                sanitized_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", func_name).strip("_")[:64]
-                # Ensure name is not empty and starts with a letter
-                if not sanitized_name or not sanitized_name[0].isalpha():
-                    sanitized_name = f"tool_{hash(func_name) % 10000}"
-
-                wrapped = StructuredTool.from_function(
-                    func=None,
-                    coroutine=async_f,
-                    name=sanitized_name,
-                    description=description,
-                    args_schema=None if input_schema == {} else input_schema,
-                )
-                tools.append(wrapped)
-
-        except Exception as e:
-            logger.warning(f"Failed to load MCP tools from {tool_obj.endpoint}: {str(e)}")
-
     # Load agents used as tools (pre-fetched)
     if agent.has_agent_tools:
         from nova.tools.agent_tool_wrapper import AgentToolWrapper

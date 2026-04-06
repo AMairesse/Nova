@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags i18n %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 760px;">
+  <h2 class="mb-3">
+    {% if operation %}{% trans "Edit API operation" %}{% else %}{% trans "Add API operation" %}{% endif %}
+  </h2>
+  <p class="text-muted">
+    {{ tool.name }}
+  </p>
+
+  <form method="post" class="mb-3">
+    {% csrf_token %}
+    {% crispy form %}
+
+    <div class="mt-4">
+      <button class="btn btn-primary me-2" type="submit">
+        <i class="bi bi-check-lg me-1"></i>{% trans "Save" %}
+      </button>
+      <a href="{% url 'user_settings:tool-configure' tool.pk %}" class="btn btn-secondary">
+        {% trans "Cancel" %}
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

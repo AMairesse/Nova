@@ -13,6 +13,7 @@ from django.test import TestCase, TransactionTestCase
 
 from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentThreadSession import AgentThreadSession
 from nova.models.MemoryDirectory import MemoryDirectory
 from nova.models.MemoryChunk import MemoryChunk
@@ -248,6 +249,66 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
     def _create_webapp_tool(self) -> Tool:
         return self._create_builtin_tool("webapp", name="WebApp")
+
+    def _create_mcp_tool(self, *, name: str = "Notion MCP", endpoint: str = "https://mcp.example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description=name,
+            tool_type=Tool.ToolType.MCP,
+            endpoint=endpoint,
+            transport_type=Tool.TransportType.STREAMABLE_HTTP,
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            auth_type="token",
+            token="mcp-token",
+        )
+        return tool
+
+    def _create_api_tool(self, *, name: str = "CRM API", endpoint: str = "https://api.example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description=name,
+            tool_type=Tool.ToolType.API,
+            endpoint=endpoint,
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            auth_type="api_key",
+            token="secret-api-key",
+            config={"api_key_name": "X-API-Key", "api_key_in": "header"},
+        )
+        return tool
+
+    def _create_api_operation(
+        self,
+        tool: Tool,
+        *,
+        name: str = "Create invoice",
+        slug: str = "create-invoice",
+        http_method: str = APIToolOperation.HTTPMethod.POST,
+        path_template: str = "/invoices/{invoice_id}",
+        query_parameters: list[str] | None = None,
+        body_parameter: str = "",
+        input_schema: dict | None = None,
+        output_schema: dict | None = None,
+    ) -> APIToolOperation:
+        return APIToolOperation.objects.create(
+            tool=tool,
+            name=name,
+            slug=slug,
+            description=name,
+            http_method=http_method,
+            path_template=path_template,
+            query_parameters=list(query_parameters or ["mode"]),
+            body_parameter=body_parameter,
+            input_schema=input_schema if input_schema is not None else {},
+            output_schema=output_schema if output_schema is not None else {},
+        )
 
     def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
         tool = self._create_builtin_tool("caldav", name=name)
@@ -653,6 +714,283 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         stored = async_to_sync(executor.execute)("cat /search/results.json")
         self.assertEqual(json.loads(stored)["query"], "nova privacy")
         self.assertEqual(mocked_search.await_args.kwargs["limit"], 1)
+
+    def test_mcp_commands_support_schema_refresh_call_and_extract_output(self):
+        mcp_tool = self._create_mcp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(mcp_tools=[mcp_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/input.json",
+            b'{"query":"roadmap"}',
+            mime_type="application/json",
+        )
+
+        discovered_tools = [
+            {
+                "name": "list_pages",
+                "description": "List pages",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            }
+        ]
+        schema_payload = {
+            "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
+            "tool": {
+                "name": "list_pages",
+                "description": "List pages",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "output_schema": {"type": "object"},
+            },
+        }
+        call_payload = {
+            "payload": {
+                "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
+                "tool": {"name": "export_report", "description": "Export report"},
+                "input": {"query": "roadmap"},
+                "result": {"report": "ready"},
+            },
+            "extractable_artifacts": [
+                SimpleNamespace(
+                    path="report.txt",
+                    content=b"report ready",
+                    mime_type="text/plain",
+                )
+            ],
+        }
+
+        with (
+            patch(
+                "nova.runtime_v2.terminal.mcp_service.list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=discovered_tools,
+            ) as mocked_list,
+            patch(
+                "nova.runtime_v2.terminal.mcp_service.describe_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=schema_payload,
+            ) as mocked_schema,
+            patch(
+                "nova.runtime_v2.terminal.mcp_service.call_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=call_payload,
+            ) as mocked_call,
+        ):
+            servers = async_to_sync(executor.execute)("mcp servers")
+            tools = async_to_sync(executor.execute)('mcp tools --server "Notion MCP"')
+            schema_written = async_to_sync(executor.execute)(
+                'mcp schema list_pages --server "Notion MCP" > /tmp/mcp-schema.json'
+            )
+            called = async_to_sync(executor.execute)(
+                'mcp call export_report --server "Notion MCP" --input-file /tmp/input.json '
+                '--extract-to /reports --output /tmp/mcp-result.json'
+            )
+            refreshed = async_to_sync(executor.execute)('mcp refresh --server "Notion MCP"')
+
+        self.assertIn("Notion MCP", servers)
+        self.assertIn("list_pages", tools)
+        self.assertIn("/tmp/mcp-schema.json", schema_written)
+        self.assertIn("/tmp/mcp-result.json", called)
+        self.assertIn("/reports/report.txt", called)
+        self.assertIn("Refreshed Notion MCP", refreshed)
+        self.assertEqual(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/mcp-schema.json"))["tool"]["name"],
+            "list_pages",
+        )
+        self.assertEqual(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/mcp-result.json"))["result"]["report"],
+            "ready",
+        )
+        self.assertEqual(
+            async_to_sync(executor.execute)("cat /reports/report.txt"),
+            "report ready",
+        )
+        self.assertEqual(mocked_call.await_args.kwargs["payload"], {"query": "roadmap"})
+        self.assertEqual(mocked_schema.await_args.kwargs["tool_name"], "list_pages")
+        self.assertTrue(any(call.kwargs.get("force_refresh") for call in mocked_list.await_args_list))
+
+    def test_api_commands_support_schema_pipes_and_redirected_calls(self):
+        api_tool = self._create_api_tool()
+        self._create_api_operation(
+            api_tool,
+            name="Create invoice",
+            slug="create_invoice",
+            http_method=APIToolOperation.HTTPMethod.POST,
+            path_template="/invoices/{invoice_id}",
+            query_parameters=["mode"],
+            body_parameter="payload",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(api_tools=[api_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/payload.json",
+            b'{"invoice_id":42,"mode":"draft","payload":{"amount":199}}',
+            mime_type="application/json",
+        )
+
+        operations_payload = [
+            {
+                "id": 1,
+                "name": "Create invoice",
+                "slug": "create_invoice",
+                "description": "Create invoice",
+                "http_method": "POST",
+                "path_template": "/invoices/{invoice_id}",
+            }
+        ]
+        schema_payload = {
+            "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
+            "operation": {
+                "id": 1,
+                "name": "Create invoice",
+                "slug": "create_invoice",
+                "description": "Create invoice",
+                "http_method": "POST",
+                "path_template": "/invoices/{invoice_id}",
+                "query_parameters": ["mode"],
+                "body_parameter": "payload",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        }
+        call_result = {
+            "payload": {
+                "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
+                "operation": {
+                    "id": 1,
+                    "name": "Create invoice",
+                    "slug": "create_invoice",
+                    "http_method": "POST",
+                    "path_template": "/invoices/{invoice_id}",
+                },
+                "request": {
+                    "url": "https://api.example.com/invoices/42?mode=draft",
+                    "method": "POST",
+                    "query": {"mode": "draft"},
+                    "body": {"amount": 199},
+                },
+                "response": {
+                    "status_code": 200,
+                    "content_type": "application/json",
+                    "headers": {"content-type": "application/json"},
+                    "body_kind": "json",
+                    "json": {"ok": True, "invoice_id": 42},
+                    "text": "{\"ok\": true, \"invoice_id\": 42}",
+                    "size": 31,
+                    "filename": "response.json",
+                },
+            },
+            "body_kind": "json",
+            "binary_content": b'{"ok": true, "invoice_id": 42}',
+            "filename": "response.json",
+            "content_type": "application/json",
+        }
+
+        with (
+            patch(
+                "nova.runtime_v2.terminal.api_tools_service.list_api_operations",
+                new_callable=AsyncMock,
+                return_value=operations_payload,
+            ),
+            patch(
+                "nova.runtime_v2.terminal.api_tools_service.describe_api_operation",
+                new_callable=AsyncMock,
+                return_value=schema_payload,
+            ) as mocked_schema,
+            patch(
+                "nova.runtime_v2.terminal.api_tools_service.call_api_operation",
+                new_callable=AsyncMock,
+                return_value=call_result,
+            ) as mocked_call,
+        ):
+            services = async_to_sync(executor.execute)("api services")
+            filtered = async_to_sync(executor.execute)('api operations --service "CRM API" | grep create_invoice')
+            schema_written = async_to_sync(executor.execute)(
+                'api schema create_invoice --service "CRM API" > /tmp/api-schema.json'
+            )
+            call_written = async_to_sync(executor.execute)(
+                'api call create_invoice --service "CRM API" < /tmp/payload.json > /tmp/api-result.json'
+            )
+
+        self.assertIn("CRM API", services)
+        self.assertIn("create_invoice", filtered)
+        self.assertIn("/tmp/api-schema.json", schema_written)
+        self.assertIn("/tmp/api-result.json", call_written)
+        self.assertEqual(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/api-schema.json"))["operation"]["slug"],
+            "create_invoice",
+        )
+        self.assertTrue(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/api-result.json"))["response"]["json"]["ok"]
+        )
+        self.assertEqual(
+            mocked_call.await_args.kwargs["payload"],
+            {"invoice_id": 42, "mode": "draft", "payload": {"amount": 199}},
+        )
+        self.assertEqual(mocked_schema.await_args.kwargs["operation_selector"], "create_invoice")
+
+    def test_api_call_rejects_binary_shell_redirection_without_output(self):
+        api_tool = self._create_api_tool()
+        self._create_api_operation(
+            api_tool,
+            name="Export PDF",
+            slug="export_pdf",
+            http_method=APIToolOperation.HTTPMethod.GET,
+            path_template="/invoices/{invoice_id}/pdf",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(api_tools=[api_tool])
+        )
+
+        with patch(
+            "nova.runtime_v2.terminal.api_tools_service.call_api_operation",
+            new_callable=AsyncMock,
+            return_value={
+                "payload": {
+                    "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
+                    "operation": {"slug": "export_pdf", "http_method": "GET"},
+                    "request": {"url": "https://api.example.com/invoices/42/pdf", "method": "GET"},
+                    "response": {
+                        "status_code": 200,
+                        "content_type": "application/pdf",
+                        "headers": {"content-type": "application/pdf"},
+                        "body_kind": "binary",
+                        "json": None,
+                        "text": None,
+                        "size": 7,
+                        "filename": "invoice.pdf",
+                    },
+                },
+                "body_kind": "binary",
+                "binary_content": b"%PDF...",
+                "filename": "invoice.pdf",
+                "content_type": "application/pdf",
+            },
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)(
+                    'api call export_pdf --service "CRM API" invoice_id=42 > /tmp/invoice.bin'
+                )
+
+        self.assertIn("cannot be piped or redirected", str(cm.exception))
+
+    def test_mcp_and_api_require_explicit_selector_when_multiple_services_exist(self):
+        first_mcp = self._create_mcp_tool(name="Notion MCP")
+        second_mcp = self._create_mcp_tool(name="Drive MCP", endpoint="https://mcp-drive.example.com")
+        first_api = self._create_api_tool(name="CRM API")
+        second_api = self._create_api_tool(name="Billing API", endpoint="https://billing.example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(
+                mcp_tools=[first_mcp, second_mcp],
+                api_tools=[first_api, second_api],
+            )
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mcp tools")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("api operations")
 
     def test_browse_open_result_requires_search_and_browse_session_is_run_local(self):
         browser_tool = self._create_builtin_tool("browser", name="Browser")
@@ -1456,6 +1794,18 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("browse click", skills["browse.md"])
         self.assertIn("browse text > /page.txt", skills["browse.md"])
 
+    def test_skill_registry_adds_mcp_and_api_guides_when_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(mcp_tools=[object()], api_tools=[object()])
+        )
+
+        self.assertIn("mcp.md", skills)
+        self.assertIn("api.md", skills)
+        self.assertIn("mcp schema", skills["mcp.md"])
+        self.assertIn("--extract-to", skills["mcp.md"])
+        self.assertIn("api schema", skills["api.md"])
+        self.assertIn("--output", skills["api.md"])
+
     def test_skill_registry_adds_webapp_guide_when_enabled(self):
         skills = build_skill_registry(
             TerminalCapabilities(webapp_tool=object())
@@ -1942,6 +2292,38 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("webapp expose", prompt)
         self.assertIn("live", prompt)
         self.assertIn("source files", prompt)
+
+    def test_system_prompt_mentions_mcp_and_api_command_families(self):
+        mcp_tool = Tool.objects.create(
+            user=self.user,
+            name="Notion MCP",
+            description="MCP",
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+            transport_type=Tool.TransportType.STREAMABLE_HTTP,
+        )
+        api_tool = Tool.objects.create(
+            user=self.user,
+            name="CRM API",
+            description="API",
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+        self.agent.tools.add(mcp_tool, api_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("mcp tools", prompt)
+        self.assertIn("mcp schema", prompt)
+        self.assertIn("api operations", prompt)
+        self.assertIn("api schema", prompt)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):

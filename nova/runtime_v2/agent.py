@@ -183,6 +183,18 @@ class ReactTerminalRuntime:
                 "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
                 "the served app without a separate publish step."
             )
+        if self.capabilities.has_mcp:
+            extra_guidance.append(
+                "Use `mcp tools` and `mcp schema` to inspect remote MCP capabilities before calling them. "
+                "For complex inputs, prepare JSON in the filesystem and pass it with `--input-file` or stdin. "
+                "Persist machine-readable results with `--output`, `--extract-to`, or shell redirection."
+            )
+        if self.capabilities.has_api:
+            extra_guidance.append(
+                "Use `api operations` and `api schema` to inspect configured custom API operations before calling them. "
+                "For complex payloads, prepare JSON in the filesystem and pass it with `--input-file` or stdin. "
+                "Persist structured results with `--output` or shell redirection."
+            )
         if self.capabilities.has_multiple_mailboxes:
             extra_guidance.append(
                 "When using mail commands, always pass `--mailbox <email>` to choose the mailbox explicitly."
