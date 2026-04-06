@@ -10,6 +10,13 @@
     <i class="bi bi-clock me-2"></i>{% trans "Tasks" %}
   </a>
 </li>
+{% if user.is_staff %}
+<li>
+  <a class="dropdown-item" href="{% url 'user_settings:dashboard' %}#pane-admin">
+    <i class="bi bi-speedometer2 me-2"></i>{% trans "Admin metrics" %}
+  </a>
+</li>
+{% endif %}
 {% if user.is_superuser %}
 <li>
   <a class="dropdown-item" href="{% url 'admin:index' %}">

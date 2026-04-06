@@ -2,6 +2,7 @@
 from django.urls import path
 
 from user_settings.views.dashboard import DashboardView
+from user_settings.views.admin_terminal_failures import AdminTerminalFailuresView
 from user_settings.views.provider import (
     ProviderListView,
     ProviderCreateView,
@@ -50,6 +51,10 @@ app_name = 'user_settings'
 
 urlpatterns = [
     path("", DashboardView.as_view(), name="dashboard"),
+]
+
+urlpatterns += [
+    path("admin/terminal-failures/", AdminTerminalFailuresView.as_view(), name="admin-terminal-failures"),
 ]
 
 urlpatterns += [
