@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import posixpath
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from asgiref.sync import sync_to_async
 
 from nova.continuous.context_builder import load_continuous_context
-from nova.models.Message import Actor, Message
+from nova.models.Message import Actor, Message, MessageType
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
@@ -40,6 +41,14 @@ class ReactTerminalRunResult:
     max_context: int | None
 
 
+@dataclass(slots=True)
+class ReactTerminalInterruptResult:
+    question: str
+    schema: dict[str, Any]
+    agent_name: str
+    resume_context: dict[str, Any]
+
+
 class ReactTerminalRuntime:
     def __init__(
         self,
@@ -52,6 +61,7 @@ class ReactTerminalRuntime:
         progress_handler=None,
         source_message_id: int | None = None,
         parent_trace_node_id: str | None = None,
+        allow_ask_user: bool = True,
         persist_session: bool = True,
         session_state_override: dict | None = None,
         persistent_root_scope: str | None = None,
@@ -67,6 +77,7 @@ class ReactTerminalRuntime:
         self.progress_handler = progress_handler
         self.source_message_id = source_message_id
         self.parent_trace_node_id = parent_trace_node_id
+        self.allow_ask_user = bool(allow_ask_user)
         self.persist_session = bool(persist_session)
         self.session_state_override = dict(session_state_override or {})
         self.persistent_root_scope = persistent_root_scope or UserFile.Scope.THREAD_SHARED
@@ -79,6 +90,27 @@ class ReactTerminalRuntime:
         self.provider_client = None
         self.vfs = None
         self.terminal = None
+        self._llm_provider = None
+
+    async def _get_llm_provider(self):
+        if self._llm_provider is not None:
+            return self._llm_provider
+
+        if not self.agent_config:
+            return None
+
+        state = getattr(self.agent_config, "_state", None)
+        fields_cache = getattr(state, "fields_cache", None)
+        if isinstance(fields_cache, dict) and "llm_provider" not in fields_cache:
+            provider = await sync_to_async(
+                lambda: self.agent_config.llm_provider,
+                thread_sensitive=True,
+            )()
+        else:
+            provider = getattr(self.agent_config, "llm_provider", None)
+
+        self._llm_provider = provider
+        return provider
 
     async def initialize(self):
         self.capabilities = await sync_to_async(resolve_terminal_capabilities, thread_sensitive=True)(self.agent_config)
@@ -115,7 +147,7 @@ class ReactTerminalRuntime:
         if self.progress_handler:
             self.terminal.realtime_task_id = getattr(self.progress_handler, "task_id", None)
             self.terminal.realtime_channel_layer = getattr(self.progress_handler, "channel_layer", None)
-        self.provider_client = OpenAICompatibleProviderClient(self.agent_config.llm_provider)
+        self.provider_client = OpenAICompatibleProviderClient(await self._get_llm_provider())
         return self
 
     def build_system_prompt(self) -> str:
@@ -129,7 +161,8 @@ class ReactTerminalRuntime:
         extra_guidance: list[str] = [
             "Create text files with `touch`, `tee`, or text shell redirection. "
             "Minimal text pipelines and `<`, `>`, `>>` redirections are supported, "
-            "but this is not a full shell: do not rely on `&&`, `||`, `;`, or command substitution.",
+            "but this is not a full shell: do not rely on `&&`, `||`, `;`, or command substitution. "
+            "Common Unix-like forms such as `cat -n`, `head -5`, `tail -1`, `grep -in`, `wc -l`, and `rm -f` are supported.",
         ]
         if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
             extra_guidance.append(
@@ -183,6 +216,11 @@ class ReactTerminalRuntime:
                 "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
                 "the served app without a separate publish step."
             )
+        if self.allow_ask_user:
+            extra_guidance.append(
+                "Use `ask_user` only when a missing user detail truly blocks progress. "
+                "Ask one combined clarification question at a time."
+            )
         if self.capabilities.has_mcp:
             extra_guidance.append(
                 "Use `mcp tools` and `mcp schema` to inspect remote MCP capabilities before calling them. "
@@ -212,7 +250,7 @@ class ReactTerminalRuntime:
         base_prompt = (
             "You are Nova running in React Terminal V1.\n"
             "Your main action surface is the `terminal` tool.\n"
-            "Use shell-like commands only.\n"
+            "Use shell-like commands for terminal work; use `ask_user` only for genuine blocking clarifications.\n"
             "The terminal session is persistent for this agent and thread.\n"
             "Filesystem layout:\n"
             f"{'\n'.join(filesystem_lines)}\n"
@@ -264,13 +302,24 @@ class ReactTerminalRuntime:
             return None
         return {"role": role, "content": content}
 
-    async def _load_history_messages(self) -> list[dict]:
+    async def _load_history_messages(
+        self,
+        *,
+        excluded_interaction_answer_ids: set[int] | None = None,
+    ) -> list[dict]:
         if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
+            excluded_answer_ids = {
+                int(value)
+                for value in list(excluded_interaction_answer_ids or set())
+                if value is not None
+            }
+
             def _load_continuous():
                 _snapshot, continuous_messages = load_continuous_context(
                     self.user,
                     self.thread,
                     exclude_message_id=None,
+                    exclude_interaction_ids=excluded_answer_ids,
                 )
                 return list(continuous_messages)
 
@@ -306,8 +355,19 @@ class ReactTerminalRuntime:
         summary_message = self._build_history_summary_message(session_state)
         if summary_message:
             history.append(summary_message)
+        excluded_answer_ids = {
+            int(value)
+            for value in list(excluded_interaction_answer_ids or set())
+            if value is not None
+        }
         for message in messages:
             if message.actor == Actor.SYSTEM:
+                continue
+            if (
+                excluded_answer_ids
+                and message.message_type == MessageType.INTERACTION_ANSWER
+                and getattr(message, "interaction_id", None) in excluded_answer_ids
+            ):
                 continue
             role = "user" if message.actor == Actor.USER else "assistant"
             content = str(message.text or "")
@@ -322,7 +382,7 @@ class ReactTerminalRuntime:
         return history
 
     def _tool_schemas(self) -> list[dict]:
-        return [
+        tools = [
             {
                 "type": "function",
                 "function": {
@@ -369,6 +429,32 @@ class ReactTerminalRuntime:
                 },
             },
         ]
+        if self.allow_ask_user:
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "ask_user",
+                        "description": "Ask the end-user one blocking clarification question when missing information prevents progress.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "question": {
+                                    "type": "string",
+                                    "description": "The clarification question to ask the user.",
+                                },
+                                "schema": {
+                                    "type": "object",
+                                    "description": "Optional JSON schema describing the preferred answer shape.",
+                                },
+                            },
+                            "required": ["question"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            )
+        return tools
 
     async def _persist_session(self):
         if not self.persist_session:
@@ -460,6 +546,7 @@ class ReactTerminalRuntime:
             progress_handler=None,
             source_message_id=self.source_message_id,
             parent_trace_node_id=node_id,
+            allow_ask_user=False,
             persist_session=False,
             session_state_override={"cwd": "/", "history": [], "directories": ["/tmp", "/inbox"]},
             persistent_root_scope=UserFile.Scope.MESSAGE_ATTACHMENT,
@@ -618,7 +705,86 @@ class ReactTerminalRuntime:
             response["streaming_fallback"] = True
             return response
 
-    async def run(self, *, ephemeral_user_prompt: str | None = None, ensure_root_trace: bool = True) -> ReactTerminalRunResult:
+    @staticmethod
+    def _build_tool_result_message(tool_call_id: str, content: str) -> dict[str, str]:
+        return {
+            "role": "tool",
+            "tool_call_id": str(tool_call_id or ""),
+            "content": str(content or ""),
+        }
+
+    def _build_ask_user_interrupt(
+        self,
+        *,
+        assistant_message: dict[str, Any],
+        tool_call: dict[str, Any],
+    ) -> ReactTerminalInterruptResult:
+        try:
+            payload = json.loads(str(tool_call.get("arguments") or "{}"))
+        except Exception as exc:
+            raise ValueError(f"Tool argument error: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Tool arguments must decode to a JSON object.")
+
+        question = str(payload.get("question") or "").strip()
+        if not question:
+            raise ValueError("Missing required argument: question")
+
+        schema = payload.get("schema") or {}
+        if not isinstance(schema, dict):
+            raise ValueError("The `schema` argument must be a JSON object.")
+
+        return ReactTerminalInterruptResult(
+            question=question,
+            schema=schema,
+            agent_name=str(getattr(self.agent_config, "name", "") or "Agent"),
+            resume_context={
+                "assistant_message": deepcopy(assistant_message),
+                "tool_call_id": str(tool_call.get("id") or ""),
+            },
+        )
+
+    @staticmethod
+    def _build_resume_tool_content(interruption_response: dict[str, Any] | None) -> str:
+        payload = dict(interruption_response or {})
+        status = str(payload.get("interaction_status") or "").strip().upper()
+        if status == "CANCELED":
+            body = {"status": "canceled"}
+        else:
+            body = {
+                "status": "answered",
+                "answer": payload.get("user_response"),
+            }
+        return json.dumps(body, ensure_ascii=False)
+
+    @staticmethod
+    def _normalize_resume_context(resume_context: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
+        context = dict(resume_context or {})
+        assistant_message = context.get("assistant_message")
+        if not isinstance(assistant_message, dict):
+            raise ValueError("Missing assistant message in ask_user resume context.")
+
+        normalized_message = deepcopy(assistant_message)
+        normalized_message["role"] = "assistant"
+
+        tool_call_id = str(context.get("tool_call_id") or "").strip()
+        if not tool_call_id:
+            tool_calls = list(normalized_message.get("tool_calls") or [])
+            if tool_calls:
+                tool_call_id = str(tool_calls[0].get("id") or "").strip()
+        if not tool_call_id:
+            raise ValueError("Missing tool call id in ask_user resume context.")
+
+        return normalized_message, tool_call_id
+
+    async def run(
+        self,
+        *,
+        ephemeral_user_prompt: str | None = None,
+        ensure_root_trace: bool = True,
+        resume_context: dict[str, Any] | None = None,
+        interruption_response: dict[str, Any] | None = None,
+    ) -> ReactTerminalRunResult | ReactTerminalInterruptResult:
         try:
             if ensure_root_trace and self.trace_handler:
                 await self.trace_handler.ensure_root_run(
@@ -628,9 +794,28 @@ class ReactTerminalRuntime:
                 )
 
             messages = [{"role": "system", "content": self.build_system_prompt()}]
-            messages.extend(await self._load_history_messages())
+            excluded_interaction_answer_ids: set[int] = set()
+            if interruption_response and interruption_response.get("interaction_id") is not None:
+                try:
+                    excluded_interaction_answer_ids.add(int(interruption_response.get("interaction_id")))
+                except (TypeError, ValueError):
+                    pass
+            messages.extend(
+                await self._load_history_messages(
+                    excluded_interaction_answer_ids=excluded_interaction_answer_ids,
+                )
+            )
             if ephemeral_user_prompt:
                 messages.append({"role": "user", "content": str(ephemeral_user_prompt or "")})
+            if resume_context:
+                assistant_message, tool_call_id = self._normalize_resume_context(resume_context)
+                messages.append(assistant_message)
+                messages.append(
+                    self._build_tool_result_message(
+                        tool_call_id,
+                        self._build_resume_tool_content(interruption_response),
+                    )
+                )
 
             await self._record_progress("Preparing React Terminal context")
 
@@ -662,15 +847,54 @@ class ReactTerminalRuntime:
                 messages.append(assistant_message)
 
                 if tool_calls:
+                    ask_user_calls = [
+                        item
+                        for item in tool_calls
+                        if str(item.get("name") or "").strip() == "ask_user"
+                    ]
+                    if ask_user_calls:
+                        if len(tool_calls) != 1:
+                            error_message = "`ask_user` must be the only tool call in a response."
+                            messages.extend(
+                                self._build_tool_result_message(
+                                    str(tool_call.get("id") or ""),
+                                    error_message,
+                                )
+                                for tool_call in tool_calls
+                            )
+                            continue
+                        if not self.allow_ask_user:
+                            messages.append(
+                                self._build_tool_result_message(
+                                    str(tool_calls[0].get("id") or ""),
+                                    "`ask_user` is unavailable in this runtime.",
+                                )
+                            )
+                            continue
+                        try:
+                            interruption = self._build_ask_user_interrupt(
+                                assistant_message=assistant_message,
+                                tool_call=tool_calls[0],
+                            )
+                        except ValueError as exc:
+                            messages.append(
+                                self._build_tool_result_message(
+                                    str(tool_calls[0].get("id") or ""),
+                                    str(exc),
+                                )
+                            )
+                            continue
+                        await self._complete_stream()
+                        await self._record_progress("Waiting for user input")
+                        return interruption
                     await self._complete_stream()
                     for tool_call in tool_calls:
                         tool_result = await self._execute_tool_call(tool_call)
                         messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_result["tool_call_id"],
-                                "content": tool_result["content"],
-                            }
+                            self._build_tool_result_message(
+                                tool_result["tool_call_id"],
+                                tool_result["content"],
+                            )
                         )
                     continue
 

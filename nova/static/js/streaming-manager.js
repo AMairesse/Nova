@@ -395,6 +395,98 @@
             }
         }
 
+        _getInteractionChoiceOptions(schema) {
+            if (!schema || typeof schema !== 'object') {
+                return [];
+            }
+            if (schema.type === 'boolean') {
+                return [
+                    { label: gettext('Yes'), value: true },
+                    { label: gettext('No'), value: false },
+                ];
+            }
+            const enumValues = Array.isArray(schema.enum) ? schema.enum : [];
+            if (!enumValues.length || enumValues.length > 5) {
+                return [];
+            }
+            const supportedValues = enumValues.filter((value) => (
+                value === null
+                || ['string', 'number', 'boolean'].includes(typeof value)
+            ));
+            if (!supportedValues.length || supportedValues.length !== enumValues.length) {
+                return [];
+            }
+            return supportedValues.map((value) => {
+                if (value === true) {
+                    return { label: gettext('Yes'), value };
+                }
+                if (value === false) {
+                    return { label: gettext('No'), value };
+                }
+                return { label: String(value), value };
+            });
+        }
+
+        _renderInteractionChoiceControls(interactionId, schema) {
+            const choices = this._getInteractionChoiceOptions(schema);
+            if (!choices.length) {
+                return '';
+            }
+            const buttons = choices.map((choice) => `
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-primary interaction-answer-btn"
+                data-interaction-id="${interactionId}"
+                data-answer-json="${window.DOMUtils.escapeHTML(JSON.stringify(choice.value))}"
+              >
+                ${window.DOMUtils.escapeHTML(choice.label)}
+              </button>
+            `).join('');
+            return `
+              <div class="small text-muted mb-2">${gettext('Quick choices')}</div>
+              <div class="d-flex flex-wrap gap-2">${buttons}</div>
+            `;
+        }
+
+        _buildInteractionSchemaHint(schema) {
+            if (!schema || Object.keys(schema).length === 0) {
+                return '';
+            }
+            const choices = this._getInteractionChoiceOptions(schema);
+            if (choices.length) {
+                return gettext('Quick choices are available; plain text is also accepted.');
+            }
+            return gettext('Answer format may be structured; plain text is also accepted.');
+        }
+
+        hydratePendingInteractionCards() {
+            const cards = document.querySelectorAll('[data-interaction-id][data-interaction-schema]');
+            cards.forEach((card) => {
+                let schema = {};
+                const rawSchema = card.dataset.interactionSchema || '';
+                if (rawSchema) {
+                    try {
+                        schema = JSON.parse(rawSchema);
+                    } catch (_error) {
+                        schema = {};
+                    }
+                }
+                const choiceContainer = card.querySelector('.interaction-choice-controls');
+                if (choiceContainer) {
+                    choiceContainer.innerHTML = this._renderInteractionChoiceControls(
+                        card.dataset.interactionId || '',
+                        schema,
+                    );
+                }
+                const schemaHint = card.querySelector('.interaction-schema-hint');
+                if (schemaHint) {
+                    const hint = this._buildInteractionSchemaHint(schema);
+                    schemaHint.textContent = hint;
+                    schemaHint.classList.toggle('d-none', !hint);
+                }
+            });
+        }
+
         // Render and handle a user prompt card
         onUserPrompt(taskId, data) {
             // Expected payload: { interaction_id, question, schema, origin_name, thread_id }
@@ -409,11 +501,12 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'message mb-3';
             wrapper.id = `interaction-card-${interaction_id}`;
+            wrapper.dataset.interactionId = String(interaction_id);
+            wrapper.dataset.interactionSchema = JSON.stringify(schema || {});
 
             const origin = origin_name ? `${window.DOMUtils.escapeHTML(origin_name)} ${gettext('asks')}:` : gettext('Question');
-            const schemaHint = (schema && Object.keys(schema).length > 0)
-                ? `<div class="form-text text-muted mt-1">${gettext('Answer format may be structured; plain text is also accepted.')}</div>`
-                : '';
+            const choiceControls = this._renderInteractionChoiceControls(interaction_id, schema);
+            const schemaHint = this._buildInteractionSchemaHint(schema);
 
             wrapper.innerHTML = `
         <div class="card border-warning">
@@ -423,9 +516,10 @@
               <strong>${origin}</strong>
             </div>
             <div class="mb-2">${window.DOMUtils.escapeHTML(question)}</div>
+            <div class="interaction-choice-controls mb-2">${choiceControls}</div>
             <div class="mb-2">
               <textarea class="form-control" id="interaction-answer-input-${interaction_id}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
-              ${schemaHint}
+              <div class="form-text text-muted mt-1 interaction-schema-hint ${schemaHint ? '' : 'd-none'}">${window.DOMUtils.escapeHTML(schemaHint)}</div>
             </div>
             <div class="d-flex gap-2">
               <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="${interaction_id}">

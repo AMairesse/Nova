@@ -111,13 +111,14 @@ class TaskExecutor:
             if interruption_response:
                 # Emit an update
                 await self.handler.on_resume_task(interruption_response)
-                result = await self.llm.aresume(Command(resume=interruption_response))
+                result = await self._resume_agent(interruption_response)
             else:
                 self.prompt = await self._create_prompt()
                 result = await self._run_agent()
 
-            if isinstance(result, dict) and result.get('__interrupt__'):
-                await self._process_interuption(result)
+            interruption = self._extract_interruption_payload(result)
+            if interruption is not None:
+                await self._process_interruption_payload(interruption)
             else:
                 await self._process_result(result)
                 await self._finalize_task()
@@ -136,6 +137,21 @@ class TaskExecutor:
             await self._handle_execution_error(e)
         finally:
             await self._cleanup()
+
+    async def _resume_agent(self, interruption_response):
+        return await self.llm.aresume(Command(resume=interruption_response))
+
+    def _extract_interruption_payload(self, result):
+        if not (isinstance(result, dict) and result.get('__interrupt__')):
+            return None
+        interruption = result['__interrupt__'][0].value
+        return {
+            "action": interruption.get("action"),
+            "question": interruption.get("question"),
+            "schema": interruption.get("schema") or {},
+            "agent_name": interruption.get("agent_name") or "",
+            "resume_context": interruption.get("resume_context") or {},
+        }
 
     async def _purge_continuous_subagent_checkpoints(self) -> None:
         """Delete LangGraph checkpoint state for all sub-agents in a continuous thread.
@@ -232,12 +248,20 @@ class TaskExecutor:
     async def _create_prompt(self):
         return self.prompt
 
-    async def _create_interaction(self, question: str, schema: Dict[str, Any], agent_name: str):
+    async def _create_interaction(
+        self,
+        question: str,
+        schema: Dict[str, Any],
+        agent_name: str,
+        *,
+        resume_context: Dict[str, Any] | None = None,
+    ):
         """Create the pending Interaction for this task."""
         # Create an Interaction object
         interaction = Interaction(task=self.task, thread=self.thread, agent_config=self.agent_config,
                                   origin_name=agent_name, question=question, schema=schema,
-                                  status=InteractionStatus.PENDING)
+                                  status=InteractionStatus.PENDING,
+                                  resume_context=resume_context or {})
         await sync_to_async(interaction.full_clean, thread_sensitive=False)()
         await sync_to_async(interaction.save, thread_sensitive=False)()
 
@@ -253,23 +277,24 @@ class TaskExecutor:
 
         return interaction
 
-    async def _process_interuption(self, result):
-        '''
-        This will:
-            - upsert an Interaction(PENDING),
-            - mark the Task AWAITING_INPUT,
-            - emit an update for the frontend
-        '''
-        # Get interruption's data
-        interruption = result['__interrupt__'][0].value
+    async def _process_interruption_payload(self, interruption):
+        """
+        Handle a runtime-agnostic interruption payload and suspend the task.
+        """
         if not interruption['action'] == 'ask_user':
             raise Exception(f"Unsupported interruption action: {interruption['action']}")
         question = interruption['question']
         schema = interruption['schema']
         agent_name = interruption['agent_name']
+        resume_context = interruption.get("resume_context") or {}
 
         # Create/Update Interaction
-        interaction = await self._create_interaction(question, schema, agent_name)
+        interaction = await self._create_interaction(
+            question,
+            schema,
+            agent_name,
+            resume_context=resume_context,
+        )
 
         if self.trace_handler:
             await self.trace_handler.record_interaction(
@@ -287,6 +312,15 @@ class TaskExecutor:
 
         # Emit an update
         await self.handler.on_interrupt(interaction.id, question, schema, agent_name)
+
+    async def _process_interuption(self, result):
+        '''
+        Backward-compatible wrapper around the new runtime-agnostic interruption payload flow.
+        '''
+        interruption = self._extract_interruption_payload(result)
+        if interruption is None:
+            raise Exception("Unsupported interruption payload.")
+        await self._process_interruption_payload(interruption)
 
     async def _run_agent(self):
         """Execute the LLM agent and return result."""

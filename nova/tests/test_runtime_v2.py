@@ -15,19 +15,24 @@ from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentThreadSession import AgentThreadSession
+from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.MemoryDirectory import MemoryDirectory
 from nova.models.MemoryChunk import MemoryChunk
 from nova.models.MemoryDocument import MemoryDocument
 from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetric
 from nova.models.memory_common import MemoryRecordStatus
-from nova.models.Message import Actor
+from nova.models.Message import Actor, MessageType
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserFile import UserFile
 from nova.models.WebApp import WebApp
-from nova.runtime_v2.agent import ReactTerminalRunResult, ReactTerminalRuntime
+from nova.runtime_v2.agent import (
+    ReactTerminalInterruptResult,
+    ReactTerminalRunResult,
+    ReactTerminalRuntime,
+)
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.compaction import (
     SESSION_KEY_HISTORY_SUMMARY,
@@ -92,6 +97,21 @@ class RuntimeV2SupportTests(TestCase):
         )
 
         self.assertIsNone(error)
+
+    def test_runtime_initialize_handles_deferred_llm_provider_relation(self):
+        thread = Thread.objects.create(user=self.user, subject="Deferred provider thread")
+        deferred_agent = AgentConfig.objects.get(pk=self.agent.pk)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=thread,
+                agent_config=deferred_agent,
+            ).initialize
+        )()
+
+        self.assertEqual(runtime.provider_client.model, self.provider.model)
+        self.assertEqual(runtime.provider_client.max_context_tokens, self.provider.max_context_tokens)
 
 
 class TerminalExecutorTests(TestCase):
@@ -486,6 +506,138 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(async_to_sync(executor.execute)("cat /copy.txt"), "hello\nworld\n")
         self.assertEqual(redirected, "hello")
         self.assertEqual(copied, "world")
+
+    def test_cat_supports_line_numbering_with_file_and_stdin(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta\\ngamma"')
+
+        file_result = async_to_sync(executor.execute)("cat -n /tmp/data.csv | tail -1")
+        stdin_result = async_to_sync(executor.execute)("cat -n < /tmp/data.csv | tail -1")
+
+        self.assertEqual(file_result, "3\tgamma")
+        self.assertEqual(stdin_result, "3\tgamma")
+
+    def test_head_and_tail_support_numeric_short_form_with_file_and_stdin(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('tee /tmp/lines.txt --text "1\\n2\\n3\\n4\\n5\\n6"')
+
+        head_file = async_to_sync(executor.execute)("head -5 /tmp/lines.txt")
+        tail_file = async_to_sync(executor.execute)("tail -1 /tmp/lines.txt")
+        head_stdin = async_to_sync(executor.execute)("cat /tmp/lines.txt | head -5")
+        tail_stdin = async_to_sync(executor.execute)("cat /tmp/lines.txt | tail -1")
+
+        self.assertEqual(head_file, "1\n2\n3\n4\n5")
+        self.assertEqual(tail_file, "6")
+        self.assertEqual(head_stdin, "1\n2\n3\n4\n5")
+        self.assertEqual(tail_stdin, "6")
+
+    def test_grep_supports_combined_short_flags_and_head_short_count(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)(
+            'tee /openrouter_activity_2026-04-06.csv --text '
+            '"kind\\ncache-hit\\nCACHE-hit\\ncache-store\\nCache-refresh\\ncache-read\\nCACHE-refresh\\nnetwork"'
+        )
+
+        piped = async_to_sync(executor.execute)(
+            "grep -i cache /openrouter_activity_2026-04-06.csv | head -5"
+        )
+        combined = async_to_sync(executor.execute)(
+            "grep -in cache /openrouter_activity_2026-04-06.csv"
+        )
+
+        self.assertEqual(
+            piped,
+            "\n".join(
+                [
+                    "/openrouter_activity_2026-04-06.csv:cache-hit",
+                    "/openrouter_activity_2026-04-06.csv:CACHE-hit",
+                    "/openrouter_activity_2026-04-06.csv:cache-store",
+                    "/openrouter_activity_2026-04-06.csv:Cache-refresh",
+                    "/openrouter_activity_2026-04-06.csv:cache-read",
+                ]
+            ),
+        )
+        self.assertEqual(
+            combined,
+            "\n".join(
+                [
+                    "/openrouter_activity_2026-04-06.csv:2:cache-hit",
+                    "/openrouter_activity_2026-04-06.csv:3:CACHE-hit",
+                    "/openrouter_activity_2026-04-06.csv:4:cache-store",
+                    "/openrouter_activity_2026-04-06.csv:5:Cache-refresh",
+                    "/openrouter_activity_2026-04-06.csv:6:cache-read",
+                    "/openrouter_activity_2026-04-06.csv:7:CACHE-refresh",
+                ]
+            ),
+        )
+
+    def test_wc_supports_line_counts_for_files_and_pipelines(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)(
+            'tee /openrouter_activity_2026-04-06.csv --text '
+            '"kind\\ncache-hit\\nCACHE-hit\\ncache-store\\nCache-refresh\\ncache-read\\nCACHE-refresh\\nnetwork"'
+        )
+
+        file_result = async_to_sync(executor.execute)(
+            "wc -l /openrouter_activity_2026-04-06.csv"
+        )
+        pipeline_result = async_to_sync(executor.execute)(
+            "grep cache /openrouter_activity_2026-04-06.csv | wc -l"
+        )
+
+        self.assertEqual(file_result, "8 /openrouter_activity_2026-04-06.csv")
+        self.assertEqual(pipeline_result, "3")
+
+    def test_rm_supports_force_flag_and_multiple_paths(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /out")
+        async_to_sync(executor.execute)('echo "hello" > /out/index.html')
+
+        removed = async_to_sync(executor.execute)("rm -f /out/index.html /out/missing.html")
+        missing_only = async_to_sync(executor.execute)("rm -f /out/missing.html")
+
+        self.assertEqual(removed, "Removed /out/index.html")
+        self.assertEqual(missing_only, "")
+        self.assertEqual(async_to_sync(executor.execute)("ls /out"), "")
+
+    def test_rm_force_keeps_real_path_errors(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError) as protected_error:
+            async_to_sync(executor.execute)("rm -f /tmp")
+        self.assertIn("Cannot remove protected path: /tmp", str(protected_error.exception))
+
+        async_to_sync(executor.execute)("mkdir /out")
+        async_to_sync(executor.execute)('echo "hello" > /out/index.html')
+        with self.assertRaises(TerminalCommandError) as non_empty_error:
+            async_to_sync(executor.execute)("rm -f /out")
+        self.assertIn("Directory not empty: /out", str(non_empty_error.exception))
+
+    def test_terminal_reports_clean_usage_errors_for_unix_like_flags(self):
+        executor = self._build_executor()
+        async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta"')
+
+        with self.assertRaises(TerminalCommandError) as wc_usage:
+            async_to_sync(executor.execute)("wc /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as wc_flag:
+            async_to_sync(executor.execute)("wc -x /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as cat_flag:
+            async_to_sync(executor.execute)("cat -x /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as head_flag:
+            async_to_sync(executor.execute)("head -x /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as rm_usage:
+            async_to_sync(executor.execute)("rm")
+
+        self.assertEqual(str(wc_usage.exception), "Usage: wc -l [<path>]")
+        self.assertEqual(str(wc_flag.exception), "Unsupported wc flag: -x")
+        self.assertEqual(str(cat_flag.exception), "Unsupported cat flag: -x")
+        self.assertEqual(str(head_flag.exception), "Unsupported head flag: -x")
+        self.assertEqual(str(rm_usage.exception), "Usage: rm [-f] <path> [<path> ...]")
 
     def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
         executor = self._build_executor()
@@ -1753,6 +1905,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("date +%F", skills["date.md"])
         self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
         self.assertIn("cat /note.txt | grep hello", skills["terminal.md"])
+        self.assertIn("wc -l /note.txt", skills["terminal.md"])
+        self.assertIn("rm -f /note.txt", skills["terminal.md"])
 
     def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
         skills = build_skill_registry(
@@ -1929,6 +2083,202 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             config={"searxng_url": "https://search.example.com", "num_results": 5},
         )
         return tool
+
+    def test_tool_schemas_include_ask_user_for_main_runtime(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        tool_names = [tool["function"]["name"] for tool in runtime._tool_schemas()]
+
+        self.assertIn("ask_user", tool_names)
+
+    def test_tool_schemas_omit_ask_user_when_disabled(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                allow_ask_user=False,
+            ).initialize
+        )()
+
+        tool_names = [tool["function"]["name"] for tool in runtime._tool_schemas()]
+
+        self.assertNotIn("ask_user", tool_names)
+
+    def test_runtime_returns_interrupt_result_for_ask_user(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            return_value={
+                "content": "I need one detail first.",
+                "tool_calls": [
+                    {
+                        "id": "call_ask_1",
+                        "name": "ask_user",
+                        "arguments": json.dumps(
+                            {
+                                "question": "Which account should I use?",
+                                "schema": {"type": "string", "enum": ["work", "personal"]},
+                            }
+                        ),
+                    }
+                ],
+            }
+        )
+
+        result = async_to_sync(runtime.run)()
+
+        self.assertIsInstance(result, ReactTerminalInterruptResult)
+        self.assertEqual(result.question, "Which account should I use?")
+        self.assertEqual(result.schema["enum"], ["work", "personal"])
+        self.assertEqual(result.resume_context["tool_call_id"], "call_ask_1")
+        self.assertEqual(result.resume_context["assistant_message"]["role"], "assistant")
+        self.assertEqual(
+            result.resume_context["assistant_message"]["tool_calls"][0]["function"]["name"],
+            "ask_user",
+        )
+
+    def test_runtime_rejects_mixed_ask_user_tool_calls(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_ask_1",
+                            "name": "ask_user",
+                            "arguments": json.dumps({"question": "Which account?"}),
+                        },
+                        {
+                            "id": "call_term_1",
+                            "name": "terminal",
+                            "arguments": json.dumps({"command": "pwd"}),
+                        },
+                    ],
+                },
+                {
+                    "content": "Recovered.",
+                    "tool_calls": [],
+                    "total_tokens": 21,
+                },
+            ]
+        )
+
+        result = async_to_sync(runtime.run)()
+
+        self.assertIsInstance(result, ReactTerminalRunResult)
+        self.assertEqual(result.final_answer, "Recovered.")
+        self.assertEqual(runtime.vfs.cwd, "/")
+        self.assertNotIn("pwd", runtime.vfs.session_state.get("history", []))
+
+    def test_runtime_resume_skips_current_interaction_answer_message(self):
+        question_message = self.thread.add_message(
+            "**Runtime Agent asks:** Which account?",
+            Actor.SYSTEM,
+            MessageType.INTERACTION_QUESTION,
+        )
+        interaction = Interaction.objects.create(
+            task=Task.objects.create(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                status=TaskStatus.AWAITING_INPUT,
+                progress_logs=[],
+            ),
+            thread=self.thread,
+            agent_config=self.agent,
+            origin_name="Runtime Agent",
+            question="Which account?",
+            status=InteractionStatus.ANSWERED,
+            answer="work",
+            resume_context={
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": "I need one detail first.",
+                    "tool_calls": [
+                        {
+                            "id": "call_ask_1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": json.dumps({"question": "Which account?"}),
+                            },
+                        }
+                    ],
+                },
+                "tool_call_id": "call_ask_1",
+            },
+        )
+        question_message.interaction = interaction
+        question_message.save(update_fields=["interaction"])
+        self.thread.add_message(
+            "**Answer:** work",
+            Actor.USER,
+            MessageType.INTERACTION_ANSWER,
+            interaction,
+        )
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        captured = {}
+
+        async def fake_create_chat_completion(*, messages, tools=None):
+            del tools
+            captured["messages"] = messages
+            return {"content": "Using the work account.", "tool_calls": []}
+
+        runtime.provider_client.create_chat_completion = AsyncMock(side_effect=fake_create_chat_completion)
+
+        result = async_to_sync(runtime.run)(
+            resume_context=interaction.resume_context,
+            interruption_response={
+                "interaction_id": interaction.id,
+                "interaction_status": interaction.status,
+                "user_response": interaction.answer,
+            },
+        )
+
+        self.assertEqual(result.final_answer, "Using the work account.")
+        joined_contents = "\n".join(str(message.get("content") or "") for message in captured["messages"])
+        self.assertNotIn("**Answer:** work", joined_contents)
+        self.assertIn('{"status": "answered", "answer": "work"}', joined_contents)
+
+    def test_system_prompt_mentions_ask_user(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+
+        self.assertIn("ask_user", prompt)
 
     def _create_webapp_tool(self) -> Tool:
         return Tool.objects.create(
@@ -2129,6 +2479,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             self.user,
             continuous_thread,
             exclude_message_id=None,
+            exclude_interaction_ids=set(),
         )
 
     def test_system_prompt_mentions_touch_tee_and_conditional_mailbox_and_date_guidance(self):
@@ -2191,6 +2542,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("tee", prompt)
         self.assertIn("Minimal text pipelines", prompt)
         self.assertIn("not a full shell", prompt)
+        self.assertIn("wc -l", prompt)
+        self.assertIn("rm -f", prompt)
         self.assertIn("date +%F", prompt)
         self.assertIn("--mailbox <email>", prompt)
         self.assertIn("- /: persistent files for this thread", prompt)

@@ -14,7 +14,8 @@ very small tool surface and a file-centric mental model.
 - V2 exposes a stable model tool surface:
   - `terminal(command: str)`
   - `delegate_to_agent(agent_id: str, question: str, input_paths: list[str] | null)`
-- No `ask_user`, `load_skill`, or `list_skills`.
+  - `ask_user(question: str, schema?: object)`
+- No `load_skill` or `list_skills`.
 - Skills are documentation only, exposed as virtual markdown files under `/skills`.
 - V2 is file-centric and does not rely on `MessageArtifact` for normal runtime flows.
 - Long-term memory is canonical in the database and exposed as a user-scoped
@@ -30,6 +31,8 @@ very small tool surface and a file-centric mental model.
 - No LangChain, LangGraph, or Langfuse in the v2 runtime package
 - Reuses the existing realtime/frontend contract for streaming, progress, trace
   footer data, and compaction UI
+- Supports native blocking user clarification through `ask_user`, backed by the
+  existing `Interaction` / `AWAITING_INPUT` product flow
 - Standard threads load raw thread history, optionally preceded by v2 compaction
   state stored in `AgentThreadSession`
 - Continuous threads load context through the continuous context builder:

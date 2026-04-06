@@ -772,7 +772,13 @@ def resume_ai_task_celery(self, interaction_pk: int):
     Uses the same thread/checkpoint and streams via the same WS group (task_id).
     """
     try:
-        interaction = Interaction.objects.select_related('task', 'thread', 'agent_config').get(pk=interaction_pk)
+        interaction = Interaction.objects.select_related(
+            'task',
+            'task__user',
+            'thread',
+            'agent_config',
+            'agent_config__llm_provider',
+        ).get(pk=interaction_pk)
         task = interaction.task
         thread = interaction.thread
         user = task.user
@@ -784,10 +790,12 @@ def resume_ai_task_celery(self, interaction_pk: int):
             'user_response': interaction.answer,
             'interaction_id': interaction.id,
             'interaction_status': interaction.status,
+            'resume_context': dict(getattr(interaction, "resume_context", {}) or {}),
         }
 
         # Run the resume executor
-        executor = AgentTaskExecutor(task, user, thread, agent_config, interaction)
+        executor_class = ReactTerminalTaskExecutor if is_react_terminal_runtime(agent_config) else AgentTaskExecutor
+        executor = executor_class(task, user, thread, agent_config, interaction)
         asyncio.run(executor.execute_or_resume(interruption_response))
 
     except Interaction.DoesNotExist:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from django.test import TransactionTestCase
 
@@ -111,12 +111,13 @@ class TaskExecutorTests(TransactionTestCase):
         executor._create_llm_agent = AsyncMock()
         executor._create_prompt = AsyncMock(return_value="hello")
         executor._run_agent = AsyncMock(return_value=interrupt_payload)
-        executor._process_interuption = AsyncMock()
+        executor._extract_interruption_payload = Mock(return_value={"action": "ask_user"})
+        executor._process_interruption_payload = AsyncMock()
         executor._cleanup = AsyncMock()
 
         asyncio.run(executor.execute_or_resume())
 
-        executor._process_interuption.assert_awaited_once_with(interrupt_payload)
+        executor._process_interruption_payload.assert_awaited_once_with({"action": "ask_user"})
         executor._cleanup.assert_awaited_once()
 
     def test_execute_or_resume_with_resume_payload_calls_llm_resume(self):
@@ -315,11 +316,13 @@ class TaskExecutorTests(TransactionTestCase):
                 question="Need confirmation?",
                 schema={"type": "object"},
                 agent_name="Planner",
+                resume_context={"kind": "react_terminal"},
             )
         )
 
         self.assertEqual(interaction.question, "Need confirmation?")
         self.assertEqual(interaction.origin_name, "Planner")
+        self.assertEqual(interaction.resume_context, {"kind": "react_terminal"})
         self.assertTrue(hasattr(interaction, "question_message"))
         self.assertEqual(interaction.question_message.message_type, MessageType.INTERACTION_QUESTION)
         self.assertEqual(interaction.question_message.interaction_id, interaction.id)
@@ -341,7 +344,7 @@ class TaskExecutorTests(TransactionTestCase):
                 type(
                     "I",
                     (),
-                    {"value": {"action": "ask_user", "question": "Continue?", "schema": {"type": "object"}, "agent_name": "Planner"}},
+                    {"value": {"action": "ask_user", "question": "Continue?", "schema": {"type": "object"}, "agent_name": "Planner", "resume_context": {"foo": "bar"}}},
                 )()
             ]
         }

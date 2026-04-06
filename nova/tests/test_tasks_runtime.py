@@ -1427,6 +1427,50 @@ class CeleryEntryPointTests(SimpleTestCase):
         executor.execute_or_resume.assert_called_once()
         mocked_asyncio_run.assert_called_once()
 
+    @patch("nova.tasks.tasks.asyncio.run")
+    @patch("nova.tasks.tasks.ReactTerminalTaskExecutor")
+    @patch("nova.tasks.tasks.Interaction.objects.select_related")
+    def test_resume_ai_task_celery_uses_v2_executor_for_react_terminal_agents(
+        self,
+        mocked_interaction_select_related,
+        mocked_executor_cls,
+        mocked_asyncio_run,
+    ):
+        task = SimpleNamespace(user=SimpleNamespace(id=1))
+        thread = SimpleNamespace(id=3)
+        agent_config = SimpleNamespace(
+            id=4,
+            runtime_engine="react_terminal_v1",
+        )
+        interaction = SimpleNamespace(
+            id=9,
+            task=task,
+            thread=thread,
+            agent_config=agent_config,
+            answer=False,
+            status="ANSWERED",
+            resume_context={"assistant_message": {"role": "assistant"}, "tool_call_id": "call_1"},
+        )
+        mocked_interaction_select_related.return_value.get.return_value = interaction
+        executor = SimpleNamespace(execute_or_resume=Mock(return_value=None))
+        mocked_executor_cls.return_value = executor
+
+        resume_ai_task_celery.run(9)
+
+        mocked_interaction_select_related.assert_called_once_with(
+            'task',
+            'task__user',
+            'thread',
+            'agent_config',
+            'agent_config__llm_provider',
+        )
+        mocked_executor_cls.assert_called_once_with(task, task.user, thread, agent_config, interaction)
+        mocked_asyncio_run.assert_called_once()
+        executor.execute_or_resume.assert_called_once()
+        interruption_response = executor.execute_or_resume.call_args.args[0]
+        self.assertEqual(interruption_response["user_response"], False)
+        self.assertEqual(interruption_response["resume_context"]["tool_call_id"], "call_1")
+
     @patch.object(resume_ai_task_celery, "retry", side_effect=RuntimeError("retry queued"))
     @patch("nova.tasks.tasks.Interaction.objects.select_related")
     def test_resume_ai_task_celery_retries_on_failure(self, mocked_interaction_select_related, mocked_retry):

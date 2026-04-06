@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from nova.continuous.utils import get_day_label_for_user
 from nova.models.DaySegment import DaySegment
-from nova.models.Message import Actor, Message
+from nova.models.Message import Actor, Message, MessageType
 
 
 @dataclass(frozen=True)
@@ -160,6 +160,7 @@ def load_continuous_context(
     thread,
     *,
     exclude_message_id: Optional[int] = None,
+    exclude_interaction_ids: Optional[set[int]] = None,
 ) -> Tuple[ContinuousContextSnapshot, List[BaseMessage]]:
     """Build the messages to inject for the continuous checkpoint.
 
@@ -267,6 +268,11 @@ def load_continuous_context(
             qs = qs.filter(id__gt=today_summary_until_message_id)
         if exclude_message_id:
             qs = qs.exclude(id=exclude_message_id)
+        if exclude_interaction_ids:
+            qs = qs.exclude(
+                message_type=MessageType.INTERACTION_ANSWER,
+                interaction_id__in=list(exclude_interaction_ids),
+            )
         for m in qs.order_by("created_at", "id"):
             msg = _message_to_langchain(m)
             if msg is not None:

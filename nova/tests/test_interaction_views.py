@@ -96,6 +96,21 @@ class InteractionViewsTests(TestCase):
         mocked_delay.assert_called_once_with(self.interaction.id)
 
     @patch("nova.views.interaction_views.resume_ai_task_celery.delay")
+    def test_answer_interaction_serializes_boolean_answers_as_json_scalars(self, mocked_delay):
+        response = self.client.post(
+            self._answer_url(),
+            data=json.dumps({"answer": False}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.interaction.refresh_from_db()
+        self.assertIs(self.interaction.answer, False)
+        answer_message = self.thread.get_messages().get(message_type=MessageType.INTERACTION_ANSWER)
+        self.assertEqual(answer_message.text, "**Answer:** false")
+        mocked_delay.assert_called_once_with(self.interaction.id)
+
+    @patch("nova.views.interaction_views.resume_ai_task_celery.delay")
     def test_answer_interaction_rejects_invalid_json(self, mocked_delay):
         response = self.client.post(
             self._answer_url(),

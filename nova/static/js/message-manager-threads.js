@@ -133,7 +133,7 @@
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ answer: answer || '' })
+                        body: JSON.stringify({ answer: answer === undefined ? '' : answer })
                     }
                 );
                 if (!response.ok) throw new Error('Server error');

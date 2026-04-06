@@ -11,7 +11,11 @@ from nova.tasks.TaskExecutor import TaskExecutor
 from nova.thread_titles import is_default_thread_subject
 from nova.utils import markdown_to_html
 
-from .agent import ReactTerminalRunResult, ReactTerminalRuntime
+from .agent import (
+    ReactTerminalInterruptResult,
+    ReactTerminalRunResult,
+    ReactTerminalRuntime,
+)
 from .compaction import (
     approximate_token_count_from_text,
     build_v2_compaction_messages,
@@ -68,6 +72,24 @@ class ReactTerminalTaskExecutor(TaskExecutor):
     async def _run_agent(self):
         await self.handler.record_progress("Running React Terminal agent")
         return await self.runtime.run()
+
+    async def _resume_agent(self, interruption_response):
+        await self.handler.record_progress("Resuming React Terminal agent")
+        return await self.runtime.run(
+            resume_context=dict(interruption_response.get("resume_context") or {}),
+            interruption_response=interruption_response,
+        )
+
+    def _extract_interruption_payload(self, result):
+        if isinstance(result, ReactTerminalInterruptResult):
+            return {
+                "action": "ask_user",
+                "question": result.question,
+                "schema": dict(result.schema or {}),
+                "agent_name": result.agent_name,
+                "resume_context": dict(result.resume_context or {}),
+            }
+        return super()._extract_interruption_payload(result)
 
     async def _persist_agent_message_state(
         self,
@@ -146,11 +168,12 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             run_result = result
         else:
             final_answer = "" if result is None else str(result)
+            provider = await self._get_llm_provider()
             run_result = ReactTerminalRunResult(
                 final_answer=final_answer,
                 real_tokens=None,
                 approx_tokens=None,
-                max_context=getattr(getattr(self.agent_config, "llm_provider", None), "max_context_tokens", None),
+                max_context=getattr(provider, "max_context_tokens", None),
             )
 
         await self.handler.record_progress("Processing React Terminal result")
@@ -270,7 +293,7 @@ class ReactTerminalSummarizationTaskExecutor(TaskExecutor):
         if compaction_error:
             raise ValueError(compaction_error)
         await self.handler.record_progress("Preparing React Terminal compaction")
-        self.provider_client = OpenAICompatibleProviderClient(self.agent_config.llm_provider)
+        self.provider_client = OpenAICompatibleProviderClient(await self._get_llm_provider())
         self.session = await get_or_create_agent_thread_session(self.thread, self.agent_config)
         self.llm = None
 

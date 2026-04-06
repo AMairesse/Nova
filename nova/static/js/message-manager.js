@@ -250,9 +250,17 @@
                     e.preventDefault();
                     const btn = target.closest(".interaction-answer-btn");
                     const interactionId = btn.dataset.interactionId;
-                    // Get the answer from the textarea
-                    const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
-                    const answer = textarea ? textarea.value : '';
+                    let answer;
+                    if (Object.prototype.hasOwnProperty.call(btn.dataset, 'answerJson')) {
+                        try {
+                            answer = JSON.parse(btn.dataset.answerJson);
+                        } catch (_error) {
+                            answer = btn.dataset.answerJson;
+                        }
+                    } else {
+                        const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
+                        answer = textarea ? textarea.value : '';
+                    }
                     this.answerInteraction(interactionId, answer);
                 },
                 '.interaction-cancel-btn': (e, target) => {
