@@ -4,6 +4,7 @@ import asyncio
 import logging
 import httpx
 import base64
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -15,6 +16,11 @@ from fastmcp.client.auth import BearerAuth
 from nova.models.Tool import ToolCredential
 from nova.utils import normalize_url
 import json
+
+from nova.mcp.oauth_service import (
+    MCPReconnectRequired,
+    get_valid_mcp_access_token,
+)
 
 ALLOWED_TYPES = (str, int, float, bool, type(None))
 
@@ -37,18 +43,22 @@ class MCPClient:
         self.safe_endpoint = slugify(self.endpoint)[:80]
 
     # ---------- Auth / transport helpers ---------------------------------
-    def _auth_object(self):
+    def _auth_object(self, token: str | None = None):
         cred = self.credential
+        if token:
+            return BearerAuth(token)
         if not cred:
             return None
         if cred.auth_type in {"token", "oauth", "bearer"} and cred.token:
             return BearerAuth(cred.token)
+        if cred.auth_type == "oauth_managed" and cred.access_token:
+            return BearerAuth(cred.access_token)
         if cred.auth_type == "none":
             return None
         return BearerAuth(cred.token) if cred.token else None
 
-    def _transport(self) -> StreamableHttpTransport | SSETransport:
-        auth = self._auth_object()
+    def _transport(self, *, token: str | None = None) -> StreamableHttpTransport | SSETransport:
+        auth = self._auth_object(token)
         headers = {}
 
         if self.transport_type == "sse":
@@ -59,6 +69,23 @@ class MCPClient:
                                        auth=auth,
                                        headers=headers) if auth else StreamableHttpTransport(url=self.endpoint,
                                                                                              headers=headers)
+
+    async def _runtime_token(self) -> str | None:
+        cred = self.credential
+        if not cred:
+            return None
+        if cred.auth_type != "oauth_managed":
+            return None
+        token = await get_valid_mcp_access_token(
+            tool=SimpleNamespace(name=self.endpoint, id=None),
+            credential=cred,
+            user=self.user_id,
+        )
+        if not token:
+            raise MCPReconnectRequired(
+                "MCP OAuth reconnect required. Reconnect this MCP server in Settings > Tools."
+            )
+        return token
 
     # ---------- Async API -------------------------------------------------
     async def alist_tools(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
@@ -76,7 +103,8 @@ class MCPClient:
                     return getattr(obj, attr)
             return default
 
-        async with FastMCPClient(self._transport()) as client:  # Per-appel
+        runtime_token = await self._runtime_token()
+        async with FastMCPClient(self._transport(token=runtime_token)) as client:  # Per-appel
             tools = await client.list_tools()
             result = [
                 dict(
@@ -104,7 +132,8 @@ class MCPClient:
             return cached
 
         try:
-            transport = self._transport()
+            runtime_token = await self._runtime_token()
+            transport = self._transport(token=runtime_token)
             async with FastMCPClient(transport) as client:
                 result = await client.call_tool(tool_name, inputs)
                 # Try to cache, but skip if not picklable

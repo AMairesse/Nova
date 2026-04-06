@@ -125,6 +125,7 @@ class ToolCredential(models.Model):
             ('basic', _('Basic Auth')),
             ('token', _('Token Auth')),
             ('oauth', _('OAuth')),
+            ('oauth_managed', _('Managed OAuth (MCP)')),
             ('api_key', _('API Key')),
             ('custom', _('Custom')),
         ],

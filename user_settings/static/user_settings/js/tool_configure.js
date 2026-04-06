@@ -109,14 +109,17 @@ document.addEventListener("DOMContentLoaded", () => {
       basic: ["username", "password"],
       token: ["token", "token_type"],
       api_key: ["token", "api_key_name", "api_key_in"],
-      oauth: ["client_id", "client_secret"],
+      oauth: ["token", "token_type"],
+      oauth_managed: ["client_id", "client_secret"],
       custom: [],
     };
     const hideAll = () =>
       document.querySelectorAll("[data-auth-field]").forEach((c) => {
         const container = c.closest('.mb-3') || c.parentElement;
         if (container) container.style.display = "none";
-        c.querySelectorAll("input").forEach((i) => (i.required = false));
+        c.querySelectorAll("input").forEach((i) => {
+          i.required = false;
+        });
       });
     const show = (names) =>
       names.forEach((n) => {
@@ -124,8 +127,6 @@ document.addEventListener("DOMContentLoaded", () => {
         if (c) {
           const container = c.closest('.mb-3') || c.parentElement;
           if (container) container.style.display = "";
-          const i = c.querySelector("input");
-          if (i) i.required = true;
         }
       });
     const toggle = () => {
@@ -157,6 +158,10 @@ document.addEventListener("DOMContentLoaded", () => {
           body: formData,
         });
         const data = await resp.json();
+        if (data.status === "oauth_redirect" && data.authorization_url) {
+          window.location.href = data.authorization_url;
+          return;
+        }
         resultBox.textContent = data.message || data.status;
         resultBox.className =
           "alert " + (data.status === "success" ? "alert-success" : "alert-danger");

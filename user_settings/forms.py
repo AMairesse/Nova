@@ -490,6 +490,26 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         self.helper.form_tag = False
         self.helper.disable_csrf = True
 
+        if self.tool and self.tool.tool_type == Tool.ToolType.MCP:
+            self.fields["auth_type"].choices = [
+                ("none", _("No Authentication")),
+                ("basic", _("Basic Auth")),
+                ("token", _("Token Auth")),
+                ("oauth", _("OAuth")),
+                ("oauth_managed", _("Managed OAuth (MCP)")),
+                ("api_key", _("API Key")),
+                ("custom", _("Custom")),
+            ]
+        elif self.tool and self.tool.tool_type == Tool.ToolType.API:
+            self.fields["auth_type"].choices = [
+                ("none", _("No Authentication")),
+                ("basic", _("Basic Auth")),
+                ("token", _("Token Auth")),
+                ("oauth", _("OAuth")),
+                ("api_key", _("API Key")),
+                ("custom", _("Custom")),
+            ]
+
         # Pre-fill config
         if self.instance.pk and self.instance.config:
             self.fields["caldav_url"].initial = self.instance.config.get(
@@ -561,6 +581,8 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             api_key_in = str(cleaned.get("api_key_in") or "").strip().lower()
             if api_key_in not in {"header", "query"}:
                 self.add_error("api_key_in", _("Choose where to send the API key."))
+        if auth_type == "oauth_managed" and self.tool and self.tool.tool_type != Tool.ToolType.MCP:
+            self.add_error("auth_type", _("Managed OAuth is only available for MCP tools."))
         return cleaned
 
 

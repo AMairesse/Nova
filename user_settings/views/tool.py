@@ -16,7 +16,7 @@ from django.views.decorators.http import require_POST
 from django.views.generic import ListView, DeleteView, FormView
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Fieldset, Field
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 
 from user_settings.mixins import (
     UserOwnedQuerySetMixin,
@@ -34,6 +34,7 @@ from nova.models.Tool import Tool, ToolCredential
 from nova.tools import get_metadata, import_module
 from nova.models.Tool import check_and_create_searxng_tool, check_and_create_judge0_tool
 from nova.mcp.client import MCPClient
+from nova.mcp import oauth_service as mcp_oauth_service
 
 logger = logging.getLogger(__name__)
 
@@ -507,16 +508,35 @@ async def tool_test_connection(request, pk: int):
             username = payload.get("username", "")
             password = payload.get("password", "")
             token = payload.get("token", "")
+            client_id = payload.get("client_id", "")
+            client_secret = payload.get("client_secret", "")
+            token_type = payload.get("token_type", "")
 
-            if not created:
-                cred.auth_type = auth_type
-                if username:
-                    cred.username = username
-                if password:
-                    cred.password = password
-                if token:
-                    cred.token = token
-                await sync_to_async(cred.save)()
+            cred.auth_type = auth_type
+            cred.username = username or None
+            if password:
+                cred.password = password
+            elif not created and auth_type != "basic":
+                cred.password = cred.password
+            else:
+                cred.password = None if auth_type != "basic" else cred.password
+            if token:
+                cred.token = token
+            elif auth_type not in {"token", "oauth", "api_key"}:
+                cred.token = None
+            if token_type:
+                cred.token_type = token_type
+            elif auth_type not in {"token", "oauth"}:
+                cred.token_type = None
+            if client_id:
+                cred.client_id = client_id
+            elif auth_type != "oauth_managed":
+                cred.client_id = None
+            if client_secret:
+                cred.client_secret = client_secret
+            elif auth_type != "oauth_managed":
+                cred.client_secret = None
+            await sync_to_async(cred.save)()
 
         # Built-in tools with test function
         if tool.tool_type == Tool.ToolType.BUILTIN:
@@ -548,6 +568,33 @@ async def tool_test_connection(request, pk: int):
         # MCP
         if tool.tool_type == Tool.ToolType.MCP:
             try:
+                if cred.auth_type == "oauth_managed":
+                    try:
+                        await mcp_oauth_service.get_valid_mcp_access_token(
+                            tool=tool,
+                            credential=cred,
+                            user=request.user,
+                        )
+                    except (
+                        mcp_oauth_service.MCPOAuthConnectionRequired,
+                        mcp_oauth_service.MCPReconnectRequired,
+                    ):
+                        callback_url = request.build_absolute_uri(
+                            reverse("user_settings:mcp-oauth-callback")
+                        )
+                        flow = await mcp_oauth_service.start_mcp_oauth_flow(
+                            tool=tool,
+                            credential=cred,
+                            user=request.user,
+                            redirect_uri=callback_url,
+                        )
+                        return JsonResponse(
+                            {
+                                "status": "oauth_redirect",
+                                "message": "OAuth authorization required.",
+                                "authorization_url": flow.authorization_url,
+                            }
+                        )
                 client = MCPClient(
                     endpoint=tool.endpoint,
                     credential=cred,
@@ -578,3 +625,36 @@ async def tool_test_connection(request, pk: int):
     except Exception as e:  # noqa: BLE001 – broad catch on purpose
         logger.error(e)
         return JsonResponse({"status": "error", "message": str(e)})
+
+
+@login_required
+def mcp_oauth_callback(request):
+    state = str(request.GET.get("state") or "").strip()
+    code = str(request.GET.get("code") or "").strip()
+    error = str(request.GET.get("error") or "").strip()
+    error_description = str(request.GET.get("error_description") or "").strip()
+
+    if error:
+        messages.error(request, f"OAuth authorization failed: {error_description or error}")
+        return HttpResponseRedirect(reverse("user_settings:tools"))
+
+    try:
+        tool, credential = async_to_sync(mcp_oauth_service.complete_mcp_oauth_flow)(
+            user=request.user,
+            state=state,
+            code=code,
+        )
+        client = MCPClient(
+            endpoint=tool.endpoint,
+            credential=credential,
+            transport_type=tool.transport_type,
+            user_id=request.user.id,
+        )
+        async_to_sync(client.alist_tools)(force_refresh=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MCP OAuth callback failed: %s", exc)
+        messages.error(request, str(exc))
+        return HttpResponseRedirect(reverse("user_settings:tools"))
+
+    messages.success(request, f'MCP OAuth connected successfully for "{tool.name}".')
+    return HttpResponseRedirect(reverse("user_settings:tool-configure", args=[tool.pk]))

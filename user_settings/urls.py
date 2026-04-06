@@ -28,6 +28,7 @@ from user_settings.views.tool import (
     ToolUpdateView,
     ToolDeleteView,
     ToolConfigureView,
+    mcp_oauth_callback,
     tool_test_connection
 )
 from user_settings.views.general import GeneralSettingsView
@@ -96,6 +97,7 @@ urlpatterns += [
     path("tools/<int:pk>/delete/", ToolDeleteView.as_view(), name="tool-delete"),
     path("tools/<int:pk>/configure/", ToolConfigureView.as_view(), name="tool-configure"),
     path("tools/<int:pk>/test/", tool_test_connection, name="tool-test"),
+    path("tools/mcp/oauth/callback/", mcp_oauth_callback, name="mcp-oauth-callback"),
     path("tools/<int:tool_pk>/operations/add/", APIToolOperationCreateView.as_view(), name="api-operation-add"),
     path(
         "tools/<int:tool_pk>/operations/<int:pk>/edit/",

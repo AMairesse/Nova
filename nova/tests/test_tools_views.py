@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from django.test import TestCase
 from django.urls import reverse
+from django.contrib.messages import get_messages
 
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.Tool import Tool, ToolCredential
+from nova.mcp import oauth_service as mcp_oauth_service
+from user_settings.forms import ToolCredentialForm
 from nova.tests.factories import (
     create_agent,
     create_provider,
@@ -460,6 +464,82 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "success")
         mock_instance.alist_tools.assert_awaited()
 
+    def test_tool_credential_form_exposes_managed_oauth_only_for_mcp(self):
+        mcp_tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+        )
+        api_tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+
+        mcp_form = ToolCredentialForm(user=self.user, tool=mcp_tool)
+        api_form = ToolCredentialForm(user=self.user, tool=api_tool)
+
+        mcp_choices = {value for value, _label in mcp_form.fields["auth_type"].choices}
+        api_choices = {value for value, _label in api_form.fields["auth_type"].choices}
+        self.assertIn("oauth_managed", mcp_choices)
+        self.assertNotIn("oauth_managed", api_choices)
+
+    @patch("user_settings.views.tool.mcp_oauth_service.start_mcp_oauth_flow", new_callable=AsyncMock)
+    @patch("user_settings.views.tool.mcp_oauth_service.get_valid_mcp_access_token", new_callable=AsyncMock)
+    def test_tool_test_connection_mcp_oauth_redirects_when_authorization_needed(
+        self,
+        mock_get_token,
+        mock_start_flow,
+    ):
+        mock_get_token.side_effect = mcp_oauth_service.MCPOAuthConnectionRequired(
+            "OAuth connection required"
+        )
+        mock_start_flow.return_value = SimpleNamespace(
+            authorization_url="https://auth.example.com/authorize?state=abc",
+            state="abc",
+        )
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+            transport_type="http",
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-test", args=[tool.id]),
+            data={"auth_type": "oauth_managed", "client_id": "preset-client"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "oauth_redirect")
+        self.assertIn("authorization_url", payload)
+        credential = ToolCredential.objects.get(user=self.user, tool=tool)
+        self.assertEqual(credential.auth_type, "oauth_managed")
+        self.assertEqual(credential.client_id, "preset-client")
+
+    @patch("user_settings.views.tool.MCPClient")
+    def test_tool_test_connection_saves_posted_credential_on_first_create(self, mock_client):
+        mock_instance = AsyncMock()
+        mock_instance.alist_tools.return_value = []
+        mock_client.return_value = mock_instance
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+            transport_type="http",
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-test", args=[tool.id]),
+            data={"auth_type": "token", "token": "token-123"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        credential = ToolCredential.objects.get(user=self.user, tool=tool)
+        self.assertEqual(credential.auth_type, "token")
+        self.assertEqual(credential.token, "token-123")
+
     @patch("user_settings.views.tool.MCPClient", side_effect=RuntimeError("boom"))
     def test_tool_test_connection_handles_errors(self, mock_client):
         tool = create_tool(
@@ -501,3 +581,46 @@ class ToolsViewsTests(TestCase):
         response = self.client.post(reverse("user_settings:tool-test", args=[tool.id]))
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
+
+    def test_mcp_oauth_callback_redirects_to_configure_on_success(self):
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+        )
+        credential = create_tool_credential(
+            self.user,
+            tool,
+            auth_type="oauth_managed",
+            config={"mcp_oauth": {"status": "connected"}},
+        )
+        with patch(
+            "user_settings.views.tool.mcp_oauth_service.complete_mcp_oauth_flow",
+            new=AsyncMock(return_value=(tool, credential)),
+        ), patch("user_settings.views.tool.MCPClient") as mock_client:
+            mock_client.return_value.alist_tools = AsyncMock(return_value=[])
+            response = self.client.get(
+                reverse("user_settings:mcp-oauth-callback"),
+                data={"state": "abc", "code": "code-123"},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        messages = [str(message) for message in get_messages(response.wsgi_request)]
+        self.assertEqual(
+            response["Location"],
+            reverse("user_settings:tool-configure", args=[tool.pk]),
+            messages,
+        )
+
+    def test_mcp_oauth_callback_redirects_to_tools_on_error(self):
+        with patch(
+            "user_settings.views.tool.mcp_oauth_service.complete_mcp_oauth_flow",
+            new=AsyncMock(side_effect=RuntimeError("bad callback")),
+        ):
+            response = self.client.get(
+                reverse("user_settings:mcp-oauth-callback"),
+                data={"state": "abc", "code": "code-123"},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:tools"))
