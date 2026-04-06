@@ -21,6 +21,10 @@ Start with:
 - `ls /skills`
 - `echo "hello" > /note.txt`
 - `cat /note.txt | grep hello`
+- `cat -n /note.txt | tail -1`
+- `grep -in hello /note.txt | head -5`
+- `wc -l /note.txt`
+- `rm -f /note.txt`
 - `tee /note.txt --text "first line\\nsecond line"`
 
 Use relative paths only if you are confident about the current working directory.

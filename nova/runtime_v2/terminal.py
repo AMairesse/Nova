@@ -371,6 +371,8 @@ class TerminalExecutor:
             return await self._cmd_find(args)
         if name == "grep":
             return await self._cmd_grep(args, stdin_text=stdin_text)
+        if name == "wc":
+            return await self._cmd_wc(args, stdin_text=stdin_text)
         if name == "search":
             return await self._cmd_search(args, capture_output=capture_output)
         if name == "browse":
@@ -427,6 +429,60 @@ class TerminalExecutor:
             remaining = remaining[1:]
         text = " ".join(remaining)
         return text if not append_newline else f"{text}\n"
+
+    @staticmethod
+    def _parse_short_flags(
+        args: list[str],
+        *,
+        command_name: str,
+        supported_flags: set[str],
+        allow_numeric_count: bool = False,
+    ) -> tuple[set[str], list[str], int | None]:
+        flags: set[str] = set()
+        positionals: list[str] = []
+        numeric_count: int | None = None
+        end_of_options = False
+
+        for token in args:
+            if end_of_options:
+                positionals.append(token)
+                continue
+            if token == "--":
+                end_of_options = True
+                continue
+            if token == "-" or not token.startswith("-") or len(token) == 1:
+                positionals.append(token)
+                continue
+            if allow_numeric_count and re.fullmatch(r"-\d+", token):
+                if numeric_count is not None:
+                    raise TerminalCommandError(
+                        f"Usage: {command_name}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                numeric_count = int(token[1:])
+                continue
+
+            for flag in token[1:]:
+                if flag not in supported_flags:
+                    raise TerminalCommandError(
+                        f"Unsupported {command_name.split()[0]} flag: -{flag}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                flags.add(flag)
+
+        return flags, positionals, numeric_count
+
+    @staticmethod
+    def _count_text_lines(content: str) -> int:
+        text = str(content or "")
+        if not text:
+            return 0
+        return len(text.splitlines())
+
+    @staticmethod
+    def _number_lines(content: str) -> str:
+        lines = str(content or "").splitlines()
+        return "\n".join(f"{index}\t{line}" for index, line in enumerate(lines, start=1))
 
     @staticmethod
     def _parse_ls_flags(args: list[str]) -> tuple[dict[str, bool], str]:
@@ -527,40 +583,65 @@ class TerminalExecutor:
         return self.vfs.cwd
 
     async def _cmd_cat(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        if len(args) > 1:
-            raise TerminalCommandError("Usage: cat [<path>]")
-        if not args:
-            if stdin_text is None:
-                raise TerminalCommandError("Usage: cat [<path>]")
-            return str(stdin_text)
-        try:
-            return await self.vfs.read_text(args[0])
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-
-    async def _cmd_head_tail(self, args: list[str], *, tail: bool, stdin_text: str | None = None) -> str:
-        line_count = 10
-        path = None
-        index = 0
-        while index < len(args):
-            token = args[index]
-            if token == "-n":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after -n")
-                line_count = max(1, int(args[index]))
-            else:
-                path = token
-            index += 1
-        if path is None:
+        usage = "cat [-n] [<path>]"
+        flags, positionals, _numeric_count = self._parse_short_flags(
+            args,
+            command_name=usage,
+            supported_flags={"n"},
+        )
+        if len(positionals) > 1:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        if not positionals:
             if stdin_text is None:
                 raise TerminalCommandError(
-                    "Usage: head [-n N] <path>",
+                    f"Usage: {usage}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            content = str(stdin_text)
+            return self._number_lines(content) if "n" in flags else content
+        try:
+            content = await self.vfs.read_text(positionals[0])
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return self._number_lines(content) if "n" in flags else content
+
+    async def _cmd_head_tail(self, args: list[str], *, tail: bool, stdin_text: str | None = None) -> str:
+        command = "tail" if tail else "head"
+        usage = f"{command} [-n N|-N] [<path>]"
+        flags, positionals, numeric_count = self._parse_short_flags(
+            args,
+            command_name=usage,
+            supported_flags={"n"},
+            allow_numeric_count=True,
+        )
+        line_count = 10
+        if "n" in flags:
+            if not positionals:
+                raise TerminalCommandError(
+                    "Missing value after -n",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            line_count = max(0, self._parse_int_flag("-n", positionals[0]))
+            positionals = positionals[1:]
+        if numeric_count is not None:
+            line_count = max(0, numeric_count)
+        if len(positionals) > 1:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        if not positionals:
+            if stdin_text is None:
+                raise TerminalCommandError(
+                    f"Usage: {usage}",
                     failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                 )
             content = str(stdin_text)
         else:
-            content = await self._cmd_cat([path])
+            content = await self._cmd_cat([positionals[0]])
         lines = content.splitlines()
         selected = lines[-line_count:] if tail else lines[:line_count]
         return "\n".join(selected)
@@ -705,13 +786,30 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
 
     async def _cmd_rm(self, args: list[str]) -> str:
-        if len(args) != 1:
-            raise TerminalCommandError("Usage: rm <path>")
-        try:
-            removed = await self._remove_and_notify(args[0])
-            return f"Removed {removed}"
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        usage = "rm [-f] <path> [<path> ...]"
+        flags, positionals, _numeric_count = self._parse_short_flags(
+            args,
+            command_name=usage,
+            supported_flags={"f"},
+        )
+        if not positionals:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        removed_messages: list[str] = []
+        force = "f" in flags
+        for path in positionals:
+            try:
+                removed = await self._remove_and_notify(path)
+            except VFSError as exc:
+                message = str(exc)
+                if force and message.startswith("Path not found:"):
+                    continue
+                raise TerminalCommandError(message) from exc
+            removed_messages.append(f"Removed {removed}")
+        return "\n".join(removed_messages)
 
     async def _cmd_find(self, args: list[str]) -> str:
         start = args[0] if args else self.vfs.cwd
@@ -726,19 +824,14 @@ class TerminalExecutor:
         if not args:
             raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
 
-        recursive = False
-        ignore_case = False
-        show_numbers = False
-        remaining: list[str] = []
-        for token in args:
-            if token == "-r":
-                recursive = True
-            elif token == "-i":
-                ignore_case = True
-            elif token == "-n":
-                show_numbers = True
-            else:
-                remaining.append(token)
+        flags, remaining, _numeric_count = self._parse_short_flags(
+            args,
+            command_name="grep [-r] [-i] [-n] <pattern> [<path>]",
+            supported_flags={"r", "i", "n"},
+        )
+        recursive = "r" in flags
+        ignore_case = "i" in flags
+        show_numbers = "n" in flags
 
         if len(remaining) not in {1, 2}:
             raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
@@ -798,6 +891,32 @@ class TerminalExecutor:
                     else:
                         results.append(f"{candidate}:{line}")
         return "\n".join(results)
+
+    async def _cmd_wc(self, args: list[str], *, stdin_text: str | None = None) -> str:
+        usage = "wc -l [<path>]"
+        flags, positionals, _numeric_count = self._parse_short_flags(
+            args,
+            command_name=usage,
+            supported_flags={"l"},
+        )
+        if "l" not in flags or len(positionals) > 1:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        if not positionals:
+            if stdin_text is None:
+                raise TerminalCommandError(
+                    f"Usage: {usage}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            content = str(stdin_text)
+            return str(self._count_text_lines(content))
+
+        path = normalize_vfs_path(positionals[0], cwd=self.vfs.cwd)
+        content = await self._cmd_cat([positionals[0]])
+        return f"{self._count_text_lines(content)} {path}"
 
     def _ensure_continuous_mode(self) -> None:
         if getattr(self.vfs.thread, "mode", None) != Thread.Mode.CONTINUOUS:
