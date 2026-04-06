@@ -112,6 +112,9 @@ class ReactTerminalRuntime:
             legacy_workspace_storage_prefix=legacy_workspace_storage_prefix,
         )
         self.terminal = TerminalExecutor(vfs=self.vfs, capabilities=self.capabilities)
+        if self.progress_handler:
+            self.terminal.realtime_task_id = getattr(self.progress_handler, "task_id", None)
+            self.terminal.realtime_channel_layer = getattr(self.progress_handler, "channel_layer", None)
         self.provider_client = OpenAICompatibleProviderClient(self.agent_config.llm_provider)
         return self
 
@@ -171,6 +174,12 @@ class ReactTerminalRuntime:
             extra_guidance.append(
                 "Use `/webdav` as a remote filesystem mount. Reuse normal file commands there and expect "
                 "permissions to depend on the configured WebDAV tool flags."
+            )
+        if self.capabilities.has_webapp:
+            extra_guidance.append(
+                "Build static webapps directly in the persistent filesystem, then publish them with "
+                "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
+                "the served app without a separate publish step."
             )
         if self.capabilities.has_multiple_mailboxes:
             extra_guidance.append(

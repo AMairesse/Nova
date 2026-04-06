@@ -765,6 +765,54 @@ class VirtualFileSystem:
             await self.copy(normalized_source, resolved_destination)
             await self.remove(normalized_source)
             return resolved_destination
+        if await self.is_dir(normalized_source):
+            if normalized_source in {"/", "/skills", "/tmp"}:
+                raise VFSError(f"Cannot move protected directory: {normalized_source}")
+            if resolved_destination == normalized_source:
+                return resolved_destination
+            source_prefix = f"{normalized_source.rstrip('/')}/"
+            if resolved_destination.startswith(source_prefix):
+                raise VFSError("Cannot move a directory inside itself.")
+            if await self.path_exists(resolved_destination) and not await self.is_dir(resolved_destination):
+                raise VFSError(f"Cannot move directory over file: {resolved_destination}")
+
+            all_files = await self._load_real_files()
+            moved_file_paths = {
+                item.path for item in all_files if item.path.startswith(source_prefix)
+            }
+            file_moves: list[tuple[VFSFile, str, str, str]] = []
+            for item in all_files:
+                if not item.path.startswith(source_prefix):
+                    continue
+                suffix = item.path[len(normalized_source):]
+                destination_path = normalize_vfs_path(f"{resolved_destination}{suffix}", cwd="/")
+                for candidate in all_files:
+                    if candidate.path == destination_path and candidate.path not in moved_file_paths:
+                        raise VFSError(f"Destination already exists: {destination_path}")
+                actual_src_scope = str(item.user_file.scope or "") if item.user_file is not None else ""
+                dst_scope, dst_storage = self._storage_path_for_vfs_path(destination_path)
+                if actual_src_scope != dst_scope:
+                    raise VFSError("Moving directories across storage boundaries is not supported.")
+                file_moves.append((item, destination_path, dst_storage, dst_scope))
+
+            dirs = self._get_session_dirs()
+            updated_dirs: set[str] = set()
+            for directory in dirs:
+                if directory == normalized_source or directory.startswith(source_prefix):
+                    suffix = directory[len(normalized_source):]
+                    updated_dirs.add(normalize_vfs_path(f"{resolved_destination}{suffix}", cwd="/"))
+                else:
+                    updated_dirs.add(directory)
+
+            def _save_directory_move():
+                for file_item, _destination_path, dst_storage, dst_scope in file_moves:
+                    file_item.user_file.original_filename = dst_storage
+                    file_item.user_file.scope = dst_scope
+                    file_item.user_file.save(update_fields=["original_filename", "scope", "updated_at"])
+
+            await sync_to_async(_save_directory_move, thread_sensitive=True)()
+            self._set_session_dirs(updated_dirs)
+            return resolved_destination
         item = await self.get_real_file(normalized_source)
         if item is None or item.user_file is None:
             raise VFSError(f"File not found: {normalized_source}")

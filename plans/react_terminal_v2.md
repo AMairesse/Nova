@@ -45,6 +45,8 @@ very small tool surface and a file-centric mental model.
 - `/webdav`: terminal-only remote WebDAV mounts when the agent has WebDAV capability
 - `/tmp`: scratch files visible in the terminal but hidden from the normal file UI
 - `/subagents/<agent-id>-<run-id>/`: outputs copied back automatically from delegated sub-agents
+- Live webapp source directories live in the normal persistent root under `/`
+  and are published explicitly with `webapp expose`
 
 ### Storage mapping
 
@@ -121,6 +123,31 @@ very small tool surface and a file-centric mental model.
   - `browse open --result N`
 - Persisted outputs from `search` or `browse` must be written explicitly through `--output`
 
+### WebApp model
+
+- Webapps are thread-scoped publications backed by a live source directory in the
+  normal persistent VFS
+- A published webapp stores:
+  - `source_root`
+  - `entry_path`
+- There is no snapshot table and no separate published-file storage
+- The canonical source files are normal `UserFile(scope=THREAD_SHARED)` entries
+  under the published source directory
+- Published source directories must not live under:
+  - `/skills`
+  - `/tmp`
+  - `/memory`
+  - `/webdav`
+- `/apps/<slug>/` serves the configured `entry_path`
+- `/apps/<slug>/<path>` serves the matching live file under `source_root`
+- Publishing is live:
+  - `webapp expose` creates or updates the publication
+  - later filesystem mutations to the source directory are reflected directly
+  - terminal-side mutations trigger the existing `webapp_update` and `webapps_update`
+    realtime events automatically
+- If the published entry file disappears, the webapp becomes broken until the
+  source directory is fixed or re-exposed
+
 ### Sub-agents
 
 - Delegation stays on the dedicated `delegate_to_agent(...)` tool
@@ -151,6 +178,7 @@ very small tool surface and a file-centric mental model.
   - date builtin -> `date`
   - memory builtin -> `/memory` mount + `memory search`
   - searxng builtin -> `search ...`
+  - webapp builtin -> `webapp list`, `webapp expose`, `webapp show`, `webapp delete`
   - webdav builtin -> `/webdav` mount through existing filesystem commands
 
 ## Implemented
@@ -194,6 +222,16 @@ very small tool surface and a file-centric mental model.
 - Terminal-native `browse` command family backed by a native Playwright service
 - Lazy Playwright session creation and guaranteed browser cleanup at the end of each v2 run
 - Browser-specific skill docs under `/skills/search.md` and `/skills/browse.md`
+- Live webapp publishing from terminal-authored source directories through
+  `webapp expose`
+- Thread-scoped `WebApp` records storing `source_root` and `entry_path`
+- Live webapp serving directly from `UserFile(scope=THREAD_SHARED)` instead of
+  `WebAppFile`
+- Automatic live-webapp refresh propagation for terminal filesystem mutations
+- Legacy callable webapp tools removed in favor of the terminal-native `webapp`
+  command family
+- Legacy `WebAppFile` storage removed without content migration
+- Webapp skill docs under `/skills/webapp.md`
 
 ## Next Steps
 
@@ -205,6 +243,7 @@ very small tool surface and a file-centric mental model.
 - Evaluate whether browser form entry, richer interactions, or screenshots are worth adding beyond the current targeted-reading scope
 - Sweep remaining product/UI text for any stale `/thread` or `/workspace` wording outside the v2 runtime package
 - Consider whether the file sidebar should eventually surface `/subagents/...` differently from other root files
+- Evaluate whether webapps eventually need a build step or SPA routing fallback beyond the current static live-serving model
 - Evaluate whether more terminal-native commands are worth adding without bloating the command language
 
 ## Out of Scope for V1
@@ -217,3 +256,5 @@ very small tool surface and a file-centric mental model.
 - Interactive editors
 - Shared writable filesystem between parent and sub-agents
 - Binary storage inside `/memory`
+- Webapp build steps, package managers, or bundler pipelines
+- SPA history-api fallback routing for webapps

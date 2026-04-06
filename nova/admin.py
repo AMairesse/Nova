@@ -22,7 +22,6 @@ from nova.models.TranscriptChunk import TranscriptChunk
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.WebApp import WebApp
-from nova.models.WebAppFile import WebAppFile
 
 
 admin.site.site_header = "Nova Admin"
@@ -363,14 +362,7 @@ class InteractionAdmin(admin.ModelAdmin):
     search_fields = ("question", "origin_name", "thread__subject")
 
 
-class WebAppFilesInline(admin.TabularInline):
-    model = WebAppFile
-    can_delete = False
-    verbose_name_plural = "files"
-
-
 @admin.register(WebApp)
 class WebAppAdmin(admin.ModelAdmin):
-    list_display = ('user', 'thread', 'name', 'slug', 'created_at', 'updated_at')
-    search_fields = ('user__username', 'thread__subject', 'name', 'slug')
-    inlines = [WebAppFilesInline]
+    list_display = ("user", "thread", "name", "slug", "source_root", "entry_path", "updated_at")
+    search_fields = ("user__username", "thread__subject", "name", "slug", "source_root", "entry_path")

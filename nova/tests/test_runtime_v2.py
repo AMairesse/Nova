@@ -23,6 +23,7 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserFile import UserFile
+from nova.models.WebApp import WebApp
 from nova.runtime_v2.agent import ReactTerminalRunResult, ReactTerminalRuntime
 from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.compaction import (
@@ -47,7 +48,7 @@ class _FakeChannelLayer:
         self.messages = []
 
     async def group_send(self, group_name, payload):
-        self.messages.append({"group": group_name, "message": payload["message"]})
+        self.messages.append({"group": group_name, "message": payload.get("message", payload)})
 
 
 class _FakeBrowserSession:
@@ -196,6 +197,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             "memory": "nova.tools.builtins.memory",
             "searxng": "nova.tools.builtins.searxng",
             "webdav": "nova.tools.builtins.webdav",
+            "webapp": "nova.tools.builtins.webapp",
         }
         return Tool.objects.create(
             user=self.user,
@@ -241,6 +243,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
     def _create_memory_tool(self) -> Tool:
         return self._create_builtin_tool("memory", name="Memory")
+
+    def _create_webapp_tool(self) -> Tool:
+        return self._create_builtin_tool("webapp", name="WebApp")
 
     def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
         tool = self._create_builtin_tool("caldav", name=name)
@@ -354,6 +359,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             python_path="nova.tools.builtins.browser",
         )
 
+    def _create_webapp_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="WebApp",
+            description="WebApp",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webapp",
+            python_path="nova.tools.builtins.webapp",
+        )
+
     def _create_searxng_tool(self) -> Tool:
         tool = Tool.objects.create(
             user=self.user,
@@ -369,6 +384,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             config={"searxng_url": "https://search.example.com", "num_results": 5},
         )
         return tool
+
+    def _create_webapp_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="WebApp",
+            description="WebApp",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webapp",
+            python_path="nova.tools.builtins.webapp",
+        )
 
     def test_touch_and_tee_create_and_append_root_files(self):
         executor = self._build_executor()
@@ -665,6 +690,72 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("Page text", async_to_sync(executor.execute)("cat /page.txt"))
         self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /links.json"))[0]["href"], "https://example.com/a")
         self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /elements.json"))["selector"], "a")
+
+    def test_webapp_commands_expose_show_list_and_delete_live_apps(self):
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webapp_tool=webapp_tool)
+        )
+        channel_layer = _FakeChannelLayer()
+        executor.realtime_task_id = "task-123"
+        executor.realtime_channel_layer = channel_layer
+
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "hello"')
+        async_to_sync(executor.execute)('tee /webapps/demo/styles.css --text "body { color: red; }"')
+
+        exposed = async_to_sync(executor.execute)('webapp expose /webapps/demo --name "Demo App"')
+        webapp = WebApp.objects.get(thread=self.thread)
+        listed = async_to_sync(executor.execute)("webapp list")
+        shown = async_to_sync(executor.execute)(f"webapp show {webapp.slug}")
+
+        self.assertIn("Exposed webapp", exposed)
+        self.assertIn(webapp.slug, exposed)
+        self.assertIn("Demo App", listed)
+        self.assertIn(webapp.slug, shown)
+        self.assertIn("source_root=/webapps/demo", shown)
+        self.assertIn("entry_path=index.html", shown)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)(f"webapp delete {webapp.slug}")
+
+        deleted = async_to_sync(executor.execute)(f"webapp delete {webapp.slug} --confirm")
+        self.assertEqual(deleted, f"Deleted webapp {webapp.slug}")
+        self.assertFalse(WebApp.objects.filter(id=webapp.id).exists())
+
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertIn("webapp_public_url", event_types)
+        self.assertIn("webapp_update", event_types)
+        self.assertIn("webapps_update", event_types)
+
+    def test_webapp_file_mutation_and_root_move_refresh_live_binding(self):
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webapp_tool=webapp_tool)
+        )
+        channel_layer = _FakeChannelLayer()
+        executor.realtime_task_id = "task-456"
+        executor.realtime_channel_layer = channel_layer
+
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "hello"')
+        async_to_sync(executor.execute)("webapp expose /webapps/demo")
+        webapp = WebApp.objects.get(thread=self.thread)
+
+        channel_layer.messages.clear()
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "updated"')
+        self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
+
+        channel_layer.messages.clear()
+        async_to_sync(executor.execute)("mkdir /sites")
+        moved = async_to_sync(executor.execute)("mv /webapps/demo /sites")
+
+        webapp.refresh_from_db()
+        self.assertEqual(moved, "Moved to /sites/demo")
+        self.assertEqual(webapp.source_root, "/sites/demo")
+        self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
 
     def test_webdav_mount_is_visible_only_when_capability_is_enabled(self):
         plain_executor = self._build_executor()
@@ -1240,6 +1331,15 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("browse open --result 1", skills["search.md"])
         self.assertIn("browse click", skills["browse.md"])
 
+    def test_skill_registry_adds_webapp_guide_when_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(webapp_tool=object())
+        )
+
+        self.assertIn("webapp.md", skills)
+        self.assertIn("webapp expose", skills["webapp.md"])
+        self.assertIn("live", skills["webapp.md"])
+
     def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
         skills = build_skill_registry(
             TerminalCapabilities(),
@@ -1354,6 +1454,16 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             config={"searxng_url": "https://search.example.com", "num_results": 5},
         )
         return tool
+
+    def _create_webapp_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="WebApp",
+            description="WebApp",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webapp",
+            python_path="nova.tools.builtins.webapp",
+        )
 
     def test_runtime_executes_terminal_tool_loop(self):
         runtime = async_to_sync(
@@ -1688,6 +1798,23 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("do not persist", prompt)
         self.assertIn("curl", prompt)
         self.assertIn("wget", prompt)
+
+    def test_system_prompt_mentions_live_webapp_workflow(self):
+        webapp_tool = self._create_webapp_tool()
+        self.agent.tools.add(webapp_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("webapp expose", prompt)
+        self.assertIn("live", prompt)
+        self.assertIn("source files", prompt)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):

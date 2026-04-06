@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import posixpath
 import re
 import shlex
@@ -17,6 +18,7 @@ from nova.runtime_v2.capabilities import TerminalCapabilities
 from nova.runtime_v2.vfs import VFSError, VirtualFileSystem, normalize_vfs_path
 from nova.tools.builtins import code_execution as code_builtin
 from nova.tools.builtins import email as email_builtin
+from nova.webapp import service as webapp_service
 from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import download_http_file
 from nova.web.search_service import SEARXNG_MAX_RESULTS, search_web
@@ -24,6 +26,9 @@ from nova.web.search_service import SEARXNG_MAX_RESULTS, search_web
 
 class TerminalCommandError(Exception):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 class TerminalExecutor:
@@ -34,6 +39,8 @@ class TerminalExecutor:
         self._calendar_registry_cache = None
         self._last_search_results: list[dict] = []
         self._browser_session: BrowserSession | None = None
+        self.realtime_task_id = None
+        self.realtime_channel_layer = None
 
     def _parse(self, command: str) -> list[str]:
         raw = str(command or "").strip()
@@ -100,6 +107,8 @@ class TerminalExecutor:
             return await self._cmd_mail(tokens[1:])
         if name == "memory":
             return await self._cmd_memory(tokens[1:])
+        if name == "webapp":
+            return await self._cmd_webapp(tokens[1:])
         if name == "python":
             return await self._cmd_python(tokens[1:])
 
@@ -169,7 +178,8 @@ class TerminalExecutor:
         if len(args) != 1:
             raise TerminalCommandError("Usage: mkdir <path>")
         try:
-            return f"Created directory {await self.vfs.mkdir(args[0])}"
+            created = await self._mkdir_and_notify(args[0])
+            return f"Created directory {created}"
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
@@ -188,7 +198,7 @@ class TerminalExecutor:
         if await self.vfs.path_exists(normalized):
             return f"Touched {normalized}"
         try:
-            written = await self.vfs.write_file(normalized, b"", mime_type="text/plain")
+            written = await self._write_file_and_notify(normalized, b"", mime_type="text/plain")
             return self._format_write_result(f"Created empty file {written.path}", written)
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
@@ -216,7 +226,7 @@ class TerminalExecutor:
 
         encoded = content.encode("utf-8")
         try:
-            written = await self.vfs.write_file(
+            written = await self._write_file_and_notify(
                 normalized,
                 encoded,
                 mime_type="text/plain",
@@ -233,7 +243,7 @@ class TerminalExecutor:
         if len(args) != 2:
             raise TerminalCommandError("Usage: cp <source> <destination>")
         try:
-            copied = await self.vfs.copy(args[0], args[1])
+            copied = await self._copy_and_notify(args[0], args[1])
             return f"Copied to {copied.path}"
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
@@ -242,7 +252,7 @@ class TerminalExecutor:
         if len(args) != 2:
             raise TerminalCommandError("Usage: mv <source> <destination>")
         try:
-            destination = await self.vfs.move(args[0], args[1])
+            destination = await self._move_and_notify(args[0], args[1])
             return f"Moved to {destination}"
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
@@ -251,8 +261,8 @@ class TerminalExecutor:
         if len(args) != 1:
             raise TerminalCommandError("Usage: rm <path>")
         try:
-            await self.vfs.remove(args[0])
-            return f"Removed {normalize_vfs_path(args[0], cwd=self.vfs.cwd)}"
+            removed = await self._remove_and_notify(args[0])
+            return f"Removed {removed}"
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
@@ -580,6 +590,112 @@ class TerminalExecutor:
         )
         return self._format_memory_search_payload(payload)
 
+    @staticmethod
+    def _format_webapp_listing(items: list[dict]) -> str:
+        if not items:
+            return "No webapps are exposed for this conversation."
+        lines = ["Exposed webapps:"]
+        for item in items:
+            status = str(item.get("status") or "unknown").strip()
+            lines.append(
+                f"- {item.get('name') or item.get('slug')} [{item.get('slug')}] "
+                f"{item.get('public_url')} ({status})"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_webapp_details(payload: dict) -> str:
+        lines = [
+            f"slug={payload.get('slug')}",
+            f"name={payload.get('name')}",
+            f"source_root={payload.get('source_root')}",
+            f"entry_path={payload.get('entry_path')}",
+            f"public_url={payload.get('public_url')}",
+            f"status={payload.get('status')}",
+        ]
+        detail = str(payload.get("status_detail") or "").strip()
+        if detail:
+            lines.append(f"status_detail={detail}")
+        return "\n".join(lines)
+
+    async def _cmd_webapp(self, args: list[str]) -> str:
+        if not self.capabilities.has_webapp:
+            raise TerminalCommandError("Webapp commands are not enabled for this agent.")
+        if not args:
+            raise TerminalCommandError("Usage: webapp <list|expose|show|delete> ...")
+
+        subcommand = str(args[0] or "").strip().lower()
+        remainder = args[1:]
+
+        if subcommand == "list":
+            if remainder:
+                raise TerminalCommandError("Usage: webapp list")
+            items = await webapp_service.list_thread_webapps(user=self.vfs.user, thread=self.vfs.thread)
+            return self._format_webapp_listing(items)
+
+        if subcommand == "show":
+            if len(remainder) != 1:
+                raise TerminalCommandError("Usage: webapp show <slug>")
+            try:
+                payload = await webapp_service.describe_webapp(
+                    user=self.vfs.user,
+                    thread=self.vfs.thread,
+                    slug=remainder[0],
+                )
+            except webapp_service.WebAppServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return self._format_webapp_details(payload)
+
+        if subcommand == "delete":
+            confirm = "--confirm" in remainder
+            remainder = [item for item in remainder if item != "--confirm"]
+            if len(remainder) != 1:
+                raise TerminalCommandError("Usage: webapp delete <slug> --confirm")
+            if not confirm:
+                raise TerminalCommandError("webapp delete requires --confirm")
+            try:
+                payload = await webapp_service.delete_webapp(
+                    user=self.vfs.user,
+                    thread=self.vfs.thread,
+                    slug=remainder[0],
+                    task_id=self.realtime_task_id,
+                    channel_layer=self.realtime_channel_layer,
+                )
+            except webapp_service.WebAppServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            return f"Deleted webapp {payload['slug']}"
+
+        if subcommand == "expose":
+            slug, remainder = self._parse_flag_value(remainder, "--slug")
+            name, remainder = self._parse_flag_value(remainder, "--name")
+            entry_path, remainder = self._parse_flag_value(remainder, "--entry")
+            if len(remainder) != 1:
+                raise TerminalCommandError(
+                    "Usage: webapp expose <source_dir> [--name <display-name>] [--entry <relative-path>] "
+                    "[--slug <slug>]"
+                )
+            try:
+                payload = await webapp_service.expose_webapp(
+                    user=self.vfs.user,
+                    thread=self.vfs.thread,
+                    vfs=self.vfs,
+                    source_root=remainder[0],
+                    slug=slug,
+                    name=name,
+                    entry_path=entry_path,
+                    task_id=self.realtime_task_id,
+                    channel_layer=self.realtime_channel_layer,
+                )
+            except webapp_service.WebAppServiceError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            action = "Exposed" if payload.get("created") else "Updated"
+            return (
+                f"{action} webapp {payload['slug']} at {payload['public_url']} "
+                f"from {payload['source_root']} (entry {payload['entry_path']})"
+            )
+
+        raise TerminalCommandError("Usage: webapp <list|expose|show|delete> ...")
+
     async def _cmd_date(self, args: list[str]) -> str:
         if not self.capabilities.has_date_time:
             raise TerminalCommandError("Date/time commands are not enabled for this agent.")
@@ -633,7 +749,7 @@ class TerminalExecutor:
     async def _write_json_output(self, output_path: str, payload: object):
         try:
             resolved_output = await self.vfs.resolve_output_path(output_path)
-            written = await self.vfs.write_file(
+            written = await self._write_file_and_notify(
                 resolved_output,
                 json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
                 mime_type="application/json",
@@ -666,6 +782,67 @@ class TerminalExecutor:
 
     def _format_write_result(self, message: str, written) -> str:
         return self._append_warnings(message, getattr(written, "warnings", ()))
+
+    async def _notify_webapp_paths(
+        self,
+        paths: list[str],
+        *,
+        moved_from: str | None = None,
+        moved_to: str | None = None,
+    ) -> None:
+        if not self.capabilities.has_webapp:
+            return
+        normalized_paths = [
+            normalize_vfs_path(path, cwd=self.vfs.cwd)
+            for path in paths
+            if str(path or "").strip()
+        ]
+        if not normalized_paths and not moved_from and not moved_to:
+            return
+        try:
+            await webapp_service.maybe_touch_impacted_webapps(
+                thread=self.vfs.thread,
+                paths=normalized_paths,
+                moved_from=normalize_vfs_path(moved_from, cwd=self.vfs.cwd) if moved_from else None,
+                moved_to=normalize_vfs_path(moved_to, cwd=self.vfs.cwd) if moved_to else None,
+                task_id=self.realtime_task_id,
+                channel_layer=self.realtime_channel_layer,
+            )
+        except Exception:
+            logger.exception(
+                "Could not refresh impacted live webapps for thread_id=%s paths=%s moved_from=%s moved_to=%s",
+                getattr(self.vfs.thread, "id", None),
+                normalized_paths,
+                moved_from,
+                moved_to,
+            )
+
+    async def _write_file_and_notify(self, *args, **kwargs):
+        written = await self.vfs.write_file(*args, **kwargs)
+        await self._notify_webapp_paths([written.path])
+        return written
+
+    async def _mkdir_and_notify(self, path: str) -> str:
+        created = await self.vfs.mkdir(path)
+        await self._notify_webapp_paths([created])
+        return created
+
+    async def _copy_and_notify(self, source: str, destination: str):
+        copied = await self.vfs.copy(source, destination)
+        await self._notify_webapp_paths([copied.path])
+        return copied
+
+    async def _move_and_notify(self, source: str, destination: str) -> str:
+        normalized_source = normalize_vfs_path(source, cwd=self.vfs.cwd)
+        moved = await self.vfs.move(source, destination)
+        await self._notify_webapp_paths([normalized_source, moved], moved_from=normalized_source, moved_to=moved)
+        return moved
+
+    async def _remove_and_notify(self, path: str) -> str:
+        normalized = normalize_vfs_path(path, cwd=self.vfs.cwd)
+        await self.vfs.remove(path)
+        await self._notify_webapp_paths([normalized])
+        return normalized
 
     async def _cmd_search(self, args: list[str]) -> str:
         if not self.capabilities.has_search:
@@ -812,7 +989,7 @@ class TerminalExecutor:
         if output_path:
             try:
                 resolved_output = await self.vfs.resolve_output_path(output_path)
-                written = await self.vfs.write_file(
+                written = await self._write_file_and_notify(
                     resolved_output,
                     content.encode("utf-8"),
                     mime_type="text/plain",
@@ -886,7 +1063,7 @@ class TerminalExecutor:
             destination = await self.vfs.resolve_output_path(destination, source_name=inferred_name)
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
-        written = await self.vfs.write_file(destination, content, mime_type=mime_type)
+        written = await self._write_file_and_notify(destination, content, mime_type=mime_type)
         return self._format_write_result(f"Downloaded {url} to {written.path}", written)
 
     async def _cmd_curl(self, args: list[str]) -> str:
@@ -902,7 +1079,7 @@ class TerminalExecutor:
                 resolved_output = await self.vfs.resolve_output_path(output_path, source_name=inferred_name)
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
-            written = await self.vfs.write_file(resolved_output, content, mime_type=mime_type)
+            written = await self._write_file_and_notify(resolved_output, content, mime_type=mime_type)
             return self._format_write_result(f"Downloaded {url} to {written.path}", written)
         if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
             try:
@@ -950,13 +1127,13 @@ class TerminalExecutor:
         try:
             resolved_output = await self.vfs.resolve_output_path(output_path)
             if resolved_output.endswith(".json"):
-                written = await self.vfs.write_file(
+                written = await self._write_file_and_notify(
                     resolved_output,
                     json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
                     mime_type="application/json",
                 )
             elif resolved_output.endswith(".md"):
-                written = await self.vfs.write_file(
+                written = await self._write_file_and_notify(
                     resolved_output,
                     markdown.encode("utf-8"),
                     mime_type="text/markdown",
@@ -1439,7 +1616,7 @@ class TerminalExecutor:
                 destination = await self.vfs.resolve_output_path(destination, source_name=source_name)
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
-            written = await self.vfs.write_file(
+            written = await self._write_file_and_notify(
                 destination,
                 bytes(selected.get("content") or b""),
                 mime_type=str(selected.get("mime_type") or "application/octet-stream"),
@@ -1572,7 +1749,7 @@ class TerminalExecutor:
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
             stdout = self._extract_python_stdout(result)
-            written = await self.vfs.write_file(
+            written = await self._write_file_and_notify(
                 resolved_output,
                 stdout.encode("utf-8"),
                 mime_type="text/plain",

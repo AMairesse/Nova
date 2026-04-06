@@ -234,7 +234,7 @@ def _get_or_create_builtin_tool(
 def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
     Ensure the baseline builtin tools exist:
-    - ask_user, date, memory, browser, webapp
+    - ask_user, date, memory, browser
     - plus discover SearXNG and Judge0 when available
 
     Returns a dict mapping logical names to Tool instances.
@@ -274,15 +274,6 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
         subtype="browser",
         name="Browser",
         description="Navigate and fetch content from the web.",
-        summary=summary,
-    )
-
-    # WebApp (builtin, if registered)
-    tools["webapp"] = _get_or_create_builtin_tool(
-        user,
-        subtype="webapp",
-        name="WebApp",
-        description="Create and serve per-thread web applications.",
         summary=summary,
     )
 
@@ -567,7 +558,6 @@ def ensure_nova_agent(
         system_prompt=nova_prompt,
         recursion_limit=25,
         is_tool=False,
-        extra_tools=["webapp"],
         special_tools=special_tools,
         sub_agents=sub_agents,
         set_as_default=True,

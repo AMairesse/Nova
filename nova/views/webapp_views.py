@@ -1,8 +1,5 @@
-# nova/views/webapp_views.py
-import mimetypes
-
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_http_methods
@@ -10,45 +7,24 @@ from asgiref.sync import async_to_sync
 
 from nova.models.WebApp import WebApp
 from nova.models.Thread import Thread
-from nova.realtime.sidebar_updates import publish_webapps_update
 from nova.utils import compute_webapp_public_url
-
-
-def _guess_mime(path: str) -> str:
-    mime, _ = mimetypes.guess_type(path)
-    if mime:
-        return mime
-    if path.endswith('.html'):
-        return 'text/html'
-    if path.endswith('.css'):
-        return 'text/css'
-    return 'application/javascript'
+from nova.webapp.service import delete_webapp as delete_live_webapp
+from nova.webapp.service import get_live_file_for_webapp, load_live_webapp_content
 
 
 @login_required
 def serve_webapp(request, slug: str, path: str | None = None):
-    """Serve a static file belonging to a user-owned WebApp."""
-    # Strict multi-tenancy: only owner's apps are visible
-    webapp = get_object_or_404(
-        WebApp.objects.select_related('user', 'thread'),
-        slug=slug,
-        user=request.user,
-    )
+    """Serve a static file belonging to a user-owned live WebApp."""
+    live_file = get_live_file_for_webapp(user=request.user, slug=slug, requested_path=path)
+    if live_file is None:
+        raise Http404("Webapp file not found.")
 
-    if path:
-        file_obj = get_object_or_404(webapp.files, path=path)
+    content = load_live_webapp_content(live_file)
+    mime = str(live_file.mime_type or "application/octet-stream")
+    if mime.startswith("text/") or mime in {"application/javascript", "application/json", "application/manifest+json"}:
+        response = HttpResponse(content, content_type=f"{mime}; charset=utf-8")
     else:
-        # Prefer index.html for the root URL, but keep legacy compatibility:
-        # fallback to the first html file when index.html is missing.
-        file_obj = webapp.files.filter(path='index.html').first()
-        if file_obj is None:
-            file_obj = webapp.files.filter(path__iendswith='.html').order_by('path').first()
-        if file_obj is None:
-            file_obj = get_object_or_404(webapp.files, path='index.html')
-        path = file_obj.path
-
-    mime = _guess_mime(path)
-    response = HttpResponse(file_obj.content, content_type=f"{mime}; charset=utf-8")
+        response = HttpResponse(content, content_type=mime)
 
     # CSP for agent-authored static apps:
     # - Allow XHR/fetch only to:
@@ -146,12 +122,16 @@ def delete_webapp(request, thread_id: int, slug: str):
     Delete a user-owned webapp from a specific thread.
     Returns 404 for unauthorized/missing resources to preserve tenant isolation.
     """
-    webapp = get_object_or_404(
+    thread = get_object_or_404(Thread, id=thread_id, user=request.user)
+    get_object_or_404(
         WebApp,
         user=request.user,
-        thread_id=thread_id,
+        thread=thread,
         slug=slug,
     )
-    webapp.delete()
-    async_to_sync(publish_webapps_update)(thread_id, "webapp_delete", slug=slug)
-    return JsonResponse({"status": "ok"})
+    result = async_to_sync(delete_live_webapp)(
+        user=request.user,
+        thread=thread,
+        slug=slug,
+    )
+    return JsonResponse({"status": result["status"]})

@@ -12,6 +12,7 @@ class TerminalCapabilities:
     searxng_tool: object | None = None
     webdav_tools: list = field(default_factory=list)
     browser_tool: object | None = None
+    webapp_tool: object | None = None
     code_execution_tool: object | None = None
     date_time_tool: object | None = None
     memory_tool: object | None = None
@@ -28,6 +29,10 @@ class TerminalCapabilities:
     @property
     def has_web(self) -> bool:
         return self.browser_tool is not None
+
+    @property
+    def has_webapp(self) -> bool:
+        return self.webapp_tool is not None
 
     @property
     def has_calendar(self) -> bool:
@@ -67,6 +72,8 @@ class TerminalCapabilities:
             families.append("search")
         if self.has_web:
             families.extend(["browse", "downloads"])
+        if self.has_webapp:
+            families.append("webapp")
         if self.has_webdav:
             families.append("webdav")
         if self.has_calendar:
@@ -96,6 +103,7 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
     searxng_tool = next((tool for tool in tools if tool.tool_subtype == "searxng"), None)
     webdav_tools = [tool for tool in tools if tool.tool_subtype == "webdav"]
     browser_tool = next((tool for tool in tools if tool.tool_subtype == "browser"), None)
+    webapp_tool = next((tool for tool in tools if tool.tool_subtype == "webapp"), None)
     code_execution_tool = next((tool for tool in tools if tool.tool_subtype == "code_execution"), None)
     date_time_tool = next((tool for tool in tools if tool.tool_subtype == "date"), None)
     memory_tool = next((tool for tool in tools if tool.tool_subtype == "memory"), None)
@@ -106,6 +114,7 @@ def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
         searxng_tool=searxng_tool,
         webdav_tools=webdav_tools,
         browser_tool=browser_tool,
+        webapp_tool=webapp_tool,
         code_execution_tool=code_execution_tool,
         date_time_tool=date_time_tool,
         memory_tool=memory_tool,

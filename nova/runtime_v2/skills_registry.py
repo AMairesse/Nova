@@ -169,6 +169,25 @@ Use the normal filesystem commands rather than expecting dedicated WebDAV comman
 Whether writes, moves, copies, or deletes succeed depends on the permissions flags configured on the WebDAV tool.
 """
 
+    if capabilities.has_webapp:
+        skills["webapp.md"] = """# WebApp
+
+Static webapps are authored directly in the normal terminal filesystem, then published live.
+
+Useful commands:
+- `mkdir /webapps/demo`
+- `tee /webapps/demo/index.html --text "<!doctype html>..."`
+- `tee /webapps/demo/styles.css --text "body { ... }"`
+- `webapp expose /webapps/demo --name "Demo App"`
+- `webapp show <slug>`
+- `webapp list`
+- `webapp delete <slug> --confirm`
+
+`webapp expose` creates a live publication tied to the source directory.
+After that, keep editing the files in the source directory normally with `tee`, `touch`, `mv`, `rm`, and `mkdir`.
+The published app reflects those file changes automatically.
+"""
+
     if capabilities.has_memory:
         skills["memory.md"] = """# Memory
 
