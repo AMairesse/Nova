@@ -17,14 +17,15 @@ The main action surface is the persistent Nova terminal.
 
 Start with:
 - `pwd`
-- `ls`
-- `ls /`
+- `ls -la`
 - `ls /skills`
-- `touch /note.txt`
-- `tee /note.txt --text "hello"`
+- `echo "hello" > /note.txt`
+- `cat /note.txt | grep hello`
+- `tee /note.txt --text "first line\\nsecond line"`
 
 Use relative paths only if you are confident about the current working directory.
 If you are unsure, run `pwd` first.
+Minimal text pipes plus `<`, `>`, and `>>` are supported, but this is not a full shell.
 """,
     }
 
@@ -119,7 +120,7 @@ Useful commands:
 - `browse current`
 - `browse back`
 - `browse text`
-- `browse text --output /page.txt`
+- `browse text > /page.txt`
 - `browse links --absolute`
 - `browse links --absolute --output /links.json`
 - `browse elements "a" --attr href --attr innerText`
@@ -195,10 +196,12 @@ Long-term memory is mounted as `/memory` and is shared at the user level.
 
 Useful commands:
 - `ls /memory`
+- `ls -l /memory`
 - `mkdir /memory/projects`
 - `cat /memory/note.md`
 - `cat /memory/projects/client-a.md`
 - `grep -r "term" /memory`
+- `cat /memory/projects/client-a.md | grep Constraints`
 - `memory search "conceptual query"`
 - `memory search "conceptual query" --under /memory/projects`
 - `tee /memory/projects/client-a.md --text "# Client A\\n\\n## Constraints\\n..."`

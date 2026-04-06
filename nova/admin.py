@@ -17,6 +17,7 @@ from nova.models.Provider import LLMProvider
 from nova.models.Task import Task
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
+from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetric
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.TranscriptChunk import TranscriptChunk
 from nova.models.UserFile import UserFile
@@ -256,6 +257,48 @@ class MemoryChunkAdmin(admin.ModelAdmin):
     search_fields = ("document__virtual_path", "heading", "content_text")
     ordering = ("document", "position")
     inlines = [MemoryEmbeddingInline]
+
+
+@admin.register(TerminalCommandFailureMetric)
+class TerminalCommandFailureMetricAdmin(admin.ModelAdmin):
+    list_display = (
+        "bucket_date",
+        "runtime_engine",
+        "head_command",
+        "failure_kind",
+        "count",
+        "last_seen_at",
+    )
+    list_filter = ("bucket_date", "runtime_engine", "failure_kind", "last_seen_at")
+    search_fields = ("head_command", "last_error")
+    ordering = ("-bucket_date", "-last_seen_at", "head_command", "failure_kind")
+    readonly_fields = (
+        "bucket_date",
+        "runtime_engine",
+        "head_command",
+        "failure_kind",
+        "count",
+        "last_seen_at",
+        "recent_examples_preview",
+        "last_error",
+        "created_at",
+        "updated_at",
+    )
+    fields = readonly_fields
+
+    @admin.display(description="Recent examples")
+    def recent_examples_preview(self, obj):
+        items = [str(item).strip() for item in list(obj.recent_examples or []) if str(item).strip()]
+        return "\n".join(items) or "-"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(MemoryChunkEmbedding)

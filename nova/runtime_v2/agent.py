@@ -127,7 +127,9 @@ class ReactTerminalRuntime:
             for subagent in self.capabilities.subagents
         ) or "none"
         extra_guidance: list[str] = [
-            "Create text files with `touch` and `tee`; do not expect shell redirection to work.",
+            "Create text files with `touch`, `tee`, or text shell redirection. "
+            "Minimal text pipelines and `<`, `>`, `>>` redirections are supported, "
+            "but this is not a full shell: do not rely on `&&`, `||`, `;`, or command substitution.",
         ]
         if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
             extra_guidance.append(

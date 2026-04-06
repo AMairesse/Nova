@@ -15,7 +15,9 @@ from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
 from nova.models.AgentThreadSession import AgentThreadSession
 from nova.models.MemoryDirectory import MemoryDirectory
+from nova.models.MemoryChunk import MemoryChunk
 from nova.models.MemoryDocument import MemoryDocument
+from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetric
 from nova.models.memory_common import MemoryRecordStatus
 from nova.models.Message import Actor
 from nova.models.Provider import LLMProvider, ProviderType
@@ -411,6 +413,19 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with self.assertRaises(TerminalCommandError):
             async_to_sync(executor.execute)("touch /skills/blocked.txt")
 
+    def test_text_shell_redirections_and_pipelines_work_for_common_cases(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('echo "hello" > /note.txt')
+        async_to_sync(executor.execute)('echo "world" >> /note.txt')
+        redirected = async_to_sync(executor.execute)("grep hello < /note.txt")
+        copied = async_to_sync(executor.execute)("cat /note.txt | tee /copy.txt | grep world")
+
+        self.assertEqual(async_to_sync(executor.execute)("cat /note.txt"), "hello\nworld\n")
+        self.assertEqual(async_to_sync(executor.execute)("cat /copy.txt"), "hello\nworld\n")
+        self.assertEqual(redirected, "hello")
+        self.assertEqual(copied, "world")
+
     def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
         executor = self._build_executor()
 
@@ -422,6 +437,24 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("note.txt", listing)
         self.assertNotIn("workspace/", listing)
         self.assertNotIn("thread/", listing)
+
+    def test_ls_supports_common_flags_and_aliases(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /docs")
+        async_to_sync(executor.execute)('echo "hello" > /note.txt')
+
+        listing = async_to_sync(executor.execute)("ls -la /")
+        file_listing = async_to_sync(executor.execute)("ls -l /note.txt")
+        alias_listing = async_to_sync(executor.execute)("la /")
+
+        self.assertIn("drwxr-xr-x - - ./", listing)
+        self.assertIn("drwxr-xr-x - - ../", listing)
+        self.assertIn("-rw-r--r-- 6 text/plain note.txt", file_listing)
+        self.assertIn("note.txt", alias_listing)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("ls -h")
 
     def test_memory_mount_is_visible_only_when_memory_capability_is_enabled(self):
         plain_executor = self._build_executor()
@@ -486,6 +519,26 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("Vim", content)
         self.assertEqual(removed, "Removed /memory/editor.md")
         self.assertEqual(document.status, MemoryRecordStatus.ARCHIVED)
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_memory_tee_decodes_escaped_newlines_and_builds_chunks(self, mocked_provider):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        result = async_to_sync(executor.execute)(
+            'tee /memory/calendrier.md --text "# Calendrier\\n\\n## Preference\\nTexte"'
+        )
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/calendrier.md")
+        chunks = list(MemoryChunk.objects.filter(document=document).order_by("position"))
+
+        self.assertIn("/memory/calendrier.md", result)
+        self.assertIn("\n\n## Preference\nTexte", document.content_markdown)
+        self.assertNotIn("\\n", document.content_markdown)
+        self.assertTrue(any((chunk.heading or "") == "Preference" for chunk in chunks))
+        self.assertGreater(len(chunks), 0)
+        mocked_provider.assert_awaited()
 
     def test_memory_write_surfaces_embedding_queue_warning_in_terminal_output(self):
         executor = self._build_executor(
@@ -690,6 +743,22 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("Page text", async_to_sync(executor.execute)("cat /page.txt"))
         self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /links.json"))[0]["href"], "https://example.com/a")
         self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /elements.json"))["selector"], "a")
+
+    def test_browse_text_supports_shell_redirection(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+        fake_session.extract_text = AsyncMock(return_value="A" * 9005)
+
+        with patch("nova.runtime_v2.terminal.BrowserSession", return_value=fake_session):
+            async_to_sync(executor.execute)("browse open https://example.com")
+            written = async_to_sync(executor.execute)("browse text > /page.txt")
+
+        stored = async_to_sync(executor.execute)("cat /page.txt")
+        self.assertIn("/page.txt", written)
+        self.assertEqual(len(stored), 9005)
 
     def test_webapp_commands_expose_show_list_and_delete_live_apps(self):
         webapp_tool = self._create_webapp_tool()
@@ -993,6 +1062,59 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertRegex(date_only, r"^\d{4}-\d{2}-\d{2}$")
         self.assertRegex(time_only, r"^\d{2}:\d{2}:\d{2}$")
 
+    def test_terminal_rejects_unsupported_shell_syntax_patterns(self):
+        executor = self._build_executor()
+
+        for command in [
+            "pwd && ls",
+            "pwd || ls",
+            "pwd ; ls",
+            "echo $(pwd)",
+            "echo `pwd`",
+        ]:
+            with self.subTest(command=command):
+                with self.assertRaises(TerminalCommandError):
+                    async_to_sync(executor.execute)(command)
+
+    def test_terminal_failure_metrics_aggregate_and_sanitize_examples(self):
+        executor = self._build_executor()
+
+        for command in [
+            "unknowncmd --token secret-value",
+            "unknowncmd --token secret-value",
+            "ls -h",
+        ]:
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(executor.execute)(command)
+
+        unknown_metric = TerminalCommandFailureMetric.objects.get(
+            head_command="unknowncmd",
+            failure_kind="unknown_command",
+        )
+        invalid_metric = TerminalCommandFailureMetric.objects.get(
+            head_command="ls",
+            failure_kind="invalid_arguments",
+        )
+
+        self.assertEqual(unknown_metric.count, 2)
+        self.assertEqual(invalid_metric.count, 1)
+        self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
+        self.assertNotIn("secret-value", " ".join(unknown_metric.recent_examples))
+
+    def test_terminal_failure_metrics_record_unsupported_syntax(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("pwd && ls")
+
+        metric = TerminalCommandFailureMetric.objects.get(
+            head_command="pwd",
+            failure_kind="unsupported_syntax",
+        )
+
+        self.assertEqual(metric.count, 1)
+        self.assertIn("not supported", metric.last_error)
+
     def test_history_commands_are_available_in_continuous_mode(self):
         continuous_thread = Thread.objects.create(
             user=self.user,
@@ -1291,6 +1413,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("date +%F", skills["date.md"])
+        self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
+        self.assertIn("cat /note.txt | grep hello", skills["terminal.md"])
 
     def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
         skills = build_skill_registry(
@@ -1330,6 +1454,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("browse.md", skills)
         self.assertIn("browse open --result 1", skills["search.md"])
         self.assertIn("browse click", skills["browse.md"])
+        self.assertIn("browse text > /page.txt", skills["browse.md"])
 
     def test_skill_registry_adds_webapp_guide_when_enabled(self):
         skills = build_skill_registry(
@@ -1714,6 +1839,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         prompt = runtime.build_system_prompt()
         self.assertIn("touch", prompt)
         self.assertIn("tee", prompt)
+        self.assertIn("Minimal text pipelines", prompt)
+        self.assertIn("not a full shell", prompt)
         self.assertIn("date +%F", prompt)
         self.assertIn("--mailbox <email>", prompt)
         self.assertIn("- /: persistent files for this thread", prompt)

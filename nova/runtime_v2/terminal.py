@@ -5,6 +5,7 @@ import logging
 import posixpath
 import re
 import shlex
+from dataclasses import dataclass
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
 
@@ -23,12 +24,33 @@ from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import download_http_file
 from nova.web.search_service import SEARXNG_MAX_RESULTS, search_web
 
+from .constants import RUNTIME_ENGINE_REACT_TERMINAL_V1
+from .terminal_metrics import (
+    FAILURE_KIND_COMMAND_ERROR,
+    FAILURE_KIND_INVALID_ARGUMENTS,
+    FAILURE_KIND_PARSE_ERROR,
+    FAILURE_KIND_UNSUPPORTED_SYNTAX,
+    classify_terminal_failure,
+    normalize_head_command,
+    record_terminal_command_failure,
+    sanitize_terminal_command,
+)
 
 class TerminalCommandError(Exception):
-    pass
+    def __init__(self, message: str, *, failure_kind: str | None = None):
+        super().__init__(message)
+        self.failure_kind = str(failure_kind or "").strip() or classify_terminal_failure(message)
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True, frozen=True)
+class ParsedShellCommand:
+    pipeline: list[list[str]]
+    input_path: str | None = None
+    output_path: str | None = None
+    output_append: bool = False
 
 
 class TerminalExecutor:
@@ -42,97 +64,451 @@ class TerminalExecutor:
         self.realtime_task_id = None
         self.realtime_channel_layer = None
 
-    def _parse(self, command: str) -> list[str]:
+    @property
+    def runtime_engine(self) -> str:
+        return str(
+            getattr(getattr(self.vfs, "agent_config", None), "runtime_engine", "")
+            or RUNTIME_ENGINE_REACT_TERMINAL_V1
+        )
+
+    def _validate_shell_operators(self, raw: str) -> None:
+        in_single = False
+        in_double = False
+        escaped = False
+        index = 0
+        while index < len(raw):
+            char = raw[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if char == "\\" and not in_single:
+                escaped = True
+                index += 1
+                continue
+            if char == "'" and not in_double:
+                in_single = not in_single
+                index += 1
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                index += 1
+                continue
+            if in_single or in_double:
+                index += 1
+                continue
+
+            if raw.startswith("&&", index) or raw.startswith("||", index):
+                raise TerminalCommandError(
+                    "Shell chaining with && and || is not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            if raw.startswith("<<<", index) or raw.startswith("<<", index):
+                raise TerminalCommandError(
+                    "Heredocs and << redirections are not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            if raw.startswith("2>&1", index) or raw.startswith("2>>", index) or raw.startswith("2>", index):
+                raise TerminalCommandError(
+                    "stderr redirections are not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            if raw.startswith("&>", index):
+                raise TerminalCommandError(
+                    "Combined stdout/stderr redirections are not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            if raw.startswith("$(", index) or char == "`":
+                raise TerminalCommandError(
+                    "Shell substitutions are not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            if char == ";":
+                raise TerminalCommandError(
+                    "Command chaining with ; is not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            index += 1
+
+    def _tokenize_shell(self, command: str) -> list[str]:
         raw = str(command or "").strip()
         if not raw:
-            raise TerminalCommandError("Empty command.")
-        forbidden_markers = ["|", "&&", "||", ">", "<", "$(", "`"]
-        if any(marker in raw for marker in forbidden_markers):
-            raise TerminalCommandError(
-                "Pipes, redirections, shell substitutions, and command chaining are not supported."
-            )
+            raise TerminalCommandError("Empty command.", failure_kind=FAILURE_KIND_PARSE_ERROR)
+        self._validate_shell_operators(raw)
         try:
-            return shlex.split(raw)
+            lexer = shlex.shlex(raw, posix=True, punctuation_chars="|<>")
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            return list(lexer)
         except ValueError as exc:
-            raise TerminalCommandError(f"Command parse error: {exc}") from exc
+            raise TerminalCommandError(
+                f"Command parse error: {exc}",
+                failure_kind=FAILURE_KIND_PARSE_ERROR,
+            ) from exc
+
+    def _parse_shell_command(self, command: str) -> ParsedShellCommand:
+        tokens = self._tokenize_shell(command)
+        if not tokens:
+            raise TerminalCommandError("Empty command.", failure_kind=FAILURE_KIND_PARSE_ERROR)
+
+        pipeline: list[list[str]] = []
+        current: list[str] = []
+        input_path: str | None = None
+        output_path: str | None = None
+        output_append = False
+
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "|":
+                if output_path is not None:
+                    raise TerminalCommandError(
+                        "Output redirection must appear at the end of the command.",
+                        failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                    )
+                if not current:
+                    raise TerminalCommandError(
+                        "Pipes require a command on both sides.",
+                        failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                    )
+                pipeline.append(current)
+                current = []
+                index += 1
+                continue
+            if token == "<":
+                index += 1
+                if index >= len(tokens) or tokens[index] in {"|", "<", ">", ">>"}:
+                    raise TerminalCommandError(
+                        "Missing path after <",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                if pipeline:
+                    raise TerminalCommandError(
+                        "Input redirection is supported only for the first command in the pipeline.",
+                        failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                    )
+                if input_path is not None:
+                    raise TerminalCommandError(
+                        "Only one input redirection is supported.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                input_path = tokens[index]
+                index += 1
+                continue
+            if token in {">", ">>"}:
+                index += 1
+                if index >= len(tokens) or tokens[index] in {"|", "<", ">", ">>"}:
+                    raise TerminalCommandError(
+                        f"Missing path after {token}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                if output_path is not None:
+                    raise TerminalCommandError(
+                        "Only one output redirection is supported.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                output_path = tokens[index]
+                output_append = token == ">>"
+                if index != len(tokens) - 1:
+                    raise TerminalCommandError(
+                        "Output redirection must appear at the end of the command.",
+                        failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                    )
+                index += 1
+                continue
+            if token == "<<":
+                raise TerminalCommandError(
+                    "Heredocs are not supported.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            current.append(token)
+            index += 1
+
+        if not current:
+            raise TerminalCommandError(
+                "Pipes require a command on both sides.",
+                failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+            )
+        pipeline.append(current)
+
+        if output_path and any(self._command_uses_builtin_output(stage) for stage in pipeline):
+            raise TerminalCommandError(
+                "Shell output redirection cannot be combined with --output.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        return ParsedShellCommand(
+            pipeline=pipeline,
+            input_path=input_path,
+            output_path=output_path,
+            output_append=output_append,
+        )
+
+    @staticmethod
+    def _command_uses_builtin_output(tokens: list[str]) -> bool:
+        return any(token in {"--output", "-o", "-O"} for token in tokens)
+
+    async def _record_terminal_failure(self, command: str, error: TerminalCommandError) -> None:
+        failure_kind = str(getattr(error, "failure_kind", "") or classify_terminal_failure(str(error)))
+        sanitized_command = sanitize_terminal_command(command)
+        payload = {
+            "runtime_engine": self.runtime_engine,
+            "failure_kind": failure_kind,
+            "head_command": normalize_head_command(command),
+            "command": sanitized_command,
+            "error": str(error),
+        }
+        logger.warning(
+            "terminal_command_failed runtime_engine=%s failure_kind=%s head_command=%s command=%s error=%s",
+            payload["runtime_engine"],
+            payload["failure_kind"],
+            payload["head_command"],
+            payload["command"],
+            payload["error"],
+            extra={"terminal_failure": payload},
+        )
+        await record_terminal_command_failure(
+            runtime_engine=self.runtime_engine,
+            command=command,
+            failure_kind=failure_kind,
+            error_message=str(error),
+        )
+
+    async def _run_shell_command(self, parsed: ParsedShellCommand) -> str:
+        stdin_text = None
+        if parsed.input_path:
+            try:
+                stdin_text = await self.vfs.read_text(parsed.input_path)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+
+        output = ""
+        for index, tokens in enumerate(parsed.pipeline):
+            capture_output = index < len(parsed.pipeline) - 1 or parsed.output_path is not None
+            output = await self._execute_stage(
+                tokens,
+                stdin_text=stdin_text,
+                capture_output=capture_output,
+            )
+            stdin_text = output
+
+        if parsed.output_path is not None:
+            written = await self._write_shell_output(
+                parsed.output_path,
+                output,
+                append=parsed.output_append,
+            )
+            return self._format_write_result(
+                f"Wrote {len(output.encode('utf-8'))} bytes to {written.path}",
+                written,
+            )
+        return output or ""
+
+    async def _execute_stage(
+        self,
+        tokens: list[str],
+        *,
+        stdin_text: str | None = None,
+        capture_output: bool = False,
+    ) -> str:
+        if not tokens:
+            raise TerminalCommandError(
+                "Empty pipeline stage.",
+                failure_kind=FAILURE_KIND_PARSE_ERROR,
+            )
+        name = str(tokens[0] or "").strip()
+        args = tokens[1:]
+        return await self._dispatch_command(
+            name,
+            args,
+            stdin_text=stdin_text,
+            capture_output=capture_output,
+        )
+
+    async def _dispatch_command(
+        self,
+        name: str,
+        args: list[str],
+        *,
+        stdin_text: str | None = None,
+        capture_output: bool = False,
+    ) -> str:
+        if name == "pwd":
+            return self.vfs.cwd
+        if name == "echo":
+            return await self._cmd_echo(args)
+        if name in {"ls", "la", "ll"}:
+            effective_args = list(args)
+            if name == "la":
+                effective_args = ["-la", *effective_args]
+            elif name == "ll":
+                effective_args = ["-l", *effective_args]
+            return await self._cmd_ls(effective_args)
+        if name == "cd":
+            return await self._cmd_cd(args)
+        if name == "cat":
+            return await self._cmd_cat(args, stdin_text=stdin_text)
+        if name == "head":
+            return await self._cmd_head_tail(args, tail=False, stdin_text=stdin_text)
+        if name == "tail":
+            return await self._cmd_head_tail(args, tail=True, stdin_text=stdin_text)
+        if name == "mkdir":
+            return await self._cmd_mkdir(args)
+        if name == "touch":
+            return await self._cmd_touch(args)
+        if name == "tee":
+            return await self._cmd_tee(args, stdin_text=stdin_text)
+        if name == "cp":
+            return await self._cmd_cp(args)
+        if name == "mv":
+            return await self._cmd_mv(args)
+        if name == "rm":
+            return await self._cmd_rm(args)
+        if name == "find":
+            return await self._cmd_find(args)
+        if name == "grep":
+            return await self._cmd_grep(args, stdin_text=stdin_text)
+        if name == "search":
+            return await self._cmd_search(args)
+        if name == "browse":
+            return await self._cmd_browse(args, capture_output=capture_output)
+        if name == "history":
+            return await self._cmd_history(args)
+        if name == "date":
+            return await self._cmd_date(args)
+        if name == "wget":
+            return await self._cmd_wget(args)
+        if name == "curl":
+            return await self._cmd_curl(args, capture_output=capture_output)
+        if name == "calendar":
+            return await self._cmd_calendar(args)
+        if name == "mail":
+            return await self._cmd_mail(args)
+        if name == "memory":
+            return await self._cmd_memory(args)
+        if name == "webapp":
+            return await self._cmd_webapp(args)
+        if name == "python":
+            return await self._cmd_python(args)
+
+        raise TerminalCommandError(
+            f"Unknown command: {name}",
+            failure_kind="unknown_command",
+        )
 
     async def execute(self, command: str) -> str:
         self.vfs.remember_command(command)
-        tokens = self._parse(command)
-        name = tokens[0]
+        try:
+            parsed = self._parse_shell_command(command)
+            return await self._run_shell_command(parsed)
+        except TerminalCommandError as exc:
+            await self._record_terminal_failure(command, exc)
+            raise
+        except Exception as exc:
+            wrapped = TerminalCommandError(
+                str(exc),
+                failure_kind=FAILURE_KIND_COMMAND_ERROR,
+            )
+            await self._record_terminal_failure(command, wrapped)
+            raise
 
-        if name == "pwd":
-            return self.vfs.cwd
-        if name == "ls":
-            return await self._cmd_ls(tokens[1:])
-        if name == "cd":
-            return await self._cmd_cd(tokens[1:])
-        if name == "cat":
-            return await self._cmd_cat(tokens[1:])
-        if name == "head":
-            return await self._cmd_head_tail(tokens[1:], tail=False)
-        if name == "tail":
-            return await self._cmd_head_tail(tokens[1:], tail=True)
-        if name == "mkdir":
-            return await self._cmd_mkdir(tokens[1:])
-        if name == "touch":
-            return await self._cmd_touch(tokens[1:])
-        if name == "tee":
-            return await self._cmd_tee(tokens[1:])
-        if name == "cp":
-            return await self._cmd_cp(tokens[1:])
-        if name == "mv":
-            return await self._cmd_mv(tokens[1:])
-        if name == "rm":
-            return await self._cmd_rm(tokens[1:])
-        if name == "find":
-            return await self._cmd_find(tokens[1:])
-        if name == "grep":
-            return await self._cmd_grep(tokens[1:])
-        if name == "search":
-            return await self._cmd_search(tokens[1:])
-        if name == "browse":
-            return await self._cmd_browse(tokens[1:])
-        if name == "history":
-            return await self._cmd_history(tokens[1:])
-        if name == "date":
-            return await self._cmd_date(tokens[1:])
-        if name == "wget":
-            return await self._cmd_wget(tokens[1:])
-        if name == "curl":
-            return await self._cmd_curl(tokens[1:])
-        if name == "calendar":
-            return await self._cmd_calendar(tokens[1:])
-        if name == "mail":
-            return await self._cmd_mail(tokens[1:])
-        if name == "memory":
-            return await self._cmd_memory(tokens[1:])
-        if name == "webapp":
-            return await self._cmd_webapp(tokens[1:])
-        if name == "python":
-            return await self._cmd_python(tokens[1:])
+    async def _cmd_echo(self, args: list[str]) -> str:
+        append_newline = True
+        remaining = list(args)
+        if remaining and remaining[0] == "-n":
+            append_newline = False
+            remaining = remaining[1:]
+        text = " ".join(remaining)
+        return text if not append_newline else f"{text}\n"
 
-        raise TerminalCommandError(f"Unknown command: {name}")
+    @staticmethod
+    def _parse_ls_flags(args: list[str]) -> tuple[dict[str, bool], str]:
+        options = {
+            "show_all": False,
+            "long_format": False,
+            "one_per_line": False,
+        }
+        path = None
+        for token in args:
+            if token.startswith("-") and token != "-":
+                for flag in token[1:]:
+                    if flag == "a":
+                        options["show_all"] = True
+                    elif flag == "l":
+                        options["long_format"] = True
+                    elif flag == "1":
+                        options["one_per_line"] = True
+                    else:
+                        raise TerminalCommandError(
+                            f"Unsupported ls flag: -{flag}",
+                            failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                        )
+                continue
+            if path is not None:
+                raise TerminalCommandError(
+                    "Usage: ls [-a] [-l] [-1] [path]",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            path = token
+        return options, (path or "")
+
+    @staticmethod
+    def _format_ls_mode(entry_type: str) -> str:
+        return "drwxr-xr-x" if entry_type == "dir" else "-rw-r--r--"
+
+    async def _lookup_ls_entry(self, normalized_path: str) -> dict[str, str | int | None]:
+        basename = posixpath.basename(normalized_path.rstrip("/")) or normalized_path
+        parent = posixpath.dirname(normalized_path.rstrip("/")) or "/"
+        try:
+            parent_entries = await self.vfs.list_dir(parent)
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        for entry in parent_entries:
+            candidate_path = normalize_vfs_path(str(entry.get("path") or ""), cwd=parent)
+            if candidate_path == normalized_path:
+                return entry
+        return {"name": basename, "path": normalized_path, "type": "file"}
+
+    def _format_ls_entry(self, entry: dict[str, str | int], *, long_format: bool) -> str:
+        name = str(entry.get("name") or "")
+        if entry.get("type") == "dir" and not name.endswith("/"):
+            name = f"{name}/"
+        if not long_format:
+            return name
+        size = "-"
+        mime_type = "-"
+        if entry.get("type") != "dir":
+            size = str(entry.get("size") if entry.get("size") is not None else 0)
+            mime_type = str(entry.get("mime_type") or "application/octet-stream")
+        return f"{self._format_ls_mode(str(entry.get('type') or 'file'))} {size} {mime_type} {name}"
 
     async def _cmd_ls(self, args: list[str]) -> str:
-        path = args[0] if args else self.vfs.cwd
+        options, raw_path = self._parse_ls_flags(args)
+        path = raw_path or self.vfs.cwd
         normalized = normalize_vfs_path(path, cwd=self.vfs.cwd)
         if not await self.vfs.path_exists(normalized):
             raise TerminalCommandError(f"Path not found: {normalized}")
         if not await self.vfs.is_dir(normalized):
-            return normalized
+            entry = await self._lookup_ls_entry(normalized)
+            return self._format_ls_entry(entry, long_format=options["long_format"])
         entries = await self.vfs.list_dir(normalized)
-        if not entries:
+        rendered_entries = list(entries)
+        if options["show_all"]:
+            rendered_entries = [
+                {"name": ".", "path": normalized, "type": "dir"},
+                {
+                    "name": "..",
+                    "path": posixpath.dirname(normalized.rstrip("/")) or "/",
+                    "type": "dir",
+                },
+                *rendered_entries,
+            ]
+        if not rendered_entries:
             return ""
-        lines = []
-        for entry in entries:
-            if entry["type"] == "dir":
-                lines.append(f"{entry['name']}/")
-            else:
-                size = entry.get("size")
-                mime_type = entry.get("mime_type", "")
-                details = f" ({mime_type}, {size} bytes)" if size is not None else ""
-                lines.append(f"{entry['name']}{details}")
+        lines = [
+            self._format_ls_entry(entry, long_format=options["long_format"])
+            for entry in rendered_entries
+        ]
         return "\n".join(lines)
 
     async def _cmd_cd(self, args: list[str]) -> str:
@@ -143,17 +519,19 @@ class TerminalExecutor:
         self.vfs.set_cwd(normalized)
         return self.vfs.cwd
 
-    async def _cmd_cat(self, args: list[str]) -> str:
-        if len(args) != 1:
-            raise TerminalCommandError("Usage: cat <path>")
+    async def _cmd_cat(self, args: list[str], *, stdin_text: str | None = None) -> str:
+        if len(args) > 1:
+            raise TerminalCommandError("Usage: cat [<path>]")
+        if not args:
+            if stdin_text is None:
+                raise TerminalCommandError("Usage: cat [<path>]")
+            return str(stdin_text)
         try:
             return await self.vfs.read_text(args[0])
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
-    async def _cmd_head_tail(self, args: list[str], *, tail: bool) -> str:
-        if not args:
-            raise TerminalCommandError("Usage: head [-n N] <path>")
+    async def _cmd_head_tail(self, args: list[str], *, tail: bool, stdin_text: str | None = None) -> str:
         line_count = 10
         path = None
         index = 0
@@ -167,9 +545,15 @@ class TerminalExecutor:
             else:
                 path = token
             index += 1
-        if not path:
-            raise TerminalCommandError("Path required.")
-        content = await self._cmd_cat([path])
+        if path is None:
+            if stdin_text is None:
+                raise TerminalCommandError(
+                    "Usage: head [-n N] <path>",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            content = str(stdin_text)
+        else:
+            content = await self._cmd_cat([path])
         lines = content.splitlines()
         selected = lines[-line_count:] if tail else lines[:line_count]
         return "\n".join(selected)
@@ -189,6 +573,66 @@ class TerminalExecutor:
             raise TerminalCommandError("Writing into /skills is not supported.")
         return normalized
 
+    @staticmethod
+    def _decode_escaped_text(text: str) -> str:
+        source = str(text or "")
+        if "\\" not in source:
+            return source
+        parts: list[str] = []
+        index = 0
+        while index < len(source):
+            char = source[index]
+            if char != "\\" or index == len(source) - 1:
+                parts.append(char)
+                index += 1
+                continue
+            pair = source[index:index + 2]
+            if pair == "\\n":
+                parts.append("\n")
+                index += 2
+                continue
+            if pair == "\\r":
+                parts.append("\r")
+                index += 2
+                continue
+            if pair == "\\t":
+                parts.append("\t")
+                index += 2
+                continue
+            if pair == '\\"':
+                parts.append('"')
+                index += 2
+                continue
+            if pair == "\\'":
+                parts.append("'")
+                index += 2
+                continue
+            if pair == "\\\\":
+                parts.append("\\")
+                index += 2
+                continue
+            parts.append(char)
+            index += 1
+        return "".join(parts)
+
+    async def _write_shell_output(self, raw_path: str, content: str, *, append: bool):
+        normalized = self._validate_text_write_path(raw_path)
+        if append and await self.vfs.path_exists(normalized):
+            try:
+                existing_text = await self.vfs.read_text(normalized)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            content = f"{existing_text}{content}"
+        try:
+            return await self._write_file_and_notify(
+                normalized,
+                str(content).encode("utf-8"),
+                mime_type="text/plain",
+                overwrite=True,
+            )
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+
     async def _cmd_touch(self, args: list[str]) -> str:
         if len(args) != 1:
             raise TerminalCommandError("Usage: touch <path>")
@@ -203,41 +647,37 @@ class TerminalExecutor:
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
-    async def _cmd_tee(self, args: list[str]) -> str:
+    async def _cmd_tee(self, args: list[str], *, stdin_text: str | None = None) -> str:
         if not args:
-            raise TerminalCommandError('Usage: tee <path> --text "<content>" [--append]')
+            raise TerminalCommandError('Usage: tee <path> [--text "<content>"] [--append]')
         append = "--append" in args
         remainder = [item for item in args if item != "--append"]
         text, remainder = self._parse_flag_value(remainder, "--text")
-        if len(remainder) != 1 or text is None:
-            raise TerminalCommandError('Usage: tee <path> --text "<content>" [--append]')
+        if len(remainder) != 1:
+            raise TerminalCommandError('Usage: tee <path> [--text "<content>"] [--append]')
+        if text is not None and stdin_text is not None:
+            raise TerminalCommandError(
+                "tee cannot combine --text with piped or redirected input.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        if text is None and stdin_text is None:
+            raise TerminalCommandError('Usage: tee <path> [--text "<content>"] [--append]')
 
         normalized = self._validate_text_write_path(remainder[0])
         if await self.vfs.is_dir(normalized):
             raise TerminalCommandError(f"Cannot write text into a directory: {normalized}")
 
-        content = str(text)
-        if append and await self.vfs.path_exists(normalized):
-            try:
-                existing_text = await self.vfs.read_text(normalized)
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            content = f"{existing_text}{content}"
-
-        encoded = content.encode("utf-8")
-        try:
-            written = await self._write_file_and_notify(
-                normalized,
-                encoded,
-                mime_type="text/plain",
-                overwrite=True,
+        if text is not None:
+            content = self._decode_escaped_text(str(text))
+            written = await self._write_shell_output(normalized, content, append=append)
+            return self._format_write_result(
+                f"Wrote {len(content.encode('utf-8'))} bytes to {written.path}",
+                written,
             )
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-        return self._format_write_result(
-            f"Wrote {len(str(text).encode('utf-8'))} bytes to {written.path}",
-            written,
-        )
+
+        content = str(stdin_text or "")
+        await self._write_shell_output(normalized, content, append=append)
+        return content
 
     async def _cmd_cp(self, args: list[str]) -> str:
         if len(args) != 2:
@@ -275,9 +715,9 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
         return "\n".join(results)
 
-    async def _cmd_grep(self, args: list[str]) -> str:
+    async def _cmd_grep(self, args: list[str], *, stdin_text: str | None = None) -> str:
         if not args:
-            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> <path>")
+            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
 
         recursive = False
         ignore_case = False
@@ -293,26 +733,50 @@ class TerminalExecutor:
             else:
                 remaining.append(token)
 
-        if len(remaining) != 2:
-            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> <path>")
+        if len(remaining) not in {1, 2}:
+            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
 
-        pattern, raw_path = remaining
-        normalized_path = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
-        if not await self.vfs.path_exists(normalized_path):
-            raise TerminalCommandError(f"Path not found: {normalized_path}")
-
-        if await self.vfs.is_dir(normalized_path):
-            if not recursive:
-                raise TerminalCommandError("grep on directories requires -r")
-            try:
-                candidates = await self.vfs.find(normalized_path, "")
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
+        pattern = remaining[0]
+        candidates: list[str] = []
+        stdin_candidate = len(remaining) == 1
+        if stdin_candidate:
+            if recursive:
+                raise TerminalCommandError(
+                    "grep -r requires a path.",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            if stdin_text is None:
+                raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
         else:
-            candidates = [normalized_path]
+            raw_path = remaining[1]
+            normalized_path = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+            if not await self.vfs.path_exists(normalized_path):
+                raise TerminalCommandError(f"Path not found: {normalized_path}")
+
+            if await self.vfs.is_dir(normalized_path):
+                if not recursive:
+                    raise TerminalCommandError("grep on directories requires -r")
+                try:
+                    candidates = await self.vfs.find(normalized_path, "")
+                except VFSError as exc:
+                    raise TerminalCommandError(str(exc)) from exc
+            else:
+                candidates = [normalized_path]
 
         results: list[str] = []
         flags = re.IGNORECASE if ignore_case else 0
+        try:
+            matcher = re.compile(pattern, flags)
+        except re.error as exc:
+            raise TerminalCommandError(f"Invalid grep pattern: {exc}") from exc
+
+        if stdin_candidate:
+            for line_number, line in enumerate(str(stdin_text or "").splitlines(), start=1):
+                if matcher.search(line):
+                    prefix = f"stdin:{line_number}:" if show_numbers else ""
+                    results.append(f"{prefix}{line}")
+            return "\n".join(results)
+
         for candidate in candidates:
             if await self.vfs.is_dir(candidate):
                 continue
@@ -321,11 +785,7 @@ class TerminalExecutor:
             except VFSError:
                 continue
             for line_number, line in enumerate(content.splitlines(), start=1):
-                try:
-                    matched = re.search(pattern, line, flags=flags)
-                except re.error as exc:
-                    raise TerminalCommandError(f"Invalid grep pattern: {exc}") from exc
-                if matched:
+                if matcher.search(line):
                     if show_numbers:
                         results.append(f"{candidate}:{line_number}:{line}")
                     else:
@@ -890,7 +1350,7 @@ class TerminalExecutor:
             lines.append(line)
         return "\n".join(lines) if lines else "No search results."
 
-    async def _cmd_browse(self, args: list[str]) -> str:
+    async def _cmd_browse(self, args: list[str], *, capture_output: bool = False) -> str:
         if not self.capabilities.has_web:
             raise TerminalCommandError("Browse commands are not enabled for this agent.")
         if not args:
@@ -906,11 +1366,11 @@ class TerminalExecutor:
         if action == "back":
             return await self._cmd_browse_back(remainder)
         if action == "text":
-            return await self._cmd_browse_text(remainder)
+            return await self._cmd_browse_text(remainder, capture_output=capture_output)
         if action == "links":
-            return await self._cmd_browse_links(remainder)
+            return await self._cmd_browse_links(remainder, capture_output=capture_output)
         if action == "elements":
-            return await self._cmd_browse_elements(remainder)
+            return await self._cmd_browse_elements(remainder, capture_output=capture_output)
         if action == "click":
             return await self._cmd_browse_click(remainder)
         raise TerminalCommandError(
@@ -977,7 +1437,7 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
         return f"Went back to {payload['url']} (status {payload['status']})"
 
-    async def _cmd_browse_text(self, args: list[str]) -> str:
+    async def _cmd_browse_text(self, args: list[str], *, capture_output: bool = False) -> str:
         output_path, remaining = self._parse_output_path(args)
         if remaining:
             raise TerminalCommandError("Usage: browse text [--output /path.txt]")
@@ -997,9 +1457,9 @@ class TerminalExecutor:
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
             return self._format_write_result(f"Wrote page text to {written.path}", written)
-        return self._truncate_output(content)
+        return content if capture_output else self._truncate_output(content)
 
-    async def _cmd_browse_links(self, args: list[str]) -> str:
+    async def _cmd_browse_links(self, args: list[str], *, capture_output: bool = False) -> str:
         output_path, remaining = self._parse_output_path(args)
         absolute = False
         for token in remaining:
@@ -1015,9 +1475,10 @@ class TerminalExecutor:
         if output_path:
             written = await self._write_json_output(output_path, links)
             return self._format_write_result(f"Wrote page links to {written.path}", written)
-        return self._truncate_output(json.dumps(links, ensure_ascii=False, indent=2))
+        rendered = json.dumps(links, ensure_ascii=False, indent=2)
+        return rendered if capture_output else self._truncate_output(rendered)
 
-    async def _cmd_browse_elements(self, args: list[str]) -> str:
+    async def _cmd_browse_elements(self, args: list[str], *, capture_output: bool = False) -> str:
         output_path, remaining = self._parse_output_path(args)
         attributes, remaining = self._parse_multi_flag(remaining, "--attr")
         if len(remaining) != 1:
@@ -1039,7 +1500,8 @@ class TerminalExecutor:
         if output_path:
             written = await self._write_json_output(output_path, payload)
             return self._format_write_result(f"Wrote selected elements to {written.path}", written)
-        return self._truncate_output(json.dumps(payload, ensure_ascii=False, indent=2))
+        rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+        return rendered if capture_output else self._truncate_output(rendered)
 
     async def _cmd_browse_click(self, args: list[str]) -> str:
         if len(args) != 1:
@@ -1066,7 +1528,7 @@ class TerminalExecutor:
         written = await self._write_file_and_notify(destination, content, mime_type=mime_type)
         return self._format_write_result(f"Downloaded {url} to {written.path}", written)
 
-    async def _cmd_curl(self, args: list[str]) -> str:
+    async def _cmd_curl(self, args: list[str], *, capture_output: bool = False) -> str:
         if not self.capabilities.has_web:
             raise TerminalCommandError("Web commands are not enabled for this agent.")
         output_path, remaining = self._parse_output_path(args)
@@ -1083,9 +1545,21 @@ class TerminalExecutor:
             return self._format_write_result(f"Downloaded {url} to {written.path}", written)
         if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
             try:
-                return content.decode("utf-8")[:8000]
+                decoded = content.decode("utf-8")
+                return decoded if capture_output else decoded[:8000]
             except UnicodeDecodeError:
-                pass
+                if capture_output:
+                    raise TerminalCommandError(
+                        "curl only supports text output when used in a pipeline or shell redirection. "
+                        "Use curl --output <path> to save binary responses.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+        if capture_output:
+            raise TerminalCommandError(
+                "curl only supports text output when used in a pipeline or shell redirection. "
+                "Use curl --output <path> to save binary responses.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
         return (
             f"Binary response from {url} ({mime_type}, {len(content)} bytes). "
             f"Use curl --output {posixpath.join(self.vfs.cwd, inferred_name)} to save it."
