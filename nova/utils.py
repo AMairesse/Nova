@@ -9,7 +9,6 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from langchain_core.messages import BaseMessage
 
 
 # Chat-oriented markdown profile: robust list/code/table rendering without TOC noise.
@@ -106,8 +105,12 @@ def extract_final_answer(output):
     if isinstance(output, str):
         return output
     if isinstance(output, list):
-        last = next((m for m in reversed(output) if isinstance(m, BaseMessage)), None)
-        return last.content if last else str(output)
+        for item in reversed(output):
+            if isinstance(item, dict) and "content" in item:
+                return str(item.get("content") or "")
+            if hasattr(item, "content"):
+                return str(getattr(item, "content", "") or "")
+        return str(output)
     if isinstance(output, dict) and "messages" in output:
         return extract_final_answer(output["messages"])
     return str(output)

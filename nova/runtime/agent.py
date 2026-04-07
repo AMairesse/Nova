@@ -301,17 +301,21 @@ class ReactTerminalRuntime:
         return rewritten
 
     def _serialize_continuous_message(self, message: Any) -> dict[str, str] | None:
-        message_type = str(getattr(message, "type", "") or "").strip().lower()
-        role_map = {
-            "system": "system",
-            "human": "user",
-            "ai": "assistant",
-        }
-        role = role_map.get(message_type)
-        if not role:
+        if isinstance(message, dict):
+            role = str(message.get("role") or "").strip().lower()
+            content_value = message.get("content")
+        else:
+            legacy_role_map = {
+                "system": "system",
+                "human": "user",
+                "ai": "assistant",
+            }
+            role = legacy_role_map.get(str(getattr(message, "type", "") or "").strip().lower(), "")
+            content_value = getattr(message, "content", "")
+        if role not in {"system", "user", "assistant"}:
             return None
         content = self._rewrite_continuous_recall_commands(
-            str(getattr(message, "content", "") or "")
+            str(content_value or "")
         ).strip()
         if not content:
             return None

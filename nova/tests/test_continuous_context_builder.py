@@ -3,8 +3,6 @@ import datetime as dt
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from langchain_core.messages import SystemMessage
-
 from nova.continuous.context_builder import load_continuous_context
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
@@ -25,6 +23,14 @@ class ContinuousContextBuilderTests(TestCase):
 
     def _mk_msg(self, text: str):
         return Message.objects.create(user=self.user, thread=self.thread, actor=Actor.USER, text=text)
+
+    @staticmethod
+    def _system_contents(messages):
+        return [
+            str(message.get("content") or "")
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "system"
+        ]
 
     def test_injects_previous_two_day_summaries_as_system_messages(self):
         now = dt.datetime.now(dt.timezone.utc)
@@ -52,9 +58,9 @@ class ContinuousContextBuilderTests(TestCase):
 
         _, messages = load_continuous_context(self.user, self.thread)
 
-        sys_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+        sys_msgs = self._system_contents(messages)
         self.assertGreaterEqual(len(sys_msgs), 2)
-        joined = "\n".join(str(m.content) for m in sys_msgs)
+        joined = "\n".join(sys_msgs)
         self.assertIn(f"Summary of {d1.isoformat()}", joined)
         self.assertIn(f"Summary of {d2.isoformat()}", joined)
 
@@ -93,8 +99,8 @@ class ContinuousContextBuilderTests(TestCase):
 
         _, messages = load_continuous_context(self.user, self.thread)
 
-        sys_msgs = [m for m in messages if isinstance(m, SystemMessage)]
-        joined = "\n".join(str(m.content) for m in sys_msgs)
+        sys_msgs = self._system_contents(messages)
+        joined = "\n".join(sys_msgs)
 
         # Keep the two most recent summarized days prior to today.
         self.assertIn(f"Summary of {d_recent.isoformat()}", joined)
@@ -128,8 +134,8 @@ class ContinuousContextBuilderTests(TestCase):
 
         _, messages = load_continuous_context(self.user, self.thread)
 
-        sys_msgs = [m for m in messages if isinstance(m, SystemMessage)]
-        joined = "\n".join(str(m.content) for m in sys_msgs)
+        sys_msgs = self._system_contents(messages)
+        joined = "\n".join(sys_msgs)
         self.assertIn("conversation_search", joined)
         self.assertIn("conversation_get", joined)
 
@@ -163,7 +169,7 @@ class ContinuousContextBuilderTests(TestCase):
         snapshot, messages = load_continuous_context(self.user, self.thread)
 
         self.assertFalse(snapshot.previous_summaries_truncated)
-        rendered = "\n".join(str(m.content) for m in messages if isinstance(m, SystemMessage))
+        rendered = "\n".join(self._system_contents(messages))
         self.assertNotIn("summary truncated due to strict context budget", rendered)
         self.assertNotIn("[Continuous context notice]", rendered)
 
@@ -195,7 +201,7 @@ class ContinuousContextBuilderTests(TestCase):
         snapshot, messages = load_continuous_context(self.user, self.thread)
 
         self.assertTrue(snapshot.previous_summaries_truncated)
-        rendered = "\n".join(str(m.content) for m in messages if isinstance(m, SystemMessage))
+        rendered = "\n".join(self._system_contents(messages))
         self.assertIn("summary truncated due to strict context budget", rendered)
         self.assertIn("[Continuous context notice]", rendered)
 
@@ -218,7 +224,7 @@ class ContinuousContextBuilderTests(TestCase):
 
         _, messages = load_continuous_context(self.user, self.thread)
 
-        rendered = [str(m.content) for m in messages]
+        rendered = [str((m or {}).get("content") or "") for m in messages]
 
         # Today summary is injected.
         self.assertTrue(any(f"Summary of {today.isoformat()}" in c for c in rendered))
@@ -247,7 +253,7 @@ class ContinuousContextBuilderTests(TestCase):
 
         _, messages = load_continuous_context(self.user, self.thread)
 
-        rendered = [str(m.content) for m in messages]
+        rendered = [str((m or {}).get("content") or "") for m in messages]
 
         # No today summary injected when empty.
         self.assertFalse(any(f"Summary of {today.isoformat()}" in c for c in rendered))

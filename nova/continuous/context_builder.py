@@ -6,11 +6,9 @@ import datetime as dt
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from django.utils import timezone
-
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from nova.continuous.utils import get_day_label_for_user
 from nova.models.DaySegment import DaySegment
@@ -118,22 +116,23 @@ def _trim_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool, int
     return trimmed, truncated, used
 
 
-def _make_summary_system_message(label: str, summary_md: str) -> List[BaseMessage]:
-    """Inject summary as a SystemMessage (continuous policy)."""
+def _make_summary_system_message(label: str, summary_md: str) -> List[dict[str, Any]]:
+    """Inject summary as a system message (continuous policy)."""
 
     summary_md = (summary_md or "").strip()
     if not summary_md:
         return []
 
-    msg = SystemMessage(
-        content=f"[{label}]\n{summary_md}",
-        additional_kwargs={"summary": True, "label": label, "source": "day_segment"},
-    )
+    msg = {
+        "role": "system",
+        "content": f"[{label}]\n{summary_md}",
+        "meta": {"summary": True, "label": label, "source": "day_segment"},
+    }
     return [msg]
 
 
-def _message_to_langchain(m: Message) -> Optional[BaseMessage]:
-    """Convert a DB Message to a LangChain message.
+def _message_to_runtime_message(m: Message) -> Optional[dict[str, str]]:
+    """Convert a DB Message to a runtime message dict.
 
     V1 trimming:
     - ignore SYSTEM
@@ -149,9 +148,9 @@ def _message_to_langchain(m: Message) -> Optional[BaseMessage]:
         return None
 
     if m.actor == Actor.USER:
-        return HumanMessage(content=content)
+        return {"role": "user", "content": content}
     if m.actor == Actor.AGENT:
-        return AIMessage(content=content)
+        return {"role": "assistant", "content": content}
     return None
 
 
@@ -161,7 +160,7 @@ def load_continuous_context(
     *,
     exclude_message_id: Optional[int] = None,
     exclude_interaction_ids: Optional[set[int]] = None,
-) -> Tuple[ContinuousContextSnapshot, List[BaseMessage]]:
+) -> Tuple[ContinuousContextSnapshot, List[dict[str, Any]]]:
     """Build the messages to inject for the continuous context window.
 
     Policy:
@@ -224,22 +223,23 @@ def load_continuous_context(
 
     previous_summaries_truncated = p1_truncated or p2_truncated
 
-    out: List[BaseMessage] = []
+    out: List[dict[str, Any]] = []
     if p1_summary:
         out.extend(_make_summary_system_message(p1_label, p1_summary))
     if p2_summary:
         out.extend(_make_summary_system_message(p2_label, p2_summary))
     if previous_summaries_truncated:
         out.append(
-            SystemMessage(
-                content=(
+            {
+                "role": "system",
+                "content": (
                     "[Continuous context notice]\n"
                     "Some previous-day summaries were truncated due to strict token budget. "
                     "If more historical detail is needed, use conversation_search first, "
                     "then conversation_get to ground exact passages."
                 ),
-                additional_kwargs={"summary_notice": True, "truncated": True},
-            )
+                "meta": {"summary_notice": True, "truncated": True},
+            }
         )
 
     today_last_message_id: Optional[int] = None
@@ -274,7 +274,7 @@ def load_continuous_context(
                 interaction_id__in=list(exclude_interaction_ids),
             )
         for m in qs.order_by("created_at", "id"):
-            msg = _message_to_langchain(m)
+            msg = _message_to_runtime_message(m)
             if msg is not None:
                 out.append(msg)
             today_last_message_id = m.id

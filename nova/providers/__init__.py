@@ -2,7 +2,8 @@
 
 from nova.providers.registry import (
     build_native_provider_request,
-    create_provider_llm,
+    complete_provider_chat,
+    stream_provider_chat,
     get_provider_adapter,
     get_provider_defaults,
     get_provider_defaults_map,
@@ -17,7 +18,7 @@ from nova.providers.validation import validate_provider_configuration
 
 __all__ = [
     "build_native_provider_request",
-    "create_provider_llm",
+    "complete_provider_chat",
     "get_provider_adapter",
     "get_provider_defaults",
     "get_provider_defaults_map",
@@ -27,5 +28,6 @@ __all__ = [
     "parse_native_provider_response",
     "prepare_turn_content_for_provider",
     "resolve_provider_capability_snapshot",
+    "stream_provider_chat",
     "validate_provider_configuration",
 ]

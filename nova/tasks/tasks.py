@@ -10,7 +10,6 @@ from channels.layers import get_channel_layer
 
 from django.contrib.auth.models import User
 from django.utils import timezone
-from langchain_core.messages import HumanMessage
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
@@ -24,7 +23,6 @@ from nova.multimodal_prompts import (
     build_multimodal_intro_text,
     build_multimodal_prompt_content,
 )
-from nova.providers.registry import create_provider_llm
 from nova.turn_inputs import load_message_turn_inputs
 from nova.tasks.email_polling import poll_new_unseen_email_headers
 from nova.tasks.task_definition_runner import (
@@ -33,6 +31,7 @@ from nova.tasks.task_definition_runner import (
 )
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
+from nova.runtime.provider_client import ProviderClient
 from nova.runtime.task_executor import (
     ReactTerminalSummarizationTaskExecutor,
     ReactTerminalTaskExecutor,
@@ -224,15 +223,21 @@ def generate_thread_title_task(
             return {"status": "skipped", "reason": "not_enough_messages"}
 
         agent_config = AgentConfig.objects.select_related("llm_provider").get(id=agent_config_id, user_id=user_id)
-        llm = create_provider_llm(agent_config.llm_provider)
+        provider_client = ProviderClient(agent_config.llm_provider)
 
         response = asyncio.run(
-            llm.ainvoke(
-                [HumanMessage(content=_build_thread_title_prompt(messages))],
+            provider_client.create_chat_completion(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _build_thread_title_prompt(messages),
+                    }
+                ],
+                tools=None,
             )
         )
 
-        raw_title = strip_thinking_blocks(getattr(response, "content", None) or str(response))
+        raw_title = strip_thinking_blocks(str(response.get("content") or ""))
         normalized_title = normalize_generated_thread_title(raw_title)
         if not normalized_title:
             return {"status": "skipped", "reason": "empty_generated_title"}

@@ -17,7 +17,6 @@ aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
     # via
     #   aiobotocore
-    #   langchain-community
     #   nova (pyproject.toml)
     #   pywebpush
 aioitertools==0.13.0
@@ -26,8 +25,6 @@ aiosignal==1.4.0
     # via aiohttp
 amqp==5.3.1
     # via kombu
-annotated-doc==0.0.4
-    # via typer
 annotated-types==0.7.0
     # via pydantic
 anyio==4.13.0
@@ -115,7 +112,6 @@ click==8.3.1
     #   click-didyoumean
     #   click-plugins
     #   click-repl
-    #   typer
     #   uvicorn
     #   x-wr-timezone
 click-didyoumean==0.3.1
@@ -149,8 +145,6 @@ cyclopts==4.10.1
     # via fastmcp
 daphne==4.2.1
     # via nova (pyproject.toml)
-dataclasses-json==0.6.7
-    # via langchain-community
 debugpy==1.8.20
     # via nova (pyproject.toml)
 distro==1.9.0
@@ -187,18 +181,16 @@ docutils==0.22.4
     # via rich-rst
 email-validator==2.3.0
     # via pydantic
+eval-type-backport==0.3.1
+    # via mistralai
 exceptiongroup==1.3.1
     # via fastmcp
 fastmcp==3.2.0
     # via nova (pyproject.toml)
-filelock==3.25.2
-    # via huggingface-hub
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-fsspec==2026.3.0
-    # via huggingface-hub
 greenlet==3.3.2
     # via playwright
 h11==0.16.0
@@ -206,8 +198,6 @@ h11==0.16.0
     #   httpcore
     #   urllib3-future
     #   uvicorn
-hf-xet==1.4.3
-    # via huggingface-hub
 http-ece==1.2.1
     # via pywebpush
 httpcore==1.0.9
@@ -215,21 +205,13 @@ httpcore==1.0.9
 httpx==0.28.1
     # via
     #   fastmcp
-    #   huggingface-hub
-    #   langchain-mistralai
-    #   langgraph-sdk
-    #   langsmith
     #   mcp
+    #   mistralai
     #   nova (pyproject.toml)
     #   ollama
     #   openai
 httpx-sse==0.4.3
-    # via
-    #   langchain-community
-    #   langchain-mistralai
-    #   mcp
-huggingface-hub==1.8.0
-    # via tokenizers
+    # via mcp
 hyperlink==21.0.0
     # via
     #   autobahn
@@ -273,10 +255,8 @@ jmespath==1.1.0
     #   aiobotocore
     #   boto3
     #   botocore
-jsonpatch==1.33
-    # via langchain-core
-jsonpointer==3.1.1
-    # via jsonpatch
+jsonpath-python==1.1.5
+    # via mistralai
 jsonref==1.1.0
     # via fastmcp
 jsonschema==4.26.0
@@ -289,65 +269,18 @@ keyring==25.7.0
     # via py-key-value-aio
 kombu==5.6.2
     # via celery
-langchain==1.2.14
-    # via nova (pyproject.toml)
-langchain-classic==1.0.3
-    # via langchain-community
-langchain-community==0.4.1
-    # via nova (pyproject.toml)
-langchain-core==1.2.25
-    # via
-    #   langchain
-    #   langchain-classic
-    #   langchain-community
-    #   langchain-mistralai
-    #   langchain-ollama
-    #   langchain-openai
-    #   langchain-text-splitters
-    #   langgraph
-    #   langgraph-checkpoint
-    #   langgraph-prebuilt
-    #   nova (pyproject.toml)
-langchain-mistralai==1.1.2
-    # via nova (pyproject.toml)
-langchain-ollama==1.0.1
-    # via nova (pyproject.toml)
-langchain-openai==1.1.12
-    # via nova (pyproject.toml)
-langchain-text-splitters==1.1.1
-    # via langchain-classic
-langgraph==1.1.4
-    # via
-    #   langchain
-    #   nova (pyproject.toml)
-langgraph-checkpoint==4.0.1
-    # via
-    #   langgraph
-    #   langgraph-checkpoint-postgres
-    #   langgraph-prebuilt
-langgraph-checkpoint-postgres==3.0.5
-    # via nova (pyproject.toml)
-langgraph-prebuilt==1.0.8
-    # via langgraph
-langgraph-sdk==0.3.12
-    # via langgraph
-langsmith==0.7.24
-    # via
-    #   langchain-classic
-    #   langchain-community
-    #   langchain-core
 lxml==6.0.2
     # via caldav
 markdown==3.10.2
     # via nova (pyproject.toml)
 markdown-it-py==4.0.0
     # via rich
-marshmallow==3.26.2
-    # via dataclasses-json
 mcp==1.27.0
     # via fastmcp
 mdurl==0.1.2
     # via markdown-it-py
+mistralai==2.3.1
+    # via nova (pyproject.toml)
 more-itertools==11.0.1
     # via
     #   jaraco-classes
@@ -361,38 +294,28 @@ multidict==6.7.1
     #   aiobotocore
     #   aiohttp
     #   yarl
-mypy-extensions==1.1.0
-    # via typing-inspect
 niquests==3.18.4
     # via caldav
 numpy==2.4.4
-    # via
-    #   langchain-community
-    #   pgvector
+    # via pgvector
 ollama==0.6.1
-    # via langchain-ollama
+    # via nova (pyproject.toml)
 openai==2.30.0
-    # via langchain-openai
+    # via nova (pyproject.toml)
 openapi-pydantic==0.5.1
     # via fastmcp
-opentelemetry-api==1.40.0
-    # via fastmcp
-orjson==3.11.8
+opentelemetry-api==1.39.1
     # via
-    #   langgraph-checkpoint-postgres
-    #   langgraph-sdk
-    #   langsmith
-ormsgpack==1.12.2
-    # via langgraph-checkpoint
+    #   fastmcp
+    #   mistralai
+    #   opentelemetry-semantic-conventions
+opentelemetry-semantic-conventions==0.60b1
+    # via mistralai
 packaging==26.0
     # via
     #   fastmcp
-    #   huggingface-hub
     #   incremental
     #   kombu
-    #   langchain-core
-    #   langsmith
-    #   marshmallow
 pathable==0.5.0
     # via jsonschema-path
 pgvector==0.4.2
@@ -408,13 +331,9 @@ propcache==0.4.1
     #   aiohttp
     #   yarl
 psycopg==3.3.3
-    # via
-    #   langgraph-checkpoint-postgres
-    #   nova (pyproject.toml)
+    # via nova (pyproject.toml)
 psycopg-pool==3.3.0
-    # via
-    #   langgraph-checkpoint-postgres
-    #   nova (pyproject.toml)
+    # via nova (pyproject.toml)
 py-key-value-aio[filetree,keyring,memory]==0.4.4
     # via fastmcp
 py-ubjson==0.16.1
@@ -432,13 +351,8 @@ pycparser==3.0
 pydantic[email]==2.12.5
     # via
     #   fastmcp
-    #   langchain
-    #   langchain-classic
-    #   langchain-core
-    #   langchain-mistralai
-    #   langgraph
-    #   langsmith
     #   mcp
+    #   mistralai
     #   ollama
     #   openai
     #   openapi-pydantic
@@ -446,9 +360,7 @@ pydantic[email]==2.12.5
 pydantic-core==2.41.5
     # via pydantic
 pydantic-settings==2.13.1
-    # via
-    #   langchain-community
-    #   mcp
+    # via mcp
 pyee==13.0.1
     # via playwright
 pygments==2.20.0
@@ -471,6 +383,7 @@ python-dateutil==2.9.0.post0
     #   celery
     #   croniter
     #   icalendar
+    #   mistralai
     #   recurring-ical-events
 python-dotenv==1.2.2
     # via
@@ -487,11 +400,7 @@ pyyaml==6.0.3
     # via
     #   caldav
     #   fastmcp
-    #   huggingface-hub
     #   jsonschema-path
-    #   langchain-classic
-    #   langchain-community
-    #   langchain-core
 qh3==1.7.1
     # via urllib3-future
 recurring-ical-events==3.8.1
@@ -507,24 +416,13 @@ referencing==0.37.0
     #   jsonschema
     #   jsonschema-path
     #   jsonschema-specifications
-regex==2026.3.32
-    # via tiktoken
 requests==2.33.1
-    # via
-    #   langchain-classic
-    #   langchain-community
-    #   langsmith
-    #   pywebpush
-    #   requests-toolbelt
-    #   tiktoken
-requests-toolbelt==1.0.0
-    # via langsmith
+    # via pywebpush
 rich==14.3.3
     # via
     #   cyclopts
     #   fastmcp
     #   rich-rst
-    #   typer
 rich-rst==1.3.2
     # via cyclopts
 rpds-py==0.30.0
@@ -535,18 +433,12 @@ s3transfer==0.14.0
     # via boto3
 service-identity==24.2.0
     # via twisted
-shellingham==1.5.4
-    # via typer
 six==1.17.0
     # via python-dateutil
 sniffio==1.3.1
     # via openai
 soupsieve==2.8.3
     # via beautifulsoup4
-sqlalchemy==2.0.48
-    # via
-    #   langchain-classic
-    #   langchain-community
 sqlparse==0.5.5
     # via django
 sse-starlette==3.3.4
@@ -555,46 +447,30 @@ starlette==1.0.0
     # via
     #   mcp
     #   sse-starlette
-tenacity==9.1.4
-    # via
-    #   langchain-community
-    #   langchain-core
-tiktoken==0.12.0
-    # via langchain-openai
-tokenizers==0.22.2
-    # via langchain-mistralai
 tqdm==4.67.3
-    # via
-    #   huggingface-hub
-    #   openai
+    # via openai
 twisted[tls]==25.5.0
     # via daphne
 txaio==25.12.2
     # via autobahn
-typer==0.24.1
-    # via huggingface-hub
 typing-extensions==4.15.0
     # via
     #   beautifulsoup4
-    #   huggingface-hub
-    #   langchain-core
     #   mcp
     #   openai
     #   opentelemetry-api
+    #   opentelemetry-semantic-conventions
     #   psycopg-pool
     #   py-key-value-aio
     #   pydantic
     #   pydantic-core
     #   pyee
-    #   sqlalchemy
     #   twisted
-    #   typing-inspect
     #   typing-inspection
-typing-inspect==0.9.0
-    # via dataclasses-json
 typing-inspection==0.4.2
     # via
     #   mcp
+    #   mistralai
     #   pydantic
     #   pydantic-settings
 tzdata==2025.3
@@ -616,10 +492,6 @@ urllib3==2.6.3
     #   requests
 urllib3-future==2.19.901
     # via niquests
-uuid-utils==0.14.1
-    # via
-    #   langchain-core
-    #   langsmith
 uvicorn==0.42.0
     # via
     #   fastmcp
@@ -645,15 +517,9 @@ wrapt==1.17.3
     # via aiobotocore
 x-wr-timezone==2.0.1
     # via recurring-ical-events
-xxhash==3.6.0
-    # via
-    #   langgraph
-    #   langsmith
 yarl==1.23.0
     # via aiohttp
 zipp==3.23.0
     # via importlib-metadata
 zope-interface==8.2
     # via twisted
-zstandard==0.25.0
-    # via langsmith

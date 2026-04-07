@@ -13,20 +13,8 @@ from nova.llm.provider_validation import (
 from nova.models.Provider import LLMProvider, ProviderType
 
 
-class _FakeResponse:
-    def __init__(self, content="OK", *, tool_calls=None, additional_kwargs=None):
-        self.content = content
-        self.tool_calls = tool_calls or []
-        self.additional_kwargs = additional_kwargs or {}
-
-
-class _HappyToolLLM:
-    async def ainvoke(self, _messages):
-        return _FakeResponse(tool_calls=[{"name": "provider_validation_echo"}])
-
-
 def _payload_part_types(messages) -> list[str]:
-    payload = messages[0].content if isinstance(messages, list) else messages
+    payload = messages[0]["content"] if isinstance(messages, list) else messages
     if not isinstance(payload, list):
         return []
     return [
@@ -36,58 +24,78 @@ def _payload_part_types(messages) -> list[str]:
     ]
 
 
-class _HappyLLM:
-    async def ainvoke(self, messages):
-        payload = messages[0].content if isinstance(messages, list) else messages
-        if isinstance(payload, list):
-            part_types = _payload_part_types(messages)
-            if "file" in part_types or "document_url" in part_types:
-                return _FakeResponse(content="pdf accepted")
-            return _FakeResponse(content="small image")
-        return _FakeResponse(content="OK")
-
-    async def astream(self, _messages):
-        yield _FakeResponse(content="chunk")
-
-    def bind_tools(self, _tools):
-        return _HappyToolLLM()
-
-
-class _NoToolsLLM(_HappyLLM):
-    def bind_tools(self, _tools):
-        raise NotImplementedError("Tool calling is not supported")
-
-
-class _NoVisionLLM(_HappyLLM):
-    async def ainvoke(self, messages):
-        part_types = _payload_part_types(messages)
-        if "image_url" in part_types or "image" in part_types:
-            raise ValueError("Vision inputs are not supported")
-        return await super().ainvoke(messages)
-
-
-class _NoPdfLLM(_HappyLLM):
-    async def ainvoke(self, messages):
-        part_types = _payload_part_types(messages)
-        if "file" in part_types or "document_url" in part_types:
-            raise ValueError("PDF inputs are not supported")
-        return await super().ainvoke(messages)
-
-
-class _BrokenStreamingLLM(_HappyLLM):
-    async def astream(self, _messages):
-        if False:
-            yield None
-        raise RuntimeError("Streaming not available")
-
-
-class _CapturingLLM(_HappyLLM):
+class _HappyAdapter:
     def __init__(self):
         self.invocations = []
 
-    async def ainvoke(self, messages):
-        self.invocations.append(messages)
-        return await super().ainvoke(messages)
+    async def complete_chat(self, provider, *, messages, tools=None):
+        self.invocations.append({"messages": messages, "tools": tools, "provider": provider})
+        payload = messages[0]["content"] if isinstance(messages, list) else messages
+        if tools:
+            return {
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "provider_validation_echo", "arguments": '{"value":"ok"}'}],
+            }
+        if isinstance(payload, list):
+            part_types = _payload_part_types(messages)
+            if "file" in part_types or "document_url" in part_types:
+                return {"content": "pdf accepted", "tool_calls": []}
+            return {"content": "small image", "tool_calls": []}
+        return {"content": "OK", "tool_calls": []}
+
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        del provider, messages, tools
+        if on_content_delta:
+            await on_content_delta("chunk")
+        return {"content": "chunk", "tool_calls": [], "streamed": True}
+
+    def supports_active_pdf_input_probe(self, provider) -> bool:
+        return provider.provider_type != ProviderType.LLMSTUDIO
+
+    def build_validation_pdf_content(self, provider, *, pdf_base64: str):
+        del provider
+        return [
+            {
+                "type": "text",
+                "text": "Confirm that you can access the attached PDF. Reply in one short sentence.",
+            },
+            {
+                "type": "file",
+                "source_type": "base64",
+                "data": pdf_base64,
+                "mime_type": "application/pdf",
+                "filename": "provider-validation.pdf",
+            },
+        ]
+
+
+class _NoToolsAdapter(_HappyAdapter):
+    async def complete_chat(self, provider, *, messages, tools=None):
+        if tools:
+            raise NotImplementedError("Tool calling is not supported")
+        return await super().complete_chat(provider, messages=messages, tools=tools)
+
+
+class _NoVisionAdapter(_HappyAdapter):
+    async def complete_chat(self, provider, *, messages, tools=None):
+        part_types = _payload_part_types(messages)
+        if "image_url" in part_types or "image" in part_types:
+            raise ValueError("Vision inputs are not supported")
+        return await super().complete_chat(provider, messages=messages, tools=tools)
+
+
+class _NoPdfAdapter(_HappyAdapter):
+    async def complete_chat(self, provider, *, messages, tools=None):
+        part_types = _payload_part_types(messages)
+        if "file" in part_types or "document_url" in part_types:
+            raise ValueError("PDF inputs are not supported")
+        return await super().complete_chat(provider, messages=messages, tools=tools)
+
+
+class _BrokenStreamingAdapter(_HappyAdapter):
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        del provider, messages, tools, on_content_delta
+        raise RuntimeError("Streaming not available")
 
 
 class ProviderValidationServiceTests(SimpleTestCase):
@@ -100,8 +108,8 @@ class ProviderValidationServiceTests(SimpleTestCase):
             base_url=kwargs.get("base_url"),
         )
 
-    @patch("nova.providers.validation.create_provider_llm", return_value=_HappyLLM())
-    def test_validate_provider_configuration_success(self, _mock_create_provider_llm):
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_HappyAdapter())
+    def test_validate_provider_configuration_success(self, _mock_get_provider_adapter):
         result = async_to_sync(validate_provider_configuration)(self._provider())
 
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
@@ -117,10 +125,10 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.INVALID)
         self.assertIn("requires a selected model", result["verification_summary"])
 
-    @patch("nova.providers.validation.create_provider_llm", side_effect=RuntimeError("401 Unauthorized"))
+    @patch("nova.providers.validation.get_provider_adapter", side_effect=RuntimeError("401 Unauthorized"))
     def test_validate_provider_configuration_marks_invalid_when_provider_creation_fails(
         self,
-        _mock_create_provider_llm,
+        _mock_get_provider_adapter,
     ):
         result = async_to_sync(validate_provider_configuration)(self._provider())
 
@@ -128,8 +136,8 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertIn("provider creation", result["verification_summary"])
         self.assertEqual(result["verified_operations"]["vision"]["status"], "fail")
 
-    @patch("nova.providers.validation.create_provider_llm", return_value=_NoToolsLLM())
-    def test_validate_provider_configuration_marks_partial_without_tools(self, _mock_create_provider_llm):
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_NoToolsAdapter())
+    def test_validate_provider_configuration_marks_partial_without_tools(self, _mock_get_provider_adapter):
         result = async_to_sync(validate_provider_configuration)(self._provider())
 
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
@@ -137,8 +145,8 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["verified_operations"]["vision"]["status"], "pass")
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "pass")
 
-    @patch("nova.providers.validation.create_provider_llm", return_value=_NoVisionLLM())
-    def test_validate_provider_configuration_marks_partial_without_vision(self, _mock_create_provider_llm):
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_NoVisionAdapter())
+    def test_validate_provider_configuration_marks_partial_without_vision(self, _mock_get_provider_adapter):
         result = async_to_sync(validate_provider_configuration)(self._provider())
 
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
@@ -146,26 +154,26 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["verified_operations"]["tools"]["status"], "pass")
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "pass")
 
-    @patch("nova.providers.validation.create_provider_llm", return_value=_BrokenStreamingLLM())
-    def test_validate_provider_configuration_marks_partial_without_streaming(self, _mock_create_provider_llm):
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_BrokenStreamingAdapter())
+    def test_validate_provider_configuration_marks_partial_without_streaming(self, _mock_get_provider_adapter):
         result = async_to_sync(validate_provider_configuration)(self._provider())
 
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
         self.assertEqual(result["verified_operations"]["streaming"]["status"], "unsupported")
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "pass")
 
-    @patch("nova.providers.validation.create_provider_llm", return_value=_NoPdfLLM())
-    def test_validate_provider_configuration_marks_partial_without_pdf_input(self, _mock_create_provider_llm):
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_NoPdfAdapter())
+    def test_validate_provider_configuration_marks_partial_without_pdf_input(self, _mock_get_provider_adapter):
         result = async_to_sync(validate_provider_configuration)(self._provider())
 
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "unsupported")
         self.assertEqual(result["verified_operations"]["vision"]["status"], "pass")
 
-    @patch("nova.providers.validation.create_provider_llm", return_value=_HappyLLM())
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_HappyAdapter())
     def test_validate_provider_configuration_skips_active_pdf_probe_for_provider_types_without_strategy(
         self,
-        _mock_create_provider_llm,
+        _mock_get_provider_adapter,
     ):
         result = async_to_sync(validate_provider_configuration)(
             self._provider(provider_type=ProviderType.LLMSTUDIO)
@@ -174,36 +182,34 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "not_run")
 
-    def test_validate_mistral_configuration_uses_document_url_for_pdf_probe(self):
-        llm = _CapturingLLM()
-        with patch("nova.providers.validation.create_provider_llm", return_value=llm):
-            result = async_to_sync(validate_provider_configuration)(
-                self._provider(
-                    provider_type=ProviderType.MISTRAL,
-                    model="mistral-small-latest",
-                )
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_HappyAdapter())
+    def test_validate_mistral_configuration_uses_document_url_for_pdf_probe(self, _mock_get_provider_adapter):
+        result = async_to_sync(validate_provider_configuration)(
+            self._provider(
+                provider_type=ProviderType.MISTRAL,
+                model="mistral-small-latest",
             )
+        )
 
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "pass")
 
+        adapter = _mock_get_provider_adapter.return_value
         document_payloads = [
-            messages[0].content
-            for messages in llm.invocations
-            if "document_url" in _payload_part_types(messages)
+            invocation["messages"][0]["content"]
+            for invocation in adapter.invocations
+            if "document_url" in _payload_part_types(invocation["messages"])
         ]
         self.assertEqual(len(document_payloads), 1)
         self.assertTrue(
-            document_payloads[0][1]["document_url"].startswith(
-                "data:application/pdf;base64,"
-            )
+            document_payloads[0][1]["document_url"].startswith("data:application/pdf;base64,")
         )
 
     @patch("nova.providers.openrouter.fetch_openrouter_model_metadata", new_callable=AsyncMock)
-    @patch("nova.providers.validation.create_provider_llm", return_value=_HappyLLM())
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_HappyAdapter())
     def test_validate_openrouter_configuration_does_not_use_declared_metadata_during_active_verification(
         self,
-        _mock_create_provider_llm,
+        _mock_get_provider_adapter,
         mocked_metadata,
     ):
         result = async_to_sync(validate_provider_configuration)(
@@ -222,10 +228,10 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "pass")
 
     @patch("nova.providers.openrouter.fetch_openrouter_model_metadata", new_callable=AsyncMock)
-    @patch("nova.providers.validation.create_provider_llm", return_value=_HappyLLM())
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_HappyAdapter())
     def test_validate_openai_configuration_does_not_use_openrouter_metadata_even_with_openrouter_url(
         self,
-        _mock_create_provider_llm,
+        _mock_get_provider_adapter,
         mocked_metadata,
     ):
         result = async_to_sync(validate_provider_configuration)(

@@ -10,7 +10,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from asgiref.sync import sync_to_async
-from langchain_core.callbacks import AsyncCallbackHandler
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +142,7 @@ def sanitize_preview(value: Any) -> str:
         return _sanitize_string(value)
 
 
-class TaskExecutionTraceHandler(AsyncCallbackHandler):
+class TaskExecutionTraceHandler:
     def __init__(
         self,
         task,

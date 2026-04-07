@@ -7,15 +7,13 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.utils import timezone
 
-from langchain_core.callbacks import AsyncCallbackHandler
-
 from nova.utils import markdown_to_html
 
 logger = logging.getLogger(__name__)
 
 
-# Custom callback handler for synthesis and streaming
-class TaskProgressHandler(AsyncCallbackHandler):
+# Realtime progress handler for synthesis and streaming.
+class TaskProgressHandler:
     def __init__(
         self,
         task_id,
@@ -160,22 +158,13 @@ class TaskProgressHandler(AsyncCallbackHandler):
     async def on_chain_start(self, serialized: Dict[str, Any], inputs: Dict[str, Any], *, run_id: UUID,
                              parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None,
                              metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
-        '''
-        Mandatory method for langchain
-        '''
         pass
 
     async def on_chain_end(self, outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None,
                            tags: Optional[List[str]] = None, **kwargs: Any) -> None:
-        '''
-        Mandatory method for langchain
-        '''
         pass
 
     async def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any):
-        '''
-        Mandatory method for langchain
-        '''
         try:
             if self.tool_depth == 0:
                 await self.on_progress("Agent started")
@@ -186,9 +175,6 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
     async def on_llm_new_token(self, token: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None,
                                **kwargs: Any) -> Any:
-        '''
-        Mandatory method for langchain
-        '''
         try:
             await self.append_markdown_delta(token)
         except Exception as e:
@@ -196,9 +182,6 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
     async def on_llm_end(self, response: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None,
                          **kwargs: Any) -> Any:
-        '''
-        Mandatory method for langchain
-        '''
         try:
             if self.tool_depth == 0:
                 await self.complete_markdown_stream()
@@ -209,7 +192,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
             logger.error(f"Error in on_llm_end: {e}")
 
     async def append_markdown_delta(self, token: str) -> None:
-        """Append streamed markdown produced outside the LangChain callback path."""
+        """Append streamed markdown produced by the runtime."""
         # Send only chunks from the root run
         if self.tool_depth == 0:
             if self._needs_segment_break:
@@ -282,9 +265,6 @@ class TaskProgressHandler(AsyncCallbackHandler):
     async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, *, run_id: UUID,
                             parent_run_id: Optional[UUID] = None, tags: Optional[List[str]] = None,
                             metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
-        '''
-        Mandatory method for langchain
-        '''
         try:
             # If a tool is starting,
             # store it to avoid sending response chunks back to the user
@@ -299,9 +279,6 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None,
                           **kwargs: Any) -> Any:
-        '''
-        Mandatory method for langchain
-        '''
         try:
             await self.on_progress(f"Tool '{self.current_tool}' finished")
             # If a tool is ending, reset the current tool so that we may
@@ -313,8 +290,7 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
     async def on_tool_failure(self, message: str | None = None) -> None:
         """
-        Reset tool-scoped streaming state after a tool failure outside the
-        LangChain callback flow.
+        Reset tool-scoped streaming state after a tool failure.
         """
         try:
             tool_name = self.current_tool or "Unknown"
@@ -326,9 +302,6 @@ class TaskProgressHandler(AsyncCallbackHandler):
 
     async def on_agent_finish(self, finish: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None,
                               **kwargs: Any) -> Any:
-        '''
-        Mandatory method for langchain
-        '''
         try:
             if self.tool_depth == 0:
                 await self.on_progress("Agent finished")

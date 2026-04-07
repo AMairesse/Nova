@@ -36,11 +36,6 @@ def get_provider_adapter(provider_or_type):
     return adapter
 
 
-def create_provider_llm(provider):
-    """Create the runtime LLM client for a provider."""
-    return get_provider_adapter(provider).create_llm(provider)
-
-
 def normalize_multimodal_content_for_provider(provider, content):
     """Normalize Nova multimodal blocks to the provider-specific wire format."""
     return get_provider_adapter(provider).normalize_multimodal_content(content)
@@ -75,6 +70,29 @@ async def list_provider_models(provider) -> list[dict]:
 
 async def resolve_provider_capability_snapshot(provider) -> dict:
     return await get_provider_adapter(provider).resolve_capability_snapshot(provider)
+
+
+async def complete_provider_chat(provider, *, messages: list[dict], tools: list[dict] | None = None) -> dict:
+    return await get_provider_adapter(provider).complete_chat(
+        provider,
+        messages=messages,
+        tools=tools,
+    )
+
+
+async def stream_provider_chat(
+    provider,
+    *,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    on_content_delta=None,
+) -> dict:
+    return await get_provider_adapter(provider).stream_chat(
+        provider,
+        messages=messages,
+        tools=tools,
+        on_content_delta=on_content_delta,
+    )
 
 
 async def build_native_provider_request(provider, invocation_request: dict) -> dict:
