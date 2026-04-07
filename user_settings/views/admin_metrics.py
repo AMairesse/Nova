@@ -17,7 +17,7 @@ from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetri
 from user_settings.mixins import StaffRequiredMixin
 
 
-FILTER_KEYS = ("q", "runtime_engine", "failure_kind")
+FILTER_KEYS = ("q", "failure_kind")
 PAGE_SIZE = 50
 PURGE_AGE_CHOICES = (
     ("", _("All matched")),
@@ -66,15 +66,12 @@ def _filtered_metrics_queryset(filters: dict[str, str]):
         "failure_kind",
     )
     query = str(filters.get("q") or "").strip()
-    runtime_engine = str(filters.get("runtime_engine") or "").strip()
     failure_kind = str(filters.get("failure_kind") or "").strip()
 
     if query:
         queryset = queryset.filter(
             Q(head_command__icontains=query) | Q(last_error__icontains=query)
         )
-    if runtime_engine:
-        queryset = queryset.filter(runtime_engine=runtime_engine)
     if failure_kind:
         queryset = queryset.filter(failure_kind=failure_kind)
     return queryset
@@ -143,11 +140,6 @@ class AdminMetricsView(LoginRequiredMixin, StaffRequiredMixin, View):
             "page_obj": page_obj,
             "paginator": paginator,
             "is_paginated": paginator.num_pages > 1,
-            "runtime_engines": list(
-                TerminalCommandFailureMetric.objects.order_by()
-                .values_list("runtime_engine", flat=True)
-                .distinct()
-            ),
             "failure_kinds": list(
                 TerminalCommandFailureMetric.objects.order_by()
                 .values_list("failure_kind", flat=True)
@@ -169,8 +161,7 @@ class AdminMetricsDeleteView(LoginRequiredMixin, StaffRequiredMixin, View):
 
         metric = get_object_or_404(TerminalCommandFailureMetric, pk=pk)
         label = (
-            f"{metric.bucket_date} / {metric.runtime_engine} / "
-            f"{metric.head_command or '(empty)'} / {metric.failure_kind}"
+            f"{metric.bucket_date} / {metric.head_command or '(empty)'} / {metric.failure_kind}"
         )
         metric.delete()
         messages.success(request, _("Deleted metrics bucket: %(label)s.") % {"label": label})

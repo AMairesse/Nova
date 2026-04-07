@@ -61,7 +61,7 @@ def _default_empty_text(
     style: str,
 ) -> str:
     if style == "process":
-        return _("Please process the attached artifacts.")
+        return _("Please process the attached files.")
 
     if len(prompt_inputs) == 1:
         kind = str(prompt_inputs[0].kind or "").strip()

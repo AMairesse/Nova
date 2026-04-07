@@ -1,182 +1,139 @@
-# Nova - Development documentation
+# Nova - Development Guide
 
-## Project layout
+## Core Architecture
 
-```
+Nova is a Django application with a single agent runtime centered on `nova/runtime/`.
+
+Important backend slices:
+
+- `nova/runtime/`: React Terminal runtime, provider client, VFS, task executor
+- `nova/plugins/`: internal plugin registry for builtins/system capabilities
+- `nova/providers/`: provider-specific model discovery and capability handling
+- `nova/continuous/`: continuous-mode summaries, recall, and context builder
+- `nova/tasks/`: Celery tasks, scheduled task execution, maintenance flows
+- `nova/web/`: web search, browsing, and downloads
+- `nova/webapp/`: live web app publication and serving
+- `user_settings/`: providers, tools, agents, memory, and tasks UI
+
+## Repository Layout
+
+```text
 Nova
-├─ docker/                              # Docker compose configuration for the project (see `docker/README.md`)
-├─ locale/                              # Project's translations files
-|  ├─ en/LC_MESSAGES/django.po          # Django translations file
-|  └─ en/LC_MESSAGES/djangojs.po        # Django JavaScript translations file
+├─ docker/                      # Docker stacks and env configuration
+├─ locale/                      # Django translations
 ├─ nova/
-|  ├─ api/                              # Minimal REST facade
-|  |  ├─ serializers.py                 # Django REST serializers
-|  |  ├─ urls.py                        # Django REST URLs
-|  |  └─ views.py                       # Django REST views
-|  ├─ llm/                              # LLM integration
-|  |  ├─ checkpoints.py                 # LLM's checkpoints management functions
-|  |  ├─ llm_agent.py                   # LangGraph/LangChain agent orchestration
-|  |  └─ llm_tools.py                   # Tools management functions for the LLM agent
-|  ├─ mcp/                              # Thin wrapper around FastMCP
-|  |  └─ client.py                      # MCPClient class
-|  ├─ migrations/                       # Django model migration scripts
-|  ├─ models/                           # Django models
-|  |  ├─ AgentConfig.py                 # AgentConfig object's model
-|  |  ├─ CheckpointLink.py              # CheckpointLink object's model
-|  |  ├─ Interaction.py                 # Interaction and InteractionStatus objects' model
-|  |  ├─ Message.py                     # Actor, Message, MessageType objects' model
-|  |  ├─ MessageArtifact.py             # Multimodal artifacts linked to messages
-|  |  ├─ Provider.py                    # ProviderType and LLMProvider objects' model
-|  |  ├─ Task.py                        # Task and TaskStatus objects' model
-|  |  ├─ Thread.py                      # Thread object's model
-|  |  ├─ Tool.py                        # Tool and ToolCredential objects' model
-|  |  ├─ Memory.py                      # MemoryTheme, MemoryItem and MemoryItemEmbedding objects' model
-|  |  ├─ UserFile.py                    # UserFile object's model
-|  |  └─ UserObjects.py                 # UserParameters and UserProfile objects' model
-|  ├─ providers/                        # Provider-specific adapters, catalogs and capability logic
-|  ├─ static/                           # JS helpers (streaming, tool modal manager…)
-|  |  ├─ css/                           # CSS helpers
-|  |  |  └─ main.css                    # CSS helpers
-|  |  ├─ images/                        # Images
-|  |  ├─ js/                            # JS helpers
-|  |  |  ├─ files.js                    # Files' panel helper
-|  |  |  ├─ responsive.js               # Bootstrap-native responsive behavior
-|  |  |  ├─ thread-manager.js           # Unified thread module (bootstrap + pagination + DOM grouping)
-|  |  |  └─ utils.js                    # VariousJS helpers
-|  |  ├─ favicon.ico                    # Favicon
-|  |  ├─ manifest.json                  # PWA manifest
-|  |  └─ sw.js                          # Service Worker
-|  ├─ templates/                        # Django + Bootstrap 5 UI
-|  ├─ tests/                            # Django tests
-|  ├─ telemetry/                        # Process-scoped telemetry helpers
-|  ├─ tools/                            # Built‑in tool modules (CalDav, agent wrapper…)
-|  ├─ views/                            # Django views
-|  ├─ admin.py                          # Django admin
-|  ├─ apps.py                           # Django apps
-|  ├─ asgi.py                           # Django ASGI
-|  ├─ celery.py                         # Django Celery
-|  ├─ consumer.py                       # 
-|  ├─ context_processors.py             # Django context processors
-|  ├─ file_utils.py                     # File utilities
-|  ├─ routing.py                        # Django routing
-|  ├─ settings_test.py                  # Django test settings
-|  ├─ settings.py                       # Django settings
-|  ├─ signals.py                        # Django signals
-|  ├─ tasks.py                          # Django tasks
-|  ├─ urls.py                           # Django URLs
-|  ├─ utils.py                          # Django utils
-|  └─ wsgi.py                           # Django WSGI
-├─ screenshots/                         # Screenshots
-├─ user_settings/                       # Dedicated Django app for the user settings (see `user_settings/README.md`)
-├─ .coveragerc                          # Coverage configuration file
-├─ .flake8                              # Flake8 configuration file
-├─ .gitignore                           # Git ignore file
-├─ LICENCE                              # Licence file
-├─ manage.py                            # Django management script
-├─ README-agents.md                     # Agents documentation
-├─ README-dev.md                        # This file : Development documentation
-├─ README.md                            # Nova's general documentation
-└─ requirements.txt                     # Project dependencies
+│  ├─ api/                      # Minimal REST facade
+│  ├─ continuous/               # Continuous-mode context and maintenance
+│  ├─ memory/                   # Memory document/chunk services
+│  ├─ mcp/                      # MCP client and managed OAuth support
+│  ├─ models/                   # One model per file
+│  ├─ plugins/                  # Internal plugin descriptors and shared helpers
+│  ├─ providers/                # Provider adapters and capability logic
+│  ├─ runtime/                  # React Terminal runtime
+│  ├─ static/                   # JS/CSS assets
+│  ├─ tasks/                    # Celery tasks and task templates
+│  ├─ templates/                # Django templates
+│  ├─ tests/                    # Django test suite
+│  ├─ views/                    # Django views
+│  ├─ web/                      # Search/browser/download services
+│  └─ webapp/                   # Live webapp publication
+├─ user_settings/               # Settings app
+├─ screenshots/
+├─ plans/
+├─ README-agents.md
+├─ README-dev.md
+└─ README.md
 ```
 
-## Data model
+## Data Model Landmarks
 
-### Conversations between users and agents
+### Conversations and Tasks
 
-- The conversation between a user and one or multiple agent is a ```Thread``` object.
-- During a conversation the user can choose to switch to another agent for each new message sent.
-- A Thread contains multiple ```Messages```.
+- `Thread`: conversation container
+- `Message`: persisted conversation turn or system/runtime event
+- `Task`: runtime execution state
+- `Interaction`: blocking user clarification for `ask_user`
+- `AgentThreadSession`: runtime session/compaction state
 
-### Files vs. artifacts
+### Files
 
-- `UserFile` stores persisted binaries in MinIO.
-- `MessageArtifact` stores message-scoped multimodal inputs, outputs and derived artifacts.
-- `Files` are user-visible thread resources.
-- `Artifacts` are conversation/runtime resources that can optionally be published to `Files`.
+- `UserFile(scope=THREAD_SHARED)`: durable thread files
+- `UserFile(scope=MESSAGE_ATTACHMENT)`: attachments and hidden runtime scratch/output files
 
-### Provider capabilities
+Thread files, attachments, and runtime scratch files are all represented through `UserFile`.
 
-- `LLMProvider` stores connection + selected model.
-- Model capability state is persisted in `LLMProvider.capability_profile`.
-- The provider settings flow separates:
-  - connection save
-  - model discovery (OpenRouter / LM Studio)
-  - metadata refresh
-  - active verification
+### Memory
 
-## Provider-aware runtime
+Long-term memory is modeled with:
 
-- `nova/llm/` owns agent orchestration, checkpoints and tool execution.
-- `nova/providers/` owns provider-specific client creation, model catalogs, multimodal payloads and capability metadata.
-- Tool-less execution is supported for models that do not support tools.
-- Native provider paths are used for non-text multimodal operations such as provider-native image/audio/PDF flows.
+- `MemoryDirectory`
+- `MemoryDocument`
+- `MemoryChunk`
+- `MemoryChunkEmbedding`
 
-## Telemetry cleanup
+`/memory` is projected from these tables and is shared per user.
 
-- Per-task cleanup must only release Nova runtime resources (`cleanup_runtime()`).
-- Langfuse shutdown is process-scoped and handled at worker shutdown, not at the end of each task.
+### Continuous Mode
 
+Continuous mode is built from:
 
-## Translation
+- `DaySegment`
+- `DaySegmentEmbedding`
+- `TranscriptChunk`
+- `TranscriptChunkEmbedding`
 
-Update the messages :
-```python manage.py makemessages -l en```
-and
-```python manage.py makemessages -l en --domain djangojs```
+Continuous execution relies on stored day segments, summaries, and transcript chunks.
 
+## Runtime Model
 
-## Requirements
+The model-facing surface is intentionally small:
 
-Requirements are defined in the requirements.in file. It can be checked with :
-```deptry .```
+- `terminal(command: str)`
+- `delegate_to_agent(...)`
+- `ask_user(...)`
 
-Then the requirements.txt file can be generated with :
-```pip-compile --upgrade pyproject.toml --output-file=requirements.txt```
+Everything else is exposed through terminal commands, virtual files, or attached integrations.
 
-Install with ```pip install pip-tools deptry```
+Examples:
 
-## Vendorized frontend assets
+- mail: `mail ...`
+- calendar: `calendar ...`
+- memory: `grep ...`, `memory search ...`
+- webapp: `webapp expose ...`
+- MCP: `mcp ...`
+- API tools: `api ...`
 
-To manually check whether vendorized frontend assets are up to date (Bootstrap, Bootstrap Icons, htmx):
+## Internal Plugins
+
+Builtins and system capabilities are registered in `nova/plugins/`.
+
+Each internal plugin describes:
+
+- metadata/settings
+- builtin subtype mapping
+- runtime capability resolution
+- skill docs
+- optional connection-test hook
+
+`Tool.tool_subtype` remains the persisted product-facing selector, but the registry in
+`nova/plugins/registry.py` is the source of truth for builtin behavior.
+
+## Provider-Aware Behavior
+
+- `LLMProvider.capability_profile` is the persisted source of model capability state
+- metadata refresh and active verification are separate flows
+- providers verified with `tools=unsupported` are gated correctly in agent/task UX
+- MCP managed OAuth is handled in settings and refreshed silently at runtime when possible
+
+## Local Environment
+
+Activate the virtualenv before Python commands:
 
 ```bash
-./scripts/check_vendor_assets.sh
+. .venv/bin/activate
 ```
 
-Useful options:
-
-```bash
-# Exit non-zero if an update is available or if a check fails
-./scripts/check_vendor_assets.sh --strict
-
-# Only read local embedded versions (no npm registry query)
-./scripts/check_vendor_assets.sh --local-only
-```
-
-To update vendorized assets manually:
-
-```bash
-# Update all to latest versions from npm
-./scripts/update_vendor_assets.sh
-
-# Update with explicit versions
-./scripts/update_vendor_assets.sh --bootstrap 5.3.7 --bootstrap-icons 1.11.3 --htmx 2.0.6
-```
-
-## Test settings note
-
-When running tests with `DJANGO_SETTINGS_MODULE=nova.settings_test`, some values from `.env` can still be loaded through `nova/settings.py` (because `settings_test.py` imports it first).
-
-To keep tests deterministic for WebPush, `nova/settings_test.py` explicitly forces:
-
-- `WEBPUSH_ENABLED = False`
-- `WEBPUSH_VAPID_PUBLIC_KEY = ''`
-- `WEBPUSH_VAPID_PRIVATE_KEY = ''`
-- `WEBPUSH_VAPID_SUBJECT = ''`
-
-This avoids local `.env` values unexpectedly enabling push features during test runs.
-
-Recommended full test command:
+Recommended test command:
 
 ```bash
 DEBUG=False \
@@ -185,10 +142,62 @@ DJANGO_SETTINGS_MODULE=nova.settings_test \
 python manage.py test
 ```
 
-## WebApp Skill Authoring Pattern
+Targeted test example:
 
-For the `WebApp` skill, code generation is agent-authored by default:
+```bash
+DEBUG=False \
+CSRF_TRUSTED_ORIGINS='https://localhost,https://testserver' \
+DJANGO_SETTINGS_MODULE=nova.settings_test \
+python manage.py test user_settings.tests.test_tasks_views
+```
 
-- The agent should generate `files` content from the user's request and call `webapp_create(name, files)`.
-- User-provided snippets are optional inputs; when present, they should be integrated/adapted by the agent.
-- `webapp_create` requires a non-empty `files` object including `index.html`.
+Quick syntax check:
+
+```bash
+python -m py_compile user_settings/views/tasks.py
+```
+
+## Translation
+
+Update messages with:
+
+```bash
+python manage.py makemessages -l en
+python manage.py makemessages -l en --domain djangojs
+```
+
+## Dependencies
+
+Requirements are defined in `pyproject.toml` / `requirements.txt`.
+
+Useful checks:
+
+```bash
+deptry .
+pip-compile --upgrade pyproject.toml --output-file=requirements.txt
+```
+
+## Vendorized Frontend Assets
+
+Check embedded frontend assets:
+
+```bash
+./scripts/check_vendor_assets.sh
+./scripts/check_vendor_assets.sh --strict
+./scripts/check_vendor_assets.sh --local-only
+```
+
+Update them manually:
+
+```bash
+./scripts/update_vendor_assets.sh
+./scripts/update_vendor_assets.sh --bootstrap 5.3.7 --bootstrap-icons 1.11.3 --htmx 2.0.6
+```
+
+## WebApp Authoring Pattern
+
+The live webapp workflow is:
+
+1. create/edit files in the normal workspace
+2. publish with `webapp expose <source_dir>`
+3. keep editing the same source files; the published app updates live

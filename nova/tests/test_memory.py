@@ -24,7 +24,6 @@ from nova.models.MemoryDocument import MemoryDocument
 from nova.models.memory_common import MemoryChunkEmbeddingState
 from nova.models.Message import Actor
 from nova.models.Thread import Thread
-from nova.tools.builtins.memory import get_functions, get_prompt_instructions
 
 
 User = get_user_model()
@@ -32,17 +31,11 @@ User = get_user_model()
 
 class MemoryBuiltinCapabilityTests(TestCase):
     def test_memory_tool_registration(self):
-        from nova.tools import get_available_tool_types
+        from nova.plugins.builtins import get_available_tool_types
 
         tool_types = get_available_tool_types()
         self.assertIn("memory", tool_types)
         self.assertEqual(tool_types["memory"]["name"], "Memory")
-
-    def test_memory_prompt_instructions_are_empty(self):
-        self.assertEqual(get_prompt_instructions(), [])
-
-    def test_get_functions_returns_no_callable_tools(self):
-        self.assertEqual(async_to_sync(get_functions)(tool=None, agent=None), [])
 
 
 class MemoryDocumentServiceTests(TestCase):

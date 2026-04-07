@@ -22,43 +22,23 @@
         }
 
         static getMessageAttachments(messageData) {
-            if (Array.isArray(messageData?.artifacts)) {
-                return messageData.artifacts;
+            if (Array.isArray(messageData?.attachments)) {
+                return messageData.attachments;
             }
-            if (Array.isArray(messageData?.message_artifacts)) {
-                return messageData.message_artifacts;
+            if (Array.isArray(messageData?.message_attachments)) {
+                return messageData.message_attachments;
             }
             return [];
         }
 
-        static isPublishableArtifact(attachment) {
-            const metadata = attachment?.metadata || {};
-            const hasContent = Boolean(attachment?.user_file_id || `${attachment?.summary_text || ''}`.trim());
-            return Boolean(attachment?.id) && !metadata.legacy && hasContent;
-        }
-
         static renderArtifactSummaryItem(attachment) {
-            const label = window.DOMUtils.escapeHTML(attachment?.label || attachment?.filename || attachment?.kind || 'artifact');
+            const label = window.DOMUtils.escapeHTML(attachment?.label || attachment?.filename || attachment?.kind || 'attachment');
             const kind = `${attachment?.kind || ''}`.trim();
             const kindSuffix = kind ? ` · ${window.DOMUtils.escapeHTML(kind)}` : '';
-            const published = Boolean(attachment?.published_to_file);
-            const publishButtonHtml = this.isPublishableArtifact(attachment)
-                ? `
-                <button
-                    type="button"
-                    class="btn btn-link btn-sm p-0 artifact-publish-btn${published ? ' artifact-publish-btn-published text-success' : ''}"
-                    data-artifact-id="${attachment.id}"
-                    aria-label="${this.t('Add artifact to Files')}"
-                >
-                    ${published ? this.t('Added to Files') : this.t('Add to Files')}
-                </button>
-                `
-                : '';
 
             return `
-                <div class="artifact-summary-item" data-artifact-id="${attachment?.id || ''}" data-published-to-file="${published ? 'true' : 'false'}">
+                <div class="artifact-summary-item">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">${label}${kindSuffix}</span>
-                    ${publishButtonHtml}
                 </div>
             `;
         }
@@ -76,7 +56,7 @@
 
         static renderInlineArtifact(attachment) {
             const contentUrl = `${attachment?.content_url || attachment?.preview_url || ''}`.trim();
-            const label = window.DOMUtils.escapeHTML(attachment?.label || attachment?.filename || attachment?.kind || 'artifact');
+            const label = window.DOMUtils.escapeHTML(attachment?.label || attachment?.filename || attachment?.kind || 'attachment');
             const kind = `${attachment?.kind || ''}`.trim();
             if (!contentUrl) {
                 return '';
@@ -221,7 +201,6 @@
             messageEl.dataset.traceSubagentCalls = String(Number(traceSummary.subagent_calls || 0));
             messageEl.dataset.traceInteractionCount = String(Number(traceSummary.interaction_count || 0));
             messageEl.dataset.traceErrorCount = String(Number(traceSummary.error_count || 0));
-            messageEl.dataset.traceArtifactCount = String(Number(traceSummary.artifact_count || 0));
             messageEl.dataset.traceDurationMs = String(Number(traceSummary.duration_ms || 0));
             messageEl.dataset.contextRealTokens = internalData.real_tokens !== null && internalData.real_tokens !== undefined
                 ? String(internalData.real_tokens)
@@ -229,7 +208,7 @@
             messageEl.dataset.contextApproxTokens = internalData.approx_tokens !== null && internalData.approx_tokens !== undefined
                 ? String(internalData.approx_tokens)
                 : '';
-            messageEl.dataset.contextLegacyTokens = internalData.context_tokens !== null && internalData.context_tokens !== undefined
+            messageEl.dataset.contextFallbackTokens = internalData.context_tokens !== null && internalData.context_tokens !== undefined
                 ? String(internalData.context_tokens)
                 : '';
             messageEl.dataset.contextMaxContext = internalData.max_context !== null && internalData.max_context !== undefined
@@ -305,7 +284,7 @@
                 const inlineArtifactsHtml = this.renderInlineArtifacts(attachments, { withTopMargin: Boolean(messageData.text) });
                 const attachmentSummaryHtml = attachments.length
                     ? `
-              <div class="${messageData.text ? 'mt-2 ' : ''}small text-muted">${attachments.length} artifact(s) attached</div>
+              <div class="${messageData.text ? 'mt-2 ' : ''}small text-muted">${attachments.length} attachment(s) added</div>
               ${this.renderArtifactSummary(attachments)}
               `
                     : '';

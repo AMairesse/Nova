@@ -54,8 +54,6 @@
         'getComposerAttachmentKind',
         'getComposerAttachmentMaxBytes',
         'getComposerAttachmentTypeLabel',
-        'publishArtifact',
-        'markArtifactAsPublished',
     ];
 
     const MESSAGE_THREAD_METHOD_NAMES = [
@@ -327,13 +325,6 @@
                     e.preventDefault();
                     this.resolveComposerPasteDecision('file');
                 },
-                '.artifact-publish-btn': (e, target) => {
-                    e.preventDefault();
-                    const button = target.closest('.artifact-publish-btn');
-                    if (button) {
-                        void this.publishArtifact(button);
-                    }
-                },
                 '.compact-thread-link': (e, target) => {
                     e.preventDefault();
                     this.summarizeCurrentThread();
@@ -562,7 +553,6 @@
                 subagent: gettext('Sub-agent'),
                 interaction: gettext('Interaction'),
                 error: gettext('Error'),
-                artifact: gettext('Artifact'),
             };
             return mapping[nodeType] || gettext('Step');
         }
@@ -588,9 +578,6 @@
             if (Number(data.error_count || 0) > 0) {
                 parts.push(`${data.error_count} ${gettext(Number(data.error_count) === 1 ? 'error' : 'errors')}`);
             }
-            if (Number(data.artifact_count || 0) > 0) {
-                parts.push(`${data.artifact_count} ${gettext(Number(data.artifact_count) === 1 ? 'artifact' : 'artifacts')}`);
-            }
             const durationLabel = this.formatExecutionDuration(data.duration_ms);
             if (durationLabel) {
                 parts.push(durationLabel);
@@ -606,25 +593,6 @@
                 parts.push(`${gettext('Context')}: ${consumed} / ${context.max_context} (${mode})`);
             }
             return parts.join(' • ');
-        }
-
-        renderExecutionArtifactRefs(artifactRefs) {
-            const refs = Array.isArray(artifactRefs) ? artifactRefs : [];
-            if (!refs.length) {
-                return '';
-            }
-            return `
-                <div class="execution-node-section">
-                    <div class="execution-node-section-label">${window.DOMUtils.escapeHTML(gettext('Artifacts'))}</div>
-                    <div class="execution-node-artifacts">
-                        ${refs.map((artifactRef) => {
-                            const artifactId = artifactRef?.artifact_id;
-                            const label = `${artifactRef?.label || gettext('Artifact')} #${artifactId || ''}`.trim();
-                            return `<span class="badge rounded-pill text-bg-light border">${window.DOMUtils.escapeHTML(label)}</span>`;
-                        }).join('')}
-                    </div>
-                </div>
-            `;
         }
 
         renderExecutionPreviewSection(label, value) {
@@ -651,7 +619,6 @@
             const startedAt = node.started_at ? new Date(node.started_at).toLocaleString() : '';
             const outputPreview = this.renderExecutionPreviewSection(gettext('Output'), node.output_preview);
             const inputPreview = this.renderExecutionPreviewSection(gettext('Input'), node.input_preview);
-            const artifactsHtml = this.renderExecutionArtifactRefs(node.artifact_refs);
             const metaHtml = startedAt
                 ? `<div class="execution-node-meta text-muted">${window.DOMUtils.escapeHTML(startedAt)}</div>`
                 : '';
@@ -659,7 +626,6 @@
                 ${metaHtml}
                 ${inputPreview}
                 ${outputPreview}
-                ${artifactsHtml}
                 ${children.length ? `<div class="execution-node-children">${children.map((child) => this.renderExecutionTraceNode(child)).join('')}</div>` : ''}
             `;
 

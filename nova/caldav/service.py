@@ -14,7 +14,7 @@ from icalendar import Calendar as ICalendar
 from icalendar import Event as ICalEvent
 
 from nova.models.Tool import Tool, ToolCredential
-from nova.tools.multi_instance import (
+from nova.plugins.shared.multi_instance import (
     dedupe_instance_labels,
     format_invalid_instance_message,
     normalize_instance_key,
@@ -461,7 +461,7 @@ def _create_ical_event(
         event.add("description", description)
 
     calendar = ICalendar()
-    calendar.add("prodid", "-//Nova//React Terminal V2//EN")
+    calendar.add("prodid", "-//Nova//React Terminal//EN")
     calendar.add("version", "2.0")
     calendar.add_component(event)
     return calendar.to_ical().decode("utf-8")

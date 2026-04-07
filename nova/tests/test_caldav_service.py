@@ -56,7 +56,7 @@ class CaldavServiceTests(TestCase):
             self.user,
             name="Work Calendar",
             tool_subtype="caldav",
-            python_path="nova.tools.builtins.caldav",
+            python_path="nova.plugins.calendar",
         )
         create_tool_credential(
             self.user,

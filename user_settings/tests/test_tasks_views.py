@@ -6,7 +6,6 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.urls import reverse
 
-from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.models.UserObjects import UserProfile
@@ -30,8 +29,6 @@ class UserSettingsTasksViewsTests(TestCase):
         self.other = create_user(username="tasks-bob", email="tasks-bob@example.com")
         self.provider = create_provider(self.user, name="provider-main")
         self.agent = create_agent(self.user, self.provider, name="agent-main")
-        self.agent.runtime_engine = AgentConfig.RuntimeEngine.REACT_TERMINAL_V1
-        self.agent.save(update_fields=["runtime_engine"])
         self.client.login(username="tasks-alice", password="testpass123")
 
     def _create_agent_cron_task(self, name: str = "Cron agent", is_active: bool = True) -> TaskDefinition:
@@ -57,7 +54,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Email Builtin",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         task = TaskDefinition(
             user=self.user,
@@ -123,7 +120,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Other Email",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         form = TaskDefinitionForm(
@@ -151,7 +148,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Email Trigger Tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         form = TaskDefinitionForm(
@@ -184,7 +181,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Email Trigger Tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         self.agent.tools.add(selected_email_tool)
 
@@ -336,7 +333,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -356,7 +353,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Delegated Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -384,7 +381,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Delegated Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -437,7 +434,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -479,7 +476,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -504,7 +501,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -518,7 +515,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Backup Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -566,7 +563,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Use a React Terminal v2 agent with browser and memory access.",
+            "Use an agent with browser and memory access.",
         )
 
     def test_task_templates_list_marks_thematic_watch_available_with_direct_browser_tool(self):
@@ -575,14 +572,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -592,7 +589,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertNotContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Use a React Terminal v2 agent with browser and memory access.",
+            "Use an agent with browser and memory access.",
         )
 
     def test_task_templates_list_marks_thematic_watch_available_with_subagent_browser_tool(self):
@@ -601,7 +598,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         sub_agent = create_agent(
             self.user,
@@ -616,7 +613,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(memory_tool)
         self.agent.agent_tools.add(sub_agent)
@@ -627,7 +624,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertNotContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Use a React Terminal v2 agent with browser and memory access.",
+            "Use an agent with browser and memory access.",
         )
 
     def test_task_template_apply_prefills_thematic_watch_weekly(self):
@@ -636,14 +633,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -668,14 +665,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -692,14 +689,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool)
         self.agent.tools.add(memory_tool)
@@ -723,14 +720,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -755,14 +752,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 

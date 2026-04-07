@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 
 
-# Backward-compatible default title patterns:
-# - legacy: "thread n°42"
+# Supported default title patterns:
+# - historical: "thread n°42"
 # - current: "New thread 42"
 _LEGACY_DEFAULT_SUBJECT_RE = re.compile(r"^thread n°\d+$", re.IGNORECASE)
 _CURRENT_DEFAULT_SUBJECT_RE = re.compile(r"^new thread \d+$", re.IGNORECASE)

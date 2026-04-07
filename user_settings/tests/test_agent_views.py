@@ -206,14 +206,14 @@ class AgentViewsTest(BaseTestCase):
             name="Email (IMAP/SMTP)",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         tool_b = create_tool(
             self.user,
             name="Email (IMAP/SMTP)",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         response = self.client.get(reverse("user_settings:agent-add"))

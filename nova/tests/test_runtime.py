@@ -1,0 +1,3237 @@
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+from asgiref.sync import async_to_sync
+from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, TransactionTestCase
+
+from nova.message_submission import SubmissionContext, submit_user_message
+from nova.models.AgentConfig import AgentConfig
+from nova.models.APIToolOperation import APIToolOperation
+from nova.models.AgentThreadSession import AgentThreadSession
+from nova.models.Interaction import Interaction, InteractionStatus
+from nova.models.MemoryDirectory import MemoryDirectory
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryDocument import MemoryDocument
+from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetric
+from nova.models.memory_common import MemoryRecordStatus
+from nova.models.Message import Actor, MessageType
+from nova.models.Provider import LLMProvider, ProviderType
+from nova.models.Task import Task, TaskStatus
+from nova.models.Thread import Thread
+from nova.models.Tool import Tool, ToolCredential
+from nova.models.UserFile import UserFile
+from nova.models.WebApp import WebApp
+from nova.runtime.agent import (
+    ReactTerminalInterruptResult,
+    ReactTerminalRunResult,
+    ReactTerminalRuntime,
+)
+from nova.runtime.capabilities import TerminalCapabilities
+from nova.runtime.compaction import (
+    SESSION_KEY_HISTORY_SUMMARY,
+    SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID,
+)
+from nova.runtime.skills_registry import build_skill_registry
+from nova.runtime.support import get_runtime_error
+from nova.runtime.task_executor import (
+    ReactTerminalSummarizationTaskExecutor,
+    ReactTerminalTaskExecutor,
+)
+from nova.runtime.terminal import TerminalCommandError, TerminalExecutor
+from nova.runtime.vfs import VirtualFileSystem
+from nova.tasks.TaskProgressHandler import TaskProgressHandler
+from nova.thread_titles import build_default_thread_subject
+from nova.web.browser_service import BrowserSessionError
+
+
+class _FakeChannelLayer:
+    def __init__(self):
+        self.messages = []
+
+    async def group_send(self, group_name, payload):
+        self.messages.append({"group": group_name, "message": payload.get("message", payload)})
+
+
+class _FakeBrowserSession:
+    def __init__(self):
+        self.open = AsyncMock(return_value={"url": "https://example.com", "status": 200})
+        self.open_search_result = AsyncMock(return_value={"url": "https://example.com/result", "status": 200})
+        self.current = AsyncMock(return_value="https://example.com/result")
+        self.back = AsyncMock(return_value={"url": "https://example.com/previous", "status": 200})
+        self.extract_text = AsyncMock(return_value="Page text " * 500)
+        self.extract_links = AsyncMock(return_value=[{"href": "https://example.com/a", "text": "A"}])
+        self.get_elements = AsyncMock(return_value=[{"href": "https://example.com/a", "innerText": "A"}])
+        self.click = AsyncMock(return_value="Clicked element 'a.link'.")
+        self.close = AsyncMock(return_value=None)
+
+
+class RuntimeSupportTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="v2-user", password="pwd")
+        self.provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="test-key",
+        )
+        self.agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Terminal Agent",
+            llm_provider=self.provider,
+            system_prompt="",
+        )
+
+    def test_get_runtime_error_accepts_continuous_mode(self):
+        error = get_runtime_error(
+            self.agent,
+            thread_mode=Thread.Mode.CONTINUOUS,
+        )
+
+        self.assertIsNone(error)
+
+    def test_runtime_initialize_handles_deferred_llm_provider_relation(self):
+        thread = Thread.objects.create(user=self.user, subject="Deferred provider thread")
+        deferred_agent = AgentConfig.objects.get(pk=self.agent.pk)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=thread,
+                agent_config=deferred_agent,
+            ).initialize
+        )()
+
+        self.assertEqual(runtime.provider_client.model, self.provider.model)
+        self.assertEqual(runtime.provider_client.max_context_tokens, self.provider.max_context_tokens)
+
+
+class TerminalExecutorTests(TestCase):
+    def test_terminal_can_list_skills_and_change_directory(self):
+        vfs = VirtualFileSystem(
+            thread=SimpleNamespace(id=1),
+            user=SimpleNamespace(id=1),
+            agent_config=SimpleNamespace(id=42),
+            session_state={"cwd": "/", "history": [], "directories": ["/tmp"]},
+            skill_registry={"mail.md": "# Mail\n", "python.md": "# Python\n"},
+        )
+        executor = TerminalExecutor(vfs=vfs, capabilities=TerminalCapabilities())
+
+        skills_listing = async_to_sync(executor.execute)("ls /skills")
+        cwd = async_to_sync(executor.execute)("cd /tmp")
+        pwd = async_to_sync(executor.execute)("pwd")
+
+        self.assertIn("mail.md", skills_listing)
+        self.assertIn("python.md", skills_listing)
+        self.assertEqual(cwd, "/tmp")
+        self.assertEqual(pwd, "/tmp")
+
+
+class TerminalExecutorCommandTests(TransactionTestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="terminal-user", password="pwd")
+        self.provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="test-key",
+        )
+        self.agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Terminal Command Agent",
+            llm_provider=self.provider,
+            system_prompt="",
+        )
+        self.thread = Thread.objects.create(user=self.user, subject="Terminal thread")
+        self.base_state = {
+            "cwd": "/",
+            "history": [],
+            "directories": ["/tmp"],
+        }
+        self._stored_contents: dict[str, bytes] = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        self.upload_patcher = patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio)
+        self.vfs_upload_patcher = patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio)
+        self.download_patcher = patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content)
+        self.delete_storage_patcher = patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock())
+        self.upload_patcher.start()
+        self.vfs_upload_patcher.start()
+        self.download_patcher.start()
+        self.delete_storage_patcher.start()
+        self.addCleanup(self.upload_patcher.stop)
+        self.addCleanup(self.vfs_upload_patcher.stop)
+        self.addCleanup(self.download_patcher.stop)
+        self.addCleanup(self.delete_storage_patcher.stop)
+
+    def _build_executor(self, capabilities: TerminalCapabilities | None = None):
+        resolved_capabilities = capabilities or TerminalCapabilities()
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+            memory_enabled=resolved_capabilities.has_memory,
+            webdav_tools=resolved_capabilities.webdav_tools,
+        )
+        return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
+
+    def _build_executor_for_thread(
+        self,
+        thread,
+        capabilities: TerminalCapabilities | None = None,
+    ):
+        resolved_capabilities = capabilities or TerminalCapabilities()
+        vfs = VirtualFileSystem(
+            thread=thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+            memory_enabled=resolved_capabilities.has_memory,
+            webdav_tools=resolved_capabilities.webdav_tools,
+        )
+        return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
+
+    def _create_builtin_tool(self, subtype: str, *, name: str, description: str = "") -> Tool:
+        python_path_map = {
+            "email": "nova.plugins.mail",
+            "code_execution": "nova.plugins.python",
+            "date": "nova.plugins.datetime",
+            "browser": "nova.plugins.browser",
+            "memory": "nova.plugins.memory",
+            "searxng": "nova.plugins.search",
+            "webdav": "nova.plugins.webdav",
+            "webapp": "nova.plugins.webapp",
+        }
+        return Tool.objects.create(
+            user=self.user,
+            name=name,
+            description=description or name,
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype=subtype,
+            python_path=python_path_map.get(subtype, ""),
+        )
+
+    def _create_email_tool(
+        self,
+        *,
+        name: str,
+        address: str,
+        imap_server: str = "imap.example.com",
+        smtp_server: str = "smtp.example.com",
+        enable_sending: bool = True,
+    ) -> Tool:
+        tool = self._create_builtin_tool("email", name=name)
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "imap_server": imap_server,
+                "smtp_server": smtp_server,
+                "username": address,
+                "password": "secret",
+                "from_address": address,
+                "enable_sending": enable_sending,
+            },
+        )
+        return tool
+
+    def _create_code_execution_tool(self) -> Tool:
+        tool = self._create_builtin_tool("code_execution", name="Judge0")
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"judge0_url": "https://judge0.example.com", "timeout": 5},
+        )
+        return tool
+
+    def _create_memory_tool(self) -> Tool:
+        return self._create_builtin_tool("memory", name="Memory")
+
+    def _create_webapp_tool(self) -> Tool:
+        return self._create_builtin_tool("webapp", name="WebApp")
+
+    def _create_mcp_tool(self, *, name: str = "Notion MCP", endpoint: str = "https://mcp.example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description=name,
+            tool_type=Tool.ToolType.MCP,
+            endpoint=endpoint,
+            transport_type=Tool.TransportType.STREAMABLE_HTTP,
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            auth_type="token",
+            token="mcp-token",
+        )
+        return tool
+
+    def _create_api_tool(self, *, name: str = "CRM API", endpoint: str = "https://api.example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description=name,
+            tool_type=Tool.ToolType.API,
+            endpoint=endpoint,
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            auth_type="api_key",
+            token="secret-api-key",
+            config={"api_key_name": "X-API-Key", "api_key_in": "header"},
+        )
+        return tool
+
+    def _create_api_operation(
+        self,
+        tool: Tool,
+        *,
+        name: str = "Create invoice",
+        slug: str = "create-invoice",
+        http_method: str = APIToolOperation.HTTPMethod.POST,
+        path_template: str = "/invoices/{invoice_id}",
+        query_parameters: list[str] | None = None,
+        body_parameter: str = "",
+        input_schema: dict | None = None,
+        output_schema: dict | None = None,
+    ) -> APIToolOperation:
+        return APIToolOperation.objects.create(
+            tool=tool,
+            name=name,
+            slug=slug,
+            description=name,
+            http_method=http_method,
+            path_template=path_template,
+            query_parameters=list(query_parameters or ["mode"]),
+            body_parameter=body_parameter,
+            input_schema=input_schema if input_schema is not None else {},
+            output_schema=output_schema if output_schema is not None else {},
+        )
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = self._create_builtin_tool("caldav", name=name)
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_webdav_tool(
+        self,
+        *,
+        name: str = "Nextcloud Docs",
+        root_path: str = "/Documents",
+        allow_create_files: bool = True,
+        allow_create_directories: bool = True,
+        allow_move: bool = True,
+        allow_copy: bool = True,
+        allow_delete: bool = True,
+    ) -> Tool:
+        tool = self._create_builtin_tool("webdav", name=name)
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "server_url": "https://cloud.example.com/remote.php/dav/files/alice",
+                "username": "alice",
+                "app_password": "secret",
+                "root_path": root_path,
+                "allow_create_files": allow_create_files,
+                "allow_create_directories": allow_create_directories,
+                "allow_move": allow_move,
+                "allow_copy": allow_copy,
+                "allow_delete": allow_delete,
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.plugins.calendar",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.plugins.calendar",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.plugins.calendar",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_browser_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="Browser",
+            description="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.plugins.browser",
+        )
+
+    def _create_webapp_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="WebApp",
+            description="WebApp",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webapp",
+            python_path="nova.plugins.webapp",
+        )
+
+    def _create_searxng_tool(self) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name="SearXNG",
+            description="Search",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.plugins.search",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"searxng_url": "https://search.example.com", "num_results": 5},
+        )
+        return tool
+
+    def _create_webapp_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="WebApp",
+            description="WebApp",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webapp",
+            python_path="nova.plugins.webapp",
+        )
+
+    def test_touch_and_tee_create_and_append_root_files(self):
+        executor = self._build_executor()
+
+        created = async_to_sync(executor.execute)("touch note.txt")
+        written = async_to_sync(executor.execute)('tee note.txt --text "hello"')
+        appended = async_to_sync(executor.execute)('tee note.txt --text " world" --append')
+        content = async_to_sync(executor.execute)("cat note.txt")
+
+        self.assertIn("Created empty file /note.txt", created)
+        self.assertIn("Wrote 5 bytes to /note.txt", written)
+        self.assertIn("Wrote 6 bytes to /note.txt", appended)
+        self.assertEqual(content, "hello world")
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("touch /skills/blocked.txt")
+
+    def test_text_shell_redirections_and_pipelines_work_for_common_cases(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('echo "hello" > /note.txt')
+        async_to_sync(executor.execute)('echo "world" >> /note.txt')
+        redirected = async_to_sync(executor.execute)("grep hello < /note.txt")
+        copied = async_to_sync(executor.execute)("cat /note.txt | tee /copy.txt | grep world")
+
+        self.assertEqual(async_to_sync(executor.execute)("cat /note.txt"), "hello\nworld\n")
+        self.assertEqual(async_to_sync(executor.execute)("cat /copy.txt"), "hello\nworld\n")
+        self.assertEqual(redirected, "hello")
+        self.assertEqual(copied, "world")
+
+    def test_cat_supports_line_numbering_with_file_and_stdin(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta\\ngamma"')
+
+        file_result = async_to_sync(executor.execute)("cat -n /tmp/data.csv | tail -1")
+        stdin_result = async_to_sync(executor.execute)("cat -n < /tmp/data.csv | tail -1")
+
+        self.assertEqual(file_result, "3\tgamma")
+        self.assertEqual(stdin_result, "3\tgamma")
+
+    def test_head_and_tail_support_numeric_short_form_with_file_and_stdin(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('tee /tmp/lines.txt --text "1\\n2\\n3\\n4\\n5\\n6"')
+
+        head_file = async_to_sync(executor.execute)("head -5 /tmp/lines.txt")
+        tail_file = async_to_sync(executor.execute)("tail -1 /tmp/lines.txt")
+        head_stdin = async_to_sync(executor.execute)("cat /tmp/lines.txt | head -5")
+        tail_stdin = async_to_sync(executor.execute)("cat /tmp/lines.txt | tail -1")
+
+        self.assertEqual(head_file, "1\n2\n3\n4\n5")
+        self.assertEqual(tail_file, "6")
+        self.assertEqual(head_stdin, "1\n2\n3\n4\n5")
+        self.assertEqual(tail_stdin, "6")
+
+    def test_grep_supports_combined_short_flags_and_head_short_count(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)(
+            'tee /openrouter_activity_2026-04-06.csv --text '
+            '"kind\\ncache-hit\\nCACHE-hit\\ncache-store\\nCache-refresh\\ncache-read\\nCACHE-refresh\\nnetwork"'
+        )
+
+        piped = async_to_sync(executor.execute)(
+            "grep -i cache /openrouter_activity_2026-04-06.csv | head -5"
+        )
+        combined = async_to_sync(executor.execute)(
+            "grep -in cache /openrouter_activity_2026-04-06.csv"
+        )
+
+        self.assertEqual(
+            piped,
+            "\n".join(
+                [
+                    "/openrouter_activity_2026-04-06.csv:cache-hit",
+                    "/openrouter_activity_2026-04-06.csv:CACHE-hit",
+                    "/openrouter_activity_2026-04-06.csv:cache-store",
+                    "/openrouter_activity_2026-04-06.csv:Cache-refresh",
+                    "/openrouter_activity_2026-04-06.csv:cache-read",
+                ]
+            ),
+        )
+        self.assertEqual(
+            combined,
+            "\n".join(
+                [
+                    "/openrouter_activity_2026-04-06.csv:2:cache-hit",
+                    "/openrouter_activity_2026-04-06.csv:3:CACHE-hit",
+                    "/openrouter_activity_2026-04-06.csv:4:cache-store",
+                    "/openrouter_activity_2026-04-06.csv:5:Cache-refresh",
+                    "/openrouter_activity_2026-04-06.csv:6:cache-read",
+                    "/openrouter_activity_2026-04-06.csv:7:CACHE-refresh",
+                ]
+            ),
+        )
+
+    def test_wc_supports_line_counts_for_files_and_pipelines(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)(
+            'tee /openrouter_activity_2026-04-06.csv --text '
+            '"kind\\ncache-hit\\nCACHE-hit\\ncache-store\\nCache-refresh\\ncache-read\\nCACHE-refresh\\nnetwork"'
+        )
+
+        file_result = async_to_sync(executor.execute)(
+            "wc -l /openrouter_activity_2026-04-06.csv"
+        )
+        pipeline_result = async_to_sync(executor.execute)(
+            "grep cache /openrouter_activity_2026-04-06.csv | wc -l"
+        )
+
+        self.assertEqual(file_result, "8 /openrouter_activity_2026-04-06.csv")
+        self.assertEqual(pipeline_result, "3")
+
+    def test_rm_supports_force_flag_and_multiple_paths(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /out")
+        async_to_sync(executor.execute)('echo "hello" > /out/index.html')
+
+        removed = async_to_sync(executor.execute)("rm -f /out/index.html /out/missing.html")
+        missing_only = async_to_sync(executor.execute)("rm -f /out/missing.html")
+
+        self.assertEqual(removed, "Removed /out/index.html")
+        self.assertEqual(missing_only, "")
+        self.assertEqual(async_to_sync(executor.execute)("ls /out"), "")
+
+    def test_rm_force_keeps_real_path_errors(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError) as protected_error:
+            async_to_sync(executor.execute)("rm -f /tmp")
+        self.assertIn("Cannot remove protected path: /tmp", str(protected_error.exception))
+
+        async_to_sync(executor.execute)("mkdir /out")
+        async_to_sync(executor.execute)('echo "hello" > /out/index.html')
+        with self.assertRaises(TerminalCommandError) as non_empty_error:
+            async_to_sync(executor.execute)("rm -f /out")
+        self.assertIn("Directory not empty: /out", str(non_empty_error.exception))
+
+    def test_terminal_reports_clean_usage_errors_for_unix_like_flags(self):
+        executor = self._build_executor()
+        async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta"')
+
+        with self.assertRaises(TerminalCommandError) as wc_usage:
+            async_to_sync(executor.execute)("wc /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as wc_flag:
+            async_to_sync(executor.execute)("wc -x /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as cat_flag:
+            async_to_sync(executor.execute)("cat -x /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as head_flag:
+            async_to_sync(executor.execute)("head -x /tmp/data.csv")
+        with self.assertRaises(TerminalCommandError) as rm_usage:
+            async_to_sync(executor.execute)("rm")
+
+        self.assertEqual(str(wc_usage.exception), "Usage: wc -l [<path>]")
+        self.assertEqual(str(wc_flag.exception), "Unsupported wc flag: -x")
+        self.assertEqual(str(cat_flag.exception), "Unsupported cat flag: -x")
+        self.assertEqual(str(head_flag.exception), "Unsupported head flag: -x")
+        self.assertEqual(str(rm_usage.exception), "Usage: rm [-f] <path> [<path> ...]")
+
+    def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("touch /note.txt")
+        listing = async_to_sync(executor.execute)("ls /")
+
+        self.assertIn("skills/", listing)
+        self.assertIn("tmp/", listing)
+        self.assertIn("note.txt", listing)
+        self.assertNotIn("workspace/", listing)
+        self.assertNotIn("thread/", listing)
+
+    def test_ls_supports_common_flags_and_aliases(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /docs")
+        async_to_sync(executor.execute)('echo "hello" > /note.txt')
+
+        listing = async_to_sync(executor.execute)("ls -la /")
+        file_listing = async_to_sync(executor.execute)("ls -l /note.txt")
+        alias_listing = async_to_sync(executor.execute)("la /")
+
+        self.assertIn("drwxr-xr-x - - ./", listing)
+        self.assertIn("drwxr-xr-x - - ../", listing)
+        self.assertIn("-rw-r--r-- 6 text/plain note.txt", file_listing)
+        self.assertIn("note.txt", alias_listing)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("ls -h")
+
+    def test_memory_mount_is_visible_only_when_memory_capability_is_enabled(self):
+        plain_executor = self._build_executor()
+        memory_executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        plain_listing = async_to_sync(plain_executor.execute)("ls /")
+        memory_listing = async_to_sync(memory_executor.execute)("ls /")
+
+        self.assertNotIn("memory/", plain_listing)
+        self.assertIn("memory/", memory_listing)
+
+    def test_memory_paths_are_reserved_without_memory_capability(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("touch /memory/editor.md")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)('tee /memory/editor.md --text "Vim"')
+
+    def test_memory_mount_supports_ls_cat_and_grep(self):
+        MemoryDirectory.objects.create(
+            user=self.user,
+            virtual_path="/memory/projects",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        document = MemoryDocument.objects.create(
+            user=self.user,
+            virtual_path="/memory/projects/editor.md",
+            title="Editor",
+            content_markdown="# Editor\n\nPreferred editor is Vim",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        memory_root = async_to_sync(executor.execute)("ls /memory")
+        memory_theme = async_to_sync(executor.execute)("ls /memory/projects")
+        memory_doc = async_to_sync(executor.execute)("cat /memory/projects/editor.md")
+        grep_result = async_to_sync(executor.execute)('grep -r -n "Vim" /memory')
+
+        self.assertIn("README.md", memory_root)
+        self.assertIn("projects/", memory_root)
+        self.assertIn("editor.md", memory_theme)
+        self.assertIn("Preferred editor is Vim", memory_doc)
+        self.assertIn("/memory/projects/editor.md", grep_result)
+        self.assertEqual(document.id, MemoryDocument.objects.get(id=document.id).id)
+
+    def test_tee_and_rm_manage_memory_items(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        written = async_to_sync(executor.execute)('tee /memory/editor.md --text "# Editor\\n\\nVim"')
+        content = async_to_sync(executor.execute)("cat /memory/editor.md")
+        removed = async_to_sync(executor.execute)("rm /memory/editor.md")
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/editor.md")
+        self.assertIn("/memory/editor.md", written)
+        self.assertIn("Vim", content)
+        self.assertEqual(removed, "Removed /memory/editor.md")
+        self.assertEqual(document.status, MemoryRecordStatus.ARCHIVED)
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_memory_tee_decodes_escaped_newlines_and_builds_chunks(self, mocked_provider):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        result = async_to_sync(executor.execute)(
+            'tee /memory/calendrier.md --text "# Calendrier\\n\\n## Preference\\nTexte"'
+        )
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/calendrier.md")
+        chunks = list(MemoryChunk.objects.filter(document=document).order_by("position"))
+
+        self.assertIn("/memory/calendrier.md", result)
+        self.assertIn("\n\n## Preference\nTexte", document.content_markdown)
+        self.assertNotIn("\\n", document.content_markdown)
+        self.assertTrue(any((chunk.heading or "") == "Preference" for chunk in chunks))
+        self.assertGreater(len(chunks), 0)
+        mocked_provider.assert_awaited()
+
+    def test_memory_write_surfaces_embedding_queue_warning_in_terminal_output(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+        executor.vfs.write_file = AsyncMock(
+            return_value=SimpleNamespace(
+                path="/memory/editor.md",
+                warnings=(
+                    "Warning: memory embeddings remain pending because background calculation could not be queued immediately.",
+                ),
+            )
+        )
+
+        result = async_to_sync(executor.execute)(
+            'tee /memory/editor.md --text "# Editor\\n\\nVim"'
+        )
+
+        self.assertIn("Wrote", result)
+        self.assertIn("/memory/editor.md", result)
+        self.assertIn("memory embeddings remain pending", result)
+        executor.vfs.write_file.assert_awaited_once()
+
+    def test_touch_and_mv_manage_memory_items(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        async_to_sync(executor.execute)("mkdir /memory/tools")
+        created = async_to_sync(executor.execute)("touch /memory/editor.md")
+        moved = async_to_sync(executor.execute)("mv /memory/editor.md /memory/tools/editor.md")
+        content = async_to_sync(executor.execute)("cat /memory/tools/editor.md")
+
+        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/tools/editor.md")
+        self.assertEqual(created, "Created empty file /memory/editor.md")
+        self.assertEqual(moved, "Moved to /memory/tools/editor.md")
+        self.assertEqual(content, "")
+        self.assertEqual(document.virtual_path, "/memory/tools/editor.md")
+
+    def test_memory_supports_nested_directories_when_created(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        async_to_sync(executor.execute)("mkdir /memory/preferences")
+        async_to_sync(executor.execute)("mkdir /memory/preferences/editors")
+        written = async_to_sync(executor.execute)(
+            'tee /memory/preferences/editors/vim.md --text "# Vim\\n\\nFast editor"'
+        )
+
+        self.assertIn("/memory/preferences/editors/vim.md", written)
+
+    def test_memory_search_formats_results_with_paths(self):
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        with patch(
+            "nova.runtime.terminal.search_memory_items",
+            new_callable=AsyncMock,
+            return_value={
+                "results": [
+                    {
+                        "path": "/memory/projects/editor.md",
+                        "section_heading": "Editor",
+                        "section_anchor": "editor",
+                        "snippet": "Uses Vim",
+                    }
+                ],
+                "notes": [],
+            },
+        ) as mocked_search:
+            result = async_to_sync(executor.execute)(
+                'memory search "editor preference" --limit 2 --under /memory/projects'
+            )
+
+        self.assertIn("/memory/projects/editor.md", result)
+        self.assertIn("Uses Vim", result)
+        self.assertEqual(mocked_search.await_args.kwargs["query"], "editor preference")
+        self.assertEqual(mocked_search.await_args.kwargs["under"], "/memory/projects")
+
+    def test_search_command_formats_results_and_supports_output(self):
+        searxng_tool = self._create_searxng_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(searxng_tool=searxng_tool)
+        )
+
+        with patch(
+            "nova.runtime.terminal.search_web",
+            new_callable=AsyncMock,
+            return_value={
+                "query": "nova privacy",
+                "results": [
+                    {
+                        "title": "Nova docs",
+                        "url": "https://example.com/nova",
+                        "snippet": "Privacy-first agent platform",
+                        "engine": "searx",
+                        "score": 0.9,
+                    }
+                ],
+                "limit": 1,
+            },
+        ) as mocked_search:
+            listing = async_to_sync(executor.execute)("search nova privacy --limit 1")
+            written = async_to_sync(executor.execute)(
+                "search nova privacy --limit 1 --output /search/results.json"
+            )
+
+        self.assertIn("1. Nova docs / https://example.com/nova / Privacy-first agent platform", listing)
+        self.assertIn("/search/results.json", written)
+        stored = async_to_sync(executor.execute)("cat /search/results.json")
+        self.assertEqual(json.loads(stored)["query"], "nova privacy")
+        self.assertEqual(mocked_search.await_args.kwargs["limit"], 1)
+
+    def test_mcp_commands_support_schema_refresh_call_and_extract_output(self):
+        mcp_tool = self._create_mcp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(mcp_tools=[mcp_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/input.json",
+            b'{"query":"roadmap"}',
+            mime_type="application/json",
+        )
+
+        discovered_tools = [
+            {
+                "name": "list_pages",
+                "description": "List pages",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            }
+        ]
+        schema_payload = {
+            "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
+            "tool": {
+                "name": "list_pages",
+                "description": "List pages",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "output_schema": {"type": "object"},
+            },
+        }
+        call_payload = {
+            "payload": {
+                "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
+                "tool": {"name": "export_report", "description": "Export report"},
+                "input": {"query": "roadmap"},
+                "result": {"report": "ready"},
+            },
+            "extractable_artifacts": [
+                SimpleNamespace(
+                    path="report.txt",
+                    content=b"report ready",
+                    mime_type="text/plain",
+                )
+            ],
+        }
+
+        with (
+            patch(
+                "nova.runtime.terminal.mcp_service.list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=discovered_tools,
+            ) as mocked_list,
+            patch(
+                "nova.runtime.terminal.mcp_service.describe_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=schema_payload,
+            ) as mocked_schema,
+            patch(
+                "nova.runtime.terminal.mcp_service.call_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=call_payload,
+            ) as mocked_call,
+        ):
+            servers = async_to_sync(executor.execute)("mcp servers")
+            tools = async_to_sync(executor.execute)('mcp tools --server "Notion MCP"')
+            schema_written = async_to_sync(executor.execute)(
+                'mcp schema list_pages --server "Notion MCP" > /tmp/mcp-schema.json'
+            )
+            called = async_to_sync(executor.execute)(
+                'mcp call export_report --server "Notion MCP" --input-file /tmp/input.json '
+                '--extract-to /reports --output /tmp/mcp-result.json'
+            )
+            refreshed = async_to_sync(executor.execute)('mcp refresh --server "Notion MCP"')
+
+        self.assertIn("Notion MCP", servers)
+        self.assertIn("list_pages", tools)
+        self.assertIn("/tmp/mcp-schema.json", schema_written)
+        self.assertIn("/tmp/mcp-result.json", called)
+        self.assertIn("/reports/report.txt", called)
+        self.assertIn("Refreshed Notion MCP", refreshed)
+        self.assertEqual(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/mcp-schema.json"))["tool"]["name"],
+            "list_pages",
+        )
+        self.assertEqual(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/mcp-result.json"))["result"]["report"],
+            "ready",
+        )
+        self.assertEqual(
+            async_to_sync(executor.execute)("cat /reports/report.txt"),
+            "report ready",
+        )
+        self.assertEqual(mocked_call.await_args.kwargs["payload"], {"query": "roadmap"})
+        self.assertEqual(mocked_schema.await_args.kwargs["tool_name"], "list_pages")
+        self.assertTrue(any(call.kwargs.get("force_refresh") for call in mocked_list.await_args_list))
+
+    def test_api_commands_support_schema_pipes_and_redirected_calls(self):
+        api_tool = self._create_api_tool()
+        self._create_api_operation(
+            api_tool,
+            name="Create invoice",
+            slug="create_invoice",
+            http_method=APIToolOperation.HTTPMethod.POST,
+            path_template="/invoices/{invoice_id}",
+            query_parameters=["mode"],
+            body_parameter="payload",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(api_tools=[api_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/payload.json",
+            b'{"invoice_id":42,"mode":"draft","payload":{"amount":199}}',
+            mime_type="application/json",
+        )
+
+        operations_payload = [
+            {
+                "id": 1,
+                "name": "Create invoice",
+                "slug": "create_invoice",
+                "description": "Create invoice",
+                "http_method": "POST",
+                "path_template": "/invoices/{invoice_id}",
+            }
+        ]
+        schema_payload = {
+            "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
+            "operation": {
+                "id": 1,
+                "name": "Create invoice",
+                "slug": "create_invoice",
+                "description": "Create invoice",
+                "http_method": "POST",
+                "path_template": "/invoices/{invoice_id}",
+                "query_parameters": ["mode"],
+                "body_parameter": "payload",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        }
+        call_result = {
+            "payload": {
+                "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
+                "operation": {
+                    "id": 1,
+                    "name": "Create invoice",
+                    "slug": "create_invoice",
+                    "http_method": "POST",
+                    "path_template": "/invoices/{invoice_id}",
+                },
+                "request": {
+                    "url": "https://api.example.com/invoices/42?mode=draft",
+                    "method": "POST",
+                    "query": {"mode": "draft"},
+                    "body": {"amount": 199},
+                },
+                "response": {
+                    "status_code": 200,
+                    "content_type": "application/json",
+                    "headers": {"content-type": "application/json"},
+                    "body_kind": "json",
+                    "json": {"ok": True, "invoice_id": 42},
+                    "text": "{\"ok\": true, \"invoice_id\": 42}",
+                    "size": 31,
+                    "filename": "response.json",
+                },
+            },
+            "body_kind": "json",
+            "binary_content": b'{"ok": true, "invoice_id": 42}',
+            "filename": "response.json",
+            "content_type": "application/json",
+        }
+
+        with (
+            patch(
+                "nova.runtime.terminal.api_tools_service.list_api_operations",
+                new_callable=AsyncMock,
+                return_value=operations_payload,
+            ),
+            patch(
+                "nova.runtime.terminal.api_tools_service.describe_api_operation",
+                new_callable=AsyncMock,
+                return_value=schema_payload,
+            ) as mocked_schema,
+            patch(
+                "nova.runtime.terminal.api_tools_service.call_api_operation",
+                new_callable=AsyncMock,
+                return_value=call_result,
+            ) as mocked_call,
+        ):
+            services = async_to_sync(executor.execute)("api services")
+            filtered = async_to_sync(executor.execute)('api operations --service "CRM API" | grep create_invoice')
+            schema_written = async_to_sync(executor.execute)(
+                'api schema create_invoice --service "CRM API" > /tmp/api-schema.json'
+            )
+            call_written = async_to_sync(executor.execute)(
+                'api call create_invoice --service "CRM API" < /tmp/payload.json > /tmp/api-result.json'
+            )
+
+        self.assertIn("CRM API", services)
+        self.assertIn("create_invoice", filtered)
+        self.assertIn("/tmp/api-schema.json", schema_written)
+        self.assertIn("/tmp/api-result.json", call_written)
+        self.assertEqual(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/api-schema.json"))["operation"]["slug"],
+            "create_invoice",
+        )
+        self.assertTrue(
+            json.loads(async_to_sync(executor.execute)("cat /tmp/api-result.json"))["response"]["json"]["ok"]
+        )
+        self.assertEqual(
+            mocked_call.await_args.kwargs["payload"],
+            {"invoice_id": 42, "mode": "draft", "payload": {"amount": 199}},
+        )
+        self.assertEqual(mocked_schema.await_args.kwargs["operation_selector"], "create_invoice")
+
+    def test_api_call_rejects_binary_shell_redirection_without_output(self):
+        api_tool = self._create_api_tool()
+        self._create_api_operation(
+            api_tool,
+            name="Export PDF",
+            slug="export_pdf",
+            http_method=APIToolOperation.HTTPMethod.GET,
+            path_template="/invoices/{invoice_id}/pdf",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(api_tools=[api_tool])
+        )
+
+        with patch(
+            "nova.runtime.terminal.api_tools_service.call_api_operation",
+            new_callable=AsyncMock,
+            return_value={
+                "payload": {
+                    "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
+                    "operation": {"slug": "export_pdf", "http_method": "GET"},
+                    "request": {"url": "https://api.example.com/invoices/42/pdf", "method": "GET"},
+                    "response": {
+                        "status_code": 200,
+                        "content_type": "application/pdf",
+                        "headers": {"content-type": "application/pdf"},
+                        "body_kind": "binary",
+                        "json": None,
+                        "text": None,
+                        "size": 7,
+                        "filename": "invoice.pdf",
+                    },
+                },
+                "body_kind": "binary",
+                "binary_content": b"%PDF...",
+                "filename": "invoice.pdf",
+                "content_type": "application/pdf",
+            },
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)(
+                    'api call export_pdf --service "CRM API" invoice_id=42 > /tmp/invoice.bin'
+                )
+
+        self.assertIn("cannot be piped or redirected", str(cm.exception))
+
+    def test_mcp_and_api_require_explicit_selector_when_multiple_services_exist(self):
+        first_mcp = self._create_mcp_tool(name="Notion MCP")
+        second_mcp = self._create_mcp_tool(name="Drive MCP", endpoint="https://mcp-drive.example.com")
+        first_api = self._create_api_tool(name="CRM API")
+        second_api = self._create_api_tool(name="Billing API", endpoint="https://billing.example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(
+                mcp_tools=[first_mcp, second_mcp],
+                api_tools=[first_api, second_api],
+            )
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mcp tools")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("api operations")
+
+    def test_browse_open_result_requires_search_and_browse_session_is_run_local(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        searxng_tool = self._create_searxng_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool, searxng_tool=searxng_tool)
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("browse open --result 1")
+        executor._browser_session = None
+
+        fake_session = _FakeBrowserSession()
+        with (
+            patch(
+                "nova.runtime.terminal.search_web",
+                new_callable=AsyncMock,
+                return_value={
+                    "query": "nova",
+                    "results": [
+                        {
+                            "title": "Nova docs",
+                            "url": "https://example.com/nova",
+                            "snippet": "Docs",
+                            "engine": "searx",
+                            "score": None,
+                        }
+                    ],
+                    "limit": 1,
+                },
+            ),
+            patch("nova.runtime.terminal.BrowserSession", return_value=fake_session),
+        ):
+            search_result = async_to_sync(executor.execute)("search nova")
+            opened = async_to_sync(executor.execute)("browse open --result 1")
+            current = async_to_sync(executor.execute)("browse current")
+
+        self.assertIn("Nova docs", search_result)
+        self.assertIn("https://example.com/result", opened)
+        self.assertEqual(current, "https://example.com/result")
+        fake_session.open_search_result.assert_awaited_once()
+
+        next_run_executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fresh_session = _FakeBrowserSession()
+        fresh_session.current = AsyncMock(
+            side_effect=BrowserSessionError(
+                "No active page in the current browser session. Use `browse open` first."
+            )
+        )
+        with patch(
+            "nova.runtime.terminal.BrowserSession",
+            return_value=fresh_session,
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(next_run_executor.execute)("browse current")
+
+    def test_browse_text_links_elements_and_click_support_output(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
+            opened = async_to_sync(executor.execute)("browse open https://example.com")
+            text_preview = async_to_sync(executor.execute)("browse text")
+            text_written = async_to_sync(executor.execute)("browse text --output /page.txt")
+            links_preview = async_to_sync(executor.execute)("browse links --absolute")
+            links_written = async_to_sync(executor.execute)("browse links --absolute --output /links.json")
+            elements_preview = async_to_sync(executor.execute)(
+                'browse elements "a" --attr href --attr innerText'
+            )
+            elements_written = async_to_sync(executor.execute)(
+                'browse elements "a" --attr href --attr innerText --output /elements.json'
+            )
+            clicked = async_to_sync(executor.execute)('browse click "a.link"')
+
+        self.assertIn("Opened https://example.com", opened)
+        self.assertIn("Page text", text_preview)
+        self.assertIn("/page.txt", text_written)
+        self.assertIn("https://example.com/a", links_preview)
+        self.assertIn("/links.json", links_written)
+        self.assertIn('"selector": "a"', elements_preview)
+        self.assertIn("/elements.json", elements_written)
+        self.assertIn("Clicked element", clicked)
+        self.assertIn("Page text", async_to_sync(executor.execute)("cat /page.txt"))
+        self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /links.json"))[0]["href"], "https://example.com/a")
+        self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /elements.json"))["selector"], "a")
+
+    def test_browse_text_supports_shell_redirection(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+        fake_session.extract_text = AsyncMock(return_value="A" * 9005)
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
+            async_to_sync(executor.execute)("browse open https://example.com")
+            written = async_to_sync(executor.execute)("browse text > /page.txt")
+
+        stored = async_to_sync(executor.execute)("cat /page.txt")
+        self.assertIn("/page.txt", written)
+        self.assertEqual(len(stored), 9005)
+
+    def test_webapp_commands_expose_show_list_and_delete_live_apps(self):
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webapp_tool=webapp_tool)
+        )
+        channel_layer = _FakeChannelLayer()
+        executor.realtime_task_id = "task-123"
+        executor.realtime_channel_layer = channel_layer
+
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "hello"')
+        async_to_sync(executor.execute)('tee /webapps/demo/styles.css --text "body { color: red; }"')
+
+        exposed = async_to_sync(executor.execute)('webapp expose /webapps/demo --name "Demo App"')
+        webapp = WebApp.objects.get(thread=self.thread)
+        listed = async_to_sync(executor.execute)("webapp list")
+        shown = async_to_sync(executor.execute)(f"webapp show {webapp.slug}")
+
+        self.assertIn("Exposed webapp", exposed)
+        self.assertIn(webapp.slug, exposed)
+        self.assertIn("Demo App", listed)
+        self.assertIn(webapp.slug, shown)
+        self.assertIn("source_root=/webapps/demo", shown)
+        self.assertIn("entry_path=index.html", shown)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)(f"webapp delete {webapp.slug}")
+
+        deleted = async_to_sync(executor.execute)(f"webapp delete {webapp.slug} --confirm")
+        self.assertEqual(deleted, f"Deleted webapp {webapp.slug}")
+        self.assertFalse(WebApp.objects.filter(id=webapp.id).exists())
+
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertIn("webapp_public_url", event_types)
+        self.assertIn("webapp_update", event_types)
+        self.assertIn("webapps_update", event_types)
+
+    def test_webapp_file_mutation_and_root_move_refresh_live_binding(self):
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webapp_tool=webapp_tool)
+        )
+        channel_layer = _FakeChannelLayer()
+        executor.realtime_task_id = "task-456"
+        executor.realtime_channel_layer = channel_layer
+
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "hello"')
+        async_to_sync(executor.execute)("webapp expose /webapps/demo")
+        webapp = WebApp.objects.get(thread=self.thread)
+
+        channel_layer.messages.clear()
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "updated"')
+        self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
+
+        channel_layer.messages.clear()
+        async_to_sync(executor.execute)("mkdir /sites")
+        moved = async_to_sync(executor.execute)("mv /webapps/demo /sites")
+
+        webapp.refresh_from_db()
+        self.assertEqual(moved, "Moved to /sites/demo")
+        self.assertEqual(webapp.source_root, "/sites/demo")
+        self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
+
+    def test_webdav_mount_is_visible_only_when_capability_is_enabled(self):
+        plain_executor = self._build_executor()
+        webdav_tool = self._create_webdav_tool()
+        webdav_executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        plain_listing = async_to_sync(plain_executor.execute)("ls /")
+        webdav_listing = async_to_sync(webdav_executor.execute)("ls /")
+
+        self.assertNotIn("webdav/", plain_listing)
+        self.assertIn("webdav/", webdav_listing)
+
+    def test_webdav_root_lists_mounts_and_suffixes_collisions(self):
+        first_tool = self._create_webdav_tool(name="Docs")
+        second_tool = self._create_webdav_tool(name="Docs")
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[first_tool, second_tool])
+        )
+
+        listing = async_to_sync(executor.execute)("ls /webdav")
+
+        self.assertIn("docs/", listing)
+        self.assertIn(f"docs-{second_tool.id}/", listing)
+
+    def test_webdav_paths_are_reserved_without_capability(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("ls /webdav")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)('tee /webdav/docs/report.txt --text "hello"')
+
+    def test_webdav_listing_and_cat_use_filesystem_commands(self):
+        webdav_tool = self._create_webdav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        with (
+            patch(
+                "nova.runtime.vfs.list_webdav_directory",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "name": "notes.txt",
+                        "path": "/notes.txt",
+                        "type": "file",
+                        "mime_type": "text/plain",
+                        "size": 12,
+                    },
+                    {
+                        "name": "archive",
+                        "path": "/archive",
+                        "type": "directory",
+                        "mime_type": None,
+                        "size": None,
+                    },
+                ],
+            ),
+            patch(
+                "nova.runtime.vfs.read_webdav_text_file",
+                new_callable=AsyncMock,
+                return_value="hello from remote",
+            ),
+        ):
+            listing = async_to_sync(executor.execute)("ls /webdav/nextcloud-docs")
+            content = async_to_sync(executor.execute)("cat /webdav/nextcloud-docs/notes.txt")
+
+        self.assertIn("notes.txt", listing)
+        self.assertIn("archive/", listing)
+        self.assertEqual(content, "hello from remote")
+
+    def test_webdav_cat_reports_binary_files_cleanly(self):
+        webdav_tool = self._create_webdav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        with patch(
+            "nova.runtime.vfs.read_webdav_text_file",
+            new_callable=AsyncMock,
+            side_effect=ValueError(
+                "Binary file cannot be displayed as text: /report.pdf (application/pdf, 8 bytes)"
+            ),
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)("cat /webdav/nextcloud-docs/report.pdf")
+
+        self.assertIn("Binary file cannot be displayed as text", str(cm.exception))
+
+    def test_webdav_tee_mkdir_rm_and_same_mount_copy_honor_permissions(self):
+        write_blocked = self._create_webdav_tool(name="Write Blocked", allow_create_files=False)
+        dir_blocked = self._create_webdav_tool(name="Dir Blocked", allow_create_directories=False)
+        delete_blocked = self._create_webdav_tool(name="Delete Blocked", allow_delete=False)
+        copy_blocked = self._create_webdav_tool(name="Copy Blocked", allow_copy=False)
+
+        write_executor = self._build_executor(TerminalCapabilities(webdav_tools=[write_blocked]))
+        dir_executor = self._build_executor(TerminalCapabilities(webdav_tools=[dir_blocked]))
+        delete_executor = self._build_executor(TerminalCapabilities(webdav_tools=[delete_blocked]))
+        copy_executor = self._build_executor(TerminalCapabilities(webdav_tools=[copy_blocked]))
+
+        with patch(
+            "nova.runtime.vfs.stat_webdav_path",
+            new_callable=AsyncMock,
+            return_value={"exists": False, "path": "/report.txt"},
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(write_executor.execute)('tee /webdav/write-blocked/report.txt --text "hello"')
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(dir_executor.execute)("mkdir /webdav/dir-blocked/archive")
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(delete_executor.execute)("rm /webdav/delete-blocked/report.txt")
+        with (
+            patch(
+                "nova.runtime.vfs.stat_webdav_path",
+                new_callable=AsyncMock,
+                return_value={"exists": True, "type": "file", "path": "/a.txt", "mime_type": "text/plain"},
+            ),
+            patch(
+                "nova.runtime.vfs.webdav_copy_path",
+                new_callable=AsyncMock,
+                side_effect=ValueError("This WebDAV tool does not allow copying paths."),
+            ),
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(copy_executor.execute)(
+                    "cp /webdav/copy-blocked/a.txt /webdav/copy-blocked/b.txt"
+                )
+
+    def test_webdav_cross_boundary_copy_and_move_use_local_filesystem_semantics(self):
+        webdav_tool = self._create_webdav_tool(name="Docs")
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+        async_to_sync(executor.execute)('tee /report.txt --text "hello remote"')
+
+        def _fake_stat(_tool, path):
+            normalized = str(path)
+            if normalized == "/remote.txt":
+                return {"exists": True, "type": "file", "path": normalized, "mime_type": "text/plain"}
+            return {"exists": False, "path": normalized}
+
+        with (
+            patch(
+                "nova.runtime.vfs.write_webdav_bytes",
+                new_callable=AsyncMock,
+                return_value={
+                    "status": "ok",
+                    "http_status": 201,
+                    "path": "/report.txt",
+                    "mime_type": "text/plain",
+                    "size": 12,
+                },
+            ) as mocked_remote_write,
+            patch(
+                "nova.runtime.vfs.stat_webdav_path",
+                new_callable=AsyncMock,
+                side_effect=_fake_stat,
+            ),
+            patch(
+                "nova.runtime.vfs.read_webdav_binary_file",
+                new_callable=AsyncMock,
+                return_value={
+                    "path": "/remote.txt",
+                    "content": b"from remote",
+                    "mime_type": "text/plain",
+                    "size": 11,
+                },
+            ),
+            patch(
+                "nova.runtime.vfs.webdav_delete_path",
+                new_callable=AsyncMock,
+                return_value={"status": "ok", "http_status": 204, "path": "/remote.txt"},
+            ) as mocked_remote_delete,
+        ):
+            copied_remote = async_to_sync(executor.execute)("cp /report.txt /webdav/docs/report.txt")
+            copied_local = async_to_sync(executor.execute)("cp /webdav/docs/remote.txt /local.txt")
+            moved_local = async_to_sync(executor.execute)("mv /webdav/docs/remote.txt /moved.txt")
+
+        self.assertIn("/webdav/docs/report.txt", copied_remote)
+        self.assertIn("/local.txt", copied_local)
+        self.assertIn("/moved.txt", moved_local)
+        self.assertEqual(async_to_sync(executor.execute)("cat /local.txt"), "from remote")
+        self.assertEqual(async_to_sync(executor.execute)("cat /moved.txt"), "from remote")
+        mocked_remote_write.assert_awaited()
+        mocked_remote_delete.assert_awaited_once()
+
+    def test_webdav_find_and_grep_surface_recursive_limit_errors(self):
+        webdav_tool = self._create_webdav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webdav_tools=[webdav_tool])
+        )
+
+        with patch(
+            "nova.runtime.vfs.find_webdav_paths",
+            new_callable=AsyncMock,
+            side_effect=ValueError(
+                "WebDAV recursive traversal exceeded 500 paths. Please target a smaller sub-directory."
+            ),
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)('grep -r "note" /webdav/nextcloud-docs')
+
+        self.assertIn("500 paths", str(cm.exception))
+
+    def test_copy_and_move_preserve_source_basename_for_directory_destinations(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('tee /a.txt --text "hello"')
+        async_to_sync(executor.execute)("mkdir /docs")
+
+        moved = async_to_sync(executor.execute)("mv /a.txt /docs")
+        copied = async_to_sync(executor.execute)("cp /docs/a.txt /")
+
+        self.assertEqual(moved, "Moved to /docs/a.txt")
+        self.assertEqual(copied, "Copied to /a.txt")
+        self.assertEqual(async_to_sync(executor.execute)("cat /docs/a.txt"), "hello")
+        self.assertEqual(async_to_sync(executor.execute)("cat /a.txt"), "hello")
+        self.assertNotIn("\n\n", async_to_sync(executor.execute)("ls /docs"))
+
+    def test_date_command_supports_native_formats(self):
+        executor = self._build_executor(
+            TerminalCapabilities(date_time_tool=object())
+        )
+
+        default_output = async_to_sync(executor.execute)("date")
+        utc_output = async_to_sync(executor.execute)("date -u")
+        date_only = async_to_sync(executor.execute)("date +%F")
+        time_only = async_to_sync(executor.execute)("date +%T")
+
+        self.assertRegex(default_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+$")
+        self.assertRegex(utc_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$")
+        self.assertRegex(date_only, r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(time_only, r"^\d{2}:\d{2}:\d{2}$")
+
+    def test_terminal_rejects_unsupported_shell_syntax_patterns(self):
+        executor = self._build_executor()
+
+        for command in [
+            "pwd && ls",
+            "pwd || ls",
+            "pwd ; ls",
+            "echo $(pwd)",
+            "echo `pwd`",
+        ]:
+            with self.subTest(command=command):
+                with self.assertRaises(TerminalCommandError):
+                    async_to_sync(executor.execute)(command)
+
+    def test_terminal_failure_metrics_aggregate_and_sanitize_examples(self):
+        executor = self._build_executor()
+
+        for command in [
+            "unknowncmd --token secret-value",
+            "unknowncmd --token secret-value",
+            "ls -h",
+        ]:
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(executor.execute)(command)
+
+        unknown_metric = TerminalCommandFailureMetric.objects.get(
+            head_command="unknowncmd",
+            failure_kind="unknown_command",
+        )
+        invalid_metric = TerminalCommandFailureMetric.objects.get(
+            head_command="ls",
+            failure_kind="invalid_arguments",
+        )
+
+        self.assertEqual(unknown_metric.count, 2)
+        self.assertEqual(invalid_metric.count, 1)
+        self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
+        self.assertNotIn("secret-value", " ".join(unknown_metric.recent_examples))
+
+    def test_terminal_failure_metrics_record_unsupported_syntax(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("pwd && ls")
+
+        metric = TerminalCommandFailureMetric.objects.get(
+            head_command="pwd",
+            failure_kind="unsupported_syntax",
+        )
+
+        self.assertEqual(metric.count, 1)
+        self.assertIn("not supported", metric.last_error)
+
+    def test_history_commands_are_available_in_continuous_mode(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous thread",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        executor = self._build_executor_for_thread(continuous_thread)
+
+        with patch(
+            "nova.runtime.terminal.conversation_search",
+            new_callable=AsyncMock,
+            return_value={
+                "results": [
+                    {
+                        "kind": "message",
+                        "day_label": "2026-04-04",
+                        "day_segment_id": 5,
+                        "message_id": 42,
+                        "snippet": "important note",
+                    }
+                ],
+                "notes": [],
+            },
+        ) as mocked_search:
+            search_result = async_to_sync(executor.execute)(
+                'history search "important note" --limit 2'
+            )
+
+        self.assertIn("message_id=42", search_result)
+        self.assertIn("important note", search_result)
+        self.assertEqual(mocked_search.await_args.kwargs["query"], "important note")
+        self.assertEqual(mocked_search.await_args.kwargs["limit"], 2)
+        self.assertEqual(mocked_search.await_args.kwargs["agent"].thread, continuous_thread)
+
+        with patch(
+            "nova.runtime.terminal.conversation_get",
+            new_callable=AsyncMock,
+            return_value={
+                "messages": [
+                    {
+                        "message_id": 42,
+                        "role": Actor.USER,
+                        "content": "important note",
+                        "created_at": "2026-04-04T10:00:00+00:00",
+                    }
+                ],
+                "truncated": False,
+            },
+        ) as mocked_get:
+            get_result = async_to_sync(executor.execute)(
+                "history get --message 42 --limit 5"
+            )
+
+        self.assertIn("[42]", get_result)
+        self.assertIn("important note", get_result)
+        self.assertEqual(mocked_get.await_args.kwargs["message_id"], 42)
+        self.assertEqual(mocked_get.await_args.kwargs["limit"], 5)
+
+    def test_mail_accounts_and_multi_mailbox_selection_are_explicit(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        personal_tool = self._create_email_tool(name="Personal Mail", address="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[work_tool, personal_tool])
+        )
+
+        accounts = async_to_sync(executor.execute)("mail accounts")
+        self.assertIn("work@example.com", accounts)
+        self.assertIn("personal@example.com", accounts)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mail list")
+
+        with patch("nova.plugins.mail.service.list_emails", new_callable=AsyncMock, return_value="ok") as mocked_list:
+            listed = async_to_sync(executor.execute)("mail list --mailbox personal@example.com --limit 5")
+
+        self.assertEqual(listed, "ok")
+        mocked_list.assert_awaited_once_with(self.user, personal_tool.id, folder="INBOX", limit=5)
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mail list --mailbox missing@example.com")
+
+    def test_mail_rejects_ambiguous_mailbox_identifiers(self):
+        first_tool = self._create_email_tool(
+            name="Shared Mail A",
+            address="shared@example.com",
+            imap_server="imap.example.com",
+        )
+        second_tool = self._create_email_tool(
+            name="Shared Mail B",
+            address="shared@example.com",
+            imap_server="imap.example.com",
+        )
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[first_tool, second_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError) as cm:
+            async_to_sync(executor.execute)("mail list --mailbox shared@example.com")
+
+        self.assertIn("Ambiguous mailbox", str(cm.exception))
+
+    def test_single_mailbox_allows_mail_commands_without_mailbox_flag(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[work_tool])
+        )
+
+        with patch("nova.plugins.mail.service.list_emails", new_callable=AsyncMock, return_value="ok") as mocked_list:
+            listed = async_to_sync(executor.execute)("mail list --limit 3")
+
+        self.assertEqual(listed, "ok")
+        mocked_list.assert_awaited_once_with(self.user, work_tool.id, folder="INBOX", limit=3)
+
+    def test_mail_send_uses_selected_mailbox(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        personal_tool = self._create_email_tool(name="Personal Mail", address="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(email_tools=[work_tool, personal_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/body.txt",
+            b"Hello from Nova",
+            mime_type="text/plain",
+        )
+
+        with patch.object(executor, "_send_mail_direct", new=AsyncMock(return_value="sent")) as mocked_send:
+            result = async_to_sync(executor.execute)(
+                "mail send --mailbox personal@example.com --to bob@example.com "
+                '--subject "Hello" --body-file /body.txt'
+            )
+
+        self.assertEqual(result, "sent")
+        mocked_send.assert_awaited_once()
+        self.assertEqual(mocked_send.await_args.kwargs["tool_id"], personal_tool.id)
+
+    def test_calendar_accounts_and_calendars_use_account_registry(self):
+        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
+        )
+
+        with patch(
+            "nova.runtime.terminal.caldav_service.list_calendars",
+            new_callable=AsyncMock,
+            return_value=["Work", "Personal"],
+        ) as mocked_list:
+            accounts = async_to_sync(executor.execute)("calendar accounts")
+            calendars = async_to_sync(executor.execute)("calendar calendars --account work@example.com")
+
+        self.assertIn("work@example.com", accounts)
+        self.assertIn("personal@example.com", accounts)
+        self.assertIn("Available calendars:", calendars)
+        self.assertIn("- Work", calendars)
+        mocked_list.assert_awaited_once_with(self.user, work_tool.id)
+
+    def test_calendar_command_requires_account_when_multiple_accounts_are_configured(self):
+        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("calendar upcoming")
+
+    def test_calendar_show_supports_json_output(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+
+        with patch(
+            "nova.runtime.terminal.caldav_service.get_event_detail",
+            new_callable=AsyncMock,
+            return_value={
+                "uid": "evt-1",
+                "calendar_name": "Work",
+                "summary": "Planning",
+                "start": "2026-04-10T09:00:00+00:00",
+                "end": "2026-04-10T10:00:00+00:00",
+                "all_day": False,
+                "location": "Room A",
+                "description": "Roadmap review",
+                "is_recurring": False,
+            },
+        ):
+            result = async_to_sync(executor.execute)("calendar show evt-1 --output /calendar.json")
+
+        content = async_to_sync(executor.execute)("cat /calendar.json")
+        self.assertIn("Wrote calendar output to /calendar.json", result)
+        self.assertIn('"uid": "evt-1"', content)
+
+    def test_calendar_create_reads_description_file(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+        async_to_sync(executor.vfs.write_file)(
+            "/details.md",
+            b"Long meeting description",
+            mime_type="text/markdown",
+        )
+
+        with patch(
+            "nova.runtime.terminal.caldav_service.create_event",
+            new_callable=AsyncMock,
+            return_value={
+                "uid": "evt-2",
+                "calendar_name": "Work",
+                "summary": "Planning",
+                "start": "2026-04-10T09:00:00+00:00",
+                "end": None,
+                "all_day": False,
+                "location": "",
+                "description": "Long meeting description",
+                "is_recurring": False,
+            },
+        ) as mocked_create:
+            result = async_to_sync(executor.execute)(
+                'calendar create --calendar Work --title "Planning" --start 2026-04-10T09:00:00+00:00 --description-file /details.md'
+            )
+
+        self.assertIn("Created event evt-2", result)
+        self.assertEqual(mocked_create.await_args.kwargs["description"], "Long meeting description")
+
+    def test_calendar_delete_requires_confirm(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("calendar delete evt-1")
+
+    def test_calendar_update_rejects_recurring_events_from_service(self):
+        work_tool = self._create_caldav_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool])
+        )
+
+        with patch(
+            "nova.runtime.terminal.caldav_service.update_event",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Recurring events are read-only in React Terminal v2."),
+        ):
+            with self.assertRaises(TerminalCommandError):
+                async_to_sync(executor.execute)(
+                    'calendar update evt-1 --calendar Work --title "Updated"'
+                )
+
+    def test_python_output_writes_stdout_file_and_preserves_terminal_result(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)(
+            'tee /script.py --text "print(\'hello\')\nprint(\'world\')"'
+        )
+        async_to_sync(executor.execute)("mkdir /results")
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_code",
+                new_callable=AsyncMock,
+                return_value="Status: Accepted\nStdout: hello\nworld\nStderr: ",
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)(
+                "python --output /results /script.py"
+            )
+
+        output_file = async_to_sync(executor.execute)("cat /results/script.stdout.txt")
+        self.assertIn("Status: Accepted", result)
+        self.assertEqual(output_file, "hello\nworld")
+        self.assertEqual(mocked_execute.await_args.args[1], "print('hello')\nprint('world')")
+
+    def test_skill_registry_mentions_mail_python_and_date_guidance(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(
+                email_tools=[object(), object()],
+                code_execution_tool=object(),
+                date_time_tool=object(),
+            )
+        )
+
+        self.assertIn("mail.md", skills)
+        self.assertIn("python.md", skills)
+        self.assertIn("date.md", skills)
+        self.assertIn("mail accounts", skills["mail.md"])
+        self.assertIn("--mailbox <email>", skills["mail.md"])
+        self.assertIn("python --output", skills["python.md"])
+        self.assertIn("date +%F", skills["date.md"])
+        self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
+        self.assertIn("cat /note.txt | grep hello", skills["terminal.md"])
+        self.assertIn("wc -l /note.txt", skills["terminal.md"])
+        self.assertIn("rm -f /note.txt", skills["terminal.md"])
+
+    def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(caldav_tools=[object(), object()])
+        )
+
+        self.assertIn("calendar.md", skills)
+        self.assertIn("calendar accounts", skills["calendar.md"])
+        self.assertIn("--account <selector>", skills["calendar.md"])
+        self.assertIn("Recurring events", skills["calendar.md"])
+
+    def test_skill_registry_adds_memory_guide_when_memory_is_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(memory_tool=object())
+        )
+
+        self.assertIn("memory.md", skills)
+        self.assertIn("memory search", skills["memory.md"])
+        self.assertIn("grep", skills["memory.md"])
+
+    def test_skill_registry_adds_webdav_guide_when_webdav_is_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(webdav_tools=[object()])
+        )
+
+        self.assertIn("webdav.md", skills)
+        self.assertIn("ls /webdav", skills["webdav.md"])
+        self.assertIn("cp /report.txt /webdav/<mount>/report.txt", skills["webdav.md"])
+        self.assertIn("permissions", skills["webdav.md"])
+
+    def test_skill_registry_adds_search_and_browse_guides_when_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(searxng_tool=object(), browser_tool=object())
+        )
+
+        self.assertIn("search.md", skills)
+        self.assertIn("browse.md", skills)
+        self.assertIn("browse open --result 1", skills["search.md"])
+        self.assertIn("browse click", skills["browse.md"])
+        self.assertIn("browse text > /page.txt", skills["browse.md"])
+
+    def test_skill_registry_adds_mcp_and_api_guides_when_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(mcp_tools=[object()], api_tools=[object()])
+        )
+
+        self.assertIn("mcp.md", skills)
+        self.assertIn("api.md", skills)
+        self.assertIn("mcp schema", skills["mcp.md"])
+        self.assertIn("--extract-to", skills["mcp.md"])
+        self.assertIn("api schema", skills["api.md"])
+        self.assertIn("--output", skills["api.md"])
+
+    def test_skill_registry_adds_webapp_guide_when_enabled(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(webapp_tool=object())
+        )
+
+        self.assertIn("webapp.md", skills)
+        self.assertIn("webapp expose", skills["webapp.md"])
+        self.assertIn("live", skills["webapp.md"])
+
+    def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(),
+            thread_mode=Thread.Mode.CONTINUOUS,
+        )
+
+        self.assertIn("continuous.md", skills)
+        self.assertIn("history search", skills["continuous.md"])
+        self.assertIn("history get", skills["continuous.md"])
+
+
+class ReactTerminalRuntimeTests(TransactionTestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="runtime-user", password="pwd")
+        self.provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="test-key",
+            max_context_tokens=8192,
+        )
+        self.agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Runtime Agent",
+            llm_provider=self.provider,
+            system_prompt="Be concise.",
+            recursion_limit=4,
+        )
+        self.thread = Thread.objects.create(user=self.user, subject="Test thread")
+        self.thread.add_message("Check the current directory.", Actor.USER)
+
+    def _create_webdav_tool(
+        self,
+        *,
+        name: str = "Nextcloud Docs",
+        root_path: str = "/Documents",
+        allow_create_files: bool = True,
+        allow_create_directories: bool = True,
+        allow_move: bool = True,
+        allow_copy: bool = True,
+        allow_delete: bool = True,
+    ) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="WebDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webdav",
+            python_path="nova.plugins.webdav",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "server_url": "https://cloud.example.com/remote.php/dav/files/alice",
+                "username": "alice",
+                "app_password": "secret",
+                "root_path": root_path,
+                "allow_create_files": allow_create_files,
+                "allow_create_directories": allow_create_directories,
+                "allow_move": allow_move,
+                "allow_copy": allow_copy,
+                "allow_delete": allow_delete,
+            },
+        )
+        return tool
+
+    def _create_caldav_tool(self, *, name: str = "Work Calendar", username: str = "work@example.com") -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name=name,
+            description="CalDAV",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="caldav",
+            python_path="nova.plugins.calendar",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={
+                "caldav_url": "https://cal.example.com",
+                "username": username,
+                "password": "secret",
+            },
+        )
+        return tool
+
+    def _create_browser_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="Browser",
+            description="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.plugins.browser",
+        )
+
+    def _create_searxng_tool(self) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name="SearXNG",
+            description="Search",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.plugins.search",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"searxng_url": "https://search.example.com", "num_results": 5},
+        )
+        return tool
+
+    def test_tool_schemas_include_ask_user_for_main_runtime(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        tool_names = [tool["function"]["name"] for tool in runtime._tool_schemas()]
+
+        self.assertIn("ask_user", tool_names)
+
+    def test_tool_schemas_omit_ask_user_when_disabled(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                allow_ask_user=False,
+            ).initialize
+        )()
+
+        tool_names = [tool["function"]["name"] for tool in runtime._tool_schemas()]
+
+        self.assertNotIn("ask_user", tool_names)
+
+    def test_runtime_returns_interrupt_result_for_ask_user(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            return_value={
+                "content": "I need one detail first.",
+                "tool_calls": [
+                    {
+                        "id": "call_ask_1",
+                        "name": "ask_user",
+                        "arguments": json.dumps(
+                            {
+                                "question": "Which account should I use?",
+                                "schema": {"type": "string", "enum": ["work", "personal"]},
+                            }
+                        ),
+                    }
+                ],
+            }
+        )
+
+        result = async_to_sync(runtime.run)()
+
+        self.assertIsInstance(result, ReactTerminalInterruptResult)
+        self.assertEqual(result.question, "Which account should I use?")
+        self.assertEqual(result.schema["enum"], ["work", "personal"])
+        self.assertEqual(result.resume_context["tool_call_id"], "call_ask_1")
+        self.assertEqual(result.resume_context["assistant_message"]["role"], "assistant")
+        self.assertEqual(
+            result.resume_context["assistant_message"]["tool_calls"][0]["function"]["name"],
+            "ask_user",
+        )
+
+    def test_runtime_rejects_mixed_ask_user_tool_calls(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_ask_1",
+                            "name": "ask_user",
+                            "arguments": json.dumps({"question": "Which account?"}),
+                        },
+                        {
+                            "id": "call_term_1",
+                            "name": "terminal",
+                            "arguments": json.dumps({"command": "pwd"}),
+                        },
+                    ],
+                },
+                {
+                    "content": "Recovered.",
+                    "tool_calls": [],
+                    "total_tokens": 21,
+                },
+            ]
+        )
+
+        result = async_to_sync(runtime.run)()
+
+        self.assertIsInstance(result, ReactTerminalRunResult)
+        self.assertEqual(result.final_answer, "Recovered.")
+        self.assertEqual(runtime.vfs.cwd, "/")
+        self.assertNotIn("pwd", runtime.vfs.session_state.get("history", []))
+
+    def test_runtime_resume_skips_current_interaction_answer_message(self):
+        question_message = self.thread.add_message(
+            "**Runtime Agent asks:** Which account?",
+            Actor.SYSTEM,
+            MessageType.INTERACTION_QUESTION,
+        )
+        interaction = Interaction.objects.create(
+            task=Task.objects.create(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                status=TaskStatus.AWAITING_INPUT,
+                progress_logs=[],
+            ),
+            thread=self.thread,
+            agent_config=self.agent,
+            origin_name="Runtime Agent",
+            question="Which account?",
+            status=InteractionStatus.ANSWERED,
+            answer="work",
+            resume_context={
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": "I need one detail first.",
+                    "tool_calls": [
+                        {
+                            "id": "call_ask_1",
+                            "type": "function",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": json.dumps({"question": "Which account?"}),
+                            },
+                        }
+                    ],
+                },
+                "tool_call_id": "call_ask_1",
+            },
+        )
+        question_message.interaction = interaction
+        question_message.save(update_fields=["interaction"])
+        self.thread.add_message(
+            "**Answer:** work",
+            Actor.USER,
+            MessageType.INTERACTION_ANSWER,
+            interaction,
+        )
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        captured = {}
+
+        async def fake_create_chat_completion(*, messages, tools=None):
+            del tools
+            captured["messages"] = messages
+            return {"content": "Using the work account.", "tool_calls": []}
+
+        runtime.provider_client.create_chat_completion = AsyncMock(side_effect=fake_create_chat_completion)
+
+        result = async_to_sync(runtime.run)(
+            resume_context=interaction.resume_context,
+            interruption_response={
+                "interaction_id": interaction.id,
+                "interaction_status": interaction.status,
+                "user_response": interaction.answer,
+            },
+        )
+
+        self.assertEqual(result.final_answer, "Using the work account.")
+        joined_contents = "\n".join(str(message.get("content") or "") for message in captured["messages"])
+        self.assertNotIn("**Answer:** work", joined_contents)
+        self.assertIn('{"status": "answered", "answer": "work"}', joined_contents)
+
+    def test_system_prompt_mentions_ask_user(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+
+        self.assertIn("ask_user", prompt)
+
+    def _create_webapp_tool(self) -> Tool:
+        return Tool.objects.create(
+            user=self.user,
+            name="WebApp",
+            description="WebApp",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="webapp",
+            python_path="nova.plugins.webapp",
+        )
+
+    def test_runtime_executes_terminal_tool_loop(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "name": "terminal",
+                            "arguments": '{"command":"pwd"}',
+                        }
+                    ],
+                },
+                {
+                    "content": "The current directory is /.",
+                    "tool_calls": [],
+                },
+            ]
+        )
+
+        result = async_to_sync(runtime.run)()
+
+        session = AgentThreadSession.objects.get(
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        self.assertEqual(result.final_answer, "The current directory is /.")
+        self.assertIn("pwd", session.session_state["history"])
+
+    def test_runtime_persists_stream_state_for_reconnect(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+        handler = TaskProgressHandler(
+            task.id,
+            channel_layer,
+            user_id=self.user.id,
+            thread_id=self.thread.id,
+            thread_mode=self.thread.mode,
+            push_notifications_enabled=False,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                task=task,
+                progress_handler=handler,
+            ).initialize
+        )()
+
+        async def fake_stream_chat_completion(*, messages, tools, on_content_delta):
+            del messages, tools
+            await on_content_delta("The current")
+            await on_content_delta(" directory is /.")
+            return {
+                "content": "The current directory is /.",
+                "tool_calls": [],
+                "total_tokens": 123,
+                "streamed": True,
+            }
+
+        runtime.provider_client.stream_chat_completion = AsyncMock(side_effect=fake_stream_chat_completion)
+
+        result = async_to_sync(runtime.run)()
+
+        task.refresh_from_db()
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertEqual(result.final_answer, "The current directory is /.")
+        self.assertEqual(result.real_tokens, 123)
+        self.assertIn("response_chunk", event_types)
+        self.assertIn("progress_update", event_types)
+        self.assertIn("The current directory is /.", task.streamed_markdown)
+        self.assertIsNotNone(task.current_response)
+
+    def test_runtime_closes_browser_session_on_success(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            return_value={"content": "Done.", "tool_calls": []}
+        )
+        runtime.terminal.close = AsyncMock()
+
+        result = async_to_sync(runtime.run)()
+
+        self.assertEqual(result.final_answer, "Done.")
+        runtime.terminal.close.assert_awaited_once()
+
+    def test_runtime_closes_browser_session_on_error(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(side_effect=RuntimeError("boom"))
+        runtime.terminal.close = AsyncMock()
+
+        with self.assertRaises(RuntimeError):
+            async_to_sync(runtime.run)()
+
+        runtime.terminal.close.assert_awaited_once()
+
+    def test_runtime_loads_compacted_history_summary(self):
+        first = self.thread.add_message("Initial requirement", Actor.USER)
+        self.thread.add_message("Recent context", Actor.USER)
+        session = AgentThreadSession.objects.create(
+            thread=self.thread,
+            agent_config=self.agent,
+            session_state={
+                "cwd": "/",
+                "history": [],
+                "directories": ["/tmp"],
+                SESSION_KEY_HISTORY_SUMMARY: "## Summary\nPrevious goals",
+                SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID: first.id,
+            },
+        )
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.session = session
+        history = async_to_sync(runtime._load_history_messages)()
+
+        self.assertEqual(history[0]["role"], "system")
+        self.assertIn("Previous goals", history[0]["content"])
+        self.assertFalse(any(item["content"] == "Initial requirement" for item in history[1:]))
+        self.assertTrue(any(item["content"] == "Recent context" for item in history[1:]))
+
+    def test_runtime_loads_continuous_context_and_rewrites_history_guidance(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous runtime",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=continuous_thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        fake_messages = [
+            SimpleNamespace(
+                type="system",
+                content="Use conversation_search and conversation_get for older context.",
+            ),
+            SimpleNamespace(type="human", content="User note"),
+            SimpleNamespace(type="ai", content="Assistant note"),
+        ]
+
+        with patch(
+            "nova.runtime.agent.load_continuous_context",
+            return_value=(SimpleNamespace(), fake_messages),
+        ) as mocked_loader:
+            history = async_to_sync(runtime._load_history_messages)()
+
+        self.assertEqual(history[0]["role"], "system")
+        self.assertIn("history search", history[0]["content"])
+        self.assertIn("history get", history[0]["content"])
+        self.assertEqual(history[1], {"role": "user", "content": "User note"})
+        self.assertEqual(history[2], {"role": "assistant", "content": "Assistant note"})
+        mocked_loader.assert_called_once_with(
+            self.user,
+            continuous_thread,
+            exclude_message_id=None,
+            exclude_interaction_ids=set(),
+        )
+
+    def test_system_prompt_mentions_touch_tee_and_conditional_mailbox_and_date_guidance(self):
+        date_tool = Tool.objects.create(
+            user=self.user,
+            name="Date",
+            description="Date",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="date",
+            python_path="nova.plugins.datetime",
+        )
+        first_mail = Tool.objects.create(
+            user=self.user,
+            name="Work Mail",
+            description="Work Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.plugins.mail",
+        )
+        second_mail = Tool.objects.create(
+            user=self.user,
+            name="Personal Mail",
+            description="Personal Mail",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.plugins.mail",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=first_mail,
+            config={
+                "imap_server": "imap.work.example.com",
+                "username": "work@example.com",
+                "password": "secret",
+                "from_address": "work@example.com",
+            },
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=second_mail,
+            config={
+                "imap_server": "imap.personal.example.com",
+                "username": "personal@example.com",
+                "password": "secret",
+                "from_address": "personal@example.com",
+            },
+        )
+        self.agent.tools.add(date_tool, first_mail, second_mail)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("touch", prompt)
+        self.assertIn("tee", prompt)
+        self.assertIn("Minimal text pipelines", prompt)
+        self.assertIn("not a full shell", prompt)
+        self.assertIn("wc -l", prompt)
+        self.assertIn("rm -f", prompt)
+        self.assertIn("date +%F", prompt)
+        self.assertIn("--mailbox <email>", prompt)
+        self.assertIn("- /: persistent files for this thread", prompt)
+        self.assertNotIn("/thread", prompt)
+        self.assertNotIn("/workspace", prompt)
+
+    def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("/memory", prompt)
+        self.assertIn("grep", prompt)
+        self.assertIn("memory search", prompt)
+
+    def test_system_prompt_mentions_calendar_commands(self):
+        first_calendar = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        second_calendar = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        self.agent.tools.add(first_calendar, second_calendar)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("calendar", prompt)
+        self.assertIn("calendar accounts", prompt)
+        self.assertIn("--account <selector>", prompt)
+        self.assertIn("Recurring events are readable", prompt)
+
+    def test_system_prompt_mentions_webdav_mount(self):
+        webdav_tool = self._create_webdav_tool()
+        self.agent.tools.add(webdav_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("/webdav", prompt)
+        self.assertIn("remote WebDAV mounts", prompt)
+
+    def test_system_prompt_mentions_search_browse_and_non_persistence(self):
+        browser_tool = self._create_browser_tool()
+        searxng_tool = self._create_searxng_tool()
+        self.agent.tools.add(browser_tool, searxng_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("search", prompt)
+        self.assertIn("browse", prompt)
+        self.assertIn("do not persist", prompt)
+        self.assertIn("curl", prompt)
+        self.assertIn("wget", prompt)
+
+    def test_system_prompt_mentions_live_webapp_workflow(self):
+        webapp_tool = self._create_webapp_tool()
+        self.agent.tools.add(webapp_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("webapp expose", prompt)
+        self.assertIn("live", prompt)
+        self.assertIn("source files", prompt)
+
+    def test_system_prompt_mentions_mcp_and_api_command_families(self):
+        mcp_tool = Tool.objects.create(
+            user=self.user,
+            name="Notion MCP",
+            description="MCP",
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+            transport_type=Tool.TransportType.STREAMABLE_HTTP,
+        )
+        api_tool = Tool.objects.create(
+            user=self.user,
+            name="CRM API",
+            description="API",
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+        self.agent.tools.add(mcp_tool, api_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("mcp tools", prompt)
+        self.assertIn("mcp schema", prompt)
+        self.assertIn("api operations", prompt)
+        self.assertIn("api schema", prompt)
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+        other_thread = Thread.objects.create(user=self.user, subject="Other thread")
+        other_thread.add_message("Check memory", Actor.USER)
+
+        runtime_a = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                source_message_id=self.thread.get_messages().order_by("id").first().id,
+            ).initialize
+        )()
+        runtime_b = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=other_thread,
+                agent_config=self.agent,
+                source_message_id=other_thread.get_messages().order_by("id").first().id,
+            ).initialize
+        )()
+
+        async_to_sync(runtime_a.vfs.write_file)(
+            "/memory/editor.md",
+            b"# Editor\n\nUses Vim",
+            mime_type="text/markdown",
+        )
+        content = async_to_sync(runtime_b.vfs.read_text)("/memory/editor.md")
+
+        self.assertIn("Uses Vim", content)
+        mocked_provider.assert_awaited()
+
+    def test_continuous_system_prompt_mentions_history_commands(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous prompt thread",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=continuous_thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+
+        self.assertIn("continuous thread", prompt)
+        self.assertIn("history search", prompt)
+        self.assertIn("history get", prompt)
+
+    def test_subagent_outputs_are_copied_back_under_subagents_directory(self):
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Child Agent",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        self._stored_contents: dict[str, bytes] = {}
+        seen = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ensure_root_trace
+            seen["prompt"] = ephemeral_user_prompt
+            await self.vfs.write_file("/answer.txt", b"answer", mime_type="text/plain")
+            await self.vfs.write_file("/tmp/ignored.txt", b"temp", mime_type="text/plain")
+            return ReactTerminalRunResult(
+                final_answer="Child done.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+            patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+            async_to_sync(runtime.vfs.write_file)("/input.txt", b"parent", mime_type="text/plain")
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Use the input.",
+                input_paths=["/input.txt"],
+            )
+
+            copied_paths = async_to_sync(runtime.vfs.find)("/subagents", "")
+            copied_answer_path = next(path for path in copied_paths if path.endswith("/answer.txt"))
+            copied_answer = async_to_sync(runtime.vfs.read_text)(copied_answer_path)
+
+        self.assertIn("Child done.", result)
+        self.assertIn("/inbox/input.txt", seen["prompt"])
+        self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
+        self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
+        self.assertEqual(copied_answer, "answer")
+
+    def test_subagent_with_webdav_capability_sees_webdav_mount(self):
+        webdav_tool = self._create_webdav_tool()
+        self.agent.tools.add(webdav_tool)
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="WebDAV Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child WebDAV tool",
+        )
+        child_agent.tools.add(webdav_tool)
+        self.agent.agent_tools.add(child_agent)
+        seen = {}
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            seen["webdav"] = await self.vfs.path_exists("/webdav/nextcloud-docs")
+            return ReactTerminalRunResult(
+                final_answer="Saw WebDAV.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Check the remote mount.",
+                input_paths=[],
+            )
+
+        self.assertIn("Saw WebDAV.", result)
+        self.assertTrue(seen["webdav"])
+
+    def test_subagent_with_browser_capability_sees_browse_commands(self):
+        browser_tool = self._create_browser_tool()
+        self.agent.tools.add(browser_tool)
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Browser Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child browser tool",
+        )
+        child_agent.tools.add(browser_tool)
+        self.agent.agent_tools.add(child_agent)
+        seen = {}
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            try:
+                await self.terminal.execute("browse current")
+            except TerminalCommandError as exc:
+                seen["browse_error"] = str(exc)
+            return ReactTerminalRunResult(
+                final_answer="Saw browse.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Check browser commands.",
+                input_paths=[],
+            )
+
+        self.assertIn("Saw browse.", result)
+        self.assertIn("No active page", seen["browse_error"])
+
+    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
+    def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        self.agent.tools.add(memory_tool)
+
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Memory Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child memory tool",
+        )
+        child_agent.tools.add(memory_tool)
+        self.agent.agent_tools.add(child_agent)
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            await self.vfs.write_file(
+                "/memory/editor.md",
+                b"# Editor\n\nUses Vim",
+                mime_type="text/markdown",
+            )
+            return ReactTerminalRunResult(
+                final_answer="Stored memory.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Remember the editor.",
+                input_paths=[],
+            )
+
+        content = async_to_sync(runtime.vfs.read_text)("/memory/editor.md")
+        self.assertIn("Stored memory.", result)
+        self.assertIn("Uses Vim", content)
+        mocked_provider.assert_awaited()
+
+
+class ReactTerminalExecutorTests(TransactionTestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="executor-user", password="pwd")
+        self.provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="test-key",
+            max_context_tokens=4096,
+        )
+        self.agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Executor Agent",
+            llm_provider=self.provider,
+            system_prompt="Be concise.",
+            recursion_limit=4,
+        )
+        self.thread = Thread.objects.create(user=self.user, subject="Executor thread")
+        self.source_message = self.thread.add_message("Give me the result.", Actor.USER)
+
+    def test_task_executor_publishes_realtime_events_and_footer_metadata(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        async def fake_stream_chat_completion(self, *, messages, tools, on_content_delta):
+            del self, messages, tools
+            await on_content_delta("Result")
+            await on_content_delta(" ready.")
+            return {
+                "content": "Result ready.",
+                "tool_calls": [],
+                "total_tokens": 321,
+                "streamed": True,
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch(
+                "nova.runtime.provider_client.ProviderClient.stream_chat_completion",
+                new=fake_stream_chat_completion,
+            ),
+        ):
+            executor = ReactTerminalTaskExecutor(
+                task,
+                self.user,
+                self.thread,
+                self.agent,
+                self.source_message.text,
+                source_message_id=self.source_message.id,
+                push_notifications_enabled=False,
+            )
+            async_to_sync(executor.execute_or_resume)()
+
+        task.refresh_from_db()
+        final_message = self.thread.get_messages().order_by("-id").first()
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertEqual(task.status, TaskStatus.COMPLETED)
+        self.assertEqual(task.current_response, None)
+        self.assertEqual(task.streamed_markdown, "")
+        self.assertEqual(final_message.actor, Actor.AGENT)
+        self.assertEqual(final_message.internal_data["real_tokens"], 321)
+        self.assertEqual(final_message.internal_data["max_context"], 4096)
+        self.assertEqual(final_message.internal_data["trace_task_id"], task.id)
+        self.assertTrue(final_message.internal_data["trace_summary"]["has_trace"])
+        self.assertIn("response_chunk", event_types)
+        self.assertIn("context_consumption", event_types)
+        self.assertIn("new_message", event_types)
+        self.assertIn("task_complete", event_types)
+
+    def test_task_executor_enqueues_thread_title_generation_for_default_subject(self):
+        thread = Thread.objects.create(user=self.user, subject=build_default_thread_subject(1))
+        source_message = thread.add_message("Give me the result.", Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        async def fake_stream_chat_completion(self, *, messages, tools, on_content_delta):
+            del self, messages, tools
+            await on_content_delta("Result")
+            return {
+                "content": "Result",
+                "tool_calls": [],
+                "total_tokens": 5,
+                "streamed": True,
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch(
+                "nova.runtime.provider_client.ProviderClient.stream_chat_completion",
+                new=fake_stream_chat_completion,
+            ),
+            patch("nova.tasks.tasks.generate_thread_title_task.delay") as mocked_delay,
+        ):
+            executor = ReactTerminalTaskExecutor(
+                task,
+                self.user,
+                thread,
+                self.agent,
+                source_message.text,
+                source_message_id=source_message.id,
+                push_notifications_enabled=False,
+            )
+            async_to_sync(executor.execute_or_resume)()
+
+        mocked_delay.assert_called_once_with(
+            thread_id=thread.id,
+            user_id=self.user.id,
+            agent_config_id=self.agent.id,
+            source_task_id=task.id,
+        )
+
+    def test_task_executor_skips_thread_title_generation_for_custom_subject(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        async def fake_stream_chat_completion(self, *, messages, tools, on_content_delta):
+            del self, messages, tools
+            await on_content_delta("Result")
+            return {
+                "content": "Result",
+                "tool_calls": [],
+                "total_tokens": 5,
+                "streamed": True,
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch(
+                "nova.runtime.provider_client.ProviderClient.stream_chat_completion",
+                new=fake_stream_chat_completion,
+            ),
+            patch("nova.tasks.tasks.generate_thread_title_task.delay") as mocked_delay,
+        ):
+            executor = ReactTerminalTaskExecutor(
+                task,
+                self.user,
+                self.thread,
+                self.agent,
+                self.source_message.text,
+                source_message_id=self.source_message.id,
+                push_notifications_enabled=False,
+            )
+            async_to_sync(executor.execute_or_resume)()
+
+        mocked_delay.assert_not_called()
+
+    def test_summarization_executor_updates_session_and_emits_completion(self):
+        self.thread.add_message("Message 1", Actor.USER)
+        self.thread.add_message("Message 2", Actor.AGENT)
+        self.thread.add_message("Message 3", Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        async def fake_create_chat_completion(self, *, messages, tools=None):
+            del self, messages, tools
+            return {"content": "## Summary\nKeep the recent context.", "tool_calls": [], "total_tokens": 77}
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch(
+                "nova.runtime.provider_client.ProviderClient.create_chat_completion",
+                new=fake_create_chat_completion,
+            ),
+        ):
+            executor = ReactTerminalSummarizationTaskExecutor(
+                task,
+                self.user,
+                self.thread,
+                self.agent,
+            )
+            async_to_sync(executor.execute)()
+
+        task.refresh_from_db()
+        session = AgentThreadSession.objects.get(
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertEqual(task.status, TaskStatus.COMPLETED)
+        self.assertEqual(session.session_state[SESSION_KEY_HISTORY_SUMMARY], "## Summary\nKeep the recent context.")
+        self.assertIn(SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID, session.session_state)
+        self.assertIn("summarization_complete", event_types)
+        self.assertIn("task_complete", event_types)
+
+    def test_summarization_executor_rejects_continuous_mode(self):
+        continuous_thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous compaction",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        continuous_thread.add_message("Message 1", Actor.USER)
+        continuous_thread.add_message("Message 2", Actor.AGENT)
+        continuous_thread.add_message("Message 3", Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+
+        with patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer):
+            executor = ReactTerminalSummarizationTaskExecutor(
+                task,
+                self.user,
+                continuous_thread,
+                self.agent,
+            )
+            async_to_sync(executor.execute)()
+
+        task.refresh_from_db()
+        event_types = [item["message"]["type"] for item in channel_layer.messages]
+        self.assertEqual(task.status, TaskStatus.FAILED)
+        self.assertIn("task_error", event_types)
+        self.assertIn("continuous mode", task.result)
+
+
+class MessageSubmissionV2Tests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="submit-user", password="pwd")
+        self.provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenAI",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4.1-mini",
+            api_key="test-key",
+        )
+        self.agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Submission Agent",
+            llm_provider=self.provider,
+            system_prompt="",
+        )
+        self.thread = Thread.objects.create(user=self.user, subject="Submission thread")
+
+    def test_v2_message_attachments_use_attachment_uploader(self):
+        uploaded = SimpleUploadedFile("note.txt", b"hello", content_type="text/plain")
+        dispatcher_task = SimpleNamespace(delay=Mock())
+        seen_file_data = {}
+
+        async def fake_thread_file_uploader(thread, user, file_data):
+            seen_file_data["value"] = list(file_data)
+            return [{"id": 123}], []
+
+        fake_attachment_uploader = Mock(return_value=([{"id": 901, "label": "note.txt"}], []))
+        fake_file_update_publisher = AsyncMock()
+
+        def prepare_context(message_text: str) -> SubmissionContext:
+            return SubmissionContext(
+                thread=self.thread,
+                create_message=lambda text: self.thread.add_message(text, Actor.USER),
+            )
+
+        result = submit_user_message(
+            user=self.user,
+            message_text="Here is the file.",
+            selected_agent=str(self.agent.id),
+            response_mode="text",
+            thread_mode=Thread.Mode.THREAD,
+            thread_files=[],
+            message_attachments=[uploaded],
+            prepare_context=prepare_context,
+            dispatcher_task=dispatcher_task,
+            thread_file_uploader=fake_thread_file_uploader,
+            attachment_uploader=fake_attachment_uploader,
+            file_update_publisher=fake_file_update_publisher,
+        )
+
+        self.assertEqual(result.uploaded_file_ids, [])
+        self.assertNotIn("value", seen_file_data)
+        fake_attachment_uploader.assert_called_once()

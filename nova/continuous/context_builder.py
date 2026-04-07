@@ -36,7 +36,7 @@ class ContinuousContextSnapshot:
 
 
 def compute_continuous_context_fingerprint(snapshot: ContinuousContextSnapshot) -> str:
-    """Stable fingerprint for deciding whether the checkpoint must be rebuilt.
+    """Stable fingerprint for deciding whether the continuous context must be rebuilt.
 
     V1: keep it deterministic and cheap to compute.
     """
@@ -162,7 +162,7 @@ def load_continuous_context(
     exclude_message_id: Optional[int] = None,
     exclude_interaction_ids: Optional[set[int]] = None,
 ) -> Tuple[ContinuousContextSnapshot, List[BaseMessage]]:
-    """Build the messages to inject for the continuous checkpoint.
+    """Build the messages to inject for the continuous context window.
 
     Policy:
     - Previous two *available* summarized days (before today) as System messages.

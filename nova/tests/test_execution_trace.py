@@ -30,20 +30,18 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         child_handler = handler.clone_for_parent(parent_node_id=subagent_node_id)
         await child_handler.on_tool_start({"name": "web_fetch"}, '{"url": "https://example.com"}', run_id=UUID(int=3))
         await child_handler.on_tool_end(
-            ("done", {"artifact_ids": [9], "tool_output": True}),
+            {"result": "done"},
             run_id=UUID(int=3),
         )
         await handler.complete_subagent(
             subagent_node_id,
             output_preview="Finished delegated research",
-            artifact_refs=[{"artifact_id": 9, "tool_output": True}],
         )
         await handler.complete_root_run("Done")
 
         trace = task.execution_trace
         self.assertEqual(trace["summary"]["tool_calls"], 2)
         self.assertEqual(trace["summary"]["subagent_calls"], 1)
-        self.assertEqual(trace["summary"]["artifact_count"], 1)
         self.assertTrue(trace["summary"]["has_trace"])
         self.assertEqual(trace["root"]["status"], "completed")
         self.assertEqual(trace["root"]["meta"]["source_message_id"], 55)
@@ -52,7 +50,6 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         self.assertEqual(root_children[0]["type"], "tool")
         self.assertEqual(root_children[1]["type"], "subagent")
         self.assertEqual(root_children[1]["children"][0]["type"], "tool")
-        self.assertEqual(root_children[1]["children"][0]["artifact_refs"][0]["artifact_id"], 9)
 
     async def test_records_interactions_and_errors(self):
         task = SimpleNamespace(id=902, execution_trace={})

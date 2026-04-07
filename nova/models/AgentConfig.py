@@ -9,10 +9,6 @@ from nova.models.Thread import Thread
 
 
 class AgentConfig(models.Model):
-    class RuntimeEngine(models.TextChoices):
-        LEGACY_LANGGRAPH = "legacy_langgraph", _("Legacy (LangGraph)")
-        REACT_TERMINAL_V1 = "react_terminal_v1", _("React Terminal V1")
-
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='user_agents',
@@ -24,13 +20,6 @@ class AgentConfig(models.Model):
                                      verbose_name=_("Provider"))
     system_prompt = models.TextField(verbose_name=_("Prompt"))
     recursion_limit = models.IntegerField(default=25, verbose_name=_("Recursion limit"))
-    runtime_engine = models.CharField(
-        max_length=32,
-        choices=RuntimeEngine.choices,
-        default=RuntimeEngine.LEGACY_LANGGRAPH,
-        verbose_name=_("Runtime engine"),
-        help_text=_("Execution engine used by this agent."),
-    )
 
     # Tools
     tools = models.ManyToManyField('Tool', blank=True, related_name="agents",
@@ -141,8 +130,6 @@ class AgentConfig(models.Model):
 
     def requires_tools_for_thread_mode(self, thread_mode: str | None) -> bool:
         """Return True when this agent cannot run meaningfully without tools."""
-        if self.runtime_engine == self.RuntimeEngine.REACT_TERMINAL_V1:
-            return True
         if self.has_explicit_tool_dependencies():
             return True
         return bool(thread_mode == Thread.Mode.CONTINUOUS and not self.is_tool)

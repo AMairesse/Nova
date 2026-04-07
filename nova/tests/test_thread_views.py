@@ -8,10 +8,9 @@ from django.http import HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import ANY, patch, AsyncMock
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
@@ -212,12 +211,7 @@ class MainViewsTests(TestCase):
 
     # ------------ delete_thread -----------------------------------------
 
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_owner_only(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_owner_only(self):
         thread = Thread.objects.create(user=self.user, subject="Del")
 
         # Non-authenticated
@@ -239,12 +233,7 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.json().get("status"), "OK")
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_prevents_deletion_with_running_tasks(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_prevents_deletion_with_running_tasks(self):
         thread = Thread.objects.create(user=self.user, subject="Del")
         # Create a running task for the thread
         Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
@@ -258,12 +247,7 @@ class MainViewsTests(TestCase):
         # Thread should still exist
         self.assertTrue(Thread.objects.filter(id=thread.id).exists())
 
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_allows_deletion_while_awaiting_input(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_allows_deletion_while_awaiting_input(self):
         thread = Thread.objects.create(user=self.user, subject="Awaiting input")
         Task.objects.create(user=self.user, thread=thread, status=TaskStatus.AWAITING_INPUT)
 
@@ -275,12 +259,7 @@ class MainViewsTests(TestCase):
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
     @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self):
         thread = Thread.objects.create(user=self.user, subject="Stale running")
         task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
         Task.objects.filter(id=task.id).update(updated_at=timezone.now() - timedelta(minutes=5))
@@ -445,7 +424,7 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["artifacts"][0]["label"], "photo.jpg")
+        self.assertEqual(payload["message"]["attachments"][0]["label"], "photo.jpg")
         self.assertEqual(payload["message"]["text"], "")
         mocked_publish_update.assert_not_awaited()
 
@@ -655,7 +634,7 @@ class MainViewsTests(TestCase):
             description="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         agent.tools.add(tool)
 
@@ -719,7 +698,7 @@ class MainViewsTests(TestCase):
             description="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         agent.tools.add(tool)
         thread = Thread.objects.create(user=self.user, subject="Tool-less block")
@@ -1032,7 +1011,6 @@ class MainViewsTests(TestCase):
             system_prompt="x",
             llm_provider=provider,
             preserve_recent=1,
-            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
         )
         profile, _ = UserProfile.objects.get_or_create(user=self.user)
         profile.default_agent = agent
@@ -1069,7 +1047,6 @@ class MainViewsTests(TestCase):
             system_prompt="x",
             llm_provider=provider,
             preserve_recent=3,
-            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
         )
         profile, _ = UserProfile.objects.get_or_create(user=self.user)
         profile.default_agent = agent
@@ -1099,7 +1076,6 @@ class MainViewsTests(TestCase):
             system_prompt="x",
             llm_provider=provider,
             preserve_recent=1,
-            runtime_engine=AgentConfig.RuntimeEngine.REACT_TERMINAL_V1,
         )
         profile, _ = UserProfile.objects.get_or_create(user=self.user)
         profile.default_agent = agent
@@ -1118,12 +1094,10 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "ERROR")
         self.assertIn("not available in continuous mode", response.json()["message"])
 
-    @patch("nova.views.thread_views.get_checkpointer")
-    @patch("nova.views.thread_views.LLMAgent.create")
-    def test_summarize_thread_returns_confirmation_when_sub_agents_have_context(
+    @patch("nova.views.thread_views.start_summarization")
+    def test_summarize_thread_ignores_legacy_subagent_confirmation(
         self,
-        mocked_create_agent,
-        mocked_get_checkpointer,
+        mocked_start_summarization,
     ):
         self.client.login(username="alice", password="pass")
         provider = LLMProvider.objects.create(
@@ -1156,29 +1130,16 @@ class MainViewsTests(TestCase):
         thread.add_message("m1", actor=Actor.USER)
         thread.add_message("m2", actor=Actor.AGENT)
         thread.add_message("m3", actor=Actor.USER)
-
-        CheckpointLink.objects.create(thread=thread, agent=sub_agent)
-
-        fake_llm = MagicMock()
-        fake_llm.config = {"configurable": {"thread_id": "sub-agent-thread"}}
-        fake_llm.count_tokens = AsyncMock(return_value=123)
-        fake_llm.cleanup = AsyncMock()
-        mocked_create_agent.return_value = fake_llm
-
-        fake_checkpointer = AsyncMock()
-        fake_checkpoint = MagicMock()
-        fake_checkpoint.checkpoint = {"channel_values": {"messages": [1, 2, 3]}}
-        fake_checkpointer.aget_tuple = AsyncMock(return_value=fake_checkpoint)
-        fake_checkpointer.conn.close = AsyncMock()
-        mocked_get_checkpointer.return_value = fake_checkpointer
+        mocked_start_summarization.return_value = HttpResponse("OK")
 
         response = self.client.post(reverse("summarize_thread", args=[thread.id]))
         self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["status"], "CONFIRMATION_NEEDED")
-        self.assertEqual(payload["thread_id"], thread.id)
-        self.assertEqual(len(payload["sub_agents"]), 1)
-        self.assertEqual(payload["sub_agents"][0]["id"], sub_agent.id)
+        mocked_start_summarization.assert_called_once_with(
+            ANY,
+            thread,
+            default_agent,
+            False,
+        )
 
     def test_confirm_summarize_thread_requires_default_agent(self):
         self.client.login(username="alice", password="pass")

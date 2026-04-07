@@ -51,9 +51,10 @@ class QuestionAnswerViewTests(TestCase):
             user=self.user,
             defaults={"default_agent": agent_config},
         )
-        fake_agent = SimpleNamespace(ainvoke=AsyncMock(return_value="42"))
+        fake_runtime = AsyncMock()
+        fake_runtime.run.return_value = SimpleNamespace(final_answer="42")
 
-        with patch("nova.api.views.LLMAgent.create", new=AsyncMock(return_value=fake_agent)) as mocked_create:
+        with patch("nova.api.views.ReactTerminalRuntime.initialize", new=AsyncMock(return_value=fake_runtime)) as mocked_initialize:
             response = self.client.post(
                 self.url,
                 data={"question": "What is the answer?"},
@@ -65,8 +66,8 @@ class QuestionAnswerViewTests(TestCase):
             response.json(),
             {"question": "What is the answer?", "answer": "42"},
         )
-        mocked_create.assert_awaited_once_with(self.user, None, agent_config)
-        fake_agent.ainvoke.assert_awaited_once_with("What is the answer?")
+        mocked_initialize.assert_awaited_once()
+        fake_runtime.run.assert_awaited_once_with(ephemeral_user_prompt="What is the answer?")
 
     def test_post_surfaces_llm_failures(self):
         provider = create_provider(self.user, name="Broken Provider", model="gpt-4o-mini")
@@ -76,7 +77,7 @@ class QuestionAnswerViewTests(TestCase):
             defaults={"default_agent": agent_config},
         )
 
-        with patch("nova.api.views.LLMAgent.create", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        with patch("nova.api.views.ReactTerminalRuntime.initialize", new=AsyncMock(side_effect=RuntimeError("boom"))):
             response = self.client.post(
                 self.url,
                 data={"question": "Will this fail?"},

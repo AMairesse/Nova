@@ -21,13 +21,13 @@ class BootstrapSkillsTests(TestCase):
             self.user,
             name="SearXNG",
             tool_subtype="searxng",
-            python_path="nova.tools.builtins.searxng",
+            python_path="nova.plugins.search",
         )
         create_tool(
             self.user,
             name="Judge0",
             tool_subtype="code_execution",
-            python_path="nova.tools.builtins.code_execution",
+            python_path="nova.plugins.python",
         )
 
     def _apply_provider_capabilities(
@@ -74,7 +74,7 @@ class BootstrapSkillsTests(TestCase):
             self.user,
             name=name,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -93,7 +93,7 @@ class BootstrapSkillsTests(TestCase):
             self.user,
             name=name,
             tool_subtype="caldav",
-            python_path="nova.tools.builtins.caldav",
+            python_path="nova.plugins.calendar",
         )
         create_tool_credential(
             self.user,
@@ -168,7 +168,7 @@ class BootstrapSkillsTests(TestCase):
         self.assertFalse(nova.agent_tools.filter(name="Email Agent").exists())
         self.assertTrue(
             any(
-                "Detached legacy sub-agents from Nova" in note
+                "Detached deprecated tool-agents from Nova" in note
                 for note in summary.get("notes", [])
             )
         )
@@ -207,14 +207,7 @@ class BootstrapSkillsTests(TestCase):
         self.assertEqual(image_agent.llm_provider, image_provider)
         self.assertTrue(nova.agent_tools.filter(pk=image_agent.pk).exists())
         self.assertIn("Image Agent", summary.get("created_agents", []))
-        self.assertIn("Never invent a file_id or artifact_id.", nova.system_prompt)
-        self.assertIn("Use file_ls to discover thread file IDs.", nova.system_prompt)
-        self.assertIn("Use artifact_ls or artifact_search to discover conversation artifact IDs.", nova.system_prompt)
         self.assertIn("Pass file_ids only for thread file IDs returned by file_ls.", image_agent.tool_description)
-        self.assertIn(
-            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search.",
-            image_agent.tool_description,
-        )
 
     def test_bootstrap_prefers_image_provider_with_editing_support(self):
         self._apply_provider_capabilities(self.provider, tools="pass")

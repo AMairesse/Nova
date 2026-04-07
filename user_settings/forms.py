@@ -1,9 +1,9 @@
 # user_settings/forms.py
 """
-Canonical forms for both *user_settings* and legacy Nova views.
+Canonical forms for both *user_settings* and Nova views.
 
 Every form accepts an optional ``user=…`` kwarg so that any
-OwnerFormKwargsMixin (or legacy view) can safely inject it.
+OwnerFormKwargsMixin (or another Nova view) can safely inject it.
 All comments are in English.
 """
 from __future__ import annotations
@@ -137,7 +137,6 @@ class AgentForm(forms.ModelForm):
         fields = [
             "name",
             "llm_provider",
-            "runtime_engine",
             "system_prompt",
             "recursion_limit",
             "is_tool",
@@ -179,7 +178,6 @@ class AgentForm(forms.ModelForm):
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
 
         # Make summarization fields not required (they have model defaults)
-        self.fields["runtime_engine"].required = False
         self.fields["auto_summarize"].required = False
         self.fields["token_threshold"].required = False
         self.fields["preserve_recent"].required = False
@@ -200,7 +198,6 @@ class AgentForm(forms.ModelForm):
         self.helper.layout = Layout(
             "name",
             "llm_provider",
-            "runtime_engine",
             "system_prompt",
             "recursion_limit",
             Field("is_tool", wrapper_class="mb-2"),
@@ -309,7 +306,7 @@ class AgentForm(forms.ModelForm):
 # ────────────────────────────────────────────────────────────────────────────
 class ToolForm(forms.ModelForm):
     """
-    Enhanced tool form — keeps legacy dynamic behaviour and adds
+    Enhanced tool form with dynamic builtin handling and a
     Crispy helper to avoid nested <form> tags in HTMX fragments.
     """
 
@@ -348,7 +345,7 @@ class ToolForm(forms.ModelForm):
         self.fields["description"].required = False
 
         # Populate subtype choices
-        from nova.tools import get_available_tool_types
+        from nova.plugins.builtins import get_available_tool_types
 
         self.fields["tool_subtype"].choices = [("", "---------")] + [
             (k, v["name"]) for k, v in get_available_tool_types().items()
@@ -376,7 +373,7 @@ class ToolForm(forms.ModelForm):
                 raise forms.ValidationError(
                     _("A BUILTIN tool must have a subtype defined.")
                 )
-            from nova.tools import get_tool_type
+            from nova.plugins.builtins import get_tool_type
 
             meta = get_tool_type(tool_subtype)
             if meta:
@@ -758,10 +755,8 @@ class APIToolOperationForm(forms.ModelForm):
 # ────────────────────────────────────────────────────────────────────────────
 #  User-level parameters
 # ────────────────────────────────────────────────────────────────────────────
-class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
-    """Per-user extra parameters (Langfuse, etc.)."""
-    secret_fields = ('langfuse_secret_key',)
-
+class UserParametersForm(forms.ModelForm):
+    """Per-user general preferences."""
     # Read-only field to display API token status
     api_token_status = forms.CharField(
         required=False,
@@ -772,18 +767,10 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
     class Meta:
         model = UserParameters
         fields = [
-            "allow_langfuse",
-            "langfuse_public_key",
-            "langfuse_secret_key",
-            "langfuse_host",
             "continuous_default_messages_limit",
             "task_notifications_enabled",
             "api_token_status",
         ]
-        widgets = {
-            "langfuse_public_key": forms.TextInput(),
-            "langfuse_secret_key": forms.PasswordInput(render_value=False),
-        }
 
     # Swallow the extra ``user`` kwarg injected by OwnerFormKwargsMixin
     def __init__(self, *args: Any, user=None, server_state: str = "disabled", **kwargs: Any) -> None:
@@ -841,13 +828,6 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
         self.helper.form_tag = False
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
-            Div(
-                Field("allow_langfuse"),
-                Field("langfuse_public_key"),
-                Field("langfuse_secret_key"),
-                Field("langfuse_host"),
-                css_class="mb-4"
-            ),
             Div(
                 Field("continuous_default_messages_limit"),
                 css_class="mb-4",

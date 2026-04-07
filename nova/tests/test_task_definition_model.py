@@ -35,7 +35,7 @@ class TaskDefinitionModelBase(TestCase):
             description="Email tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         self.non_email_tool = Tool.objects.create(
             user=self.user,
@@ -43,7 +43,7 @@ class TaskDefinitionModelBase(TestCase):
             description="Search tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="searxng",
-            python_path="nova.tools.builtins.searxng",
+            python_path="nova.plugins.search",
         )
 
     def _build_agent_cron_task(self, name="agent-cron"):

@@ -3,19 +3,16 @@
 [![Docker Image CI](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/docker-image.yml)
 [![Django CI](https://github.com/AMairesse/Nova/actions/workflows/django.yml/badge.svg)](https://github.com/AMairesse/Nova/actions/workflows/django.yml)
 
-**Nova is a privacy-first, multi-tenant AI agent workspace.**
+Nova is a privacy-first, multi-tenant AI agent workspace built around a persistent terminal-style runtime.
 
 ![Get the news](./screenshots/Webbrowsing%20by%20agent.png)
 
 | | | | |
 | --- | --- | --- | --- |
 | ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Work on files](./screenshots/Work%20on%20files.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
-| ![Providers' config](./screenshots/Providers%20config.png) | ![Caldav config](./screenshots/Caldav%20config.png) | ![Multiple tools](./screenshots/Multiple%20tools.png) | ![Agents and Agents as tools](./screenshots/Various%20agents.png) |
-| | | | |
+| ![Providers' config](./screenshots/Providers%20config.png) | ![Caldav config](./screenshots/Caldav%20config.png) | ![Multiple tools](./screenshots/Multiple%20tools.png) | ![Various agents](./screenshots/Various%20agents.png) |
 
 ## Quickstart
-
-Quickstart on your computer (Docker):
 
 ```bash
 git clone https://github.com/AMairesse/Nova.git
@@ -30,123 +27,82 @@ Default credentials:
 - Username: `admin`
 - Password: `changeme`
 
-Configure optional modules in `docker/.env` using `COMPOSE_FILE`.
+Optional services are enabled through `COMPOSE_FILE` in `docker/.env`.
 
-Then configure your agents: [How to configure agents](README-agents.md).
+Then configure your providers, tools, and agents: [README-agents.md](README-agents.md).
 
-## Table of Contents
+## What Nova Provides
 
-- [What Nova Is](#what-nova-is)
-- [Key Capabilities](#key-capabilities)
-- [Docker Setup](#docker-setup)
-- [API](#api)
-- [Project Layout](#project-layout)
-- [Documentation Map](#documentation-map)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgements](#acknowledgements)
-- [Troubleshooting](#troubleshooting)
-
-## What Nova Is
-
-Nova is a web platform to build and run user-scoped AI agents with strong privacy and extensibility guarantees.
-
-- Agent-centric orchestration: each user can create specialized agents and compose them as tools.
-- Local or remote model routing: choose per-provider and per-agent what model backend to use.
-- Provider-aware model catalogs: OpenRouter and LM Studio can expose model lists, declared capabilities, and verification state in the UI.
-- Real-time execution flow: tool calls and agent progress are streamed live in the UI.
-- Multi-tenancy by design: data access is scoped to the authenticated user.
-- Background runtime: long operations run asynchronously through Celery.
+- A terminal-first agent runtime with a very small model tool surface:
+  - `terminal(command: str)`
+  - `delegate_to_agent(...)`
+  - `ask_user(...)`
+- Persistent thread-scoped files plus terminal-only mounts such as `/memory` and `/webdav`
+- User-scoped long-term memory stored as Markdown documents and searched via chunks/embeddings
+- Email, CalDAV, WebDAV, web search, browsing, MCP, and custom API integrations
+- Continuous discussion mode with day summaries and history search/get commands
+- Live thread-scoped static web apps published from normal workspace files
+- Provider-aware model configuration, metadata refresh, and active verification
+- Scheduled tasks, email polling, and maintenance flows
 
 ## Key Capabilities
 
-### Conversation Modes
+### React Terminal Runtime
 
-Nova supports two conversation experiences:
+Nova agents work through a persistent pseudo-terminal mental model:
 
-- `Threads` mode for classic conversation threads.
-- `Continuous` mode for day-segmented ongoing discussion with summaries and recall.
+- normal file operations (`ls`, `cat`, `find`, `tee`, `mv`, `rm`, ...)
+- specialized command families (`mail`, `calendar`, `memory search`, `webapp`, `mcp`, `api`, ...)
+- delegated sub-agents that exchange files through `/subagents/...`
+- blocking clarifications through `ask_user`
 
-Both modes coexist in the UI and can be used side by side.
+### Files and Memory
 
-### Skills and Tools
+- Thread files are stored as `UserFile`
+- `/memory` is a user-scoped virtual Markdown workspace backed by:
+  - `MemoryDirectory`
+  - `MemoryDocument`
+  - `MemoryChunk`
+  - `MemoryChunkEmbedding`
+- Semantic lookup is done on chunks with `memory search`
 
-Agents can use:
+### Continuous Mode
 
-- Built-in tools (browser, memory, date/time, webapp, email, caldav, webdav, code execution, etc.).
-- API and MCP tools.
-- Other agents as tools.
+Nova supports:
 
-Nova also supports on-demand skills in the runtime (`list_skills`, `load_skill`) so some tool families can be activated only when needed for the current turn.
+- classic thread conversations
+- one user-scoped continuous conversation with day segmentation, summaries, and recall
 
-### Multimodal Artifacts
+Continuous mode relies on stored messages, summaries, and embeddings.
 
-- Users can attach images, PDFs and audio directly to a message.
-- Providers can generate media that is rendered inline in the thread.
-- Conversation artifacts are stored separately from thread `Files`.
-- Artifacts can be explicitly copied to `Files` when they should become durable workspace files.
+### Integrations
 
-### Provider-Aware Routing
+Nova supports:
 
-- `OpenRouter` and `LM Studio` support provider-aware model discovery in Settings.
-- Nova persists a unified capability profile per provider/model.
-- Metadata refresh and active verification are separate actions.
-- Models without tool support can still run in tool-less thread mode when the agent does not depend on tools.
+- built-in capabilities exposed through internal plugins
+- MCP servers with optional managed OAuth
+- custom API services defined through `APIToolOperation`
+- optional system services such as SearXNG and Judge0 when enabled in Docker
 
-### Automation and Scheduled Tasks
+### Web Apps
 
-Nova includes user-managed scheduled tasks in Settings:
+Agents can publish live static apps from normal files:
 
-- Trigger types: cron and email polling.
-- Run modes: new thread, continuous message, ephemeral.
-- Predefined task templates (including guided setup flows for selected templates).
-- Maintenance tasks (for example continuous nightly day summaries).
-
-### Structured Memory
-
-Long-term memory is structured and queryable:
-
-- Memory items and themes are user-scoped.
-- Builtin memory tool supports search/add/get/archive/list themes.
-- Optional semantic retrieval with embeddings is available through per-user settings.
-
-### Files and Web Apps
-
-- User files are scoped per user/thread and stored in MinIO.
-- Message-scoped artifacts can be promoted to thread files on demand.
-- Agents can generate static mini web apps and expose them under `/apps/<slug>/`.
-- Web app serving enforces user ownership checks.
-
-## Docker Setup
-
-Docker is the recommended setup for production-like and development usage.
-
-See [docker/README.md](docker/README.md) for:
-
-- Stack selection via `COMPOSE_FILE`
-- Optional modules
-- Development and source builds
-- Environment variables
+- create/edit files in the workspace
+- run `webapp expose <source_dir>`
+- Nova serves the app under `/apps/<slug>/`
 
 ## API
 
-Nova exposes a minimal authenticated API.
+Nova exposes a minimal authenticated API:
 
-### Endpoints
+- `GET /api/`
+- `GET /api/ask/`
+- `POST /api/ask/`
 
-- `GET /api/` -> API root (discovery)
-- `GET /api/ask/` -> usage information
-- `POST /api/ask/` -> ask a question to your default agent
+`POST /api/ask/` runs your default agent through the same runtime on an ephemeral thread, then returns only the final answer.
 
-### Authentication
-
-Use token authentication:
-
-1. Generate an API token in **Settings > General**.
-2. Send `Authorization: Token <YOUR_TOKEN>`.
-
-### Example
+Authentication uses DRF token auth:
 
 ```bash
 curl -H "Authorization: Token YOUR_TOKEN_HERE" \
@@ -155,12 +111,6 @@ curl -H "Authorization: Token YOUR_TOKEN_HERE" \
      http://localhost:8080/api/ask/
 ```
 
-### Notes
-
-- A default agent must be configured for the authenticated user.
-- Invalid or missing token returns `401 Unauthorized`.
-- Missing default agent returns `400`.
-
 ## Project Layout
 
 ```text
@@ -168,49 +118,30 @@ Nova
 ├─ docker/                # Docker stacks and runtime configuration
 ├─ nova/
 │  ├─ api/                # REST API endpoints
-│  ├─ continuous/         # Continuous-mode context and conversation tools
-│  ├─ llm/                # Agent runtime, prompts, middleware, skill policy
-│  ├─ providers/          # Provider adapters, model catalogs, capability metadata
+│  ├─ continuous/         # Continuous-mode context, summaries, recall
 │  ├─ models/             # One model per file
-│  ├─ telemetry/          # Process-scoped telemetry helpers
+│  ├─ plugins/            # Internal plugin registry and builtin descriptors
+│  ├─ providers/          # Provider adapters and capability logic
+│  ├─ runtime/            # React Terminal runtime
 │  ├─ tasks/              # Celery tasks and task templates
-│  ├─ tools/              # Built-in tools, tool loading, agent-tool wrappers
-│  ├─ views/              # App views (threads, continuous, files, tasks...)
-│  ├─ templates/          # Django templates
-│  └─ static/             # Frontend assets
-├─ user_settings/         # User configuration app (providers, agents, tools, memory, tasks)
-├─ plans/                 # Design and architecture plans
-├─ README-agents.md       # Agent configuration guide
-└─ README-dev.md          # Development-oriented repository guide
+│  ├─ views/              # Django views
+│  ├─ web/                # Search, browser, and download services
+│  └─ webapp/             # Webapp publishing/serving
+├─ user_settings/         # User configuration app
+├─ plans/                 # Current architecture and product notes
+├─ README-agents.md       # Agent setup guide
+└─ README-dev.md          # Development guide
 ```
 
 ## Documentation Map
 
 - [docker/README.md](docker/README.md): Docker stacks and environment configuration
-- [README-agents.md](README-agents.md): Recommended agent/tool setup
-- [README-dev.md](README-dev.md): Development structure and internals
-- [plans/continuous_discussion.md](plans/continuous_discussion.md): Continuous mode decisions
-- [plans/memory.md](plans/memory.md): Memory system decisions
-
-## Roadmap
-
-### Recently shipped
-
-1. Continuous mode with day segments, summaries, and conversation recall tools.
-2. Structured long-term memory with optional embeddings.
-3. On-demand skill loading in the runtime.
-4. Scheduled tasks with templates and maintenance flows.
-5. Provider-aware model discovery and capability verification.
-6. Multimodal message artifacts and inline media rendering.
-
-### Planned
-
-1. Messaging app integrations (Signal, Discord, ...).
-2. Agent self-scheduling capabilities.
-
-## Contributing
-
-Pull requests are welcome.
+- [README-agents.md](README-agents.md): provider/tool/agent setup
+- [README-dev.md](README-dev.md): repository structure and runtime internals
+- [plans/react_terminal.md](plans/react_terminal.md): runtime architecture
+- [plans/memory.md](plans/memory.md): long-term memory model
+- [plans/continuous_discussion.md](plans/continuous_discussion.md): continuous mode behavior
+- [plans/task_engine.md](plans/task_engine.md): task execution model
 
 ## License
 
@@ -222,18 +153,13 @@ Nova is released under the MIT License. See [LICENSE](LICENSE).
 - [Django REST Framework](https://www.django-rest-framework.org/)
 - [Django Channels](https://channels.readthedocs.io/)
 - [Celery](https://docs.celeryq.dev/)
-- [LangChain](https://python.langchain.com/)
-- [LangGraph](https://www.langchain.com/langgraph)
 - [FastMCP](https://github.com/modelcontext/fastmcp)
 - [Bootstrap 5](https://getbootstrap.com/)
 
 ## Troubleshooting
 
-- **Port conflicts:** Ensure your configured `HOST_PORT` (default `8080`) is free.
-- **Stack mismatch:** If you changed `COMPOSE_FILE`, run `docker compose up -d --remove-orphans`.
-- **DB startup issues:** Check database container health/logs and wait for healthchecks.
-- **No superuser:** Ensure `DJANGO_SUPERUSER_*` is set in `docker/.env`.
-- **Optional module not visible in Nova:** Verify the related compose add-on is included in `COMPOSE_FILE` and required env vars are set.
-- **Ollama connectivity issues:** Use `host.docker.internal` (Docker Desktop) or host IP when targeting host-side Ollama.
-
-For more help, open an issue on GitHub.
+- Port conflicts: ensure `HOST_PORT` (default `8080`) is free
+- Stack mismatch: after changing `COMPOSE_FILE`, run `docker compose up -d --remove-orphans`
+- No superuser: ensure `DJANGO_SUPERUSER_*` is set in `docker/.env`
+- Optional service missing in UI: check `COMPOSE_FILE` and related env vars
+- Ollama connectivity: use `host.docker.internal` on Docker Desktop or your host IP on Linux

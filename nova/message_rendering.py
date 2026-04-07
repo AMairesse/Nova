@@ -4,15 +4,13 @@ from django.db.models import Prefetch
 
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor
-from nova.models.MessageArtifact import MessageArtifact
+from nova.models.UserFile import UserFile
 from nova.utils import markdown_to_html
 
 
-MESSAGE_ARTIFACT_DISPLAY_PREFETCH = Prefetch(
-    "artifacts",
-    queryset=MessageArtifact.objects.select_related("user_file", "published_file").order_by(
-        "direction",
-        "order",
+MESSAGE_ATTACHMENT_DISPLAY_PREFETCH = Prefetch(
+    "attached_files",
+    queryset=UserFile.objects.order_by(
         "created_at",
         "id",
     ),
@@ -20,7 +18,7 @@ MESSAGE_ARTIFACT_DISPLAY_PREFETCH = Prefetch(
 
 
 def with_message_display_relations(queryset):
-    return queryset.select_related("interaction").prefetch_related(MESSAGE_ARTIFACT_DISPLAY_PREFETCH)
+    return queryset.select_related("interaction").prefetch_related(MESSAGE_ATTACHMENT_DISPLAY_PREFETCH)
 
 
 def prepare_messages_for_display(

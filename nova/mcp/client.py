@@ -156,7 +156,7 @@ class MCPClient:
             logger.error(f"Error calling {tool_name}: {e}")
             raise
 
-    # ---------- Sync helpers (legacy) --------------
+    # ---------- Sync helpers --------------
     def call(self, tool_name: str, **inputs):
         self._validate_inputs(inputs)
         return asyncio.run(self.acall(tool_name, **inputs))

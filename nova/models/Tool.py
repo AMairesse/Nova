@@ -7,7 +7,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 
-from nova.tools import get_tool_type
+from nova.plugins.builtins import get_tool_type
 from nova.utils import validate_relaxed_url
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 def get_default_schema():
     return {}
+
+
+def _get_builtin_python_path(subtype: str) -> str:
+    metadata = get_tool_type(subtype) or {}
+    return str(metadata.get("python_path") or "").strip()
 
 
 class Tool(models.Model):
@@ -63,18 +68,6 @@ class Tool(models.Model):
         help_text=_("Transport method for MCP servers")
     )
 
-    # I/O JSON-Schema contract
-    input_schema = models.JSONField(default=get_default_schema,
-                                    blank=True, null=True)
-    output_schema = models.JSONField(default=get_default_schema,
-                                     blank=True, null=True)
-
-    available_functions = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text=_("Available functions for this tool, if any.")
-    )
-
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -91,9 +84,7 @@ class Tool(models.Model):
             if not metadata:
                 raise ValidationError(_("Invalid builtin subtype: %s") % self.tool_subtype)
 
-            self.python_path = metadata.get("python_path", "")
-            self.input_schema = metadata.get("input_schema", {})
-            self.output_schema = metadata.get("output_schema", {})
+            self.python_path = _get_builtin_python_path(self.tool_subtype)
 
         if self.tool_type in {self.ToolType.API, self.ToolType.MCP} and not self.endpoint:
             raise ValidationError(_("Endpoint is mandatory for API or MCP tools."))
@@ -176,7 +167,7 @@ def check_and_create_searxng_tool():
                                        name='System - SearXNG',
                                        tool_type=Tool.ToolType.BUILTIN,
                                        tool_subtype='searxng',
-                                       python_path='nova.tools.builtins.searxng')
+                                       python_path=_get_builtin_python_path('searxng'))
             ToolCredential.objects.create(user=None,
                                           tool=tool,
                                           config={'searxng_url': SEARNGX_SERVER_URL,
@@ -223,7 +214,7 @@ def check_and_create_judge0_tool():
                                        name='System - Code Execution',
                                        tool_type=Tool.ToolType.BUILTIN,
                                        tool_subtype='code_execution',
-                                       python_path='nova.tools.builtins.code_execution')
+                                       python_path=_get_builtin_python_path('code_execution'))
             ToolCredential.objects.create(user=None,
                                           tool=tool,
                                           config={'judge0_url': JUDGE0_SERVER_URL})

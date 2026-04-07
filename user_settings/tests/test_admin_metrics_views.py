@@ -30,7 +30,6 @@ class AdminMetricsViewTests(TestCase):
 
         self.ls_metric = TerminalCommandFailureMetric.objects.create(
             bucket_date="2026-04-06",
-            runtime_engine="react_terminal_v1",
             head_command="ls",
             failure_kind="invalid_arguments",
             count=3,
@@ -40,7 +39,6 @@ class AdminMetricsViewTests(TestCase):
         )
         self.unknown_metric = TerminalCommandFailureMetric.objects.create(
             bucket_date="2026-04-06",
-            runtime_engine="react_terminal_v1",
             head_command="unknowncmd",
             failure_kind="unknown_command",
             count=5,
@@ -50,7 +48,6 @@ class AdminMetricsViewTests(TestCase):
         )
         self.legacy_metric = TerminalCommandFailureMetric.objects.create(
             bucket_date="2026-04-05",
-            runtime_engine="legacy_terminal",
             head_command="pwd",
             failure_kind="unsupported_syntax",
             count=2,
@@ -84,7 +81,6 @@ class AdminMetricsViewTests(TestCase):
         self.assertTemplateUsed(response, "user_settings/admin_metrics.html")
         self.assertContains(response, "Admin metrics")
         self.assertContains(response, "unknowncmd")
-        self.assertContains(response, "legacy_terminal")
         self.assertContains(response, "Delete bucket")
         self.assertContains(response, 'data-bs-target="#purgeMetricsModal"', html=False)
         self.assertContains(response, 'id="purgeMetricsModal"', html=False)
@@ -100,7 +96,6 @@ class AdminMetricsViewTests(TestCase):
             self.url,
             {
                 "q": "unknown",
-                "runtime_engine": "react_terminal_v1",
                 "failure_kind": "unknown_command",
             },
         )
@@ -119,13 +114,12 @@ class AdminMetricsViewTests(TestCase):
             {
                 "confirm": "1",
                 "q": "unknown",
-                "runtime_engine": "react_terminal_v1",
                 "failure_kind": "unknown_command",
             },
             follow=True,
         )
 
-        self.assertEqual(response.redirect_chain[0][0], f"{self.url}?q=unknown&runtime_engine=react_terminal_v1&failure_kind=unknown_command")
+        self.assertEqual(response.redirect_chain[0][0], f"{self.url}?q=unknown&failure_kind=unknown_command")
         self.assertFalse(TerminalCommandFailureMetric.objects.filter(pk=self.unknown_metric.pk).exists())
         self.assertIn("Deleted metrics bucket:", self._messages(response)[0])
 
@@ -136,7 +130,6 @@ class AdminMetricsViewTests(TestCase):
             reverse("user_settings:admin-metrics-purge"),
             {
                 "confirm": "1",
-                "runtime_engine": "react_terminal_v1",
                 "failure_kind": "",
                 "q": "",
                 "older_than_days": "",
@@ -144,12 +137,12 @@ class AdminMetricsViewTests(TestCase):
             follow=True,
         )
 
-        self.assertEqual(response.redirect_chain[0][0], f"{self.url}?runtime_engine=react_terminal_v1")
+        self.assertEqual(response.redirect_chain[0][0], self.url)
         remaining_commands = set(
             TerminalCommandFailureMetric.objects.values_list("head_command", flat=True)
         )
-        self.assertEqual(remaining_commands, {"pwd"})
-        self.assertIn("Purged 2 metrics bucket(s).", self._messages(response))
+        self.assertEqual(remaining_commands, set())
+        self.assertIn("Purged 3 metrics bucket(s).", self._messages(response))
 
     def test_purge_matching_buckets_can_target_only_old_rows(self):
         self.client.login(username="staff-user", password="pass123")
@@ -159,7 +152,6 @@ class AdminMetricsViewTests(TestCase):
             {
                 "confirm": "1",
                 "q": "",
-                "runtime_engine": "",
                 "failure_kind": "",
                 "older_than_days": "7",
             },
@@ -180,7 +172,6 @@ class AdminMetricsViewTests(TestCase):
             {
                 "confirm": "1",
                 "q": "no-match",
-                "runtime_engine": "",
                 "failure_kind": "",
                 "older_than_days": "",
             },

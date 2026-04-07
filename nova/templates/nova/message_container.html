@@ -45,11 +45,10 @@
           data-trace-subagent-calls="{{ trace_summary.subagent_calls|default_if_none:'' }}"
           data-trace-interaction-count="{{ trace_summary.interaction_count|default_if_none:'' }}"
           data-trace-error-count="{{ trace_summary.error_count|default_if_none:'' }}"
-          data-trace-artifact-count="{{ trace_summary.artifact_count|default_if_none:'' }}"
           data-trace-duration-ms="{{ trace_summary.duration_ms|default_if_none:'' }}"
           data-context-real-tokens="{{ message.internal_data.real_tokens|default_if_none:'' }}"
           data-context-approx-tokens="{{ message.internal_data.approx_tokens|default_if_none:'' }}"
-          data-context-legacy-tokens="{{ message.internal_data.context_tokens|default_if_none:'' }}"
+          data-context-fallback-tokens="{{ message.internal_data.context_tokens|default_if_none:'' }}"
           data-context-max-context="{{ message.internal_data.max_context|default_if_none:'' }}"
           data-is-last-agent-message="{% if message.is_last_agent_message %}true{% else %}false{% endif %}"
           data-can-compact="false"
@@ -104,9 +103,9 @@
             {% if message.text %}
             <div class="user-message-text text-primary">{{ message.text|linebreaksbr }}</div>
             {% endif %}
-            {% if message.message_artifacts %}
+            {% if message.message_attachments %}
               <div class="{% if message.text %}mt-3 {% endif %}artifact-inline-list">
-                {% for attachment in message.message_artifacts %}
+                {% for attachment in message.message_attachments %}
                   {% if attachment.content_url %}
                     {% if attachment.kind == 'image' %}
                       <div class="artifact-inline-card artifact-inline-card-image">
@@ -138,31 +137,15 @@
               </div>
               <div class="{% if message.text %}mt-2 {% endif %}small text-muted">
                 {% blocktrans count attachment_count=message.message_attachment_count %}
-                  {{ attachment_count }} artifact was attached to this message.
+                  {{ attachment_count }} attachment was added to this message.
                 {% plural %}
-                  {{ attachment_count }} artifacts were attached to this message.
+                  {{ attachment_count }} attachments were added to this message.
                 {% endblocktrans %}
               </div>
               <div class="composer-attachment-summary">
-                {% for attachment in message.message_artifacts %}
-                  <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
+                {% for attachment in message.message_attachments %}
+                  <div class="artifact-summary-item">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
-                    {% if attachment.id and not attachment.metadata.legacy %}
-                      {% if attachment.user_file_id or attachment.summary_text %}
-                        <button
-                          type="button"
-                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
-                          data-artifact-id="{{ attachment.id }}"
-                          aria-label="{% trans 'Add artifact to Files' %}"
-                        >
-                          {% if attachment.published_to_file %}
-                            {% trans "Added to Files" %}
-                          {% else %}
-                            {% trans "Add to Files" %}
-                          {% endif %}
-                        </button>
-                      {% endif %}
-                    {% endif %}
                   </div>
                 {% endfor %}
               </div>
@@ -190,9 +173,9 @@
           </button>
           <div class="card-body py-2">
             <div class="assistant-markdown">{{ message.rendered_html }}</div>
-            {% if message.message_artifacts %}
+            {% if message.message_attachments %}
               <div class="mt-3 artifact-inline-list">
-                {% for attachment in message.message_artifacts %}
+                {% for attachment in message.message_attachments %}
                   {% if attachment.content_url %}
                     {% if attachment.kind == 'image' %}
                       <div class="artifact-inline-card artifact-inline-card-image">
@@ -223,25 +206,9 @@
                 {% endfor %}
               </div>
               <div class="mt-3 composer-attachment-summary">
-                {% for attachment in message.message_artifacts %}
-                  <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
+                {% for attachment in message.message_attachments %}
+                  <div class="artifact-summary-item">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
-                    {% if attachment.id and not attachment.metadata.legacy %}
-                      {% if attachment.user_file_id or attachment.summary_text %}
-                        <button
-                          type="button"
-                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
-                          data-artifact-id="{{ attachment.id }}"
-                          aria-label="{% trans 'Add artifact to Files' %}"
-                        >
-                          {% if attachment.published_to_file %}
-                            {% trans "Added to Files" %}
-                          {% else %}
-                            {% trans "Add to Files" %}
-                          {% endif %}
-                        </button>
-                      {% endif %}
-                    {% endif %}
                   </div>
                 {% endfor %}
               </div>

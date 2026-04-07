@@ -303,7 +303,7 @@
             return window.MessageRenderer.buildContextSummary({
                 real_tokens: messageEl.dataset.contextRealTokens,
                 approx_tokens: messageEl.dataset.contextApproxTokens,
-                context_tokens: messageEl.dataset.contextLegacyTokens,
+                context_tokens: messageEl.dataset.contextFallbackTokens,
                 max_context: messageEl.dataset.contextMaxContext,
             });
         },
@@ -318,7 +318,6 @@
             const subagentCalls = Number(messageEl?.dataset?.traceSubagentCalls || 0);
             const interactionCount = Number(messageEl?.dataset?.traceInteractionCount || 0);
             const errorCount = Number(messageEl?.dataset?.traceErrorCount || 0);
-            const artifactCount = Number(messageEl?.dataset?.traceArtifactCount || 0);
             const durationMs = Number(messageEl?.dataset?.traceDurationMs || 0);
             const parts = [];
 
@@ -332,10 +331,6 @@
                 if (primary) {
                     parts.push(primary);
                 }
-            }
-
-            if (artifactCount > 0) {
-                parts.push(`${artifactCount} ${gettext(artifactCount === 1 ? 'artifact' : 'artifacts')}`);
             }
 
             const durationLabel = this.formatExecutionDuration(durationMs);

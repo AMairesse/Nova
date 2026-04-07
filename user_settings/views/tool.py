@@ -31,7 +31,7 @@ from user_settings.mixins import (
 from user_settings.forms import APIToolOperationForm, ToolForm, ToolCredentialForm
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.Tool import Tool, ToolCredential
-from nova.tools import get_metadata, import_module
+from nova.plugins.builtins import get_metadata, get_tool_type
 from nova.models.Tool import check_and_create_searxng_tool, check_and_create_judge0_tool
 from nova.mcp.client import MCPClient
 from nova.mcp import oauth_service as mcp_oauth_service
@@ -85,6 +85,13 @@ def _build_mcp_oauth_context(credential: ToolCredential | None) -> dict | None:
         "using_managed_oauth": auth_type == "oauth_managed",
         "has_advanced_credentials": bool(credential.client_id or credential.client_secret),
     }
+
+
+def _get_builtin_metadata_for_tool(tool: Tool) -> dict:
+    metadata = get_tool_type(tool.tool_subtype or "")
+    if metadata:
+        return metadata
+    return get_metadata(tool.python_path)
 
 
 class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
@@ -345,7 +352,7 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
     # ------------------------------------------------------------------ #
     def get_form_class(self):
         if self.tool.tool_type == Tool.ToolType.BUILTIN:
-            meta = get_metadata(self.tool.python_path)
+            meta = _get_builtin_metadata_for_tool(self.tool)
             return lambda *a, **kw: _BuiltInConfigForm(*a, meta=meta, **kw)
         return ToolCredentialForm
 
@@ -390,7 +397,7 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
         ctx = super().get_context_data(**kwargs)
         ctx["tool"] = self.tool
         if self.tool.tool_type == Tool.ToolType.BUILTIN:
-            ctx["metadata"] = get_metadata(self.tool.python_path)
+            ctx["metadata"] = _get_builtin_metadata_for_tool(self.tool)
         if self.tool.tool_type == Tool.ToolType.API:
             ctx["api_operations"] = list(
                 APIToolOperation.objects.filter(tool=self.tool).order_by("name", "id")
@@ -535,7 +542,7 @@ async def tool_test_connection(request, pk: int):
 
         # For built-in tools, extract config from metadata fields
         if tool.tool_type == Tool.ToolType.BUILTIN:
-            meta = get_metadata(tool.python_path)
+            meta = _get_builtin_metadata_for_tool(tool)
             if meta and meta.get("config_fields"):
                 # Start with existing config
                 config_data = cred.config.copy()
@@ -585,29 +592,13 @@ async def tool_test_connection(request, pk: int):
 
         # Built-in tools with test function
         if tool.tool_type == Tool.ToolType.BUILTIN:
-            meta = get_metadata(tool.python_path)
-            if meta and meta.get("test_function"):
-                test_func = meta["test_function"]
-                test_args = meta.get("test_function_args", [])
-
-                # Handle string function names (import from module)
-                if isinstance(test_func, str):
-                    module = import_module(tool.python_path)
-                    if module and hasattr(module, test_func):
-                        test_func = getattr(module, test_func)
-                    else:
-                        return JsonResponse({
-                            "status": "error",
-                            "message": f"Test function {test_func} not found"
-                        })
-
-                # Call the test function with the specified arguments
-                if test_args == ['user', 'tool_id']:
-                    result = await test_func(request.user, tool.id)
-                elif test_args == ['tool']:
-                    result = await test_func(tool)
+            meta = _get_builtin_metadata_for_tool(tool)
+            test_handler = meta.get("test_connection_handler") if meta else None
+            if test_handler:
+                if tool.tool_subtype in {"email", "caldav"}:
+                    result = await test_handler(user=request.user, tool_id=tool.id)
                 else:
-                    result = await test_func()
+                    result = await test_handler(tool=tool)
                 return JsonResponse(result)
 
         # MCP

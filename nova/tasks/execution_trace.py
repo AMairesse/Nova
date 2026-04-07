@@ -143,48 +143,6 @@ def sanitize_preview(value: Any) -> str:
         return _sanitize_string(value)
 
 
-def extract_artifact_refs(payload: Any) -> list[dict[str, Any]]:
-    refs: list[dict[str, Any]] = []
-
-    def _append_artifact_id(artifact_id: Any, *, tool_output: bool = False) -> None:
-        try:
-            normalized_id = int(artifact_id)
-        except (TypeError, ValueError):
-            return
-        refs.append({
-            "artifact_id": normalized_id,
-            "tool_output": bool(tool_output),
-        })
-
-    if isinstance(payload, tuple) and len(payload) >= 2:
-        refs.extend(extract_artifact_refs(payload[1]))
-        return refs
-
-    if isinstance(payload, dict):
-        artifact_ids = payload.get("artifact_ids")
-        if isinstance(artifact_ids, list):
-            for artifact_id in artifact_ids:
-                _append_artifact_id(artifact_id, tool_output=bool(payload.get("tool_output")))
-        artifact_refs = payload.get("artifact_refs")
-        if isinstance(artifact_refs, list):
-            for artifact_ref in artifact_refs:
-                if not isinstance(artifact_ref, dict):
-                    continue
-                try:
-                    normalized_id = int(artifact_ref.get("artifact_id"))
-                except (TypeError, ValueError):
-                    continue
-                refs.append({
-                    "artifact_id": normalized_id,
-                    "tool_output": bool(artifact_ref.get("tool_output")),
-                    "kind": str(artifact_ref.get("kind") or "").strip(),
-                    "label": sanitize_preview(artifact_ref.get("label")),
-                })
-        return refs
-
-    return refs
-
-
 class TaskExecutionTraceHandler(AsyncCallbackHandler):
     def __init__(
         self,
@@ -249,7 +207,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 "subagent_calls": 0,
                 "interaction_count": 0,
                 "error_count": 0,
-                "artifact_count": 0,
                 "duration_ms": None,
                 "started_at": root_started_at,
                 "finished_at": None,
@@ -265,7 +222,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 "input_preview": "",
                 "output_preview": "",
                 "children": [],
-                "artifact_refs": [],
                 "meta": {},
             },
         }
@@ -299,7 +255,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         input_preview: Any = "",
         output_preview: Any = "",
         meta: dict[str, Any] | None = None,
-        artifact_refs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         started_at = _utc_now_iso()
         node_id = f"{node_type}_{uuid4().hex}"
@@ -314,7 +269,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             "input_preview": sanitize_preview(input_preview),
             "output_preview": sanitize_preview(output_preview),
             "children": [],
-            "artifact_refs": list(artifact_refs or []),
             "meta": deepcopy(meta) if isinstance(meta, dict) else {},
         }
 
@@ -334,7 +288,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         *,
         status: str,
         output_preview: Any = None,
-        artifact_refs: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
         node["status"] = status
@@ -342,8 +295,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         node["duration_ms"] = _compute_duration_ms(node.get("started_at"), node.get("finished_at"))
         if output_preview is not None:
             node["output_preview"] = sanitize_preview(output_preview)
-        if artifact_refs is not None:
-            node["artifact_refs"] = list(artifact_refs)
         if isinstance(meta, dict):
             merged_meta = dict(node.get("meta") or {})
             merged_meta.update(meta)
@@ -359,7 +310,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
     def _build_summary(self) -> dict[str, Any]:
         trace = self._get_trace()
         root = trace.get("root") or {}
-        artifact_ids: set[int] = set()
         tool_calls = 0
         subagent_calls = 0
         interaction_count = 0
@@ -375,11 +325,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 interaction_count += 1
             elif node_type == "error":
                 error_count += 1
-            for artifact_ref in node.get("artifact_refs", []) or []:
-                try:
-                    artifact_ids.add(int(artifact_ref.get("artifact_id")))
-                except (TypeError, ValueError, AttributeError):
-                    continue
 
         return {
             "has_trace": bool(root.get("id")),
@@ -387,7 +332,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
             "subagent_calls": subagent_calls,
             "interaction_count": interaction_count,
             "error_count": error_count,
-            "artifact_count": len(artifact_ids),
             "duration_ms": root.get("duration_ms"),
             "started_at": root.get("started_at"),
             "finished_at": root.get("finished_at"),
@@ -603,7 +547,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         node_id: str,
         *,
         output_preview: Any = None,
-        artifact_refs: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
         with self._state["lock"]:
@@ -614,7 +557,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 node,
                 status="completed",
                 output_preview=output_preview,
-                artifact_refs=artifact_refs,
                 meta=meta,
             )
             self._persist_locked()
@@ -624,14 +566,12 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
         node_id: str,
         *,
         output_preview: Any = None,
-        artifact_refs: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
         await self._run_serialized(
             self._complete_subagent_sync,
             node_id,
             output_preview=output_preview,
-            artifact_refs=artifact_refs,
             meta=meta,
         )
 
@@ -681,7 +621,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 "subagent_calls": int(summary.get("subagent_calls") or 0),
                 "interaction_count": int(summary.get("interaction_count") or 0),
                 "error_count": int(summary.get("error_count") or 0),
-                "artifact_count": int(summary.get("artifact_count") or 0),
                 "duration_ms": summary.get("duration_ms"),
             }
 
@@ -745,7 +684,6 @@ class TaskExecutionTraceHandler(AsyncCallbackHandler):
                 node,
                 status="completed",
                 output_preview=output,
-                artifact_refs=extract_artifact_refs(output),
             )
             self._persist_locked()
         return None

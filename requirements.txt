@@ -60,8 +60,6 @@ autobahn==25.12.2
     # via daphne
 automat==25.4.16
     # via twisted
-backoff==2.2.1
-    # via langfuse
 beartype==0.22.9
     # via py-key-value-aio
 beautifulsoup4==4.14.3
@@ -201,8 +199,6 @@ frozenlist==1.8.0
     #   aiosignal
 fsspec==2026.3.0
     # via huggingface-hub
-googleapis-common-protos==1.74.0
-    # via opentelemetry-exporter-otlp-proto-http
 greenlet==3.3.2
     # via playwright
 h11==0.16.0
@@ -221,7 +217,6 @@ httpx==0.28.1
     #   fastmcp
     #   huggingface-hub
     #   langchain-mistralai
-    #   langfuse
     #   langgraph-sdk
     #   langsmith
     #   mcp
@@ -321,8 +316,6 @@ langchain-openai==1.1.12
     # via nova (pyproject.toml)
 langchain-text-splitters==1.1.1
     # via langchain-classic
-langfuse==4.0.6
-    # via nova (pyproject.toml)
 langgraph==1.1.4
     # via
     #   langchain
@@ -383,27 +376,7 @@ openai==2.30.0
 openapi-pydantic==0.5.1
     # via fastmcp
 opentelemetry-api==1.40.0
-    # via
-    #   fastmcp
-    #   langfuse
-    #   nova (pyproject.toml)
-    #   opentelemetry-exporter-otlp-proto-http
-    #   opentelemetry-sdk
-    #   opentelemetry-semantic-conventions
-opentelemetry-exporter-otlp-proto-common==1.40.0
-    # via opentelemetry-exporter-otlp-proto-http
-opentelemetry-exporter-otlp-proto-http==1.40.0
-    # via langfuse
-opentelemetry-proto==1.40.0
-    # via
-    #   opentelemetry-exporter-otlp-proto-common
-    #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-sdk==1.40.0
-    # via
-    #   langfuse
-    #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-semantic-conventions==0.61b0
-    # via opentelemetry-sdk
+    # via fastmcp
 orjson==3.11.8
     # via
     #   langgraph-checkpoint-postgres
@@ -418,7 +391,6 @@ packaging==26.0
     #   incremental
     #   kombu
     #   langchain-core
-    #   langfuse
     #   langsmith
     #   marshmallow
 pathable==0.5.0
@@ -435,10 +407,6 @@ propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
-protobuf==6.33.6
-    # via
-    #   googleapis-common-protos
-    #   opentelemetry-proto
 psycopg==3.3.3
     # via
     #   langgraph-checkpoint-postgres
@@ -468,7 +436,6 @@ pydantic[email]==2.12.5
     #   langchain-classic
     #   langchain-core
     #   langchain-mistralai
-    #   langfuse
     #   langgraph
     #   langsmith
     #   mcp
@@ -547,7 +514,6 @@ requests==2.33.1
     #   langchain-classic
     #   langchain-community
     #   langsmith
-    #   opentelemetry-exporter-otlp-proto-http
     #   pywebpush
     #   requests-toolbelt
     #   tiktoken
@@ -615,9 +581,6 @@ typing-extensions==4.15.0
     #   mcp
     #   openai
     #   opentelemetry-api
-    #   opentelemetry-exporter-otlp-proto-http
-    #   opentelemetry-sdk
-    #   opentelemetry-semantic-conventions
     #   psycopg-pool
     #   py-key-value-aio
     #   pydantic
@@ -679,9 +642,7 @@ websockets==16.0
 whitenoise==6.12.0
     # via nova (pyproject.toml)
 wrapt==1.17.3
-    # via
-    #   aiobotocore
-    #   langfuse
+    # via aiobotocore
 x-wr-timezone==2.0.1
     # via recurring-ical-events
 xxhash==3.6.0

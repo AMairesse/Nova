@@ -5,6 +5,7 @@ from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Tool import Tool, ToolCredential
+from nova.plugins.builtins import get_tool_type
 
 User = get_user_model()
 
@@ -43,6 +44,9 @@ def create_agent(user, provider, name="Test Agent",
 def create_tool(user, name="Test Tool", tool_type=Tool.ToolType.BUILTIN, description="Test tool",
                 endpoint="https://api.example.com/v1", tool_subtype="memory", is_active=True,
                 python_path="", transport_type="") -> Tool:
+    builtin_python_path = ""
+    if tool_type == Tool.ToolType.BUILTIN and tool_subtype:
+        builtin_python_path = str((get_tool_type(tool_subtype) or {}).get("python_path") or "")
     return Tool.objects.create(
         user=user,
         name=name,
@@ -51,14 +55,7 @@ def create_tool(user, name="Test Tool", tool_type=Tool.ToolType.BUILTIN, descrip
         endpoint=endpoint if tool_type in {Tool.ToolType.API, Tool.ToolType.MCP} else None,
         tool_subtype=tool_subtype,
         is_active=is_active,
-        python_path=(
-            python_path
-            or (
-                f"nova.tools.builtins.{tool_subtype}"
-                if tool_type == Tool.ToolType.BUILTIN and tool_subtype
-                else ""
-            )
-        ),
+        python_path=(python_path or builtin_python_path),
         transport_type=transport_type,
     )
 

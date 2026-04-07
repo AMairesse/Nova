@@ -42,13 +42,13 @@ class ToolsViewsTests(TestCase):
             user=None,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="searxng",
-            python_path="nova.tools.builtins.searxng",
+            python_path="nova.plugins.search",
         )
         create_tool(
             user=None,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="code_execution",
-            python_path="nova.tools.builtins.code_execution",
+            python_path="nova.plugins.python",
         )
         response = self.client.get(reverse("user_settings:tools"), {"partial": "1"})
         self.assertEqual(response.status_code, 200)
@@ -68,7 +68,7 @@ class ToolsViewsTests(TestCase):
             name="System Tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="searxng",
-            python_path="nova.tools.builtins.searxng",
+            python_path="nova.plugins.search",
         )
         response = self.client.get(reverse("user_settings:tools"))
         tools = response.context["tools"]
@@ -91,13 +91,13 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
-    @patch("nova.tools.get_available_tool_types", return_value={"date": {"name": "Date Tool"}})
+    @patch("nova.plugins.builtins.get_available_tool_types", return_value={"date": {"name": "Date Tool"}})
     @patch(
-        "nova.tools.get_tool_type",
+        "nova.plugins.builtins.get_tool_type",
         return_value={
             "name": "Date Tool",
             "description": "Dates",
-            "python_path": "nova.tools.builtins.date",
+            "python_path": "nova.plugins.datetime",
             "input_schema": {},
             "output_schema": {},
         },
@@ -110,7 +110,7 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         tool = Tool.objects.get(user=self.user, tool_subtype="date")
         self.assertEqual(response["Location"], reverse("user_settings:tool-configure", args=[tool.pk]))
-        self.assertEqual(tool.python_path, "nova.tools.builtins.date")
+        self.assertEqual(tool.python_path, "nova.plugins.datetime")
 
     def test_create_builtin_email_tool_keeps_custom_alias_name(self):
         response = self.client.post(
@@ -133,7 +133,7 @@ class ToolsViewsTests(TestCase):
             name="Shared Inbox",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         response = self.client.post(
@@ -339,15 +339,15 @@ class ToolsViewsTests(TestCase):
             description="read only",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         response = self.client.post(reverse("user_settings:tool-delete", args=[system_tool.id]))
         self.assertEqual(response.status_code, 404)
         self.assertTrue(Tool.objects.filter(pk=system_tool.pk).exists())
 
-    @patch("user_settings.views.tool.get_metadata")
-    def test_configure_builtin_tool_saves_config(self, mock_get_metadata):
-        mock_get_metadata.return_value = {
+    @patch("user_settings.views.tool._get_builtin_metadata_for_tool")
+    def test_configure_builtin_tool_saves_config(self, mock_get_builtin_metadata):
+        mock_get_builtin_metadata.return_value = {
             "config_fields": [
                 {"name": "username", "label": "User", "type": "text", "required": True},
                 {"name": "password", "label": "Password", "type": "password", "required": False},
@@ -357,7 +357,7 @@ class ToolsViewsTests(TestCase):
             self.user,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="caldav",
-            python_path="nova.tools.builtins.caldav",
+            python_path="nova.plugins.calendar",
         )
         response = self.client.post(
             reverse("user_settings:tool-configure", args=[tool.id]),
@@ -374,7 +374,7 @@ class ToolsViewsTests(TestCase):
             name="Mailbox",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
@@ -384,13 +384,27 @@ class ToolsViewsTests(TestCase):
         self.assertContains(response, "SMTP")
         self.assertContains(response, "Enable email sending")
 
+    def test_configure_builtin_uses_registry_even_when_python_path_is_stale(self):
+        tool = create_tool(
+            self.user,
+            name="Mailbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="legacy.invalid.path",
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "IMAP")
+
     def test_configure_webdav_tool_shows_secret_placeholder_for_existing_app_password(self):
         tool = create_tool(
             self.user,
             name="WebDAV",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="webdav",
-            python_path="nova.tools.builtins.webdav",
+            python_path="nova.plugins.webdav",
         )
         create_tool_credential(
             self.user,
@@ -426,14 +440,14 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(credential.username, "foo")
         self.assertEqual(credential.password, "bar")
 
-    @patch("nova.tools.builtins.caldav.test_caldav_access", new_callable=AsyncMock)
+    @patch("nova.plugins.calendar.test_calendar_access", new_callable=AsyncMock)
     def test_tool_test_connection_builtin(self, mock_test_access):
         mock_test_access.return_value = {"status": "success"}
         tool = create_tool(
             self.user,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="caldav",
-            python_path="nova.tools.builtins.caldav",
+            python_path="nova.plugins.calendar",
         )
         response = self.client.post(
             reverse("user_settings:tool-test", args=[tool.id]),
@@ -588,14 +602,14 @@ class ToolsViewsTests(TestCase):
         self.assertIn("boom", response.json()["message"])
         self.assertTrue(any("boom" in line for line in logs.output))
 
-    @patch("nova.tools.builtins.code_execution.test_judge0_access", new_callable=AsyncMock)
+    @patch("nova.plugins.python.service.test_judge0_access", new_callable=AsyncMock)
     def test_tool_test_connection_codegen(self, mock_test):
         mock_test.return_value = {"status": "success"}
         tool = create_tool(
             self.user,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="code_execution",
-            python_path="nova.tools.builtins.code_execution",
+            python_path="nova.plugins.python",
         )
         response = self.client.post(
             reverse("user_settings:tool-test", args=[tool.id]),

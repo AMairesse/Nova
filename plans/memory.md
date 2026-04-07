@@ -1,83 +1,83 @@
-# Long-term Memory (Implemented)
+# Long-Term Memory
 
-Last reviewed: 2026-02-28
+Last reviewed: 2026-04-06  
 Status: implemented
 
 ## Scope
 
-Nova memory is a structured, user-scoped store accessed through tools (not injected as full prompt content).
+Nova memory is a user-scoped Markdown workspace exposed through the runtime as `/memory`.
 
-## Data model
+It is not stored as prompt text and is modeled as documents, directories, and chunks.
+
+## Data Model
 
 Implemented models:
-- `MemoryTheme`
-- `MemoryItem`
-- `MemoryItemEmbedding`
+
+- `MemoryDirectory`
+- `MemoryDocument`
+- `MemoryChunk`
+- `MemoryChunkEmbedding`
 
 Key points:
-- Memory is global per user.
-- `MemoryItem.status` supports `active` and `archived`.
-- Embeddings use fixed-size pgvector storage (`VectorField(dimensions=1024)`).
-- PostgreSQL-specific vector index migration is present for embeddings.
 
-## Tool surface
+- memory is global per user
+- `MemoryDocument.virtual_path` is the source of truth for visible file paths
+- empty directories are persisted through `MemoryDirectory`
+- documents are soft-archived through status fields
 
-Builtin memory tool functions:
-- `memory_search`
-- `memory_add`
-- `memory_get`
-- `memory_list_themes`
-- `memory_archive`
+## Visible Runtime Surface
 
-Behavior highlights:
-- `memory_add` creates structured items and defaults missing theme to `general`.
-- `memory_search` defaults to `status=active`.
-- `memory_search` accepts match-all mode (`query=''` or `query='*'`) and returns recent items.
-- `memory_archive` performs soft-delete (`status=archived`).
+Examples:
 
-## Retrieval behavior
+- `/memory/README.md`
+- `/memory/profile.md`
+- `/memory/projects/client-a.md`
 
-`memory_search` uses DB-dependent retrieval:
-- PostgreSQL: hybrid ranking (FTS + semantic when query vector is available).
-- Without embeddings/query vector: lexical ranking only.
-- Non-PostgreSQL fallback: `icontains`.
+Supported operations come from normal terminal commands:
 
-Returned payload includes score/signals metadata and snippets.
+- `ls`
+- `cat`
+- `mkdir`
+- `touch`
+- `tee`
+- `mv`
+- `rm`
+- `grep`
+- `memory search`
 
-## Prompt contract
+## Retrieval Behavior
 
-Memory is tool-driven in prompt generation:
-- Full memory content is not injected.
-- Prompt includes lightweight discovery hints (themes + active counts) when memory tool is enabled.
+Lexical:
 
-## Embeddings operations
+- `grep` works on rendered document text only
 
-Implemented background tasks:
-- `compute_memory_item_embedding_task`
-- `rebuild_user_memory_embeddings_task`
+Hybrid semantic:
 
-Operational behavior:
-- Embedding computation is asynchronous.
-- If no embeddings provider is configured, memory still works in lexical mode.
-- Rebuild task marks vectors pending and requeues computation in batches.
+- `memory search` runs on `MemoryChunk`
+- supports `--under /memory/...`
+- returns path + matching heading/section
 
-Dimension handling:
-- vectors shorter than 1024 are zero-padded.
-- vectors longer than 1024 raise an error.
+## Chunking
 
-## User settings and inspection UI
+Documents are chunked with a Markdown-first strategy:
 
-Implemented user-facing memory settings in `user_settings`:
-- per-user embeddings configuration fields (stored in `UserParameters`)
-- endpoint healthcheck action
-- confirmation flow before provider/model change when rebuild is needed
-- background rebuild trigger after confirmation
+- split by `##` sections first
+- oversized sections fall back to overlapping windows
+- documents without headings are window-chunked directly
 
-Implemented read-only browser:
-- paginated memory item table
-- optional archived inclusion toggle
-- simple theme/text filtering
+## Embeddings
 
-## Out of scope in this document
+- embeddings are stored per chunk, never per whole file
+- `MemoryChunkEmbedding` rows are created immediately on write
+- async computation is queued when a provider is available
+- pending rows are later picked up by rebuild flows when needed
 
-This file does not describe deprecated markdown-blob memory or speculative future consolidation designs.
+## UI / Settings
+
+User-facing memory settings include:
+
+- embeddings source and provider config
+- rebuild confirmation when the effective provider changes
+- a document-centric browser
+
+The browser lists documents/directories rather than typed memory items.

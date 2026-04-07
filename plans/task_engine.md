@@ -1,84 +1,89 @@
-# Task Engine (Implemented)
+# Task Engine
 
-Last reviewed: 2026-02-28
+Last reviewed: 2026-04-06  
 Status: implemented
 
 ## Scope
 
-This document describes the implemented execution model for scheduled and interactive agent tasks.
+This document describes the current execution model for scheduled and interactive agent tasks.
 
-## Core models
+## Core Models
 
-- `TaskDefinition`: scheduler config and execution intent.
-- `Task`: runtime execution state (`PENDING`, `RUNNING`, `AWAITING_INPUT`, `COMPLETED`, `FAILED`).
-- `Interaction`: blocking question/answer checkpoint during a task run.
+- `TaskDefinition`: scheduler config and execution intent
+- `Task`: runtime execution state (`PENDING`, `RUNNING`, `AWAITING_INPUT`, `COMPLETED`, `FAILED`)
+- `Interaction`: blocking clarification during a task run
 
 `TaskDefinition` supports:
+
 - `task_kind`: `agent` or `maintenance`
 - `trigger_type`: `cron` or `email_poll`
 - `run_mode`: `new_thread`, `continuous_message`, `ephemeral`
 
-## Scheduling and Beat sync
+## Scheduling
 
-`TaskDefinition.save()` keeps a `django_celery_beat` `PeriodicTask` in sync:
+`TaskDefinition.save()` keeps its `django_celery_beat` task in sync:
+
 - `cron` trigger -> `CrontabSchedule`
-- `email_poll` trigger -> `IntervalSchedule` (minutes)
+- `email_poll` trigger -> `IntervalSchedule`
 
-Disabling a definition disables the associated periodic task.
-Deleting a definition deletes the associated periodic task.
+## Execution Path
 
-## Celery entrypoints
+Agent tasks run through the current runtime/task executors:
 
-Implemented trigger tasks:
-- `run_task_definition_cron`
-- `poll_task_definition_email`
-- `run_task_definition_maintenance`
+- `ReactTerminalTaskExecutor`
+- `ReactTerminalSummarizationTaskExecutor`
 
-## Agent execution path
+High-level flow:
 
-`execute_agent_task_definition(...)` flow:
-1. Render prompt placeholders (`{{ var }}`) from runtime variables.
-2. Prepare execution thread/message from `run_mode`:
-   - `new_thread`: create classic thread + user message.
-   - `continuous_message`: append to continuous thread and enqueue continuous follow-ups.
-   - `ephemeral`: create temporary classic thread + user message.
-3. Create runtime `Task` and execute via `AgentTaskExecutor`.
-4. For `ephemeral`, delete the temporary thread in `finally`.
+1. render prompt variables
+2. create the target thread/message based on `run_mode`
+3. create a `Task`
+4. execute through the React Terminal runtime
+5. delete ephemeral threads in `finally` when required
 
-## Interactive interruption/resume
+## Run Modes
 
-When agent interrupts for user input:
-- `TaskExecutor` creates an `Interaction` (`PENDING`) and a linked `interaction_question` message.
-- Task transitions to `AWAITING_INPUT`.
-- WS event `user_prompt` is emitted.
+### `new_thread`
 
-User response/cancel (`interaction_views`):
-- verifies user ownership
-- updates interaction status (`ANSWERED` or `CANCELED`)
-- queues `resume_ai_task`
+- creates a new classic thread
+- adds the prompt as a user message
 
-`resume_ai_task` re-enters the same task/thread/agent execution context.
+### `continuous_message`
 
-## Continuous-specific execution hooks
+- appends to the user’s continuous thread
+- triggers continuous follow-up indexing/summarization hooks
 
-During continuous runs:
-- checkpoint context can be rebuilt before invocation (`ensure_continuous_checkpoint_state`).
-- after success, sub-agent checkpoints for the thread are purged (main checkpoint kept).
+### `ephemeral`
 
-## Email polling specifics
+- creates a temporary classic thread
+- runs the task
+- deletes the thread afterwards
 
-`poll_new_unseen_email_headers(...)` behavior:
-- read-only IMAP polling
-- UID cursor and UIDVALIDITY tracking in `TaskDefinition.runtime_state`
-- first run processes unseen backlog
-- backlog is skipped after prolonged downtime (>2x poll interval)
+## Interactive Clarification
 
-When new headers are found, prompt variables are injected (count + markdown/json header list).
+When the runtime calls `ask_user(...)`:
 
-## Retry behavior
+- task status becomes `AWAITING_INPUT`
+- an `Interaction` row is created
+- websocket event `user_prompt` is emitted
+- user answers/cancels through the same interaction endpoints
+- resume is performed through the runtime-aware resume path
 
-Trigger-driven runners use bounded exponential retry:
-- max retries: 5
-- countdown: exponential backoff from 30s (capped)
+The resume path rehydrates the runtime context and injects a synthetic tool result for `ask_user`.
 
-Direct runtime tasks (`run_ai_task`, `resume_ai_task`, `summarize_thread_task`) use Celery retry-on-error behavior defined in task code.
+## Continuous Hooks
+
+Continuous-specific task execution:
+
+- appends messages through the continuous helpers
+- relies on stored summaries and transcript chunks
+
+## Trigger Tasks
+
+Implemented trigger tasks include:
+
+- cron task execution
+- email polling task execution
+- maintenance task execution
+
+Trigger-driven runners use bounded exponential retry.

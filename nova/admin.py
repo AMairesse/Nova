@@ -4,7 +4,6 @@ from django.contrib.auth.models import User
 
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.ConversationEmbedding import DaySegmentEmbedding, TranscriptChunkEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction
@@ -12,7 +11,6 @@ from nova.models.MemoryChunk import MemoryChunk
 from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
 from nova.models.MemoryDirectory import MemoryDirectory
 from nova.models.MemoryDocument import MemoryDocument
-from nova.models.MessageArtifact import MessageArtifact
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
 from nova.models.Task import Task
@@ -35,12 +33,6 @@ class FilesInline(admin.TabularInline):
     extra = 0
 
 
-class ArtifactsInline(admin.TabularInline):
-    model = MessageArtifact
-    verbose_name_plural = "artifacts"
-    extra = 0
-
-
 class DaySegmentsInline(admin.TabularInline):
     model = DaySegment
     verbose_name_plural = "Day Segments"
@@ -55,12 +47,6 @@ class TranscriptChunksInline(admin.TabularInline):
     extra = 0
     fields = ("day_segment", "start_message", "end_message", "token_estimate", "updated_at")
     readonly_fields = ("updated_at",)
-
-
-class CheckpointLinksInline(admin.TabularInline):
-    model = CheckpointLink
-    verbose_name_plural = "Checkpoint Links"
-    extra = 0
 
 
 class DaySegmentEmbeddingInline(admin.StackedInline):
@@ -97,7 +83,7 @@ class ThreadAdmin(admin.ModelAdmin):
     list_filter = ("mode", "created_at")
     search_fields = ("subject", "user__username", "user__email")
     ordering = ("-created_at",)
-    inlines = [FilesInline, ArtifactsInline, CheckpointLinksInline, DaySegmentsInline, TranscriptChunksInline]
+    inlines = [FilesInline, DaySegmentsInline, TranscriptChunksInline]
 
 
 @admin.register(LLMProvider)
@@ -116,51 +102,6 @@ class LLMProviderAdmin(admin.ModelAdmin):
               'additional_config', 'max_context_tokens', 'validation_status',
               'probe_checked_at', 'metadata_checked_at', 'validated_fingerprint',
               'capability_profile', 'user')
-
-
-@admin.register(MessageArtifact)
-class MessageArtifactAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "thread",
-        "message",
-        "direction",
-        "kind",
-        "label",
-        "user_file",
-        "published_file",
-        "source_artifact",
-        "is_currently_published_to_file",
-        "created_at",
-    )
-    list_filter = ("direction", "kind", "created_at")
-    search_fields = ("label", "summary_text", "search_text", "message__text", "user_file__original_filename")
-    readonly_fields = ("created_at", "updated_at")
-    fields = (
-        "user",
-        "thread",
-        "message",
-        "direction",
-        "kind",
-        "label",
-        "mime_type",
-        "user_file",
-        "published_file",
-        "source_artifact",
-        "summary_text",
-        "search_text",
-        "provider_type",
-        "model",
-        "provider_fingerprint",
-        "order",
-        "metadata",
-        "created_at",
-        "updated_at",
-    )
-
-    @admin.display(boolean=True, description="Published")
-    def is_currently_published_to_file(self, obj):
-        return obj.is_currently_published_to_file
 
 
 @admin.register(AgentConfig)
@@ -264,18 +205,16 @@ class MemoryChunkAdmin(admin.ModelAdmin):
 class TerminalCommandFailureMetricAdmin(admin.ModelAdmin):
     list_display = (
         "bucket_date",
-        "runtime_engine",
         "head_command",
         "failure_kind",
         "count",
         "last_seen_at",
     )
-    list_filter = ("bucket_date", "runtime_engine", "failure_kind", "last_seen_at")
+    list_filter = ("bucket_date", "failure_kind", "last_seen_at")
     search_fields = ("head_command", "last_error")
     ordering = ("-bucket_date", "-last_seen_at", "head_command", "failure_kind")
     readonly_fields = (
         "bucket_date",
-        "runtime_engine",
         "head_command",
         "failure_kind",
         "count",
@@ -380,7 +319,6 @@ class MessageAdmin(admin.ModelAdmin):
     list_filter = ("actor", "message_type", "created_at")
     search_fields = ("user__username", "thread__subject", "text")
     ordering = ("-created_at",)
-    inlines = [ArtifactsInline]
 
 
 admin.site.unregister(User)
@@ -392,18 +330,6 @@ class UserFileAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "thread", "source_message", "scope", "original_filename", "size", "expiration_date")
     list_filter = ("scope", "mime_type", "expiration_date")
     search_fields = ("user__username", "original_filename", "key")
-
-
-@admin.register(CheckpointLink)
-class CheckpointLinkAdmin(admin.ModelAdmin):
-    list_display = (
-        "checkpoint_id",
-        "thread",
-        "agent",
-        "continuous_context_built_at",
-    )
-    list_filter = ("continuous_context_built_at",)
-    search_fields = ("thread__subject", "agent__name")
 
 
 @admin.register(Interaction)

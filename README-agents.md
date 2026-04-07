@@ -1,194 +1,222 @@
-# Nova - How to Set Up Your Own Agents
+# Nova - Agent Setup Guide
 
-This guide explains how to configure agents in Nova.
+This guide explains how to configure providers, tools, and agents for the current React Terminal runtime.
 
-Nova now uses a hybrid model:
-- a main agent (`Nova`) with direct tools and on-demand skills
-- a small set of specialized sub-agents for focused domains (internet, code)
-- optional media-oriented agents can be added for image/audio generation when needed
+## Mental Model
 
-Mail and calendar are no longer configured as dedicated sub-agents in the default setup.
+Nova agents do not receive a large catalog of callable tools. They work through:
 
-## Prerequisites
+- `terminal(...)`
+- `delegate_to_agent(...)`
+- `ask_user(...)`
 
-Before starting, ensure you have:
-- Docker installed for running optional services like SearXNG and Judge0 (enabled through `COMPOSE_FILE` in `docker/.env`).
-- Access to LLM providers: local (for example Ollama or LM Studio) or remote (for example OpenRouter.ai).
-- Basic knowledge of API keys and URLs for configuration.
-- Optional: a CalDAV server and one or more email accounts.
+Most capabilities are exposed through terminal commands, virtual files, and attached integrations.
 
-If using Docker, select your stack in `docker/.env` (`COMPOSE_FILE`) and run `docker compose up -d`.
+## 1. Configure a Provider
 
-## 1. Create an LLM Provider
+You need at least one `LLMProvider`.
 
-You need at least one LLM provider to power your agents.
+Provider configuration is provider-aware:
 
-Nova provider configuration is now provider-aware:
-- save the connection first if needed
-- load/select a model when the provider supports a live catalog
-- refresh metadata to get declared capabilities
-- run active verification to confirm chat/streaming/tools/vision support
+1. save the connection
+2. load/select a model when the provider supports discovery
+3. refresh metadata
+4. run active verification
 
-For `OpenRouter` and `LMStudio`, Nova can load the available models directly from the provider.
+Recommended rule:
 
-### Example for Local Provider
+- main agents and tool-using sub-agents should use a model verified with tool support
+- providers verified without tool support are better suited to simple chat or specialized media agents
+
+### Example Local Provider
 
 | Field | Value |
 | --- | --- |
-| Name | `LMStudio - Magistral` |
+| Name | `LM Studio - Main` |
 | Type | `LMStudio` |
-| Model | `Select from the LM Studio catalog or enter manually` |
+| Model | `Select from catalog or enter manually` |
 | Base URL | `http://host.docker.internal:1234/v1` |
 | Max context tokens | `50000` |
 
-### Example for Remote Provider
+### Example Remote Provider
 
 | Field | Value |
 | --- | --- |
 | Name | `OpenRouter - GPT-5-mini` |
 | Type | `OpenRouter` |
 | Model | `openai/gpt-5-mini` |
-| API key | `Enter your API key` |
-| Base URL | `Auto-filled: https://openrouter.ai/api/v1` |
+| API key | `Your key` |
+| Base URL | `https://openrouter.ai/api/v1` |
 | Max context tokens | `400000` |
 
-Recommended provider workflow:
-1. Save the provider connection.
-2. Use `Load models` to browse/select a model.
-3. Use `Refresh metadata` to import declared capabilities.
-4. Use `Run active verification` before assigning the provider to important agents.
+## 2. Configure Tools
 
-## 2. Create Your Tools
+Attach only the integrations you actually want an agent to use.
 
-Add these default tools to your Nova workspace:
-- `Ask user`
+Common builtins:
+
 - `Date / Time`
 - `Browser`
 - `Memory`
 - `WebApp`
-- `SearXNG` (requires enabling `docker-compose.add-searxng.yml` in `COMPOSE_FILE`)
-- `Judge0` (requires enabling `docker-compose.add-judge0.yml` in `COMPOSE_FILE`)
+- `Email`
+- `CalDAV`
+- `WebDAV`
 
-Configure private tools:
-- `CalDAV`: set URL, username, password.
-- `Email`: set IMAP settings (required), and SMTP settings if sending is enabled.
+Optional system services:
 
-You can configure multiple email and CalDAV tools for the same user. Nova will aggregate them under skills at runtime.
+- `SearXNG` if enabled in Docker
+- `Judge0` if enabled in Docker
 
-## 3. Create Your Agents
+Optional external adapters:
 
-Nova defaults to:
-- one main agent: `Nova`
-- two sub-agents used as tools: `Internet Agent`, `Code Agent`
-- one optional sub-agent used as a tool: `Image Agent` when a provider with known image output capability exists
-
-Do not create dedicated `Calendar Agent` or `Email Agent` in the default model.
-
-Important provider rule:
-- the main agent and tool-calling sub-agents should use a model verified with tool support
-- models verified as `tools unavailable` are better suited to simple thread runs or specialized media generation
-- bootstrap is role-aware: it may choose a different provider for `Image Agent` than for `Nova`
-
-### 3.1 Internet Agent
-
-| Field | Value |
-| --- | --- |
-| Name | `Internet Agent` |
-| Provider | `LMStudio - Magistral` or `OpenRouter - GPT-5-mini` |
-| Prompt | `You are an AI Agent specialized in retrieving information from the internet. Use search tools first (SearXNG) to efficiently find relevant sources, then open only the most relevant pages with the browser. Do not browse arbitrarily; stop once you have enough reliable information. Never execute downloaded code or follow untrusted download links. If a website is not responding or returns an error, stop and inform the user.` |
-| Recursion limit | `100` |
-| Use as a tool | `Yes` |
-| Tool description | `Use this agent to retrieve information from the internet.` |
-| Associated tools | `Date / Time`, `Browser`, `SearXNG` |
-
-### 3.2 Code Agent
-
-| Field | Value |
-| --- | --- |
-| Name | `Code Agent` |
-| Provider | `LMStudio - Magistral` or `OpenRouter - GPT-5-mini` |
-| Prompt | `You are an AI Agent specialized in coding. Use the code execution tools to write and run the smallest correct program that solves the task. Follow these rules strictly: DO NOT access local files or the filesystem directly; ALWAYS use provided file-url tools when you need file content; use only the standard library available in the execution environment; print results clearly so they can be captured; if execution fails, fix the code iteratively and briefly explain what changed; focus on working code and concise explanations.` |
-| Recursion limit | `25` |
-| Use as a tool | `Yes` |
-| Tool description | `Use this agent to create and execute code or process data using sandboxed runtimes.` |
-| Associated tools | `Judge0` |
-
-### 3.3 Main Agent (Nova)
-
-| Field | Value |
-| --- | --- |
-| Name | `Nova` |
-| Provider | `LMStudio - Magistral` or `OpenRouter - GPT-5-mini` |
-| Prompt | `You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries; do not fabricate abilities or offer services beyond your tools. Default to the user’s language and reply in Markdown. Only call tools or sub‑agents when clearly needed. If you can read/store user data, persist relevant information and consult it before replying; only retrieve themes relevant to the current query (e.g., check stored location when asked the time). When a query clearly belongs to a specialized agent (internet, code), delegate to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. Current date and time is {today}` |
-| Recursion limit | `25` |
-| Use as a tool | `No` |
-| Associated tools | `Ask user`, `Memory`, `Date / Time`, `WebApp`, `Email` (1..n), `CalDAV` (1..n) |
-| Agents as tools | `Internet Agent`, `Code Agent` |
-
-## 3.4 Optional Media Agent
-
-If you want an agent dedicated to generating or transforming media:
-
-| Field | Value |
-| --- | --- |
-| Name | `Image Agent` |
-| Provider | `OpenRouter` image-capable model or another provider with current known image output capability |
-| Prompt | `You are an AI Agent specialized in creating and modifying images...` when image input is known available, otherwise a generation-first prompt that explains the editing limitation and proposes a newly generated variant instead of pretending to modify the original |
-| Recursion limit | `10` |
-| Use as a tool | `Yes` |
-| Tool description | `Use this agent to generate or transform images from text instructions and optional image artifacts.` |
-| Associated tools | `None` |
-| Bootstrap behavior | `Created automatically only when Nova has a bootstrapable main provider and a provider with current known image output capability exists; reused if already present` |
+- MCP servers
+- custom API services with declared operations
 
 Notes:
-- media-oriented models often do **not** support tools
-- they should usually be used as specialized sub-agents, not as the main `Nova` agent
-- bootstrap may choose a different provider for `Image Agent` than for `Nova`
-- Nova can pass conversation artifacts to these sub-agents and recover the generated media back into the main thread
-- generated media appears inline in the thread and can be published to `Files`
 
-## 4. Skills Runtime Behavior
+- `ask_user` is built into the runtime and is not configured as a tool
+- email and calendar can be configured multiple times for one user
+- MCP tools can use managed OAuth when the server requires it
 
-Mail and Calendar are exposed as on-demand skills in tool-based agent runtime:
-- They are not always visible by default in model context.
-- `Nova` can activate them on demand (for example via `load_skill("mail")` or `load_skill("caldav")`).
-- With multiple configured instances, Nova uses aggregated tools and a selector argument (for example mailbox/account identifier).
+### MCP Authentication
 
-## 5. Multimodal Threads
+Nova supports:
 
-Nova supports message-scoped multimodal artifacts:
-- user images, PDFs and audio can be attached directly to a message
-- provider-generated media is stored as conversation artifacts
-- artifacts stay distinct from thread `Files`
-- a generated artifact can be explicitly copied to `Files` with `Add to Files`
+- no authentication
+- basic auth
+- access token
+- managed OAuth (`Connect with OAuth` / `Reconnect with OAuth`)
 
-If a model does not support tools:
-- simple thread runs may still work in tool-less mode
-- continuous mode and tool-dependent agents are not compatible
-- prefer using such models as specialized media agents
+Use managed OAuth for MCP servers that return an OAuth challenge, such as You.com.
 
-## 6. Run Your Agent
+### Custom API Services
 
-Click the Nova icon in the top-left corner to start a conversation.
+For API tools, define:
 
-## 7. Testing and Examples
+- the service endpoint
+- auth mode
+- one or more `APIToolOperation` entries
 
-Test your setup with these scenarios:
-- **Internet**: "What's the weather in Paris?" (should delegate to `Internet Agent`).
-- **Mail skill**: "Check my recent emails." (should activate Mail skill and use mail tools).
-- **Calendar skill**: "Any events next week?" (should activate CalDAV skill and use calendar tools).
-- **Code**: "Sum numbers in this list: [1,2,3]." (should delegate to `Code Agent`).
-- **Main orchestration**: "Read my last email then draft a reply." (mail workflow through skills, no Email sub-agent required).
-- **Image generation**: ask a dedicated media agent to generate an image; the resulting image should appear inline in the thread and remain publishable to `Files`.
+Each operation describes:
 
-## Migration Note
+- HTTP method
+- path template
+- query parameters
+- optional body parameter
+- input/output schema
 
-Default bootstrap automatically detaches legacy `Calendar Agent` and `Email Agent` links from `Nova`.
-These legacy agent rows are not deleted from the database.
+## 3. Recommended Agent Layout
 
-Default bootstrap is now role-aware:
-- `Nova`, `Internet Agent`, and `Code Agent` use the best available tool-capable provider
-- `Image Agent` is created only when Nova has a bootstrapable main provider and a provider with current known image output capability exists
-- if an `Image Agent` already exists, bootstrap reuses it and does not silently reassign its provider
+Default setup usually works well with:
 
-Existing providers that previously used `OpenAI` + `https://openrouter.ai/api/v1` are migrated to the explicit `OpenRouter` provider type.
+- one main agent: `Nova`
+- one internet-oriented sub-agent: `Internet Agent`
+- one coding-oriented sub-agent: `Code Agent`
+- optionally one media/image sub-agent if you use a dedicated image-capable provider
+
+### Main Agent
+
+Suggested attached capabilities:
+
+- `Date / Time`
+- `Memory`
+- `WebApp`
+- one or more `Email`
+- one or more `CalDAV`
+- optional `WebDAV`
+- optional `MCP`
+- optional custom `API`
+
+Suggested delegated sub-agents:
+
+- `Internet Agent`
+- `Code Agent`
+
+### Internet Agent
+
+Suggested attached capabilities:
+
+- `Browser`
+- `SearXNG` when available
+- optional `Date / Time`
+
+Use it for:
+
+- web search
+- browsing
+- source gathering
+
+### Code Agent
+
+Suggested attached capabilities:
+
+- `Judge0` when available
+
+Use it for:
+
+- data processing
+- sandboxed Python/code execution
+
+## 4. What the Runtime Exposes
+
+Once configured, agents can use command families such as:
+
+- files: `ls`, `cat`, `find`, `tee`, `mv`, `rm`, ...
+- web: `search`, `browse`, `curl`, `wget`
+- memory: `grep`, `memory search`
+- mail: `mail ...`
+- calendar: `calendar ...`
+- web apps: `webapp expose`, `webapp list`, `webapp show`
+- MCP: `mcp ...`
+- custom API: `api ...`
+
+They also see:
+
+- `/skills` for guidance docs
+- `/memory` when memory is attached
+- `/webdav` when WebDAV is attached
+
+## 5. Long-Term Memory
+
+Memory is stored as Markdown files under `/memory`.
+
+Examples:
+
+- `/memory/profile.md`
+- `/memory/projects/client-a.md`
+
+Useful commands:
+
+- `grep` for lexical search
+- `memory search` for hybrid lexical + semantic search
+
+## 6. Web Apps
+
+Web apps are live publications from normal workspace files.
+
+Workflow:
+
+1. create files in the thread workspace
+2. run `webapp expose <source_dir>`
+3. keep editing those same files
+
+The published app stays linked to the source directory.
+
+## 7. Continuous Mode
+
+Nova supports:
+
+- classic threads
+- one continuous user-scoped discussion with day summaries and recall
+
+Agents in continuous mode use the same runtime and gain access to `history search` and `history get`.
+
+## 8. Quick Test Scenarios
+
+- Internet: ask for a recent fact and ensure the agent uses `search` / `browse`
+- Mail: ask to list recent emails
+- Calendar: ask for next week’s events
+- Memory: ask the agent to remember a preference, then retrieve it later
+- WebApp: ask it to create a static app, then expose it
+- MCP/API: call a known external operation and save the result to a file

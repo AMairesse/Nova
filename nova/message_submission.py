@@ -8,12 +8,11 @@ from asgiref.sync import async_to_sync
 from django.core.files.uploadedfile import UploadedFile
 
 from nova.file_utils import batch_upload_files
-from nova.message_artifacts import normalize_message_artifacts
+from nova.message_attachments import normalize_message_attachments
 from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.models.Message import Message
 from nova.models.Task import Task
 from nova.models.Thread import Thread
-from nova.runtime_v2.support import is_react_terminal_runtime
 from nova.realtime.sidebar_updates import publish_file_update
 from nova.views.agent_dispatch import (
     enqueue_message_agent_task,
@@ -59,7 +58,7 @@ class SubmissionResult:
             "actor": self.message.actor,
             "file_count": len(self.uploaded_file_ids),
             "internal_data": self.message.internal_data or {},
-            "artifacts": getattr(self.message, "message_artifacts", []),
+            "attachments": getattr(self.message, "message_attachments", []),
         }
         payload = {
             "status": "OK",
@@ -165,10 +164,6 @@ def submit_user_message(
         raise MessageSubmissionError("Message or attachment required", status_code=400)
 
     agent_config = resolve_selected_or_default_agent(user, selected_agent)
-    if is_react_terminal_runtime(agent_config) and uploaded_message_attachments:
-        uploaded_thread_files.extend(uploaded_message_attachments)
-        uploaded_message_attachments = []
-
     execution_error = get_agent_execution_capability_error(
         agent_config,
         thread_mode=thread_mode,
@@ -205,7 +200,7 @@ def submit_user_message(
         message = context.create_message(normalized_text)
         context.message = message
 
-    message_attachment_artifacts: list[dict] = []
+    message_attachment_manifests: list[dict] = []
     if uploaded_message_attachments:
         attachment_meta, attachment_errors = attachment_uploader(
             context.thread,
@@ -213,8 +208,8 @@ def submit_user_message(
             message,
             uploaded_message_attachments,
         )
-        message_attachment_artifacts = list(attachment_meta or [])
-        if attachment_errors and not message_attachment_artifacts:
+        message_attachment_manifests = list(attachment_meta or [])
+        if attachment_errors and not message_attachment_manifests:
             _cleanup_submission_message(context)
             raise MessageSubmissionError("; ".join(attachment_errors), status_code=400)
 
@@ -224,11 +219,11 @@ def submit_user_message(
     }
     message.save(update_fields=["internal_data"])
     annotate_user_message(message)
-    if message_attachment_artifacts and not getattr(message, "message_artifacts", None):
-        message.message_artifacts = normalize_message_artifacts(
-            message_attachment_artifacts
+    if message_attachment_manifests and not getattr(message, "message_attachments", None):
+        message.message_attachments = normalize_message_attachments(
+            message_attachment_manifests
         )
-        message.message_attachment_count = len(message.message_artifacts)
+        message.message_attachment_count = len(message.message_attachments)
 
     task = enqueue_message_agent_task(
         user=user,

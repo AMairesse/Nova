@@ -84,19 +84,19 @@ def normalize_url(urlish) -> str:
 
 def validate_relaxed_url(value):
     """
-    Simple validator for relaxed URLs:
-    This allows single-label hosts like 'langfuse:3000'.
-    Checks for scheme (http/https), host, optional port/path.
+    Simple validator for relaxed URLs.
+
+    This allows single-label hosts like ``nova:3000`` while still requiring
+    an explicit http/https scheme.
     """
     if not value:
-        return  # Allow empty if blank=True
+        return
 
-    # Relaxed regex: scheme://host[:port][/path]
     regex = re.compile(
-        r'^(https?://)'  # Scheme (http or https)
-        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host
-        r'(?::\d{1,5})?'  # Optional port
-        r'(?:/[^\s]*)?$'  # Optional path
+        r'^(https?://)'
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'
+        r'(?::\d{1,5})?'
+        r'(?:/[^\s]*)?$'
     )
     if not regex.match(value):
         raise ValidationError(_("Enter a valid URL."))

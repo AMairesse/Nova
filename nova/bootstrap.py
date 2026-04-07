@@ -210,12 +210,10 @@ def _get_or_create_builtin_tool(
     # 2) Create
     owner = None if system_only else user
 
-    # Resolve builtin metadata to set python_path and schemas when available
-    from nova.tools import get_tool_type  # Local import to avoid circulars at module import time
+    # Resolve builtin metadata to set python_path when available
+    from nova.plugins.builtins import get_tool_type  # Local import to avoid circulars at module import time
     metadata = get_tool_type(subtype) or {}
     python_path = metadata.get("python_path", "") or ""
-    input_schema = metadata.get("input_schema", {})
-    output_schema = metadata.get("output_schema", {})
 
     tool = Tool.objects.create(
         user=owner,
@@ -224,8 +222,6 @@ def _get_or_create_builtin_tool(
         tool_type=Tool.ToolType.BUILTIN,
         tool_subtype=subtype,
         python_path=python_path,
-        input_schema=input_schema,
-        output_schema=output_schema,
     )
     summary.created_tools.append(tool.name)
     return tool
@@ -234,21 +230,12 @@ def _get_or_create_builtin_tool(
 def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
     Ensure the baseline builtin tools exist:
-    - ask_user, date, memory, browser
+    - date, memory, browser
     - plus discover SearXNG and Judge0 when available
 
     Returns a dict mapping logical names to Tool instances.
     """
     tools: Dict[str, Tool] = {}
-
-    # Ask user
-    tools["ask_user"] = _get_or_create_builtin_tool(
-        user,
-        subtype="ask_user",
-        name="Ask user",
-        description="Ask the human user for additional input or confirmation.",
-        summary=summary,
-    )
 
     # Date / Time
     tools["date_time"] = _get_or_create_builtin_tool(
@@ -472,7 +459,7 @@ def _build_image_agent_prompt(provider: LLMProvider) -> str:
     if provider.known_image_input_status == "pass":
         return (
             "You are an AI Agent specialized in creating and modifying images. "
-            "Generate images from text instructions and transform optional image artifacts "
+            "Generate images from text instructions and transform optional attached images "
             "when they are provided. When editing, preserve the user's intent and explain "
             "briefly what changed. If a request is ambiguous, choose the smallest useful "
             "change set that satisfies the instruction."
@@ -514,8 +501,7 @@ def ensure_image_agent(
         is_tool=True,
         tool_description=(
             "Use this agent to generate or transform images from text instructions and optional media inputs. "
-            "Pass file_ids only for thread file IDs returned by file_ls. "
-            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search."
+            "Pass file_ids only for thread file IDs returned by file_ls."
         ),
     )
 
@@ -540,8 +526,7 @@ def ensure_nova_agent(
         "language and reply in Markdown. Only call tools or sub‑agents when clearly needed. If "
         "you can read/store user data, persist relevant information and consult it before replying; "
         "only retrieve themes relevant to the current query (e.g., check stored location when asked the time). "
-        "Never invent a file_id or artifact_id. Use file_ls to discover thread file IDs. "
-        "Use artifact_ls or artifact_search to discover conversation artifact IDs. "
+        "Never invent file identifiers. Inspect the filesystem or memory directly when you need concrete paths. "
         "When a query clearly belongs to a specialized agent (internet, code), delegate "
         "to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. "
         f"{'Delegate image generation or image transformation requests to the Image Agent when appropriate. ' if has_image_agent else ''}"
@@ -554,7 +539,7 @@ def ensure_nova_agent(
         tools=tools,
         summary=summary,
         name="Nova",
-        required_tools=["ask_user", "memory", "date_time"],
+        required_tools=["memory", "date_time"],
         system_prompt=nova_prompt,
         recursion_limit=25,
         is_tool=False,
@@ -565,15 +550,15 @@ def ensure_nova_agent(
     if not nova_agent:
         return None
 
-    legacy_sub_agents = list(
+    detached_tool_agents = list(
         nova_agent.agent_tools.filter(
             name__in=["Calendar Agent", "Email Agent"],
         )
     )
-    if legacy_sub_agents:
-        nova_agent.agent_tools.remove(*legacy_sub_agents)
-        detached = ", ".join(sorted({agent.name for agent in legacy_sub_agents}))
-        summary.notes.append(f"Detached legacy sub-agents from Nova: {detached}.")
+    if detached_tool_agents:
+        nova_agent.agent_tools.remove(*detached_tool_agents)
+        detached = ", ".join(sorted({agent.name for agent in detached_tool_agents}))
+        summary.notes.append(f"Detached deprecated tool-agents from Nova: {detached}.")
         if (
             nova_agent.name not in summary.created_agents
             and nova_agent.name not in summary.updated_agents

@@ -135,7 +135,7 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["artifacts"][0]["label"], "camera.jpg")
+        self.assertEqual(payload["message"]["attachments"][0]["label"], "camera.jpg")
 
     def test_continuous_add_message_rejects_empty_payload(self):
         response = self.client.post(

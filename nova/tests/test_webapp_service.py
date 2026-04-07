@@ -10,7 +10,7 @@ from django.test import TestCase
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.models.WebApp import WebApp
-from nova.runtime_v2.vfs import VirtualFileSystem
+from nova.runtime.vfs import VirtualFileSystem
 from nova.webapp.service import (
     WebAppServiceError,
     describe_webapp,

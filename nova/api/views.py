@@ -10,8 +10,9 @@ from asgiref.sync import async_to_sync
 
 from .serializers import QuestionSerializer
 from nova.models.UserObjects import UserProfile
-from nova.llm.llm_agent import LLMAgent
-from nova.runtime_v2.support import is_react_terminal_runtime
+from nova.models.Thread import Thread
+from nova.runtime.agent import ReactTerminalRuntime
+from nova.runtime.support import get_runtime_error
 
 
 class QuestionAnswerView(APIView):
@@ -57,21 +58,38 @@ class QuestionAnswerView(APIView):
                 {"detail": "User has no default agent"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if is_react_terminal_runtime(agent_config):
+
+        runtime_error = get_runtime_error(agent_config, thread_mode=Thread.Mode.THREAD)
+        if runtime_error:
             return Response(
-                {"detail": "React Terminal V1 is only available in thread-backed conversations."},
+                {"detail": runtime_error},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        thread = None
         try:
-            # Create the agent
-            llm_agent = async_to_sync(LLMAgent.create)(request.user, None, agent_config)
-            answer = async_to_sync(llm_agent.ainvoke)(question)
+            thread = Thread.objects.create(
+                user=request.user,
+                subject="Ephemeral API QA",
+                mode=Thread.Mode.THREAD,
+            )
+            runtime = ReactTerminalRuntime(
+                user=request.user,
+                thread=thread,
+                agent_config=agent_config,
+                allow_ask_user=False,
+            )
+            runtime = async_to_sync(runtime.initialize)()
+            result = async_to_sync(runtime.run)(ephemeral_user_prompt=question)
+            answer = result.final_answer
         except Exception as exc:
             return Response(
                 {"detail": f"LLM error: {exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        finally:
+            if thread is not None:
+                thread.delete()
 
         response_data = {"question": question, "answer": answer}
         return Response(response_data, status=status.HTTP_200_OK)

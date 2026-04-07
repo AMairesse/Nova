@@ -13,7 +13,7 @@ Most domain entities are user-scoped via FK to user and are queried with explici
 
 Examples of user-scoped runtime entities:
 - threads/messages/tasks/interactions
-- memory items/themes/embeddings
+- memory documents/directories/chunks/embeddings
 - day segments/transcript chunks/conversation embeddings
 - task definitions and runtime state
 

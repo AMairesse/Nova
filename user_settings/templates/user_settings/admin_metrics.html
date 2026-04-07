@@ -70,15 +70,6 @@
         >
       </div>
       <div class="col-md-3">
-        <label class="form-label" for="adminMetricsEngine">{% trans "Runtime engine" %}</label>
-        <select class="form-select" id="adminMetricsEngine" name="runtime_engine">
-          <option value="">{% trans "All engines" %}</option>
-          {% for value in runtime_engines %}
-            <option value="{{ value }}" {% if filters.runtime_engine == value %}selected{% endif %}>{{ value }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-md-3">
         <label class="form-label" for="adminMetricsKind">{% trans "Failure kind" %}</label>
         <select class="form-select" id="adminMetricsKind" name="failure_kind">
           <option value="">{% trans "All failure kinds" %}</option>
@@ -122,7 +113,6 @@
       <thead class="table-light">
         <tr>
           <th>{% trans "Date" %}</th>
-          <th>{% trans "Engine" %}</th>
           <th>{% trans "Command" %}</th>
           <th>{% trans "Failure kind" %}</th>
           <th>{% trans "Count" %}</th>
@@ -136,7 +126,6 @@
         {% for metric in metrics_rows %}
           <tr>
             <td class="text-nowrap">{{ metric.bucket_date|date:"Y-m-d" }}</td>
-            <td><code>{{ metric.runtime_engine }}</code></td>
             <td><code>{{ metric.head_command|default:"(empty)" }}</code></td>
             <td><span class="badge text-bg-secondary">{{ metric.failure_kind }}</span></td>
             <td>{{ metric.count }}</td>
@@ -177,7 +166,6 @@
                 {% csrf_token %}
                 <input type="hidden" name="confirm" value="1">
                 <input type="hidden" name="q" value="{{ filters.q }}">
-                <input type="hidden" name="runtime_engine" value="{{ filters.runtime_engine }}">
                 <input type="hidden" name="failure_kind" value="{{ filters.failure_kind }}">
                 <button type="submit" class="btn btn-sm btn-outline-danger">
                   {% trans "Delete bucket" %}
@@ -187,7 +175,7 @@
           </tr>
         {% empty %}
           <tr>
-            <td colspan="9" class="text-muted">{% trans "No terminal failures captured yet." %}</td>
+            <td colspan="8" class="text-muted">{% trans "No terminal failures captured yet." %}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -245,7 +233,6 @@
           {% csrf_token %}
           <input type="hidden" name="confirm" value="1">
           <input type="hidden" name="q" value="{{ filters.q }}">
-          <input type="hidden" name="runtime_engine" value="{{ filters.runtime_engine }}">
           <input type="hidden" name="failure_kind" value="{{ filters.failure_kind }}">
           <div class="modal-header">
             <h5 class="modal-title" id="purgeMetricsModalLabel">{% trans "Purge displayed buckets" %}</h5>

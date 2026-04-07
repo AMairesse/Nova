@@ -83,8 +83,6 @@ def default_agent_has_memory_tool(user) -> bool:
     )
     if not default_agent:
         return False
-    if default_agent.runtime_engine != AgentConfig.RuntimeEngine.REACT_TERMINAL_V1:
-        return False
     return _agent_has_tool_subtype(default_agent, "memory")
 
 
@@ -216,8 +214,7 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
         (
             agent
             for agent in agents
-            if agent.runtime_engine == AgentConfig.RuntimeEngine.REACT_TERMINAL_V1
-            and _agent_has_tool_subtype(agent, "browser")
+            if _agent_has_tool_subtype(agent, "browser")
             and _agent_has_tool_subtype(agent, "memory")
         ),
         None,
@@ -269,7 +266,7 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
         reason = str(
             _(
                 "No selectable agent can both browse the web and access memory. "
-                "Use a React Terminal v2 agent with browser and memory access."
+                "Use an agent with browser and memory access."
             )
         )
         return TemplateAvailability(False, reason, prerequisites)

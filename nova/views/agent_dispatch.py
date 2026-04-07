@@ -2,11 +2,11 @@ from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 
 from nova.agent_execution import requires_tools_for_run
+from nova.message_attachments import detect_attachment_kind
 from nova.message_panel import get_user_default_agent
-from nova.message_artifacts import detect_artifact_kind
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Thread import Thread
-from nova.runtime_v2.support import get_v2_runtime_error, is_react_terminal_runtime
+from nova.runtime.support import get_runtime_error
 from nova.tasks.tasks import create_and_dispatch_agent_task
 from nova.turn_inputs import is_modality_explicitly_unavailable
 
@@ -22,15 +22,12 @@ def resolve_selected_or_default_agent(user, selected_agent: str | None):
 
 
 def get_message_attachment_capability_error(agent_config, uploaded_files=None) -> str | None:
-    if is_react_terminal_runtime(agent_config):
-        return None
-
     provider = getattr(agent_config, "llm_provider", None)
     if not provider:
         return None
 
     attachment_kinds = {
-        detect_artifact_kind(
+        detect_attachment_kind(
             getattr(uploaded_file, "content_type", None),
             getattr(uploaded_file, "name", None),
         )
@@ -63,7 +60,7 @@ def get_agent_execution_capability_error(
     thread_mode: str | None,
     response_mode: str = "text",
 ) -> str | None:
-    runtime_error = get_v2_runtime_error(agent_config, thread_mode=thread_mode)
+    runtime_error = get_runtime_error(agent_config, thread_mode=thread_mode)
     if runtime_error:
         return runtime_error
 

@@ -6,7 +6,6 @@ from django.utils import timezone
 from unittest.mock import patch, MagicMock
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Message, Actor, MessageType
 from nova.models.Task import Task, TaskStatus
@@ -26,7 +25,6 @@ class UserObjectsModelsTest(BaseTestCase):
         # UserParameters is created automatically via signal, so we get it for user created in base.py
         params = UserParameters.objects.get(user=self.user)
         self.assertEqual(params.user, self.user)
-        self.assertFalse(params.allow_langfuse)
         self.assertEqual(
             params.continuous_default_messages_limit,
             UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT,
@@ -478,40 +476,6 @@ class InteractionModelsTest(BaseTestCase):
         )
         with self.assertRaises(ValidationError):
             interaction.full_clean()
-
-
-class CheckpointLinkModelsTest(BaseTestCase):
-    def setUp(self):
-        super().setUp()
-        self.thread = Thread.objects.create(user=self.user, subject="Test Thread")
-        self.provider = create_provider(self.user)
-        self.agent = create_agent(self.user, self.provider)
-
-    def test_checkpoint_link_creation(self):
-        """
-        Test CheckpointLink model creation for LangGraph state persistence.
-        Ensures that checkpoint links are properly created with UUIDs.
-        """
-        link = CheckpointLink.objects.create(
-            thread=self.thread,
-            agent=self.agent,
-        )
-        self.assertEqual(link.thread, self.thread)
-        self.assertEqual(link.agent, self.agent)
-        self.assertIsNotNone(link.checkpoint_id)
-
-    def test_checkpoint_link_str(self):
-        """
-        Test CheckpointLink string representation.
-        Verifies that __str__ includes checkpoint and entity IDs.
-        """
-        link = CheckpointLink.objects.create(
-            thread=self.thread,
-            agent=self.agent,
-        )
-        self.assertIn("Checkpoint", str(link))
-        self.assertIn(str(self.thread.id), str(link))
-        self.assertIn(str(self.agent.id), str(link))
 
 
 class UserFileModelsTest(BaseTestCase):
