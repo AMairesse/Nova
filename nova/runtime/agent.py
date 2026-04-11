@@ -312,7 +312,8 @@ class ReactTerminalRuntime:
         if self.source_message_id is not None:
             extra_guidance.append(
                 "Files attached to the current user message are available under `/inbox` when present. "
-                "Only claim to have used a reference file if you can read it there or pass it explicitly to a sub-agent."
+                "Older live-message attachments are available under `/history`. Only claim to have used a "
+                "reference file if you can read it there or pass it explicitly to a sub-agent."
             )
         extra_guidance.append(
             "You may reference existing thread files by absolute VFS path in Markdown: "
@@ -342,6 +343,7 @@ class ReactTerminalRuntime:
         filesystem_lines = [
             "- /: persistent files for this thread",
             "- /inbox: files attached to the current user message, when present",
+            "- /history: files attached to earlier live messages in this conversation",
             "- /skills: readonly recipes",
             "- /tmp: scratch files hidden from the normal file sidebar",
             "- /subagents/<subagent-slug>-<run-id>/: files returned by delegated sub-agents",

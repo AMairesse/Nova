@@ -7,10 +7,18 @@ from asgiref.sync import sync_to_async
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 
-from nova.file_utils import batch_upload_files, download_file_content, upload_file_to_minio
+from nova.continuous.context_builder import get_live_continuous_message_ids
+from nova.file_utils import (
+    MESSAGE_ATTACHMENT_STORAGE_PREFIX,
+    batch_upload_files,
+    download_file_content,
+    upload_file_to_minio,
+)
 from nova.message_attachments import (
+    MESSAGE_ATTACHMENT_HISTORY_ROOT,
     MESSAGE_ATTACHMENT_INBOX_ROOT,
     build_attachment_label,
+    build_message_attachment_history_paths,
     build_message_attachment_inbox_paths,
 )
 from nova.memory.service import (
@@ -49,12 +57,14 @@ from nova.webdav.service import (
 )
 
 from .constants import RUNTIME_STORAGE_ROOT
+from .compaction import SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID
 
 
 class VFSError(Exception):
     pass
 
 INBOX_ROOT = MESSAGE_ATTACHMENT_INBOX_ROOT
+HISTORY_ROOT = MESSAGE_ATTACHMENT_HISTORY_ROOT
 
 
 @dataclass(slots=True)
@@ -91,6 +101,7 @@ class VirtualFileSystem:
         webdav_tools: list | None = None,
         source_message_id: int | None = None,
         source_message_inbox_enabled: bool = True,
+        source_message_history_enabled: bool = True,
         persistent_root_scope: str = UserFile.Scope.THREAD_SHARED,
         persistent_root_prefix: str | None = None,
         tmp_storage_prefix: str | None = None,
@@ -105,6 +116,7 @@ class VirtualFileSystem:
         self._webdav_mounts_by_name = {mount.name: mount for mount in self.webdav_mounts}
         self.source_message_id = source_message_id
         self.source_message_inbox_enabled = bool(source_message_inbox_enabled)
+        self.source_message_history_enabled = bool(source_message_history_enabled)
         self.persistent_root_scope = str(persistent_root_scope or UserFile.Scope.THREAD_SHARED)
         self.persistent_root_prefix = (
             str(persistent_root_prefix or "").rstrip("/") if persistent_root_prefix else None
@@ -135,11 +147,22 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd="/")
         return normalized == INBOX_ROOT or normalized.startswith(f"{INBOX_ROOT}/")
 
+    @staticmethod
+    def _is_history_path(path: str) -> bool:
+        normalized = normalize_vfs_path(path, cwd="/")
+        return normalized == HISTORY_ROOT or normalized.startswith(f"{HISTORY_ROOT}/")
+
     def _has_source_message_inbox(self) -> bool:
         return self.source_message_inbox_enabled and self.source_message_id is not None
 
+    def _has_source_message_history(self) -> bool:
+        return self.source_message_history_enabled and self.source_message_id is not None
+
     def _has_inbox_dir(self) -> bool:
         return self._has_source_message_inbox() or INBOX_ROOT in self._get_session_dirs()
+
+    def _has_history_dir(self) -> bool:
+        return self._has_source_message_history()
 
     @staticmethod
     def _inbox_filename_for_user_file(user_file: UserFile) -> str:
@@ -165,6 +188,16 @@ class VirtualFileSystem:
         return {
             file_id: normalize_vfs_path(path, cwd="/")
             for file_id, path in build_message_attachment_inbox_paths(user_files).items()
+        }
+
+    @classmethod
+    def build_source_message_history_paths(
+        cls,
+        user_files: list[UserFile],
+    ) -> dict[int, str]:
+        return {
+            file_id: normalize_vfs_path(path, cwd="/")
+            for file_id, path in build_message_attachment_history_paths(user_files).items()
         }
 
     def _resolve_webdav_path(self, path: str) -> tuple[str, WebDAVMount | None, str | None]:
@@ -221,6 +254,8 @@ class VirtualFileSystem:
             raise VFSError("Writing into /skills is not supported.")
         if self._is_inbox_path(normalized) and not allow_inbox_write:
             raise VFSError("Writing into /inbox is not supported. Copy files elsewhere first.")
+        if self._is_history_path(normalized):
+            raise VFSError("Writing into /history is not supported. Copy files elsewhere first.")
         if self._is_reserved_memory_path(normalized):
             if not self.memory_enabled:
                 raise VFSError("Memory is not enabled for this agent.")
@@ -254,22 +289,68 @@ class VirtualFileSystem:
             return normalized
         return None
 
+    @staticmethod
+    def _is_canonical_message_attachment_storage_path(path: str) -> bool:
+        normalized = str(path or "").strip()
+        return normalized.startswith(f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_")
+
+    def _load_history_message_ids_sync(self) -> list[int]:
+        if not self._has_source_message_history():
+            return []
+        if self.thread.mode == "continuous":
+            return get_live_continuous_message_ids(
+                self.user,
+                self.thread,
+                exclude_message_id=self.source_message_id,
+            )
+
+        summary_until_message_id = self.session_state.get(SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID)
+        try:
+            summary_until_message_id = (
+                int(summary_until_message_id)
+                if summary_until_message_id is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            summary_until_message_id = None
+
+        queryset = Message.objects.filter(
+            user=self.user,
+            thread=self.thread,
+            id__lt=self.source_message_id,
+        ).order_by("created_at", "id")
+        if summary_until_message_id:
+            queryset = queryset.filter(id__gt=summary_until_message_id)
+        return list(queryset.values_list("id", flat=True))
+
+    async def _load_history_message_ids(self) -> list[int]:
+        return await sync_to_async(self._load_history_message_ids_sync, thread_sensitive=True)()
+
     def _vfs_path_for_user_file(
         self,
         user_file: UserFile,
         *,
         source_message_aliases: dict[int, str] | None = None,
+        history_aliases: dict[int, str] | None = None,
     ) -> str | None:
         original_path = str(user_file.original_filename or "").strip()
         if (
             self._has_source_message_inbox()
             and user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
             and getattr(user_file, "source_message_id", None) == self.source_message_id
+            and self._is_canonical_message_attachment_storage_path(original_path)
         ):
             file_id = getattr(user_file, "id", None)
             if file_id is not None and source_message_aliases and file_id in source_message_aliases:
                 return source_message_aliases[file_id]
             return self.build_source_message_inbox_path(user_file)
+        if (
+            self._has_source_message_history()
+            and user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
+        ):
+            file_id = getattr(user_file, "id", None)
+            if file_id is not None and history_aliases and file_id in history_aliases:
+                return history_aliases[file_id]
         if user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT:
             if original_path.startswith(self.tmp_storage_prefix):
                 suffix = original_path[len(self.tmp_storage_prefix):] or ""
@@ -280,12 +361,19 @@ class VirtualFileSystem:
         return None
 
     async def _load_real_files(self) -> list[VFSFile]:
+        history_message_ids = await self._load_history_message_ids()
+
         def _load():
             query = Q(scope=UserFile.Scope.MESSAGE_ATTACHMENT, original_filename__startswith=self.tmp_storage_prefix)
             if self._has_source_message_inbox():
                 query |= Q(
                     scope=UserFile.Scope.MESSAGE_ATTACHMENT,
                     source_message_id=self.source_message_id,
+                )
+            if history_message_ids:
+                query |= Q(
+                    scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                    source_message_id__in=history_message_ids,
                 )
             if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
                 query |= Q(scope=UserFile.Scope.THREAD_SHARED)
@@ -310,6 +398,23 @@ class VirtualFileSystem:
                 if (
                     user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
                     and getattr(user_file, "source_message_id", None) == self.source_message_id
+                    and self._is_canonical_message_attachment_storage_path(
+                        getattr(user_file, "original_filename", "")
+                    )
+                )
+            ])
+        history_message_ids_set = set(history_message_ids)
+        history_aliases: dict[int, str] = {}
+        if history_message_ids_set:
+            history_aliases = self.build_source_message_history_paths([
+                user_file
+                for user_file in user_files
+                if (
+                    user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
+                    and getattr(user_file, "source_message_id", None) in history_message_ids_set
+                    and self._is_canonical_message_attachment_storage_path(
+                        getattr(user_file, "original_filename", "")
+                    )
                 )
             ])
         by_path: dict[str, VFSFile] = {}
@@ -317,6 +422,7 @@ class VirtualFileSystem:
             vfs_path = self._vfs_path_for_user_file(
                 user_file,
                 source_message_aliases=source_message_aliases,
+                history_aliases=history_aliases,
             )
             if not vfs_path:
                 continue
@@ -344,6 +450,8 @@ class VirtualFileSystem:
             return True
         if normalized == INBOX_ROOT:
             return self._has_inbox_dir()
+        if normalized == HISTORY_ROOT:
+            return self._has_history_dir()
         if normalized == WEBDAV_VFS_ROOT:
             return bool(self.webdav_mounts)
         if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
@@ -380,6 +488,8 @@ class VirtualFileSystem:
             return True
         if normalized == INBOX_ROOT:
             return self._has_inbox_dir()
+        if normalized == HISTORY_ROOT:
+            return self._has_history_dir()
         if normalized == WEBDAV_VFS_ROOT:
             return bool(self.webdav_mounts)
         if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
@@ -441,6 +551,8 @@ class VirtualFileSystem:
             entries["skills"] = {"name": "skills", "path": "/skills", "type": "dir"}
             if self._has_inbox_dir():
                 entries["inbox"] = {"name": "inbox", "path": INBOX_ROOT, "type": "dir"}
+            if self._has_history_dir():
+                entries["history"] = {"name": "history", "path": HISTORY_ROOT, "type": "dir"}
             entries["tmp"] = {"name": "tmp", "path": "/tmp", "type": "dir"}
             if self.webdav_mounts:
                 entries["webdav"] = {"name": "webdav", "path": WEBDAV_VFS_ROOT, "type": "dir"}
@@ -552,8 +664,12 @@ class VirtualFileSystem:
             raise VFSError("mkdir is not supported inside /skills.")
         if normalized == INBOX_ROOT and self._has_inbox_dir():
             return normalized
+        if normalized == HISTORY_ROOT and self._has_history_dir():
+            return normalized
         if self._is_inbox_path(normalized):
             raise VFSError("mkdir is not supported inside /inbox.")
+        if self._is_history_path(normalized):
+            raise VFSError("mkdir is not supported inside /history.")
         if self._is_reserved_memory_path(normalized):
             if not self.memory_enabled:
                 raise VFSError("Memory is not enabled for this agent.")
@@ -725,6 +841,8 @@ class VirtualFileSystem:
             raise VFSError(f"Cannot remove protected path: {normalized}")
         if self._is_inbox_path(normalized):
             raise VFSError("Removing files from /inbox is not supported.")
+        if self._is_history_path(normalized):
+            raise VFSError("Removing files from /history is not supported.")
         if self._is_memory_enabled_path(normalized):
             try:
                 await archive_memory_path(user=self.user, path=normalized)
@@ -825,6 +943,8 @@ class VirtualFileSystem:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
         if self._is_inbox_path(normalized_source):
             raise VFSError("Moving files from /inbox is not supported. Use cp instead.")
+        if self._is_history_path(normalized_source):
+            raise VFSError("Moving files from /history is not supported. Use cp instead.")
         source_name = posixpath.basename(normalized_source) or "file"
         resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
         source_webdav_kind, source_webdav_mount, source_webdav_path = self._resolve_webdav_path(normalized_source)

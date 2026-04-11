@@ -154,6 +154,57 @@ def _message_to_runtime_message(m: Message) -> Optional[dict[str, str]]:
     return None
 
 
+def get_live_continuous_message_ids(
+    user,
+    thread,
+    *,
+    exclude_message_id: Optional[int] = None,
+    exclude_interaction_ids: Optional[set[int]] = None,
+) -> list[int]:
+    today = get_day_label_for_user(user)
+    t_seg = (
+        DaySegment.objects.filter(user=user, thread=thread, day_label=today)
+        .select_related("starts_at_message", "summary_until_message")
+        .first()
+    )
+
+    if not t_seg or not t_seg.starts_at_message_id:
+        return []
+
+    today_start_dt = t_seg.starts_at_message.created_at
+    today_end_dt = None
+    next_seg = (
+        DaySegment.objects.filter(user=user, thread=thread, day_label__gt=today)
+        .order_by("day_label")
+        .first()
+    )
+    if next_seg and next_seg.starts_at_message_id:
+        today_end_dt = next_seg.starts_at_message.created_at
+
+    today_summary_until_message_id: Optional[int] = None
+    today_summary_raw = (t_seg.summary_markdown or "").strip()
+    if today_summary_raw and t_seg.summary_until_message_id:
+        today_summary_until_message_id = t_seg.summary_until_message_id
+
+    qs = Message.objects.filter(user=user, thread=thread, created_at__gte=today_start_dt)
+    if today_end_dt:
+        qs = qs.filter(created_at__lt=today_end_dt)
+    if today_summary_until_message_id:
+        qs = qs.filter(id__gt=today_summary_until_message_id)
+    if exclude_message_id:
+        qs = qs.exclude(id=exclude_message_id)
+    if exclude_interaction_ids:
+        qs = qs.exclude(
+            message_type=MessageType.INTERACTION_ANSWER,
+            interaction_id__in=list(exclude_interaction_ids),
+        )
+    return list(
+        qs.exclude(actor=Actor.SYSTEM)
+        .order_by("created_at", "id")
+        .values_list("id", flat=True)
+    )
+
+
 def load_continuous_context(
     user,
     thread,
@@ -261,19 +312,13 @@ def load_continuous_context(
             )
 
     if today_start_dt:
-        qs = Message.objects.filter(user=user, thread=thread, created_at__gte=today_start_dt)
-        if today_end_dt:
-            qs = qs.filter(created_at__lt=today_end_dt)
-        if today_summary_until_message_id:
-            qs = qs.filter(id__gt=today_summary_until_message_id)
-        if exclude_message_id:
-            qs = qs.exclude(id=exclude_message_id)
-        if exclude_interaction_ids:
-            qs = qs.exclude(
-                message_type=MessageType.INTERACTION_ANSWER,
-                interaction_id__in=list(exclude_interaction_ids),
-            )
-        for m in qs.order_by("created_at", "id"):
+        live_message_ids = get_live_continuous_message_ids(
+            user,
+            thread,
+            exclude_message_id=exclude_message_id,
+            exclude_interaction_ids=exclude_interaction_ids,
+        )
+        for m in Message.objects.filter(id__in=live_message_ids).order_by("created_at", "id"):
             msg = _message_to_runtime_message(m)
             if msg is not None:
                 out.append(msg)

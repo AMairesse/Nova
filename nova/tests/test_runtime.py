@@ -12,10 +12,12 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
+from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user
 from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentThreadSession import AgentThreadSession
+from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.MemoryDirectory import MemoryDirectory
 from nova.models.MemoryChunk import MemoryChunk
@@ -2824,6 +2826,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("[label](/path/file.ext)", prompt)
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
+        self.assertIn("/history", prompt)
 
     def test_runtime_mounts_source_message_attachments_under_inbox(self):
         jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
@@ -2910,6 +2913,261 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(copied.path, "/tmp/copied.jpg")
         self.assertEqual(copied_content, jpeg_bytes)
         self.assertEqual(copied_mime, "image/jpeg")
+
+    def test_runtime_mounts_previous_attachments_under_history(self):
+        older_bytes = b"old"
+        current_bytes = b"new"
+        older_message = self.thread.add_message("Older attachment.", Actor.USER)
+        current_message = self.thread.add_message("Current attachment.", Actor.USER)
+        older_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=older_message,
+            original_filename=f"/.message_attachments/message_{older_message.id}/IMG_1000.jpg",
+            mime_type="image/jpeg",
+            size=len(older_bytes),
+            key="fake://attachment/IMG_1000.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        current_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=current_message,
+            original_filename=f"/.message_attachments/message_{current_message.id}/IMG_2000.jpg",
+            mime_type="image/jpeg",
+            size=len(current_bytes),
+            key="fake://attachment/IMG_2000.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        stored_contents = {
+            older_file.key: older_bytes,
+            current_file.key: current_bytes,
+        }
+
+        async def fake_download_file_content(file_obj):
+            return stored_contents[file_obj.key]
+
+        with patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=current_message.id,
+                ).initialize
+            )()
+
+            root_entries = async_to_sync(runtime.vfs.list_dir)("/")
+            history_entries = async_to_sync(runtime.vfs.list_dir)("/history")
+            older_entries = async_to_sync(runtime.vfs.list_dir)(f"/history/message-{older_message.id}")
+            inbox_entries = async_to_sync(runtime.vfs.list_dir)("/inbox")
+            older_content, older_mime = async_to_sync(runtime.vfs.read_bytes)(
+                f"/history/message-{older_message.id}/IMG_1000.jpg"
+            )
+
+        self.assertTrue(async_to_sync(runtime.vfs.path_exists)("/history"))
+        self.assertEqual([entry["name"] for entry in history_entries], [f"message-{older_message.id}"])
+        self.assertEqual([entry["name"] for entry in older_entries], ["IMG_1000.jpg"])
+        self.assertEqual([entry["name"] for entry in inbox_entries], ["IMG_2000.jpg"])
+        self.assertIn("history", [entry["name"] for entry in root_entries])
+        self.assertEqual(older_content, older_bytes)
+        self.assertEqual(older_mime, "image/jpeg")
+
+    def test_history_is_read_only_but_files_can_be_copied_out(self):
+        older_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        older_message = self.thread.add_message("Older attachment.", Actor.USER)
+        current_message = self.thread.add_message("Current attachment.", Actor.USER)
+        older_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=older_message,
+            original_filename=f"/.message_attachments/message_{older_message.id}/IMG_1000.jpg",
+            mime_type="image/jpeg",
+            size=len(older_bytes),
+            key="fake://attachment/IMG_1000.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {older_file.key: older_bytes}
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        history_path = f"/history/message-{older_message.id}/IMG_1000.jpg"
+        with (
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=current_message.id,
+                ).initialize
+            )()
+
+            with self.assertRaisesRegex(Exception, "Writing into /history"):
+                async_to_sync(runtime.vfs.write_file)("/history/nope.txt", b"nope", mime_type="text/plain")
+            with self.assertRaisesRegex(Exception, "mkdir is not supported inside /history"):
+                async_to_sync(runtime.vfs.mkdir)("/history/newdir")
+            with self.assertRaisesRegex(Exception, "Removing files from /history"):
+                async_to_sync(runtime.vfs.remove)(history_path)
+            with self.assertRaisesRegex(Exception, "Moving files from /history"):
+                async_to_sync(runtime.vfs.move)(history_path, "/tmp/moved.jpg")
+
+            copied = async_to_sync(runtime.vfs.copy)(history_path, "/tmp/copied-from-history.jpg")
+            copied_content, copied_mime = async_to_sync(runtime.vfs.read_bytes)("/tmp/copied-from-history.jpg")
+
+        self.assertEqual(copied.path, "/tmp/copied-from-history.jpg")
+        self.assertEqual(copied_content, older_bytes)
+        self.assertEqual(copied_mime, "image/jpeg")
+
+    def test_runtime_history_excludes_compacted_thread_attachments(self):
+        older_message = self.thread.add_message("Compacted attachment.", Actor.USER)
+        live_message = self.thread.add_message("Live attachment.", Actor.USER)
+        current_message = self.thread.add_message("Current message.", Actor.USER)
+        older_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=older_message,
+            original_filename=f"/.message_attachments/message_{older_message.id}/old.jpg",
+            mime_type="image/jpeg",
+            size=3,
+            key="fake://attachment/old.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        live_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=live_message,
+            original_filename=f"/.message_attachments/message_{live_message.id}/live.jpg",
+            mime_type="image/jpeg",
+            size=4,
+            key="fake://attachment/live.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {
+            older_file.key: b"old",
+            live_file.key: b"live",
+        }
+        AgentThreadSession.objects.create(
+            thread=self.thread,
+            agent_config=self.agent,
+            session_state={
+                "cwd": "/",
+                "history": [],
+                "directories": ["/tmp"],
+                SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID: older_message.id,
+            },
+        )
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        with patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=current_message.id,
+                ).initialize
+            )()
+
+            history_paths = async_to_sync(runtime.vfs.find)("/history", "")
+
+        self.assertFalse(any(path.endswith("/old.jpg") for path in history_paths))
+        self.assertTrue(any(path.endswith("/live.jpg") for path in history_paths))
+
+    def test_runtime_history_excludes_summarized_continuous_attachments(self):
+        continuous_thread = ensure_continuous_thread(self.user)
+        older_message = continuous_thread.add_message("Earlier attachment.", Actor.USER)
+        summarized_message = continuous_thread.add_message("Summarized attachment.", Actor.USER)
+        live_message = continuous_thread.add_message("Still live attachment.", Actor.USER)
+        current_message = continuous_thread.add_message("Current attachment.", Actor.USER)
+        older_file = UserFile.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            source_message=older_message,
+            original_filename=f"/.message_attachments/message_{older_message.id}/older.jpg",
+            mime_type="image/jpeg",
+            size=5,
+            key="fake://attachment/older.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        summarized_file = UserFile.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            source_message=summarized_message,
+            original_filename=f"/.message_attachments/message_{summarized_message.id}/summarized.jpg",
+            mime_type="image/jpeg",
+            size=5,
+            key="fake://attachment/summarized.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        live_file = UserFile.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            source_message=live_message,
+            original_filename=f"/.message_attachments/message_{live_message.id}/live.jpg",
+            mime_type="image/jpeg",
+            size=4,
+            key="fake://attachment/live.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        current_file = UserFile.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            source_message=current_message,
+            original_filename=f"/.message_attachments/message_{current_message.id}/current.jpg",
+            mime_type="image/jpeg",
+            size=7,
+            key="fake://attachment/current.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        day_label = get_day_label_for_user(self.user)
+        DaySegment.objects.create(
+            user=self.user,
+            thread=continuous_thread,
+            day_label=day_label,
+            starts_at_message=older_message,
+            summary_markdown="Summary up to the middle of the day.",
+            summary_until_message=summarized_message,
+        )
+        self._stored_contents = {
+            older_file.key: b"older",
+            summarized_file.key: b"sum",
+            live_file.key: b"live",
+            current_file.key: b"current",
+        }
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        with patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=continuous_thread,
+                    agent_config=self.agent,
+                    source_message_id=current_message.id,
+                ).initialize
+            )()
+
+            history_paths = async_to_sync(runtime.vfs.find)("/history", "")
+            inbox_paths = async_to_sync(runtime.vfs.find)("/inbox", "")
+
+        self.assertFalse(any(path.endswith("/older.jpg") for path in history_paths))
+        self.assertFalse(any(path.endswith("/summarized.jpg") for path in history_paths))
+        self.assertTrue(any(path.endswith("/live.jpg") for path in history_paths))
+        self.assertTrue(any(path.endswith("/current.jpg") for path in inbox_paths))
 
     def test_source_message_prompt_mentions_inbox_paths_for_attachments(self):
         source_message = self.thread.add_message("Please use the attached image.", Actor.USER)
@@ -3997,6 +4255,127 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(seen["inbox_exists"])
         self.assertIn("/inbox/IMG_6433.jpg", seen["prompt"])
         self.assertEqual(seen["content"], (jpeg_bytes, "image/jpeg"))
+
+    def test_delegate_to_agent_can_copy_history_attachment(self):
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        older_message = self.thread.add_message("Older attached photo.", Actor.USER)
+        current_message = self.thread.add_message("Current request.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=older_message,
+            original_filename=f"/.message_attachments/message_{older_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=len(jpeg_bytes),
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {user_file.key: jpeg_bytes}
+        seen = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ensure_root_trace
+            seen["prompt"] = ephemeral_user_prompt
+            seen["inbox_exists"] = await self.vfs.path_exists("/inbox/IMG_6433.jpg")
+            seen["content"] = await self.vfs.read_bytes("/inbox/IMG_6433.jpg")
+            return ReactTerminalRunResult(
+                final_answer="Used the historical photo.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        history_path = f"/history/message-{older_message.id}/IMG_6433.jpg"
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+            patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=current_message.id,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Use the older image.",
+                input_paths=[history_path],
+            )
+
+        self.assertIn("Used the historical photo.", result)
+        self.assertTrue(seen["inbox_exists"])
+        self.assertIn("/inbox/IMG_6433.jpg", seen["prompt"])
+        self.assertEqual(seen["content"], (jpeg_bytes, "image/jpeg"))
+
+    def test_native_inbox_prompt_inputs_ignore_history_files(self):
+        older_message = self.thread.add_message("Older attachment.", Actor.USER)
+        current_message = self.thread.add_message("Current attachment.", Actor.USER)
+        older_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=older_message,
+            original_filename=f"/.message_attachments/message_{older_message.id}/older.jpg",
+            mime_type="image/jpeg",
+            size=3,
+            key="fake://attachment/older.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        current_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=current_message,
+            original_filename=f"/.message_attachments/message_{current_message.id}/current.jpg",
+            mime_type="image/jpeg",
+            size=4,
+            key="fake://attachment/current.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {
+            older_file.key: b"old",
+            current_file.key: b"new",
+        }
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        with patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=current_message.id,
+                ).initialize
+            )()
+
+            prompt_inputs = async_to_sync(runtime._load_native_inbox_prompt_inputs)()
+
+        input_paths = runtime._extract_input_paths_from_prompt_inputs(prompt_inputs)
+        self.assertEqual(input_paths, ["/inbox/current.jpg"])
 
     def test_delegate_to_agent_accepts_composite_subagent_selectors(self):
         child_agent = AgentConfig.objects.create(

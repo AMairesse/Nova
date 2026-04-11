@@ -22,6 +22,7 @@ DEFAULT_MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
 DEFAULT_MESSAGE_ATTACHMENT_MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024
 DEFAULT_MESSAGE_ATTACHMENT_MAX_AUDIO_SIZE_BYTES = 10 * 1024 * 1024
 MESSAGE_ATTACHMENT_INBOX_ROOT = "/inbox"
+MESSAGE_ATTACHMENT_HISTORY_ROOT = "/history"
 
 
 def get_message_attachment_max_files() -> int:
@@ -161,6 +162,26 @@ def build_message_attachment_inbox_paths(user_files: list[UserFile]) -> dict[int
         alias_name = raw_name if count == 0 else f"{stem}-{count + 1}{suffix}"
         used_names[raw_name] = count + 1
         aliases[file_id] = f"{MESSAGE_ATTACHMENT_INBOX_ROOT}/{alias_name}"
+    return aliases
+
+
+def build_message_attachment_history_paths(user_files: list[UserFile]) -> dict[int, str]:
+    aliases: dict[int, str] = {}
+    used_names_by_message: dict[int, dict[str, int]] = {}
+    for user_file in user_files:
+        file_id = getattr(user_file, "id", None)
+        source_message_id = getattr(user_file, "source_message_id", None)
+        if file_id is None or source_message_id is None:
+            continue
+        raw_name = build_attachment_label(user_file, fallback=f"attachment-{file_id}")
+        stem, suffix = posixpath.splitext(raw_name)
+        used_names = used_names_by_message.setdefault(int(source_message_id), {})
+        count = used_names.get(raw_name, 0)
+        alias_name = raw_name if count == 0 else f"{stem}-{count + 1}{suffix}"
+        used_names[raw_name] = count + 1
+        aliases[file_id] = (
+            f"{MESSAGE_ATTACHMENT_HISTORY_ROOT}/message-{int(source_message_id)}/{alias_name}"
+        )
     return aliases
 
 
