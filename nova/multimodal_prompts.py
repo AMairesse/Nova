@@ -27,7 +27,7 @@ def build_multimodal_intro_text(
     if not prompt_inputs:
         return text
 
-    lines = "\n".join(f"- {prompt_input.label}" for prompt_input in prompt_inputs)
+    lines = "\n".join(_format_prompt_input_line(prompt_input) for prompt_input in prompt_inputs)
     attachment_heading = heading or (
         singular_heading if len(prompt_inputs) == 1 else plural_heading
     )
@@ -74,3 +74,11 @@ def _default_empty_text(
         return _("Please analyze the attached file.")
 
     return _("Please analyze the attached files.")
+
+
+def _format_prompt_input_line(prompt_input: PromptInput) -> str:
+    metadata = prompt_input.metadata if isinstance(prompt_input.metadata, dict) else {}
+    inbox_path = str(metadata.get("inbox_path") or "").strip()
+    if inbox_path:
+        return f"- {prompt_input.label} (available at {inbox_path})"
+    return f"- {prompt_input.label}"

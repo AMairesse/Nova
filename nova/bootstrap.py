@@ -473,7 +473,8 @@ def _build_image_agent_prompt(provider: LLMProvider) -> str:
             "Generate images from text instructions and transform optional attached images "
             "when they are provided. When editing, preserve the user's intent and explain "
             "briefly what changed. If a request is ambiguous, choose the smallest useful "
-            "change set that satisfies the instruction."
+            "change set that satisfies the instruction. Only claim to have used a reference "
+            "image when it is actually available in `/inbox`."
         )
 
     return (
@@ -481,7 +482,7 @@ def _build_image_agent_prompt(provider: LLMProvider) -> str:
         "When the user provides an existing image, use it only as descriptive context if direct "
         "image editing is not supported by your model. In that case, state the limitation briefly "
         "and generate a new image variant based on the user's description instead of pretending to "
-        "have modified the original."
+        "have modified the original. If a requested reference image is missing from `/inbox`, say so."
     )
 
 
@@ -518,7 +519,8 @@ def ensure_image_agent(
         is_tool=True,
         tool_description=(
             "Use this agent to generate or transform images from text instructions and optional media inputs. "
-            "When you pass files into the delegated task, read them from `/inbox` and produce persisted image files."
+            "When you pass files into the delegated task, read them from `/inbox`, and if a requested reference file "
+            "is missing there, say so instead of claiming it was used."
         ),
         default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
     )

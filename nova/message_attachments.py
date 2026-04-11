@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import posixpath
 from typing import Any
 
 from django.conf import settings
@@ -15,10 +16,12 @@ class AttachmentKind:
     TEXT = "text"
     ANNOTATION = "annotation"
 
+
 DEFAULT_MESSAGE_ATTACHMENT_MAX_FILES = 4
 DEFAULT_MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
 DEFAULT_MESSAGE_ATTACHMENT_MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024
 DEFAULT_MESSAGE_ATTACHMENT_MAX_AUDIO_SIZE_BYTES = 10 * 1024 * 1024
+MESSAGE_ATTACHMENT_INBOX_ROOT = "/inbox"
 
 
 def get_message_attachment_max_files() -> int:
@@ -143,6 +146,22 @@ def build_attachment_label(user_file: UserFile | None, *, fallback: str = "") ->
         if normalized:
             return normalized
     return fallback or "attachment"
+
+
+def build_message_attachment_inbox_paths(user_files: list[UserFile]) -> dict[int, str]:
+    aliases: dict[int, str] = {}
+    used_names: dict[str, int] = {}
+    for user_file in user_files:
+        file_id = getattr(user_file, "id", None)
+        if file_id is None:
+            continue
+        raw_name = build_attachment_label(user_file, fallback=f"attachment-{file_id}")
+        stem, suffix = posixpath.splitext(raw_name)
+        count = used_names.get(raw_name, 0)
+        alias_name = raw_name if count == 0 else f"{stem}-{count + 1}{suffix}"
+        used_names[raw_name] = count + 1
+        aliases[file_id] = f"{MESSAGE_ATTACHMENT_INBOX_ROOT}/{alias_name}"
+    return aliases
 
 
 def build_message_attachment_manifest_from_user_file(

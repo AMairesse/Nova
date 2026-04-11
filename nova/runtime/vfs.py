@@ -8,6 +8,11 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 
 from nova.file_utils import batch_upload_files, download_file_content, upload_file_to_minio
+from nova.message_attachments import (
+    MESSAGE_ATTACHMENT_INBOX_ROOT,
+    build_attachment_label,
+    build_message_attachment_inbox_paths,
+)
 from nova.memory.service import (
     MEMORY_ROOT,
     archive_memory_path,
@@ -49,6 +54,8 @@ from .constants import RUNTIME_STORAGE_ROOT
 class VFSError(Exception):
     pass
 
+INBOX_ROOT = MESSAGE_ATTACHMENT_INBOX_ROOT
+
 
 @dataclass(slots=True)
 class VFSFile:
@@ -83,6 +90,7 @@ class VirtualFileSystem:
         memory_enabled: bool = False,
         webdav_tools: list | None = None,
         source_message_id: int | None = None,
+        source_message_inbox_enabled: bool = True,
         persistent_root_scope: str = UserFile.Scope.THREAD_SHARED,
         persistent_root_prefix: str | None = None,
         tmp_storage_prefix: str | None = None,
@@ -96,6 +104,7 @@ class VirtualFileSystem:
         self.webdav_mounts = build_webdav_mounts(list(webdav_tools or []))
         self._webdav_mounts_by_name = {mount.name: mount for mount in self.webdav_mounts}
         self.source_message_id = source_message_id
+        self.source_message_inbox_enabled = bool(source_message_inbox_enabled)
         self.persistent_root_scope = str(persistent_root_scope or UserFile.Scope.THREAD_SHARED)
         self.persistent_root_prefix = (
             str(persistent_root_prefix or "").rstrip("/") if persistent_root_prefix else None
@@ -119,6 +128,43 @@ class VirtualFileSystem:
 
     def _is_memory_enabled_path(self, path: str) -> bool:
         return self.memory_enabled and is_memory_path(path)
+
+    @staticmethod
+    def _is_inbox_path(path: str) -> bool:
+        normalized = normalize_vfs_path(path, cwd="/")
+        return normalized == INBOX_ROOT or normalized.startswith(f"{INBOX_ROOT}/")
+
+    def _has_source_message_inbox(self) -> bool:
+        return self.source_message_inbox_enabled and self.source_message_id is not None
+
+    def _has_inbox_dir(self) -> bool:
+        return self._has_source_message_inbox() or INBOX_ROOT in self._get_session_dirs()
+
+    @staticmethod
+    def _inbox_filename_for_user_file(user_file: UserFile) -> str:
+        basename = build_attachment_label(user_file, fallback="")
+        if basename:
+            return basename
+        file_id = getattr(user_file, "id", None)
+        if file_id is not None:
+            return f"attachment-{file_id}"
+        return "attachment"
+
+    @classmethod
+    def build_source_message_inbox_path(cls, user_file: UserFile) -> str:
+        aliases = build_message_attachment_inbox_paths([user_file])
+        path = aliases.get(getattr(user_file, "id", None))
+        return normalize_vfs_path(path or f"{INBOX_ROOT}/{cls._inbox_filename_for_user_file(user_file)}", cwd="/")
+
+    @classmethod
+    def build_source_message_inbox_paths(
+        cls,
+        user_files: list[UserFile],
+    ) -> dict[int, str]:
+        return {
+            file_id: normalize_vfs_path(path, cwd="/")
+            for file_id, path in build_message_attachment_inbox_paths(user_files).items()
+        }
 
     def _resolve_webdav_path(self, path: str) -> tuple[str, WebDAVMount | None, str | None]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
@@ -163,10 +209,17 @@ class VirtualFileSystem:
             directory for directory in dirs if directory and directory != "/"
         )
 
-    def _storage_path_for_vfs_path(self, path: str) -> tuple[str, str]:
+    def _storage_path_for_vfs_path(
+        self,
+        path: str,
+        *,
+        allow_inbox_write: bool = False,
+    ) -> tuple[str, str]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized == "/skills" or normalized.startswith("/skills/"):
             raise VFSError("Writing into /skills is not supported.")
+        if self._is_inbox_path(normalized) and not allow_inbox_write:
+            raise VFSError("Writing into /inbox is not supported. Copy files elsewhere first.")
         if self._is_reserved_memory_path(normalized):
             if not self.memory_enabled:
                 raise VFSError("Memory is not enabled for this agent.")
@@ -200,8 +253,22 @@ class VirtualFileSystem:
             return normalized
         return None
 
-    def _vfs_path_for_user_file(self, user_file: UserFile) -> str | None:
+    def _vfs_path_for_user_file(
+        self,
+        user_file: UserFile,
+        *,
+        source_message_aliases: dict[int, str] | None = None,
+    ) -> str | None:
         original_path = str(user_file.original_filename or "").strip()
+        if (
+            self._has_source_message_inbox()
+            and user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
+            and getattr(user_file, "source_message_id", None) == self.source_message_id
+        ):
+            file_id = getattr(user_file, "id", None)
+            if file_id is not None and source_message_aliases and file_id in source_message_aliases:
+                return source_message_aliases[file_id]
+            return self.build_source_message_inbox_path(user_file)
         if user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT:
             if original_path.startswith(self.tmp_storage_prefix):
                 suffix = original_path[len(self.tmp_storage_prefix):] or ""
@@ -214,6 +281,11 @@ class VirtualFileSystem:
     async def _load_real_files(self) -> list[VFSFile]:
         def _load():
             query = Q(scope=UserFile.Scope.MESSAGE_ATTACHMENT, original_filename__startswith=self.tmp_storage_prefix)
+            if self._has_source_message_inbox():
+                query |= Q(
+                    scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                    source_message_id=self.source_message_id,
+                )
             if self.persistent_root_scope == UserFile.Scope.THREAD_SHARED:
                 query |= Q(scope=UserFile.Scope.THREAD_SHARED)
             elif self.persistent_root_prefix:
@@ -229,9 +301,22 @@ class VirtualFileSystem:
             )
 
         user_files = await sync_to_async(_load, thread_sensitive=True)()
+        source_message_aliases: dict[int, str] = {}
+        if self._has_source_message_inbox():
+            source_message_aliases = self.build_source_message_inbox_paths([
+                user_file
+                for user_file in user_files
+                if (
+                    user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
+                    and getattr(user_file, "source_message_id", None) == self.source_message_id
+                )
+            ])
         by_path: dict[str, VFSFile] = {}
         for user_file in user_files:
-            vfs_path = self._vfs_path_for_user_file(user_file)
+            vfs_path = self._vfs_path_for_user_file(
+                user_file,
+                source_message_aliases=source_message_aliases,
+            )
             if not vfs_path:
                 continue
             candidate = VFSFile(
@@ -256,6 +341,8 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             return True
+        if normalized == INBOX_ROOT:
+            return self._has_inbox_dir()
         if normalized == WEBDAV_VFS_ROOT:
             return bool(self.webdav_mounts)
         if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
@@ -290,6 +377,8 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             return True
+        if normalized == INBOX_ROOT:
+            return self._has_inbox_dir()
         if normalized == WEBDAV_VFS_ROOT:
             return bool(self.webdav_mounts)
         if self._is_reserved_memory_path(normalized) and not self.memory_enabled:
@@ -349,6 +438,8 @@ class VirtualFileSystem:
         entries: dict[str, dict] = {}
         if normalized == "/":
             entries["skills"] = {"name": "skills", "path": "/skills", "type": "dir"}
+            if self._has_inbox_dir():
+                entries["inbox"] = {"name": "inbox", "path": INBOX_ROOT, "type": "dir"}
             entries["tmp"] = {"name": "tmp", "path": "/tmp", "type": "dir"}
             if self.webdav_mounts:
                 entries["webdav"] = {"name": "webdav", "path": WEBDAV_VFS_ROOT, "type": "dir"}
@@ -458,6 +549,10 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized.startswith("/skills"):
             raise VFSError("mkdir is not supported inside /skills.")
+        if normalized == INBOX_ROOT and self._has_inbox_dir():
+            return normalized
+        if self._is_inbox_path(normalized):
+            raise VFSError("mkdir is not supported inside /inbox.")
         if self._is_reserved_memory_path(normalized):
             if not self.memory_enabled:
                 raise VFSError("Memory is not enabled for this agent.")
@@ -500,6 +595,7 @@ class VirtualFileSystem:
         *,
         mime_type: str = "application/octet-stream",
         overwrite: bool = True,
+        allow_inbox_write: bool = False,
     ) -> VFSFile:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if self._is_memory_enabled_path(normalized):
@@ -558,7 +654,10 @@ class VirtualFileSystem:
             if not self.webdav_mounts:
                 raise VFSError("WebDAV is not enabled for this agent.")
             raise VFSError("Invalid WebDAV path.")
-        scope, storage_path = self._storage_path_for_vfs_path(normalized)
+        scope, storage_path = self._storage_path_for_vfs_path(
+            normalized,
+            allow_inbox_write=allow_inbox_write,
+        )
         existing = await self.get_real_file(normalized)
         if existing and existing.user_file is not None:
             if not overwrite:
@@ -612,6 +711,8 @@ class VirtualFileSystem:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             raise VFSError(f"Cannot remove protected path: {normalized}")
+        if self._is_inbox_path(normalized):
+            raise VFSError("Removing files from /inbox is not supported.")
         if self._is_memory_enabled_path(normalized):
             try:
                 await archive_memory_path(user=self.user, path=normalized)
@@ -710,6 +811,8 @@ class VirtualFileSystem:
 
     async def move(self, source: str, destination: str) -> str:
         normalized_source = normalize_vfs_path(source, cwd=self.cwd)
+        if self._is_inbox_path(normalized_source):
+            raise VFSError("Moving files from /inbox is not supported. Use cp instead.")
         source_name = posixpath.basename(normalized_source) or "file"
         resolved_destination = await self.resolve_output_path(destination, source_name=source_name)
         source_webdav_kind, source_webdav_mount, source_webdav_path = self._resolve_webdav_path(normalized_source)
@@ -894,6 +997,16 @@ class VirtualFileSystem:
             matches.append(WEBDAV_VFS_ROOT)
 
         return sorted(set(matches))
+
+    async def suggest_inbox_path(self, missing_path: str) -> str | None:
+        basename = posixpath.basename(str(missing_path or "").strip())
+        if not basename:
+            return None
+        lowered = basename.lower()
+        for item in await self._load_real_files():
+            if item.path.startswith(f"{INBOX_ROOT}/") and posixpath.basename(item.path).lower() == lowered:
+                return item.path
+        return None
 
     async def snapshot_persistent_files(self) -> dict[str, tuple[int | None, int, str]]:
         snapshot: dict[str, tuple[int | None, int, str]] = {}

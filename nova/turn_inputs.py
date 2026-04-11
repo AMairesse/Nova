@@ -11,7 +11,12 @@ from asgiref.sync import sync_to_async
 from django.utils.translation import gettext as _
 
 from nova.file_utils import download_file_content
-from nova.message_attachments import AttachmentKind, build_attachment_label, detect_attachment_kind
+from nova.message_attachments import (
+    AttachmentKind,
+    build_attachment_label,
+    build_message_attachment_inbox_paths,
+    detect_attachment_kind,
+)
 from nova.models.UserFile import UserFile
 
 logger = logging.getLogger(__name__)
@@ -196,18 +201,25 @@ async def load_message_turn_inputs(source_message) -> list[ResolvedTurnInput]:
         return []
 
     def _load_inputs():
-        return [
-            ResolvedTurnInput.from_user_file(
-                user_file,
-                source=TURN_INPUT_SOURCE_MESSAGE_ATTACHMENT,
-                metadata={"source": TURN_INPUT_SOURCE_MESSAGE_ATTACHMENT},
-            )
-            for user_file in UserFile.objects.filter(
+        user_files = list(
+            UserFile.objects.filter(
                 user=source_message.user,
                 thread=source_message.thread,
                 source_message_id=source_message_id,
                 scope=UserFile.Scope.MESSAGE_ATTACHMENT,
             ).order_by("created_at", "id")
+        )
+        inbox_paths = build_message_attachment_inbox_paths(user_files)
+        return [
+            ResolvedTurnInput.from_user_file(
+                user_file,
+                source=TURN_INPUT_SOURCE_MESSAGE_ATTACHMENT,
+                metadata={
+                    "source": TURN_INPUT_SOURCE_MESSAGE_ATTACHMENT,
+                    "inbox_path": inbox_paths.get(user_file.id),
+                },
+            )
+            for user_file in user_files
         ]
 
     return await sync_to_async(_load_inputs, thread_sensitive=True)()

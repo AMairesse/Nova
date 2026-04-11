@@ -24,11 +24,14 @@ from nova.agent_execution import (
     requires_tools_for_run,
     resolve_effective_response_mode,
 )
+from nova.file_utils import download_file_content
 from nova.continuous.context_builder import load_continuous_context
 from nova.models.Message import Actor, Message, MessageType
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
+from nova.providers.registry import prepare_turn_content_for_provider
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
+from nova.turn_inputs import ResolvedTurnInput, TURN_INPUT_SOURCE_SUBAGENT_INPUT
 
 from .capabilities import resolve_terminal_capabilities
 from .compaction import (
@@ -87,6 +90,7 @@ class ReactTerminalRuntime:
         allow_ask_user: bool = True,
         persist_session: bool = True,
         session_state_override: dict | None = None,
+        mount_source_message_inbox: bool = True,
         persistent_root_scope: str | None = None,
         persistent_root_prefix: str | None = None,
         tmp_storage_prefix: str | None = None,
@@ -102,6 +106,7 @@ class ReactTerminalRuntime:
         self.allow_ask_user = bool(allow_ask_user)
         self.persist_session = bool(persist_session)
         self.session_state_override = dict(session_state_override or {})
+        self.mount_source_message_inbox = bool(mount_source_message_inbox)
         self.persistent_root_scope = persistent_root_scope or UserFile.Scope.THREAD_SHARED
         self.persistent_root_prefix = persistent_root_prefix
         self.tmp_storage_prefix = tmp_storage_prefix
@@ -214,6 +219,7 @@ class ReactTerminalRuntime:
             memory_enabled=self.capabilities.has_memory,
             webdav_tools=self.capabilities.webdav_tools,
             source_message_id=self.source_message_id,
+            source_message_inbox_enabled=self.mount_source_message_inbox,
             persistent_root_scope=self.persistent_root_scope,
             persistent_root_prefix=self.persistent_root_prefix,
             tmp_storage_prefix=self.tmp_storage_prefix,
@@ -294,6 +300,11 @@ class ReactTerminalRuntime:
                 "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
                 "the served app without a separate publish step."
             )
+        if self.source_message_id is not None:
+            extra_guidance.append(
+                "Files attached to the current user message are available under `/inbox` when present. "
+                "Only claim to have used a reference file if you can read it there or pass it explicitly to a sub-agent."
+            )
         extra_guidance.append(
             "You may reference existing thread files by absolute VFS path in Markdown: "
             "`[label](/path/file.ext)` creates a link, and `![alt](/path/image.png)` displays an image inline."
@@ -321,6 +332,7 @@ class ReactTerminalRuntime:
             )
         filesystem_lines = [
             "- /: persistent files for this thread",
+            "- /inbox: files attached to the current user message, when present",
             "- /skills: readonly recipes",
             "- /tmp: scratch files hidden from the normal file sidebar",
             "- /subagents/<subagent-slug>-<run-id>/: files returned by delegated sub-agents",
@@ -647,6 +659,7 @@ class ReactTerminalRuntime:
             allow_ask_user=False,
             persist_session=False,
             session_state_override={"cwd": "/", "history": [], "directories": ["/tmp", "/inbox"]},
+            mount_source_message_inbox=False,
             persistent_root_scope=UserFile.Scope.MESSAGE_ATTACHMENT,
             persistent_root_prefix=child_root_prefix,
             tmp_storage_prefix=child_tmp_prefix,
@@ -663,11 +676,20 @@ class ReactTerminalRuntime:
                     mime_type = "text/markdown"
                 else:
                     content, mime_type = await self.vfs.read_bytes(normalized_input)
-                await child_runtime.vfs.write_file(child_target, content, mime_type=mime_type)
+                await child_runtime.vfs.write_file(
+                    child_target,
+                    content,
+                    mime_type=mime_type,
+                    allow_inbox_write=True,
+                )
             except Exception as exc:
+                suggestion = await self.vfs.suggest_inbox_path(input_path)
+                error_text = str(exc)
+                if suggestion:
+                    error_text = f"{error_text} Did you mean {suggestion}?"
                 if self.trace_handler and node_id:
-                    await self.trace_handler.fail_subagent(node_id, error=str(exc))
-                return f"Failed to copy {input_path} into the sub-agent input area: {exc}"
+                    await self.trace_handler.fail_subagent(node_id, error=error_text)
+                return f"Failed to copy {input_path} into the sub-agent input area: {error_text}"
             copied_inputs.append(child_target)
 
         before_files = await child_runtime.vfs.snapshot_persistent_files()
@@ -859,7 +881,34 @@ class ReactTerminalRuntime:
             context_lines.append(f"{label}:\n{text}")
         return "\n\n".join(context_lines).strip()
 
-    def _build_native_invocation_request(
+    async def _load_native_inbox_prompt_inputs(self) -> list[ResolvedTurnInput]:
+        if not await self.vfs.path_exists("/inbox") or not await self.vfs.is_dir("/inbox"):
+            return []
+
+        prompt_inputs: list[ResolvedTurnInput] = []
+        for entry in await self.vfs.list_dir("/inbox"):
+            if str(entry.get("type") or "") != "file":
+                continue
+            path = str(entry.get("path") or "").strip()
+            if not path:
+                continue
+            real_file = await self.vfs.get_real_file(path)
+            if real_file is None or real_file.user_file is None:
+                continue
+            prompt_inputs.append(
+                ResolvedTurnInput.from_user_file(
+                    real_file.user_file,
+                    source=TURN_INPUT_SOURCE_SUBAGENT_INPUT,
+                    label=str(entry.get("name") or ""),
+                    metadata={
+                        "source": TURN_INPUT_SOURCE_SUBAGENT_INPUT,
+                        "inbox_path": path,
+                    },
+                )
+            )
+        return prompt_inputs
+
+    async def _build_native_invocation_request(
         self,
         messages: list[dict],
         *,
@@ -895,6 +944,25 @@ class ReactTerminalRuntime:
         prompt_text = self._extract_text_content(current_content)
         if context_prompt:
             prompt_text = f"{context_prompt}\n\nCurrent request:\n{prompt_text}".strip()
+        inbox_prompt_inputs = await self._load_native_inbox_prompt_inputs()
+        if inbox_prompt_inputs:
+            content = await prepare_turn_content_for_provider(
+                self.provider_client.provider,
+                prompt_text,
+                inbox_prompt_inputs,
+                content_downloader=download_file_content,
+                log_subject=(
+                    f"native {response_mode} request for "
+                    f"{getattr(self.agent_config, 'name', 'agent')}"
+                ),
+                include_missing_file_summary=True,
+            )
+            if isinstance(content, list):
+                return {
+                    "content": content,
+                    "response_mode": response_mode,
+                }
+            prompt_text = str(content or "").strip()
         return {
             "prompt": prompt_text,
             "response_mode": response_mode,
@@ -1143,7 +1211,7 @@ class ReactTerminalRuntime:
         return "\n\n".join(part for part in parts if part).strip() or "No final response produced."
 
     async def _run_native_response_mode(self, messages: list[dict], *, response_mode: str) -> ReactTerminalRunResult:
-        invocation_request = self._build_native_invocation_request(
+        invocation_request = await self._build_native_invocation_request(
             messages,
             response_mode=response_mode,
         )

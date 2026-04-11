@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import uuid
@@ -46,6 +47,7 @@ from nova.runtime.task_executor import (
 )
 from nova.runtime.terminal import TerminalCommandError, TerminalExecutor
 from nova.runtime.vfs import VirtualFileSystem
+from nova.tasks.tasks import build_source_message_prompt
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 from nova.thread_titles import build_default_thread_subject
 from nova.web.browser_service import BrowserSessionError
@@ -2371,6 +2373,121 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         self.assertIn("[label](/path/file.ext)", prompt)
         self.assertIn("![alt](/path/image.png)", prompt)
+        self.assertIn("/inbox", prompt)
+
+    def test_runtime_mounts_source_message_attachments_under_inbox(self):
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        source_message = self.thread.add_message("Use the attached photo.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=len(jpeg_bytes),
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        stored_contents = {user_file.key: jpeg_bytes}
+
+        async def fake_download_file_content(file_obj):
+            return stored_contents[file_obj.key]
+
+        with patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            inbox_entries = async_to_sync(runtime.vfs.list_dir)("/inbox")
+            content, mime_type = async_to_sync(runtime.vfs.read_bytes)("/inbox/IMG_6433.jpg")
+
+        self.assertTrue(async_to_sync(runtime.vfs.path_exists)("/inbox"))
+        self.assertEqual([entry["name"] for entry in inbox_entries], ["IMG_6433.jpg"])
+        self.assertEqual(content, jpeg_bytes)
+        self.assertEqual(mime_type, "image/jpeg")
+
+    def test_inbox_is_read_only_but_files_can_be_copied_out(self):
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        source_message = self.thread.add_message("Use the attached photo.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=len(jpeg_bytes),
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        stored_contents = {user_file.key: jpeg_bytes}
+
+        async def fake_download_file_content(file_obj):
+            return stored_contents[file_obj.key]
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            stored_contents[key] = bytes(content)
+            return key
+
+        with (
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            with self.assertRaisesRegex(Exception, "Writing into /inbox"):
+                async_to_sync(runtime.vfs.write_file)("/inbox/new.txt", b"nope", mime_type="text/plain")
+            with self.assertRaisesRegex(Exception, "Removing files from /inbox"):
+                async_to_sync(runtime.vfs.remove)("/inbox/IMG_6433.jpg")
+
+            copied = async_to_sync(runtime.vfs.copy)("/inbox/IMG_6433.jpg", "/tmp/copied.jpg")
+            copied_content, copied_mime = async_to_sync(runtime.vfs.read_bytes)("/tmp/copied.jpg")
+
+        self.assertEqual(copied.path, "/tmp/copied.jpg")
+        self.assertEqual(copied_content, jpeg_bytes)
+        self.assertEqual(copied_mime, "image/jpeg")
+
+    def test_source_message_prompt_mentions_inbox_paths_for_attachments(self):
+        source_message = self.thread.add_message("Please use the attached image.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=3,
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        async def fake_download_file_content(file_obj):
+            self.assertEqual(file_obj.id, user_file.id)
+            return b"jpg"
+
+        with patch("nova.tasks.tasks.download_file_content", new=fake_download_file_content):
+            prompt = async_to_sync(build_source_message_prompt)(
+                source_message,
+                provider=self.provider,
+            )
+
+        intro_text = prompt[0]["text"] if isinstance(prompt, list) else prompt
+        self.assertIn("Attached file:", intro_text)
+        self.assertIn("IMG_6433.jpg", intro_text)
+        self.assertIn("/inbox/IMG_6433.jpg", intro_text)
 
     def _create_webapp_tool(self) -> Tool:
         return Tool.objects.create(
@@ -3173,6 +3290,117 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(copied_content.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(copied_mime, "image/png")
 
+    def test_delegate_to_native_image_subagent_includes_copied_inbox_image_in_invocation_request(self):
+        png_data_url = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmXcAAAAASUVORK5CYII="
+        )
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        child_provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenRouter Image Child",
+            provider_type=ProviderType.OPENROUTER,
+            model="openai/gpt-image-1",
+            api_key="router-key",
+        )
+        self._apply_provider_capabilities(
+            child_provider,
+            tools="unsupported",
+            image_input="pass",
+            image_output="pass",
+            image_generation="pass",
+        )
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Child",
+            llm_provider=child_provider,
+            system_prompt="Generate images.",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Image child",
+            default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
+        )
+        self.agent.agent_tools.add(child_agent)
+        source_message = self.thread.add_message("Edit the attached image.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=len(jpeg_bytes),
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {user_file.key: jpeg_bytes}
+        captured = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        async def fake_invoke_native_completion(self, *, invocation_request):
+            del self
+            captured["request"] = invocation_request
+            return {
+                "text": "Generated.",
+                "images": [
+                    {
+                        "data": png_data_url,
+                        "mime_type": "image/png",
+                        "filename": "generated-image-1.png",
+                    }
+                ],
+                "audio": None,
+                "raw_response": {},
+            }
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.runtime.agent.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+            patch(
+                "nova.runtime.provider_client.ProviderClient.invoke_native_completion",
+                new=fake_invoke_native_completion,
+            ),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Add a stylish hat to the man on the left.",
+                input_paths=["/inbox/IMG_6433.jpg"],
+            )
+
+        content = captured["request"]["content"]
+        image_parts = [
+            part for part in content
+            if isinstance(part, dict) and part.get("type") == "image"
+        ]
+        self.assertIn("finished with 1 output file(s)", result)
+        self.assertIsInstance(content, list)
+        self.assertTrue(any(part.get("type") == "text" for part in content if isinstance(part, dict)))
+        self.assertEqual(len(image_parts), 1)
+        self.assertEqual(image_parts[0]["filename"], "IMG_6433.jpg")
+        self.assertEqual(image_parts[0]["mime_type"], "image/jpeg")
+        self.assertEqual(
+            image_parts[0]["data"],
+            base64.b64encode(jpeg_bytes).decode("utf-8"),
+        )
+
     def test_subagent_outputs_are_copied_back_under_subagents_directory(self):
         child_agent = AgentConfig.objects.create(
             user=self.user,
@@ -3238,6 +3466,124 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
         self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
         self.assertEqual(copied_answer, "answer")
+
+    def test_delegate_to_agent_can_copy_source_message_inbox_attachment(self):
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        source_message = self.thread.add_message("Use the attached photo.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=len(jpeg_bytes),
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents: dict[str, bytes] = {user_file.key: jpeg_bytes}
+        seen = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ensure_root_trace
+            seen["prompt"] = ephemeral_user_prompt
+            seen["inbox_exists"] = await self.vfs.path_exists("/inbox/IMG_6433.jpg")
+            seen["content"] = await self.vfs.read_bytes("/inbox/IMG_6433.jpg")
+            return ReactTerminalRunResult(
+                final_answer="Used the provided photo.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+            patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Use the attached image.",
+                input_paths=["/inbox/IMG_6433.jpg"],
+            )
+
+        self.assertIn("Used the provided photo.", result)
+        self.assertTrue(seen["inbox_exists"])
+        self.assertIn("/inbox/IMG_6433.jpg", seen["prompt"])
+        self.assertEqual(seen["content"], (jpeg_bytes, "image/jpeg"))
+
+    def test_delegate_to_agent_suggests_inbox_path_for_missing_attachment_path(self):
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        source_message = self.thread.add_message("Use the attached photo.", Actor.USER)
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=3,
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {user_file.key: b"jpg"}
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        with patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Use the attached image.",
+                input_paths=["/IMG_6433.jpg"],
+            )
+
+        self.assertIn("Did you mean /inbox/IMG_6433.jpg?", result)
 
     def test_subagent_with_webdav_capability_sees_webdav_mount(self):
         webdav_tool = self._create_webdav_tool()
