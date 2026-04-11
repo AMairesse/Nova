@@ -636,13 +636,27 @@ class TerminalExecutor:
         return "\n".join(selected)
 
     async def _cmd_mkdir(self, args: list[str]) -> str:
-        if len(args) != 1:
-            raise TerminalCommandError("Usage: mkdir <path>")
-        try:
-            created = await self._mkdir_and_notify(args[0])
-            return f"Created directory {created}"
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        flags, positionals, _numeric_count = self._parse_short_flags(
+            args,
+            command_name="mkdir [-p] <path> [<path> ...]",
+            supported_flags={"p"},
+        )
+        if not positionals:
+            raise TerminalCommandError("Usage: mkdir [-p] <path> [<path> ...]")
+
+        recursive = "p" in flags
+        results: list[str] = []
+        for raw_path in positionals:
+            try:
+                if recursive:
+                    created = await self._mkdir_recursive_and_notify(raw_path)
+                    results.append(f"Ensured directory {created}")
+                else:
+                    created = await self._mkdir_and_notify(raw_path)
+                    results.append(f"Created directory {created}")
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+        return "\n".join(results)
 
     def _validate_text_write_path(self, raw_path: str) -> str:
         normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
@@ -1601,22 +1615,20 @@ class TerminalExecutor:
             raise TerminalCommandError("Date/time commands are not enabled for this agent.")
 
         use_utc = False
-        format_token = None
+        format_tokens: list[str] = []
         for token in args:
             if token == "-u":
                 use_utc = True
                 continue
-            if token in {"+%F", "+%T"} and format_token is None:
-                format_token = token
-                continue
-            raise TerminalCommandError("Usage: date [-u] [+%F|+%T]")
+            format_tokens.append(token)
+        if format_tokens and not str(format_tokens[0]).startswith("+"):
+            raise TerminalCommandError("Usage: date [-u] [+FORMAT [FORMAT ...]]")
 
         now = timezone.now()
         current = now.astimezone(dt_timezone.utc) if use_utc else timezone.localtime(now)
-        if format_token == "+%F":
-            return current.strftime("%Y-%m-%d")
-        if format_token == "+%T":
-            return current.strftime("%H:%M:%S")
+        if format_tokens:
+            format_string = " ".join(str(token)[1:] if str(token).startswith("+") else str(token) for token in format_tokens)
+            return current.strftime(format_string)
         zone_label = "UTC" if use_utc else str(current.tzname() or timezone.get_current_timezone_name())
         return f"{current.strftime('%Y-%m-%d %H:%M:%S')} {zone_label}"
 
@@ -1885,6 +1897,19 @@ class TerminalExecutor:
         created = await self.vfs.mkdir(path)
         await self._notify_webapp_paths([created])
         return created
+
+    async def _mkdir_recursive_and_notify(self, path: str) -> str:
+        normalized = normalize_vfs_path(path, cwd=self.vfs.cwd)
+        if normalized == "/":
+            return normalized
+
+        current = "/"
+        for segment in [part for part in normalized.strip("/").split("/") if part]:
+            current = posixpath.join(current, segment) if current != "/" else f"/{segment}"
+            if await self.vfs.is_dir(current):
+                continue
+            await self._mkdir_and_notify(current)
+        return normalized
 
     async def _copy_and_notify(self, source: str, destination: str):
         copied = await self.vfs.copy(source, destination)

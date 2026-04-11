@@ -111,6 +111,15 @@ class AgentViewsTest(BaseTestCase):
             provider_ids,
         )
 
+    def test_create_form_explains_system_prompt_is_literal(self):
+        self._create_provider()
+
+        response = self.client.get(reverse("user_settings:agent-add"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Literal prompt text.")
+        self.assertContains(response, "not injected automatically")
+
     def test_edit_form_warns_when_provider_has_no_tools_but_agent_depends_on_them(self):
         provider = self._create_provider(
             provider_type="openrouter",

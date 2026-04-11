@@ -7,12 +7,14 @@ def _skill_docs(_capabilities, _thread_mode):
     return {
         "date.md": """# Date / Time
 
-Use the native `date` command for current date and time:
+Use the native `date` command for current date and time.
 
+Common `strftime` fragments are supported. Locale-dependent names such as `%A`
+follow the server locale.
+
+Examples:
 - `date`
-- `date -u`
-- `date +%F`
-- `date +%T`
+- `date +%F %T`
 
 For more advanced date arithmetic, use Python instead of expecting full GNU date support.
 """,

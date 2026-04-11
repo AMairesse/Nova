@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -51,6 +52,11 @@ class ReactTerminalInterruptResult:
 
 
 class ReactTerminalRuntime:
+    _TERMINAL_COMMAND_FALLBACK_RE = re.compile(
+        r'^\s*\{\s*"command"\s*:\s*"(.*)"\s*\}\s*$',
+        re.DOTALL,
+    )
+
     def __init__(
         self,
         *,
@@ -160,9 +166,8 @@ class ReactTerminalRuntime:
         ) or "none"
         extra_guidance: list[str] = [
             "Create text files with `touch`, `tee`, or text shell redirection. "
-            "Minimal text pipelines and `<`, `>`, `>>` redirections are supported, "
-            "but this is not a full shell: do not rely on `&&`, `||`, `;`, or command substitution. "
-            "Common Unix-like forms such as `cat -n`, `head -5`, `tail -1`, `grep -in`, `wc -l`, and `rm -f` are supported.",
+            "Text pipelines and `<`, `>`, `>>` redirections are supported, "
+            "but this is not a full shell: do not rely on `&&`, `||`, `;`, or command substitution.",
         ]
         if not self.tools_enabled:
             extra_guidance.append(
@@ -177,7 +182,7 @@ class ReactTerminalRuntime:
             )
         if self.capabilities.has_date_time:
             extra_guidance.append(
-                "Use `date`, `date -u`, `date +%F`, and `date +%T` for current time queries."
+                "Use `date` for current date/time queries."
             )
         if self.capabilities.has_memory:
             extra_guidance.append(
@@ -648,28 +653,53 @@ class ReactTerminalRuntime:
             output_suffix = "\nOutput files copied back to the parent runtime:\n" + "\n".join(copied_outputs)
         return f"Sub-agent {subagent_label} finished.\n\n{answer}{output_suffix}"
 
+    @classmethod
+    def _repair_single_terminal_command_payload(cls, raw_arguments: str) -> dict[str, str] | None:
+        match = cls._TERMINAL_COMMAND_FALLBACK_RE.match(str(raw_arguments or ""))
+        if not match:
+            return None
+        return {"command": match.group(1)}
+
+    @classmethod
+    def _decode_tool_payload(cls, tool_name: str, tool_arguments: Any) -> dict[str, Any]:
+        if isinstance(tool_arguments, dict):
+            payload = tool_arguments
+        else:
+            raw_arguments = str(tool_arguments or "{}")
+            try:
+                payload = json.loads(raw_arguments or "{}")
+            except Exception as exc:
+                payload = (
+                    cls._repair_single_terminal_command_payload(raw_arguments)
+                    if tool_name == "terminal"
+                    else None
+                )
+                if payload is None:
+                    raise ValueError(f"Tool argument error: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Tool arguments must decode to a JSON object.")
+        return payload
+
     async def _execute_tool_call(self, tool_call: dict) -> dict:
         tool_name = str(tool_call.get("name") or "").strip()
-        tool_arguments = str(tool_call.get("arguments") or "{}")
+        tool_arguments = tool_call.get("arguments")
         tool_call_id = str(tool_call.get("id") or "")
         try:
-            payload = json.loads(tool_arguments or "{}")
-            if not isinstance(payload, dict):
-                raise ValueError("Tool arguments must decode to a JSON object.")
-        except Exception as exc:
-            return {"tool_call_id": tool_call_id, "name": tool_name, "content": f"Tool argument error: {exc}"}
+            payload = self._decode_tool_payload(tool_name, tool_arguments)
+        except ValueError as exc:
+            return {"tool_call_id": tool_call_id, "name": tool_name, "content": str(exc)}
 
         run_id = uuid.uuid4()
         if self.progress_handler:
             await self.progress_handler.on_tool_start(
                 {"name": tool_name},
-                tool_arguments,
+                str(tool_arguments or "{}"),
                 run_id=run_id,
             )
         if self.trace_handler:
             await self.trace_handler.on_tool_start(
                 {"name": tool_name},
-                tool_arguments,
+                str(tool_arguments or "{}"),
                 run_id=run_id,
             )
 
@@ -740,12 +770,10 @@ class ReactTerminalRuntime:
         assistant_message: dict[str, Any],
         tool_call: dict[str, Any],
     ) -> ReactTerminalInterruptResult:
-        try:
-            payload = json.loads(str(tool_call.get("arguments") or "{}"))
-        except Exception as exc:
-            raise ValueError(f"Tool argument error: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("Tool arguments must decode to a JSON object.")
+        payload = self._decode_tool_payload(
+            str(tool_call.get("name") or "ask_user"),
+            tool_call.get("arguments"),
+        )
 
         question = str(payload.get("question") or "").strip()
         if not question:

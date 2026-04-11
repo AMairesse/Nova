@@ -186,6 +186,16 @@ class BootstrapSkillsTests(TestCase):
             ).exists()
         )
 
+    def test_bootstrap_nova_prompt_does_not_embed_current_datetime(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+
+        bootstrap_default_setup(self.user)
+
+        nova = AgentConfig.objects.get(user=self.user, name="Nova")
+        self.assertNotIn("Current date and time is", nova.system_prompt)
+        self.assertNotIn("{today}", nova.system_prompt)
+        self.assertIn("date/time capability", nova.system_prompt)
+
     def test_bootstrap_creates_and_attaches_image_agent_with_best_image_provider(self):
         main_provider = self.provider
         image_provider = create_provider(self.user, name="Image Provider")

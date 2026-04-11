@@ -505,6 +505,28 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(redirected, "hello")
         self.assertEqual(copied, "world")
 
+    def test_mkdir_supports_recursive_p_flag(self):
+        memory_tool = self._create_memory_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(memory_tool=memory_tool)
+        )
+
+        created = async_to_sync(executor.execute)("mkdir -p /memory/preferences/editors")
+        created_again = async_to_sync(executor.execute)("mkdir -p /memory/preferences/editors")
+
+        self.assertIn("Ensured directory /memory/preferences/editors", created)
+        self.assertIn("Ensured directory /memory/preferences/editors", created_again)
+        self.assertIn("preferences/", async_to_sync(executor.execute)("ls /memory"))
+        self.assertIn("editors/", async_to_sync(executor.execute)("ls /memory/preferences"))
+
+    def test_mkdir_p_rejects_file_in_parent_chain(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('echo "hello" > /note.txt')
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mkdir -p /note.txt/archive")
+
     def test_cat_supports_line_numbering_with_file_and_stdin(self):
         executor = self._build_executor()
 
@@ -1544,11 +1566,30 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         utc_output = async_to_sync(executor.execute)("date -u")
         date_only = async_to_sync(executor.execute)("date +%F")
         time_only = async_to_sync(executor.execute)("date +%T")
+        combined = async_to_sync(executor.execute)("date +%F %T")
+        combined_utc = async_to_sync(executor.execute)("date -u +%F %T")
+        weekday = async_to_sync(executor.execute)("date +%A")
+        date_and_weekday = async_to_sync(executor.execute)("date +%Y-%m-%d '+%A'")
+        redirected = async_to_sync(executor.execute)("date +%F %T > /tmp/date.txt")
 
         self.assertRegex(default_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+$")
         self.assertRegex(utc_output, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$")
         self.assertRegex(date_only, r"^\d{4}-\d{2}-\d{2}$")
         self.assertRegex(time_only, r"^\d{2}:\d{2}:\d{2}$")
+        self.assertRegex(combined, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertRegex(combined_utc, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertTrue(weekday)
+        self.assertRegex(date_and_weekday, r"^\d{4}-\d{2}-\d{2} .+$")
+        self.assertIn("Wrote", redirected)
+        self.assertRegex(async_to_sync(executor.execute)("cat /tmp/date.txt"), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+    def test_date_rejects_first_format_fragment_without_plus(self):
+        executor = self._build_executor(
+            TerminalCapabilities(date_time_tool=object())
+        )
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("date %F")
 
     def test_terminal_rejects_unsupported_shell_syntax_patterns(self):
         executor = self._build_executor()
@@ -1900,11 +1941,11 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("mail accounts", skills["mail.md"])
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
-        self.assertIn("date +%F", skills["date.md"])
+        self.assertIn("date +%F %T", skills["date.md"])
+        self.assertIn("server locale", skills["date.md"])
+        self.assertIn("pwd", skills["terminal.md"])
+        self.assertIn("mkdir -p /memory/preferences", skills["terminal.md"])
         self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
-        self.assertIn("cat /note.txt | grep hello", skills["terminal.md"])
-        self.assertIn("wc -l /note.txt", skills["terminal.md"])
-        self.assertIn("rm -f /note.txt", skills["terminal.md"])
 
     def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
         skills = build_skill_registry(
@@ -2287,6 +2328,22 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             python_path="nova.plugins.webapp",
         )
 
+    def _create_code_execution_tool(self) -> Tool:
+        tool = Tool.objects.create(
+            user=self.user,
+            name="Judge0",
+            description="Judge0",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="code_execution",
+            python_path="nova.plugins.python",
+        )
+        ToolCredential.objects.create(
+            user=self.user,
+            tool=tool,
+            config={"judge0_url": "https://judge0.example.com", "timeout": 5},
+        )
+        return tool
+
     def test_runtime_executes_terminal_tool_loop(self):
         runtime = async_to_sync(
             ReactTerminalRuntime(
@@ -2322,6 +2379,103 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )
         self.assertEqual(result.final_answer, "The current directory is /.")
         self.assertIn("pwd", session.session_state["history"])
+
+    def test_runtime_executes_python_dash_c_terminal_tool_call(self):
+        code_tool = self._create_code_execution_tool()
+        self.agent.tools.add(code_tool)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_python_1",
+                            "name": "terminal",
+                            "arguments": json.dumps({"command": 'python -c "print(45 * 35)"'}),
+                        }
+                    ],
+                },
+                {
+                    "content": "1575",
+                    "tool_calls": [],
+                },
+            ]
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_code",
+                new_callable=AsyncMock,
+                return_value="Status: Accepted\nStdout: 1575\nStderr: ",
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(runtime.run)()
+
+        session = AgentThreadSession.objects.get(
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        self.assertEqual(result.final_answer, "1575")
+        self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
+        self.assertIn('python -c "print(45 * 35)"', session.session_state["history"])
+
+    def test_runtime_recovers_terminal_tool_call_with_unescaped_inner_quotes(self):
+        code_tool = self._create_code_execution_tool()
+        self.agent.tools.add(code_tool)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_python_1",
+                            "name": "terminal",
+                            "arguments": '{"command":"python -c "print(45 * 35)""}',
+                        }
+                    ],
+                },
+                {
+                    "content": "1575",
+                    "tool_calls": [],
+                },
+            ]
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_code",
+                new_callable=AsyncMock,
+                return_value="Status: Accepted\nStdout: 1575\nStderr: ",
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(runtime.run)()
+
+        self.assertEqual(result.final_answer, "1575")
+        self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
 
     def test_runtime_persists_stream_state_for_reconnect(self):
         task = Task.objects.create(
@@ -2535,11 +2689,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         prompt = runtime.build_system_prompt()
         self.assertIn("touch", prompt)
         self.assertIn("tee", prompt)
-        self.assertIn("Minimal text pipelines", prompt)
+        self.assertIn("Text pipelines", prompt)
         self.assertIn("not a full shell", prompt)
-        self.assertIn("wc -l", prompt)
-        self.assertIn("rm -f", prompt)
-        self.assertIn("date +%F", prompt)
+        self.assertIn("Use `date` for current date/time queries.", prompt)
         self.assertIn("--mailbox <email>", prompt)
         self.assertIn("- /: persistent files for this thread", prompt)
         self.assertNotIn("/thread", prompt)

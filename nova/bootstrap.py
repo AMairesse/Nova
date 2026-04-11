@@ -530,7 +530,7 @@ def ensure_nova_agent(
         "When a query clearly belongs to a specialized agent (internet, code), delegate "
         "to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. "
         f"{'Delegate image generation or image transformation requests to the Image Agent when appropriate. ' if has_image_agent else ''}"
-        "Current date and time is {today}"
+        "Use the date/time capability when the current date or time matters."
     )
 
     nova_agent = _ensure_agent(

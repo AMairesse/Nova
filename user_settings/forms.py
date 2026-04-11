@@ -184,6 +184,10 @@ class AgentForm(forms.ModelForm):
         self.fields["strategy"].required = False
         self.fields["max_summary_length"].required = False
         self.fields["summary_model"].required = False
+        self.fields["system_prompt"].help_text = _(
+            "Literal prompt text. The current date/time is not injected automatically; "
+            "agents should use the date capability when they need it."
+        )
 
         # Crispy-forms helper
         #
