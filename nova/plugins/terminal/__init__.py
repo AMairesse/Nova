@@ -13,6 +13,7 @@ Start by checking `pwd`, `ls`, and `ls /skills` when you need orientation.
 
 Examples:
 - `mkdir -p /memory/preferences`
+- `mkdir -p /tmp/demo; ls -l /tmp/demo`
 - `echo "hello" > /note.txt`
 
 Use relative paths only if you are confident about the current working directory.

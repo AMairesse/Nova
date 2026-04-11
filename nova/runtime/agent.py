@@ -248,8 +248,8 @@ class ReactTerminalRuntime:
         ) or "none"
         extra_guidance: list[str] = [
             "Create text files with `touch`, `tee`, or text shell redirection. "
-            "Text pipelines and `<`, `>`, `>>` redirections are supported, "
-            "but this is not a full shell: do not rely on heredocs, `&&`, `||`, `;`, or command substitution.",
+            "Text pipelines, `<`, `>`, `>>`, and sequential commands with `;` are supported, "
+            "but this is not a full shell: do not rely on heredocs, `&&`, `||`, or command substitution.",
         ]
         if not self.tools_enabled:
             extra_guidance.append(
@@ -288,7 +288,7 @@ class ReactTerminalRuntime:
             if self.capabilities.has_web:
                 search_guidance += (
                     " It returns search results only and caches them for this run so "
-                    "you can open one with `browse open --result N`."
+                    "you can open one with `browse open --result N` using 0-based indexes."
                 )
             extra_guidance.append(search_guidance)
         if self.capabilities.has_web:
@@ -680,14 +680,28 @@ class ReactTerminalRuntime:
         before_files = await self.vfs.snapshot_visible_files()
         cwd_before = self.vfs.cwd
         failure_kind = ""
+        segment_count = 1
+        segment_head_commands: list[str] = []
+        try:
+            parsed_command = self.terminal._parse_shell_command(command)
+        except TerminalCommandError:
+            parsed_command = None
+        if parsed_command is not None:
+            segment_count = len(parsed_command.segments)
+            segment_head_commands = [
+                normalize_head_command(segment.raw)
+                for segment in parsed_command.segments
+            ]
         try:
             output = await self.terminal.execute(command)
             await self._persist_session()
             content = output or ""
+            failed_segment_indexes: list[int] = []
         except TerminalCommandError as exc:
             await self._persist_session()
             failure_kind = str(getattr(exc, "failure_kind", "") or classify_terminal_failure(str(exc)))
             content = f"Command error: {exc}"
+            failed_segment_indexes = [failure.segment_index for failure in list(exc.segment_failures or [])]
         after_files = await self.vfs.snapshot_visible_files()
         output_paths = sorted(
             path
@@ -702,6 +716,8 @@ class ReactTerminalRuntime:
             "cwd": cwd_before,
             "cwd_after": self.vfs.cwd,
             "progress_end_message": "Terminal command finished",
+            "segment_count": segment_count,
+            "segment_head_commands": segment_head_commands,
             "output_kind": self._infer_terminal_output_kind(
                 content,
                 output_paths=output_paths,
@@ -712,6 +728,8 @@ class ReactTerminalRuntime:
         }
         if failure_kind:
             trace_meta["error_kind"] = failure_kind
+        if failed_segment_indexes:
+            trace_meta["failed_segment_indexes"] = failed_segment_indexes
         return ToolExecutionResult(
             content=content,
             trace_meta=trace_meta,

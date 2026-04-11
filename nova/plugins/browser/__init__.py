@@ -11,7 +11,7 @@ Interactive browser reading is exposed through `browse` commands.
 
 Useful commands:
 - `browse open https://example.com`
-- `browse open --result 1`
+- `browse open --result 0`
 - `browse current`
 - `browse back`
 - `browse text`

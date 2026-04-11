@@ -8,7 +8,7 @@ from nova.plugins.base import InternalPluginDescriptor, resolve_single_builtin_t
 def _skill_docs(capabilities, _thread_mode):
     browse_note = (
         "\nUse `search` to discover candidate pages, then open a result during the same run with:\n"
-        "- `browse open --result 1`\n"
+        "- `browse open --result 0`\n"
         if capabilities.has_web
         else ""
     )

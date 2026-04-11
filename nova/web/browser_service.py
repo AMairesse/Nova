@@ -56,9 +56,12 @@ class BrowserSession:
         }
 
     async def open_search_result(self, index: int, results: Sequence[dict[str, Any]]) -> dict[str, Any]:
-        if index < 1 or index > len(results):
-            raise BrowserSessionError(f"Search result {index} is out of range.")
-        url = str(results[index - 1].get("url") or "").strip()
+        if index < 0 or index >= len(results):
+            max_index = len(results) - 1
+            raise BrowserSessionError(
+                f"Search result {index} is out of range. Available range: 0..{max_index}."
+            )
+        url = str(results[index].get("url") or "").strip()
         if not url:
             raise BrowserSessionError(f"Search result {index} has no URL to open.")
         return await self.open(url)

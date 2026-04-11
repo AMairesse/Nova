@@ -39,9 +39,16 @@ from .terminal_metrics import (
 )
 
 class TerminalCommandError(Exception):
-    def __init__(self, message: str, *, failure_kind: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_kind: str | None = None,
+        segment_failures: list["SegmentExecutionFailure"] | None = None,
+    ):
         super().__init__(message)
         self.failure_kind = str(failure_kind or "").strip() or classify_terminal_failure(message)
+        self.segment_failures = list(segment_failures or [])
 
 
 logger = logging.getLogger(__name__)
@@ -49,10 +56,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True, frozen=True)
 class ParsedShellCommand:
+    raw: str
     pipeline: list[list[str]]
     input_path: str | None = None
     output_path: str | None = None
     output_append: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class ParsedShellProgram:
+    segments: list[ParsedShellCommand]
 
 
 @dataclass(slots=True)
@@ -61,6 +74,15 @@ class ParsedDownloadCommand:
     output_path: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     user_agent: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class SegmentExecutionFailure:
+    segment_index: int
+    command: str
+    head_command: str
+    failure_kind: str
+    error: str
 
 
 class TerminalExecutor:
@@ -126,12 +148,50 @@ class TerminalExecutor:
                     "Shell substitutions are not supported.",
                     failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
                 )
-            if char == ";":
-                raise TerminalCommandError(
-                    "Command chaining with ; is not supported.",
-                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
-                )
             index += 1
+
+    def _split_shell_segments(self, raw: str) -> list[str]:
+        segments: list[str] = []
+        in_single = False
+        in_double = False
+        escaped = False
+        start = 0
+
+        for index, char in enumerate(raw):
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\" and not in_single:
+                escaped = True
+                continue
+            if char == "'" and not in_double:
+                in_single = not in_single
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                continue
+            if in_single or in_double:
+                continue
+            if char != ";":
+                continue
+
+            segment = raw[start:index].strip()
+            if not segment:
+                raise TerminalCommandError(
+                    "Command chaining with ; requires a command on both sides.",
+                    failure_kind=FAILURE_KIND_PARSE_ERROR,
+                )
+            segments.append(segment)
+            start = index + 1
+
+        final_segment = raw[start:].strip()
+        if not final_segment:
+            raise TerminalCommandError(
+                "Command chaining with ; requires a command on both sides.",
+                failure_kind=FAILURE_KIND_PARSE_ERROR,
+            )
+        segments.append(final_segment)
+        return segments
 
     def _tokenize_shell(self, command: str) -> list[str]:
         raw = str(command or "").strip()
@@ -149,8 +209,9 @@ class TerminalExecutor:
                 failure_kind=FAILURE_KIND_PARSE_ERROR,
             ) from exc
 
-    def _parse_shell_command(self, command: str) -> ParsedShellCommand:
-        tokens = self._tokenize_shell(command)
+    def _parse_shell_segment(self, command: str) -> ParsedShellCommand:
+        raw = str(command or "").strip()
+        tokens = self._tokenize_shell(raw)
         if not tokens:
             raise TerminalCommandError("Empty command.", failure_kind=FAILURE_KIND_PARSE_ERROR)
 
@@ -241,11 +302,20 @@ class TerminalExecutor:
             )
 
         return ParsedShellCommand(
+            raw=raw,
             pipeline=pipeline,
             input_path=input_path,
             output_path=output_path,
             output_append=output_append,
         )
+
+    def _parse_shell_command(self, command: str) -> ParsedShellProgram:
+        raw = str(command or "").strip()
+        if not raw:
+            raise TerminalCommandError("Empty command.", failure_kind=FAILURE_KIND_PARSE_ERROR)
+        self._validate_shell_operators(raw)
+        segments = [self._parse_shell_segment(segment) for segment in self._split_shell_segments(raw)]
+        return ParsedShellProgram(segments=segments)
 
     @staticmethod
     def _command_uses_builtin_output(tokens: list[str]) -> bool:
@@ -274,7 +344,34 @@ class TerminalExecutor:
             error_message=str(error),
         )
 
-    async def _run_shell_command(self, parsed: ParsedShellCommand) -> str:
+    @staticmethod
+    def _merge_command_outputs(outputs: list[str]) -> str:
+        cleaned = [str(item or "").rstrip("\n") for item in outputs if str(item or "").strip()]
+        return "\n".join(cleaned)
+
+    def _build_segment_failure_message(
+        self,
+        failures: list[SegmentExecutionFailure],
+        *,
+        partial_output: str,
+    ) -> str:
+        lines = ["One or more command segments failed:"]
+        for failure in failures:
+            label = failure.head_command or failure.command or "command"
+            lines.append(
+                f"- Segment {failure.segment_index} (`{label}`): {failure.error}"
+            )
+        if partial_output:
+            lines.extend(
+                [
+                    "",
+                    "Partial output from successful segments:",
+                    self._truncate_output(partial_output, limit=4000),
+                ]
+            )
+        return "\n".join(lines).strip()
+
+    async def _run_shell_segment(self, parsed: ParsedShellCommand) -> str:
         stdin_text = None
         if parsed.input_path:
             try:
@@ -303,6 +400,42 @@ class TerminalExecutor:
                 written,
             )
         return output or ""
+
+    async def _run_shell_command(self, parsed: ParsedShellProgram) -> str:
+        if len(parsed.segments) == 1:
+            return await self._run_shell_segment(parsed.segments[0])
+
+        outputs: list[str] = []
+        failures: list[SegmentExecutionFailure] = []
+
+        for segment_index, segment in enumerate(parsed.segments, start=1):
+            try:
+                output = await self._run_shell_segment(segment)
+            except TerminalCommandError as exc:
+                failures.append(
+                    SegmentExecutionFailure(
+                        segment_index=segment_index,
+                        command=segment.raw,
+                        head_command=normalize_head_command(segment.raw),
+                        failure_kind=str(
+                            getattr(exc, "failure_kind", "") or classify_terminal_failure(str(exc))
+                        ),
+                        error=str(exc),
+                    )
+                )
+                continue
+            if output:
+                outputs.append(output)
+
+        merged_output = self._merge_command_outputs(outputs)
+        if failures:
+            first_failure_kind = failures[0].failure_kind if len(failures) == 1 else FAILURE_KIND_COMMAND_ERROR
+            raise TerminalCommandError(
+                self._build_segment_failure_message(failures, partial_output=merged_output),
+                failure_kind=first_failure_kind,
+                segment_failures=failures,
+            )
+        return merged_output
 
     async def _execute_stage(
         self,
@@ -408,7 +541,15 @@ class TerminalExecutor:
             parsed = self._parse_shell_command(command)
             return await self._run_shell_command(parsed)
         except TerminalCommandError as exc:
-            await self._record_terminal_failure(command, exc)
+            if exc.segment_failures:
+                for failure in exc.segment_failures:
+                    await record_terminal_command_failure(
+                        command=failure.command,
+                        failure_kind=failure.failure_kind,
+                        error_message=failure.error,
+                    )
+            else:
+                await self._record_terminal_failure(command, exc)
             raise
         except Exception as exc:
             wrapped = TerminalCommandError(
@@ -487,6 +628,7 @@ class TerminalExecutor:
             "show_all": False,
             "long_format": False,
             "one_per_line": False,
+            "human_readable": False,
         }
         path = None
         for token in args:
@@ -498,6 +640,8 @@ class TerminalExecutor:
                         options["long_format"] = True
                     elif flag == "1":
                         options["one_per_line"] = True
+                    elif flag == "h":
+                        options["human_readable"] = True
                     else:
                         raise TerminalCommandError(
                             f"Unsupported ls flag: -{flag}",
@@ -506,11 +650,25 @@ class TerminalExecutor:
                 continue
             if path is not None:
                 raise TerminalCommandError(
-                    "Usage: ls [-a] [-l] [-1] [path]",
+                    "Usage: ls [-a] [-l] [-1] [-h] [path]",
                     failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                 )
             path = token
         return options, (path or "")
+
+    @staticmethod
+    def _format_human_size(size: int | None) -> str:
+        value = float(size or 0)
+        units = ["B", "K", "M", "G", "T", "P"]
+        unit_index = 0
+        while value >= 1024 and unit_index < len(units) - 1:
+            value /= 1024
+            unit_index += 1
+        if unit_index == 0:
+            return f"{int(value)}{units[unit_index]}"
+        if value >= 10 or float(value).is_integer():
+            return f"{value:.0f}{units[unit_index]}"
+        return f"{value:.1f}{units[unit_index]}"
 
     @staticmethod
     def _format_ls_mode(entry_type: str) -> str:
@@ -529,7 +687,13 @@ class TerminalExecutor:
                 return entry
         return {"name": basename, "path": normalized_path, "type": "file"}
 
-    def _format_ls_entry(self, entry: dict[str, str | int], *, long_format: bool) -> str:
+    def _format_ls_entry(
+        self,
+        entry: dict[str, str | int],
+        *,
+        long_format: bool,
+        human_readable: bool = False,
+    ) -> str:
         name = str(entry.get("name") or "")
         if entry.get("type") == "dir" and not name.endswith("/"):
             name = f"{name}/"
@@ -538,7 +702,8 @@ class TerminalExecutor:
         size = "-"
         mime_type = "-"
         if entry.get("type") != "dir":
-            size = str(entry.get("size") if entry.get("size") is not None else 0)
+            raw_size = int(entry.get("size") if entry.get("size") is not None else 0)
+            size = self._format_human_size(raw_size) if human_readable else str(raw_size)
             mime_type = str(entry.get("mime_type") or "application/octet-stream")
         return f"{self._format_ls_mode(str(entry.get('type') or 'file'))} {size} {mime_type} {name}"
 
@@ -550,7 +715,11 @@ class TerminalExecutor:
             raise TerminalCommandError(f"Path not found: {normalized}")
         if not await self.vfs.is_dir(normalized):
             entry = await self._lookup_ls_entry(normalized)
-            return self._format_ls_entry(entry, long_format=options["long_format"])
+            return self._format_ls_entry(
+                entry,
+                long_format=options["long_format"],
+                human_readable=options["human_readable"],
+            )
         entries = await self.vfs.list_dir(normalized)
         rendered_entries = list(entries)
         if options["show_all"]:
@@ -566,7 +735,11 @@ class TerminalExecutor:
         if not rendered_entries:
             return ""
         lines = [
-            self._format_ls_entry(entry, long_format=options["long_format"])
+            self._format_ls_entry(
+                entry,
+                long_format=options["long_format"],
+                human_readable=options["human_readable"],
+            )
             for entry in rendered_entries
         ]
         return "\n".join(lines)
@@ -2088,7 +2261,7 @@ class TerminalExecutor:
             return self._render_structured_stdout(payload, capture_output=True)
 
         lines: list[str] = []
-        for index, result in enumerate(self._last_search_results, start=1):
+        for index, result in enumerate(self._last_search_results):
             title = str(result.get("title") or "").strip() or "(untitled)"
             url = str(result.get("url") or "").strip() or "(missing url)"
             snippet = str(result.get("snippet") or "").strip()

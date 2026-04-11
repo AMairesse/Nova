@@ -892,15 +892,47 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
         listing = async_to_sync(executor.execute)("ls -la /")
         file_listing = async_to_sync(executor.execute)("ls -l /note.txt")
+        human_listing = async_to_sync(executor.execute)("ls -h /")
+        human_file_listing = async_to_sync(executor.execute)("ls -lh /note.txt")
         alias_listing = async_to_sync(executor.execute)("la /")
 
         self.assertIn("drwxr-xr-x - - ./", listing)
         self.assertIn("drwxr-xr-x - - ../", listing)
         self.assertIn("-rw-r--r-- 6 text/plain note.txt", file_listing)
+        self.assertIn("note.txt", human_listing)
+        self.assertIn("-rw-r--r-- 6B text/plain note.txt", human_file_listing)
         self.assertIn("note.txt", alias_listing)
 
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("ls -h")
+    def test_terminal_supports_semicolon_sequences(self):
+        executor = self._build_executor()
+
+        output = async_to_sync(executor.execute)(
+            'mkdir -p /tmp/flyer-v8; echo "ok" > /tmp/flyer-v8/status.txt; ls -l /tmp/flyer-v8'
+        )
+
+        self.assertIn("/tmp/flyer-v8", output)
+        self.assertIn("status.txt", output)
+        self.assertEqual(async_to_sync(executor.execute)("cat /tmp/flyer-v8/status.txt"), "ok\n")
+
+    def test_terminal_semicolon_sequences_continue_after_failure_but_fail_overall(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError) as cm:
+            async_to_sync(executor.execute)(
+                'mkdir /tmp/semicolon-test; unknowncmd; echo "done" > /tmp/semicolon-test/result.txt'
+            )
+
+        self.assertIn("Segment 2", str(cm.exception))
+        self.assertIn("Unknown command: unknowncmd", str(cm.exception))
+        self.assertEqual(async_to_sync(executor.execute)("cat /tmp/semicolon-test/result.txt"), "done\n")
+
+    def test_terminal_semicolon_sequences_reject_empty_segments(self):
+        executor = self._build_executor()
+
+        for command in ["pwd;;ls", "; pwd", "pwd;"]:
+            with self.subTest(command=command):
+                with self.assertRaises(TerminalCommandError):
+                    async_to_sync(executor.execute)(command)
 
     def test_memory_mount_is_visible_only_when_memory_capability_is_enabled(self):
         plain_executor = self._build_executor()
@@ -1094,7 +1126,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 "search nova privacy --limit 1 --output /search/results.json"
             )
 
-        self.assertIn("1. Nova docs / https://example.com/nova / Privacy-first agent platform", listing)
+        self.assertIn("0. Nova docs / https://example.com/nova / Privacy-first agent platform", listing)
         self.assertIn("/search/results.json", written)
         stored = async_to_sync(executor.execute)("cat /search/results.json")
         self.assertEqual(json.loads(stored)["query"], "nova privacy")
@@ -1385,7 +1417,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
 
         with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("browse open --result 1")
+            async_to_sync(executor.execute)("browse open --result 0")
         executor._browser_session = None
 
         fake_session = _FakeBrowserSession()
@@ -1410,13 +1442,49 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             patch("nova.runtime.terminal.BrowserSession", return_value=fake_session),
         ):
             search_result = async_to_sync(executor.execute)("search nova")
-            opened = async_to_sync(executor.execute)("browse open --result 1")
+            opened = async_to_sync(executor.execute)("browse open --result 0")
             current = async_to_sync(executor.execute)("browse current")
 
         self.assertIn("Nova docs", search_result)
+        self.assertIn("0. Nova docs / https://example.com/nova / Docs", search_result)
         self.assertIn("https://example.com/result", opened)
         self.assertEqual(current, "https://example.com/result")
         fake_session.open_search_result.assert_awaited_once()
+        self.assertEqual(fake_session.open_search_result.await_args.args[0], 0)
+
+        with (
+            patch(
+                "nova.runtime.terminal.search_web",
+                new_callable=AsyncMock,
+                return_value={
+                    "query": "nova",
+                    "results": [
+                        {
+                            "title": "Nova docs",
+                            "url": "https://example.com/nova",
+                            "snippet": "Docs",
+                            "engine": "searx",
+                            "score": None,
+                        }
+                    ],
+                    "limit": 1,
+                },
+            ),
+            patch(
+                "nova.runtime.terminal.BrowserSession",
+                return_value=SimpleNamespace(
+                    open_search_result=AsyncMock(
+                        side_effect=BrowserSessionError(
+                            "Search result 1 is out of range. Available range: 0..0."
+                        )
+                    )
+                ),
+            ),
+        ):
+            executor._browser_session = None
+            async_to_sync(executor.execute)("search nova")
+            with self.assertRaisesRegex(TerminalCommandError, r"Available range: 0\.\.0"):
+                async_to_sync(executor.execute)("browse open --result 1")
 
         next_run_executor = self._build_executor(
             TerminalCapabilities(browser_tool=browser_tool)
@@ -1810,7 +1878,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         for command in [
             "pwd && ls",
             "pwd || ls",
-            "pwd ; ls",
             "echo $(pwd)",
             "echo `pwd`",
         ]:
@@ -1824,7 +1891,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         for command in [
             "unknowncmd --token secret-value",
             "unknowncmd --token secret-value",
-            "ls -h",
+            "ls -z",
         ]:
             with self.assertRaises(TerminalCommandError):
                 async_to_sync(executor.execute)(command)
@@ -1842,6 +1909,26 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(invalid_metric.count, 1)
         self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
         self.assertNotIn("secret-value", " ".join(unknown_metric.recent_examples))
+
+    def test_terminal_failure_metrics_record_failed_semicolon_segments_individually(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("pwd; unknowncmd --token secret-value; ls -z")
+
+        unknown_metric = TerminalCommandFailureMetric.objects.get(
+            head_command="unknowncmd",
+            failure_kind="unknown_command",
+        )
+        invalid_metric = TerminalCommandFailureMetric.objects.get(
+            head_command="ls",
+            failure_kind="invalid_arguments",
+        )
+
+        self.assertEqual(unknown_metric.count, 1)
+        self.assertEqual(invalid_metric.count, 1)
+        self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
+        self.assertFalse(TerminalCommandFailureMetric.objects.filter(head_command="pwd").exists())
 
     def test_terminal_failure_metrics_record_unsupported_syntax(self):
         executor = self._build_executor()
@@ -2196,7 +2283,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
         self.assertIn("search.md", skills)
         self.assertIn("browse.md", skills)
-        self.assertIn("browse open --result 1", skills["search.md"])
+        self.assertIn("browse open --result 0", skills["search.md"])
         self.assertIn("browse click", skills["browse.md"])
         self.assertIn("browse text > /page.txt", skills["browse.md"])
 
@@ -3884,6 +3971,26 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         self.assertIn("Saw browse.", result)
         self.assertIn("No active page", seen["browse_error"])
+
+    def test_runtime_terminal_trace_meta_includes_semicolon_segments(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        result = async_to_sync(runtime._execute_terminal_command)(
+            "pwd; unknowncmd; ls /"
+        )
+
+        self.assertTrue(result.failed)
+        self.assertEqual(result.trace_meta["segment_count"], 3)
+        self.assertEqual(result.trace_meta["segment_head_commands"], ["pwd", "unknowncmd", "ls"])
+        self.assertEqual(result.trace_meta["failed_segment_indexes"], [2])
+        self.assertIn("Segment 2", result.content)
+        self.assertIn("skills/", result.content)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):
