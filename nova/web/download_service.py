@@ -10,6 +10,7 @@ from nova.file_utils import MAX_FILE_SIZE
 
 DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 _FILENAME_RE = re.compile(r'filename\*?=(?:UTF-8\'\')?"?([^\";]+)"?')
+DEFAULT_DOWNLOAD_USER_AGENT = "NovaTerminal/1.0 (+https://github.com/AMairesse/Nova)"
 
 
 def infer_download_filename(url: str, headers: Any, explicit_filename: str = "") -> str:
@@ -34,12 +35,30 @@ async def download_http_file(
     url: str,
     *,
     filename: str = "",
+    headers: dict[str, str] | None = None,
+    user_agent: str = "",
     max_size: int = MAX_FILE_SIZE,
 ) -> dict[str, Any]:
     bytes_read = 0
     chunks: list[bytes] = []
+    request_headers = httpx.Headers()
+    for name, value in dict(headers or {}).items():
+        normalized_name = str(name or "").strip()
+        normalized_value = str(value or "").strip()
+        if not normalized_name or not normalized_value:
+            continue
+        request_headers[normalized_name] = normalized_value
+    effective_user_agent = str(user_agent or "").strip()
+    if effective_user_agent:
+        request_headers["User-Agent"] = effective_user_agent
+    elif "User-Agent" not in request_headers:
+        request_headers["User-Agent"] = DEFAULT_DOWNLOAD_USER_AGENT
 
-    async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=DOWNLOAD_TIMEOUT,
+        follow_redirects=True,
+        headers=request_headers,
+    ) as client:
         async with client.stream("GET", url) as response:
             response.raise_for_status()
             inferred_name = infer_download_filename(url, response.headers, filename)
@@ -59,4 +78,3 @@ async def download_http_file(
         "content": b"".join(chunks),
         "size": bytes_read,
     }
-

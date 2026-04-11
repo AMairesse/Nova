@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
 from nova.message_submission import SubmissionContext, submit_user_message
 from nova.models.AgentConfig import AgentConfig
@@ -51,6 +51,7 @@ from nova.tasks.tasks import build_source_message_prompt
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 from nova.thread_titles import build_default_thread_subject
 from nova.web.browser_service import BrowserSessionError
+from nova.web.download_service import DEFAULT_DOWNLOAD_USER_AGENT, download_http_file
 
 
 class _FakeChannelLayer:
@@ -72,6 +73,25 @@ class _FakeBrowserSession:
         self.get_elements = AsyncMock(return_value=[{"href": "https://example.com/a", "innerText": "A"}])
         self.click = AsyncMock(return_value="Clicked element 'a.link'.")
         self.close = AsyncMock(return_value=None)
+
+
+class _FakeDownloadStreamResponse:
+    def __init__(self, *, headers: dict[str, str], chunks: list[bytes]):
+        self.headers = headers
+        self._chunks = list(chunks)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self):
+        return None
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
 
 
 class RuntimeSupportTests(TestCase):
@@ -113,6 +133,77 @@ class RuntimeSupportTests(TestCase):
 
         self.assertEqual(runtime.provider_client.model, self.provider.model)
         self.assertEqual(runtime.provider_client.max_context_tokens, self.provider.max_context_tokens)
+
+
+class DownloadServiceTests(SimpleTestCase):
+    def test_download_http_file_sends_default_user_agent(self):
+        captured = {}
+
+        class FakeAsyncClient:
+            def __init__(self, *, headers=None, **kwargs):
+                del kwargs
+                captured["headers"] = dict(headers or {})
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, method, url):
+                captured["method"] = method
+                captured["url"] = url
+                return _FakeDownloadStreamResponse(
+                    headers={"content-type": "text/plain"},
+                    chunks=[b"hello"],
+                )
+
+        with patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+            payload = async_to_sync(download_http_file)("https://example.com/hello.txt")
+
+        normalized_headers = {
+            str(name).lower(): value for name, value in captured["headers"].items()
+        }
+        self.assertEqual(payload["content"], b"hello")
+        self.assertEqual(payload["mime_type"], "text/plain")
+        self.assertEqual(captured["method"], "GET")
+        self.assertEqual(captured["url"], "https://example.com/hello.txt")
+        self.assertEqual(normalized_headers["user-agent"], DEFAULT_DOWNLOAD_USER_AGENT)
+
+    def test_download_http_file_allows_user_agent_override_and_custom_headers(self):
+        captured = {}
+
+        class FakeAsyncClient:
+            def __init__(self, *, headers=None, **kwargs):
+                del kwargs
+                captured["headers"] = dict(headers or {})
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, method, url):
+                del method, url
+                return _FakeDownloadStreamResponse(
+                    headers={"content-type": "text/plain"},
+                    chunks=[b"ok"],
+                )
+
+        with patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+            payload = async_to_sync(download_http_file)(
+                "https://example.com/data.txt",
+                headers={"Referer": "https://example.com", "User-Agent": "HeaderUA/1.0"},
+                user_agent="NovaOverride/2.0",
+            )
+
+        normalized_headers = {
+            str(name).lower(): value for name, value in captured["headers"].items()
+        }
+        self.assertEqual(payload["content"], b"ok")
+        self.assertEqual(normalized_headers["user-agent"], "NovaOverride/2.0")
+        self.assertEqual(normalized_headers["referer"], "https://example.com")
 
 
 class TerminalExecutorTests(TestCase):
@@ -210,6 +301,126 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             webdav_tools=resolved_capabilities.webdav_tools,
         )
         return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
+
+    def test_curl_accepts_common_user_agent_header_and_output_flags(self):
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=SimpleNamespace()),
+        )
+        captured = {}
+
+        async def fake_download_http_file(url, *, headers=None, user_agent="", filename="", max_size=None):
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["user_agent"] = user_agent
+            captured["filename"] = filename
+            captured["max_size"] = max_size
+            return {
+                "url": url,
+                "filename": "trentemoult-real-street.jpg",
+                "mime_type": "image/jpeg",
+                "content": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
+                "size": 10,
+            }
+
+        with patch("nova.runtime.terminal.download_http_file", new=fake_download_http_file):
+            output = async_to_sync(executor.execute)(
+                'curl -A "Mozilla/5.0" -H "Referer: https://example.com" -o /tmp/trentemoult-real-street.jpg '
+                '"https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg"'
+            )
+
+        self.assertIn("/tmp/trentemoult-real-street.jpg", output)
+        self.assertEqual(
+            captured["url"],
+            "https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg",
+        )
+        self.assertEqual(captured["user_agent"], "Mozilla/5.0")
+        self.assertEqual(captured["headers"]["Referer"], "https://example.com")
+
+    def test_curl_accepts_url_after_options_and_multiple_headers(self):
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=SimpleNamespace()),
+        )
+        captured = {}
+
+        async def fake_download_http_file(url, *, headers=None, user_agent="", filename="", max_size=None):
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["user_agent"] = user_agent
+            del filename, max_size
+            return {
+                "url": url,
+                "filename": "page.html",
+                "mime_type": "text/html",
+                "content": b"<html>Hello</html>",
+                "size": 18,
+            }
+
+        with patch("nova.runtime.terminal.download_http_file", new=fake_download_http_file):
+            output = async_to_sync(executor.execute)(
+                'curl -H "Referer: https://example.com" -H "User-Agent: BrowserUA/1.0" https://example.com/page.html'
+            )
+
+        self.assertIn("<html>Hello</html>", output)
+        self.assertEqual(captured["url"], "https://example.com/page.html")
+        self.assertEqual(captured["headers"]["Referer"], "https://example.com")
+        self.assertEqual(captured["user_agent"], "BrowserUA/1.0")
+
+    def test_wget_accepts_common_user_agent_and_header_flags(self):
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=SimpleNamespace()),
+        )
+        captured = {}
+
+        async def fake_download_http_file(url, *, headers=None, user_agent="", filename="", max_size=None):
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["user_agent"] = user_agent
+            del filename, max_size
+            return {
+                "url": url,
+                "filename": "trentemoult.jpg",
+                "mime_type": "image/jpeg",
+                "content": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
+                "size": 10,
+            }
+
+        with patch("nova.runtime.terminal.download_http_file", new=fake_download_http_file):
+            output = async_to_sync(executor.execute)(
+                'wget -U "Mozilla/5.0" --header "Referer: https://example.com" -O /tmp/trentemoult.jpg '
+                'https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg'
+            )
+
+        self.assertIn("/tmp/trentemoult.jpg", output)
+        self.assertEqual(
+            captured["url"],
+            "https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg",
+        )
+        self.assertEqual(captured["user_agent"], "Mozilla/5.0")
+        self.assertEqual(captured["headers"]["Referer"], "https://example.com")
+
+    def test_curl_rejects_invalid_header_value(self):
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=SimpleNamespace()),
+        )
+
+        with self.assertRaisesRegex(TerminalCommandError, "expected 'Name: value'"):
+            async_to_sync(executor.execute)('curl -H "BrokenHeader" https://example.com')
+
+    def test_curl_rejects_multiple_urls(self):
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=SimpleNamespace()),
+        )
+
+        with self.assertRaisesRegex(TerminalCommandError, "single URL"):
+            async_to_sync(executor.execute)("curl https://example.com https://example.org")
+
+    def test_curl_rejects_unknown_flags(self):
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=SimpleNamespace()),
+        )
+
+        with self.assertRaisesRegex(TerminalCommandError, "Unsupported curl flag"):
+            async_to_sync(executor.execute)("curl --compressed https://example.com")
 
     def _create_builtin_tool(self, subtype: str, *, name: str, description: str = "") -> Tool:
         python_path_map = {

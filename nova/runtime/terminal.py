@@ -5,7 +5,7 @@ import logging
 import posixpath
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
 from typing import Any
@@ -53,6 +53,14 @@ class ParsedShellCommand:
     input_path: str | None = None
     output_path: str | None = None
     output_append: bool = False
+
+
+@dataclass(slots=True)
+class ParsedDownloadCommand:
+    url: str
+    output_path: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    user_agent: str = ""
 
 
 class TerminalExecutor:
@@ -1651,9 +1659,123 @@ class TerminalExecutor:
             output_path = posixpath.join(self.vfs.cwd, default_filename)
         return output_path, remaining
 
-    async def _download_http(self, url: str) -> tuple[bytes, str, str]:
+    @staticmethod
+    def _parse_http_header_value(header_value: str, *, command_name: str) -> tuple[str, str]:
+        raw_header = str(header_value or "").strip()
+        if ":" not in raw_header:
+            raise TerminalCommandError(
+                f"Invalid {command_name} header: expected 'Name: value'.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        name, value = raw_header.split(":", 1)
+        normalized_name = str(name or "").strip()
+        normalized_value = str(value or "").strip()
+        if not normalized_name:
+            raise TerminalCommandError(
+                f"Invalid {command_name} header: missing header name.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        return normalized_name, normalized_value
+
+    @classmethod
+    def _parse_download_command(
+        cls,
+        args: list[str],
+        *,
+        command_name: str,
+        usage: str,
+        output_flags: set[str],
+        user_agent_flags: set[str],
+        header_flags: set[str],
+    ) -> ParsedDownloadCommand:
+        output_path: str | None = None
+        headers: dict[str, str] = {}
+        user_agent = ""
+        urls: list[str] = []
+        index = 0
+        end_of_options = False
+
+        while index < len(args):
+            token = args[index]
+            if not end_of_options and token == "--":
+                end_of_options = True
+                index += 1
+                continue
+            if not end_of_options and token in output_flags:
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError(
+                        f"Missing value after {token}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                output_path = args[index]
+                index += 1
+                continue
+            if not end_of_options and token in user_agent_flags:
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError(
+                        f"Missing value after {token}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                user_agent = str(args[index] or "")
+                index += 1
+                continue
+            if not end_of_options and token in header_flags:
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError(
+                        f"Missing value after {token}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                header_name, header_value = cls._parse_http_header_value(
+                    args[index],
+                    command_name=command_name,
+                )
+                if header_name.lower() == "user-agent":
+                    user_agent = header_value
+                else:
+                    headers[header_name] = header_value
+                index += 1
+                continue
+            if not end_of_options and token.startswith("-"):
+                raise TerminalCommandError(
+                    f"Unsupported {command_name} flag: {token}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            urls.append(token)
+            index += 1
+
+        if not urls:
+            raise TerminalCommandError(
+                usage,
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        if len(urls) > 1:
+            raise TerminalCommandError(
+                f"{command_name} currently supports a single URL.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        return ParsedDownloadCommand(
+            url=urls[0],
+            output_path=output_path,
+            headers=headers,
+            user_agent=user_agent,
+        )
+
+    async def _download_http(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        user_agent: str = "",
+    ) -> tuple[bytes, str, str]:
         try:
-            payload = await download_http_file(url)
+            payload = await download_http_file(
+                url,
+                headers=headers,
+                user_agent=user_agent,
+            )
         except ValueError as exc:
             raise TerminalCommandError(str(exc)) from exc
         return payload["content"], payload["mime_type"], payload["filename"]
@@ -2141,34 +2263,53 @@ class TerminalExecutor:
     async def _cmd_wget(self, args: list[str]) -> str:
         if not self.capabilities.has_web:
             raise TerminalCommandError("Web commands are not enabled for this agent.")
-        output_path, remaining = self._parse_output_path(args)
-        if len(remaining) != 1:
-            raise TerminalCommandError("Usage: wget <url> [--output <path>]")
-        url = remaining[0]
-        content, mime_type, inferred_name = await self._download_http(url)
-        destination = output_path or posixpath.join(self.vfs.cwd, inferred_name)
+        parsed = self._parse_download_command(
+            args,
+            command_name="wget",
+            usage="Usage: wget [-O <path>] [--output <path>] [-U <value>] [--user-agent <value>] [--header <name: value>] <url>",
+            output_flags={"-O", "--output"},
+            user_agent_flags={"-U", "--user-agent"},
+            header_flags={"--header"},
+        )
+        content, mime_type, inferred_name = await self._download_http(
+            parsed.url,
+            headers=parsed.headers,
+            user_agent=parsed.user_agent,
+        )
+        destination = parsed.output_path or posixpath.join(self.vfs.cwd, inferred_name)
         try:
             destination = await self.vfs.resolve_output_path(destination, source_name=inferred_name)
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
         written = await self._write_file_and_notify(destination, content, mime_type=mime_type)
-        return self._format_write_result(f"Downloaded {url} to {written.path}", written)
+        return self._format_write_result(f"Downloaded {parsed.url} to {written.path}", written)
 
     async def _cmd_curl(self, args: list[str], *, capture_output: bool = False) -> str:
         if not self.capabilities.has_web:
             raise TerminalCommandError("Web commands are not enabled for this agent.")
-        output_path, remaining = self._parse_output_path(args)
-        if len(remaining) != 1:
-            raise TerminalCommandError("Usage: curl <url> [--output <path>]")
-        url = remaining[0]
-        content, mime_type, inferred_name = await self._download_http(url)
-        if output_path:
+        parsed = self._parse_download_command(
+            args,
+            command_name="curl",
+            usage="Usage: curl [-o <path>] [--output <path>] [-A <value>] [--user-agent <value>] [-H <name: value>] [--header <name: value>] <url>",
+            output_flags={"-o", "--output"},
+            user_agent_flags={"-A", "--user-agent"},
+            header_flags={"-H", "--header"},
+        )
+        content, mime_type, inferred_name = await self._download_http(
+            parsed.url,
+            headers=parsed.headers,
+            user_agent=parsed.user_agent,
+        )
+        if parsed.output_path:
             try:
-                resolved_output = await self.vfs.resolve_output_path(output_path, source_name=inferred_name)
+                resolved_output = await self.vfs.resolve_output_path(
+                    parsed.output_path,
+                    source_name=inferred_name,
+                )
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
             written = await self._write_file_and_notify(resolved_output, content, mime_type=mime_type)
-            return self._format_write_result(f"Downloaded {url} to {written.path}", written)
+            return self._format_write_result(f"Downloaded {parsed.url} to {written.path}", written)
         if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
             try:
                 decoded = content.decode("utf-8")
@@ -2187,7 +2328,7 @@ class TerminalExecutor:
                 failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
             )
         return (
-            f"Binary response from {url} ({mime_type}, {len(content)} bytes). "
+            f"Binary response from {parsed.url} ({mime_type}, {len(content)} bytes). "
             f"Use curl --output {posixpath.join(self.vfs.cwd, inferred_name)} to save it."
         )
 
