@@ -252,6 +252,16 @@
               {% endif %}
             </a>
             {% endif %}
+            <a
+              href="#"
+              class="agent-footer-chip agent-footer-chip-action delete-tail-link text-decoration-none d-none"
+              data-message-id="{{ message.id }}"
+              aria-label="{% trans 'Delete messages after this' %}"
+            >
+              <span class="agent-footer-chip-heading">
+                <i class="bi bi-trash3"></i>{% trans "Delete after" %}
+              </span>
+            </a>
             {% if message.internal_data.max_context %}
             {% if message.internal_data.real_tokens is not None or message.internal_data.approx_tokens or message.internal_data.context_tokens %}
             <div class="agent-footer-chip agent-footer-chip-info card-footer-consumption">
@@ -402,6 +412,39 @@
             <div id="execution-trace-modal-problems"></div>
             <div id="execution-trace-modal-tree"></div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="delete-message-tail-modal" tabindex="-1" aria-labelledby="delete-message-tail-modal-label" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h5 class="modal-title" id="delete-message-tail-modal-label">{% trans "Delete later messages" %}</h5>
+            <div id="delete-message-tail-modal-summary" class="small text-muted"></div>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-warning mb-3">
+            {% trans "This action is irreversible. The selected message stays, but every later message will be permanently deleted." %}
+          </div>
+          <p id="delete-message-tail-modal-message" class="mb-3"></p>
+          <div id="delete-message-tail-modal-untracked" class="alert alert-secondary py-2 px-3 small d-none"></div>
+          <div id="delete-message-tail-modal-files-wrapper" class="d-none">
+            <div class="fw-semibold mb-2">{% trans "Files that will also be deleted" %}</div>
+            <div class="list-group small" id="delete-message-tail-modal-files"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+            {% trans "Cancel" %}
+          </button>
+          <button type="button" class="btn btn-danger" id="delete-message-tail-confirm-btn">
+            {% trans "Delete messages" %}
+          </button>
         </div>
       </div>
     </div>

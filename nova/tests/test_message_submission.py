@@ -27,14 +27,19 @@ class MessageSubmissionTests(TestCase):
         self.thread = Thread.objects.create(user=self.user, subject="Submission thread")
         provider = create_provider(self.user, name="Submission provider", model="gpt-4o-mini")
         self.agent = create_agent(self.user, provider, name="Submission agent")
+        self.source_message = self.thread.add_message(
+            "Source message",
+            actor=Actor.USER,
+        )
 
     def test_upload_thread_files_passes_uploaded_file_content_type(self):
         captured = {}
 
-        async def fake_uploader(thread, user, file_data):
+        async def fake_uploader(thread, user, file_data, *, source_message=None):
             captured["thread"] = thread
             captured["user"] = user
             captured["file_data"] = file_data
+            captured["source_message"] = source_message
             return ([{"id": 11, "path": "/trace.log"}], [])
 
         async def fake_publish(_thread_id, _reason):
@@ -49,6 +54,7 @@ class MessageSubmissionTests(TestCase):
         file_ids = _upload_thread_files(
             thread=self.thread,
             user=self.user,
+            source_message=self.source_message,
             uploaded_files=[uploaded_file],
             thread_file_uploader=fake_uploader,
             file_update_publisher=fake_publish,
@@ -57,6 +63,7 @@ class MessageSubmissionTests(TestCase):
         self.assertEqual(file_ids, [11])
         self.assertEqual(captured["thread"], self.thread)
         self.assertEqual(captured["user"], self.user)
+        self.assertEqual(captured["source_message"], self.source_message)
         self.assertEqual(captured["file_data"][0]["mime_type"], "text/plain")
         self.assertEqual(captured["file_data"][0]["path"], "/trace.log")
 

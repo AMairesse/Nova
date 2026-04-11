@@ -562,6 +562,7 @@ class ContinuousViewsTests(TestCase):
         self.assertNotContains(response, 'id="desktop-mode-badge"')
         self.assertContains(response, 'id="messageContextMenu"')
         self.assertContains(response, 'id="context-menu-execution-details"')
+        self.assertContains(response, 'id="context-menu-delete-after"')
 
     def test_continuous_home_exposes_mobile_mode_toggle_and_days_panel_button(self):
         response = self.client.get(reverse("continuous_home"))

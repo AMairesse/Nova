@@ -248,6 +248,18 @@
                 ${traceSummaryText ? `<span class="agent-footer-chip-detail execution-trace-summary">${window.DOMUtils.escapeHTML(traceSummaryText)}</span>` : ''}
               </a>
             ` : '';
+            const deleteTailHtml = `
+              <a
+                href="#"
+                class="agent-footer-chip agent-footer-chip-action delete-tail-link text-decoration-none d-none"
+                data-message-id="${window.DOMUtils.escapeHTML(String(messageData.id || ''))}"
+                aria-label="${this.t('Delete messages after this')}"
+              >
+                <span class="agent-footer-chip-heading">
+                  <i class="bi bi-trash3"></i>${this.t('Delete after')}
+                </span>
+              </a>
+            `;
             const contextHtml = `
               <div class="agent-footer-chip agent-footer-chip-info card-footer-consumption${hasContext ? '' : ' d-none'}">
                 ${contextChipContent}
@@ -260,6 +272,7 @@
                 <div class="agent-footer-chip-row">
                   ${compactLinkHtml}
                   ${executionHtml}
+                  ${deleteTailHtml}
                   ${contextHtml}
                 </div>
               </div>

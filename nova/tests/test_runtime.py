@@ -308,6 +308,26 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
         return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
+    def test_vfs_write_file_persists_source_message_for_thread_files(self):
+        source_message = self.thread.add_message("Source", actor=Actor.USER)
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+            source_message_id=source_message.id,
+        )
+
+        async_to_sync(vfs.write_file)("/report.txt", b"", mime_type="text/plain")
+
+        user_file = UserFile.objects.get(
+            user=self.user,
+            thread=self.thread,
+            original_filename="/report.txt",
+        )
+        self.assertEqual(user_file.source_message_id, source_message.id)
+
     def test_curl_accepts_common_user_agent_header_and_output_flags(self):
         executor = self._build_executor(
             TerminalCapabilities(browser_tool=SimpleNamespace()),
@@ -3977,6 +3997,53 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(seen["inbox_exists"])
         self.assertIn("/inbox/IMG_6433.jpg", seen["prompt"])
         self.assertEqual(seen["content"], (jpeg_bytes, "image/jpeg"))
+
+    def test_delegate_to_agent_accepts_composite_subagent_selectors(self):
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Child",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        seen = {"prompts": []}
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ensure_root_trace
+            seen["prompts"].append(ephemeral_user_prompt)
+            return ReactTerminalRunResult(
+                final_answer="Handled by composite selector.",
+                real_tokens=None,
+                approx_tokens=None,
+                max_context=None,
+            )
+
+        with patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+
+            first = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=f"{child_agent.id}:{child_agent.name}",
+                question="Use the id:name selector.",
+                input_paths=[],
+            )
+            second = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=f"{child_agent.name} ({child_agent.id})",
+                question="Use the name (id) selector.",
+                input_paths=[],
+            )
+
+        self.assertIn("Handled by composite selector.", first)
+        self.assertIn("Handled by composite selector.", second)
+        self.assertEqual(len(seen["prompts"]), 2)
 
     def test_delegate_to_agent_suggests_inbox_path_for_missing_attachment_path(self):
         child_agent = AgentConfig.objects.create(

@@ -125,6 +125,7 @@ class WebAppViewsTests(TestCase):
         self.assertContains(response, 'id="messageContextMenu"')
         self.assertContains(response, 'id="context-menu-execution-details"')
         self.assertContains(response, 'id="context-menu-compact"')
+        self.assertContains(response, 'id="context-menu-delete-after"')
 
     def test_deleted_webapp_is_not_served_anymore(self):
         app = self._create_live_webapp(name="Temporary app", source_root="/webapps/temp")

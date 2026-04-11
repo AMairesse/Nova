@@ -80,6 +80,7 @@ class MainViewsTests(TestCase):
         self.assertContains(response, 'id="messageContextMenu"')
         self.assertContains(response, 'id="context-menu-execution-details"')
         self.assertContains(response, 'id="context-menu-compact"')
+        self.assertContains(response, 'id="context-menu-delete-after"')
 
     def test_index_exposes_mobile_mode_toggle_and_threads_panel_button(self):
         self.client.login(username="alice", password="pass")

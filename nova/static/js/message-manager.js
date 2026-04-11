@@ -66,6 +66,8 @@
         'summarizeCurrentThread',
         'showSubAgentConfirmationDialog',
         'confirmSummarize',
+        'openDeleteTailPreview',
+        'confirmDeleteTailAfter',
         'loadInitialThread',
         'getInitialThreadIdFromUrl',
         'checkPendingInteractions',
@@ -338,6 +340,14 @@
                         void this.openExecutionTrace(link);
                     }
                 },
+                '.delete-tail-link': (e, target) => {
+                    e.preventDefault();
+                    const link = target.closest('.delete-tail-link');
+                    const messageId = `${link?.dataset?.messageId || link?.closest('.message')?.dataset?.messageId || ''}`.trim();
+                    if (messageId) {
+                        void this.openDeleteTailPreview(messageId);
+                    }
+                },
                 '.task-progress-trace-link': (e, target) => {
                     e.preventDefault();
                     const button = target.closest('.task-progress-trace-link');
@@ -352,6 +362,10 @@
                     if (messageCard) {
                         this.showMessageContextMenu(messageCard);
                     }
+                },
+                '#delete-message-tail-confirm-btn': (e) => {
+                    e.preventDefault();
+                    void this.confirmDeleteTailAfter();
                 }
             };
 
@@ -504,31 +518,35 @@
             if (!messagesList) return;
             const isContinuousPage = Boolean(window.NovaApp?.isContinuousPage);
 
-            // Get all messages and agent messages
+            // Get all stored messages and agent messages
+            const storedMessages = Array.from(messagesList.querySelectorAll('.message[data-message-id]'));
             const allMessages = messagesList.querySelectorAll('.message');
-            const agentMessages = messagesList.querySelectorAll('.message[data-message-actor="agent"]');
+            const agentMessages = Array.from(messagesList.querySelectorAll('.message[data-message-actor="agent"]'));
+            const lastStoredMessage = storedMessages.length ? storedMessages[storedMessages.length - 1] : null;
 
-            // Hide compact link on all agent messages first
+            // Reset footer controls on all agent messages first
             agentMessages.forEach(messageEl => {
                 const compactLink = messageEl.querySelector('.compact-thread-link');
+                const deleteTailLink = messageEl.querySelector('.delete-tail-link');
                 const footer = messageEl.querySelector('.agent-message-footer');
                 const hasContext = Boolean(this.getMessageContextSummary(messageEl));
                 const hasTrace = Boolean(this.getMessageTraceTaskId(messageEl));
+                const hasLaterMessage = Boolean(lastStoredMessage && lastStoredMessage !== messageEl);
                 messageEl.dataset.canCompact = 'false';
                 if (compactLink) {
                     compactLink.classList.add('d-none');
                 }
-                if (footer && !hasContext && !hasTrace) {
-                    footer.classList.add('d-none');
+                if (deleteTailLink) {
+                    deleteTailLink.classList.toggle('d-none', !hasLaterMessage);
+                }
+                if (footer) {
+                    footer.classList.toggle('d-none', !hasContext && !hasTrace && !hasLaterMessage);
                 }
             });
-            if (isContinuousPage) {
-                return;
-            }
 
             // Show compact link only on the last agent message if there are enough messages for compaction
             // (more messages than preserve_recent setting - we assume default of 2 for client-side)
-            if (allMessages.length > 2 && agentMessages.length > 0) {  // Need more than preserve_recent messages
+            if (!isContinuousPage && allMessages.length > 2 && agentMessages.length > 0) {
                 const lastAgentMessage = agentMessages[agentMessages.length - 1];
                 const compactLink = lastAgentMessage.querySelector('.compact-thread-link');
                 const footer = lastAgentMessage.querySelector('.agent-message-footer');

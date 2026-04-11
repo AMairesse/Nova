@@ -27,7 +27,7 @@ class UserFile(models.Model):
                                blank=True, related_name='files')
     source_message = models.ForeignKey(
         'Message',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='attached_files',

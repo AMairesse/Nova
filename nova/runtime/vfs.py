@@ -112,6 +112,7 @@ class VirtualFileSystem:
         self.tmp_storage_prefix = (
             str(tmp_storage_prefix or self._default_tmp_storage_prefix()).rstrip("/")
         )
+        self._source_message_cache = None
 
     def _default_tmp_storage_prefix(self) -> str:
         return f"{RUNTIME_STORAGE_ROOT}/{int(self.agent_config.id)}/tmp"
@@ -605,16 +606,7 @@ class VirtualFileSystem:
                 decoded = content.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise VFSError("Memory files must be valid UTF-8 text.") from exc
-            source_message = None
-            if self.source_message_id is not None:
-                def _load_source_message():
-                    return Message.objects.filter(
-                        id=self.source_message_id,
-                        user=self.user,
-                        thread=self.thread,
-                    ).first()
-
-                source_message = await sync_to_async(_load_source_message, thread_sensitive=True)()
+            source_message = await self._get_source_message()
             try:
                 entry = await write_memory_document(
                     user=self.user,
@@ -664,6 +656,8 @@ class VirtualFileSystem:
                 raise VFSError(f"File already exists: {normalized}")
             await sync_to_async(existing.user_file.delete, thread_sensitive=True)()
 
+        source_message = await self._get_source_message()
+
         if len(content) == 0:
             key = await upload_file_to_minio(content, storage_path, mime_type, self.thread, self.user)
 
@@ -676,6 +670,7 @@ class VirtualFileSystem:
                     size=0,
                     key=key,
                     scope=scope,
+                    source_message=source_message,
                 )
 
             user_file = await sync_to_async(_create_empty_file, thread_sensitive=True)()
@@ -691,6 +686,7 @@ class VirtualFileSystem:
             self.user,
             [{"path": storage_path, "content": content, "mime_type": mime_type}],
             scope=scope,
+            source_message=source_message,
         )
         if errors and not created:
             raise VFSError("; ".join(errors))
@@ -706,6 +702,22 @@ class VirtualFileSystem:
             mime_type=str(user_file.mime_type or mime_type),
             size=int(user_file.size or len(content)),
         )
+
+    async def _get_source_message(self) -> Message | None:
+        if self.source_message_id is None:
+            return None
+        if self._source_message_cache is not None:
+            return self._source_message_cache
+
+        def _load_source_message():
+            return Message.objects.filter(
+                id=self.source_message_id,
+                user=self.user,
+                thread=self.thread,
+            ).first()
+
+        self._source_message_cache = await sync_to_async(_load_source_message, thread_sensitive=True)()
+        return self._source_message_cache
 
     async def remove(self, path: str) -> None:
         normalized = normalize_vfs_path(path, cwd=self.cwd)

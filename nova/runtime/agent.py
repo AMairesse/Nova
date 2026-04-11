@@ -79,6 +79,7 @@ class ReactTerminalRuntime:
         r'^\s*\{\s*"command"\s*:\s*"(.*)"\s*\}\s*$',
         re.DOTALL,
     )
+    _SUBAGENT_TRAILING_ID_RE = re.compile(r"^(?P<name>.+?)\s*\((?P<id>\d+)\)\s*$")
     _DATA_URL_RE = re.compile(
         r"^data:(?P<mime>[^;,]+)?(?:;charset=[^;,]+)?;base64,(?P<data>.+)$",
         re.IGNORECASE | re.DOTALL,
@@ -370,7 +371,8 @@ class ReactTerminalRuntime:
             "If the current working directory matters and you are unsure, run `pwd` first.\n"
             f"Enabled command families: {', '.join(families)}.\n"
             f"Configured sub-agents: {subagents}.\n"
-            "Use `delegate_to_agent` only for configured sub-agents.\n"
+            "Use `delegate_to_agent` only for configured sub-agents. "
+            "Pass either the sub-agent id, its exact name, or the composite selector shown above.\n"
             f"{' '.join(extra_guidance)}\n"
         )
         custom_prompt = str(getattr(self.agent_config, "system_prompt", "") or "").strip()
@@ -529,7 +531,7 @@ class ReactTerminalRuntime:
                         "properties": {
                             "agent_id": {
                                 "type": "string",
-                                "description": "configured sub-agent id or exact name",
+                                "description": "configured sub-agent id, exact name, or composite selector like 7:Image Agent",
                             },
                             "question": {
                                 "type": "string",
@@ -749,6 +751,34 @@ class ReactTerminalRuntime:
             failed=bool(failure_kind),
         )
 
+    def _resolve_subagent_match(self, selector: str):
+        candidates = list(self.capabilities.subagents or [])
+        normalized = str(selector or "").strip()
+        if not normalized:
+            return None
+
+        for subagent in candidates:
+            if str(subagent.id) == normalized or str(subagent.name) == normalized:
+                return subagent
+
+        if ":" in normalized:
+            leading_id, _, _remainder = normalized.partition(":")
+            candidate_id = leading_id.strip()
+            if candidate_id.isdigit():
+                for subagent in candidates:
+                    if str(subagent.id) == candidate_id:
+                        return subagent
+
+        trailing_id_match = self._SUBAGENT_TRAILING_ID_RE.match(normalized)
+        if trailing_id_match:
+            candidate_id = trailing_id_match.group("id")
+            if candidate_id.isdigit():
+                for subagent in candidates:
+                    if str(subagent.id) == candidate_id:
+                        return subagent
+
+        return None
+
     async def _delegate_to_agent_result(
         self,
         *,
@@ -756,13 +786,8 @@ class ReactTerminalRuntime:
         question: str,
         input_paths: list[str] | None = None,
     ) -> ToolExecutionResult:
-        candidates = list(self.capabilities.subagents or [])
-        match = None
         normalized = str(agent_id or "").strip()
-        for subagent in candidates:
-            if str(subagent.id) == normalized or str(subagent.name) == normalized:
-                match = subagent
-                break
+        match = self._resolve_subagent_match(normalized)
         if match is None:
             return ToolExecutionResult(
                 content=f"Unknown sub-agent: {agent_id}",

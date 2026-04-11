@@ -22,6 +22,10 @@ from nova.views.files_views import (
 from nova.views.interaction_views import (
     answer_interaction, cancel_interaction
 )
+from nova.views.message_tail_views import (
+    delete_message_tail,
+    preview_delete_message_tail,
+)
 from nova.views.pwa_views import service_worker
 from nova.views.push_views import push_config, push_subscriptions
 from nova.views.security_views import csrf_token
@@ -79,6 +83,8 @@ urlpatterns += [
 urlpatterns += [
     path('interactions/<int:interaction_id>/answer/', answer_interaction, name='interaction_answer'),
     path('interactions/<int:interaction_id>/cancel/', cancel_interaction, name='interaction_cancel'),
+    path('messages/<int:message_id>/delete-tail-preview/', preview_delete_message_tail, name='preview_delete_message_tail'),
+    path('messages/<int:message_id>/delete-tail/', delete_message_tail, name='delete_message_tail'),
 ]
 
 # Web apps sidebar listing (server-rendered partial)

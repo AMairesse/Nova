@@ -28,6 +28,8 @@
         fileDelete: root.dataset.urlFileDelete,
         interactionAnswer: root.dataset.urlInteractionAnswer,
         interactionCancel: root.dataset.urlInteractionCancel,
+        previewDeleteMessageTail: root.dataset.urlPreviewDeleteMessageTail,
+        deleteMessageTail: root.dataset.urlDeleteMessageTail,
     };
 
     const t = (window.gettext && typeof window.gettext === 'function') ? window.gettext : (s) => s;
@@ -551,6 +553,9 @@
         const tid = document.querySelector('#message-container input[name="thread_id"]')?.value;
         if (window.NovaApp.messageManager) {
             window.NovaApp.messageManager.currentThreadId = tid || null;
+            if (typeof window.NovaApp.messageManager.updateCompactLinkVisibility === 'function') {
+                window.NovaApp.messageManager.updateCompactLinkVisibility();
+            }
             if (!state.reconnectChecked && typeof window.NovaApp.messageManager.checkAndReconnectRunningTasks === 'function') {
                 state.reconnectChecked = true;
                 window.NovaApp.messageManager.checkAndReconnectRunningTasks();
