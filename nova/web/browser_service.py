@@ -113,6 +113,8 @@ class BrowserSession:
             for attribute in attributes:
                 if attribute == "innerText":
                     value = await element.inner_text()
+                elif attribute == "tagName":
+                    value = await element.evaluate("(node) => (node.tagName || '').toLowerCase()")
                 else:
                     value = await element.get_attribute(attribute)
                 if value is not None and str(value).strip():

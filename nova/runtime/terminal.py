@@ -58,6 +58,18 @@ class TerminalCommandError(Exception):
 
 logger = logging.getLogger(__name__)
 
+BROWSER_SINGLE_PANE_ERROR = "Nova browser currently has a single active page; only `--pane 0` is available."
+BROWSER_DEFAULT_ELEMENT_ATTRIBUTES = (
+    "tagName",
+    "href",
+    "src",
+    "data-src",
+    "srcset",
+    "alt",
+    "title",
+    "innerText",
+)
+
 
 @dataclass(slots=True, frozen=True)
 class ParsedShellCommand:
@@ -2519,7 +2531,7 @@ class TerminalExecutor:
             raise TerminalCommandError("Browse commands are not enabled for this agent.")
         if not args:
             raise TerminalCommandError(
-                "Usage: browse <open|current|back|text|links|elements|click> ..."
+                "Usage: browse <open|current|back|text|read|links|elements|click> ..."
             )
         action = args[0]
         remainder = args[1:]
@@ -2529,7 +2541,7 @@ class TerminalExecutor:
             return await self._cmd_browse_current(remainder)
         if action == "back":
             return await self._cmd_browse_back(remainder)
-        if action == "text":
+        if action in {"text", "read"}:
             return await self._cmd_browse_text(remainder, capture_output=capture_output)
         if action == "links":
             return await self._cmd_browse_links(remainder, capture_output=capture_output)
@@ -2538,7 +2550,7 @@ class TerminalExecutor:
         if action == "click":
             return await self._cmd_browse_click(remainder)
         raise TerminalCommandError(
-            "Usage: browse <open|current|back|text|links|elements|click> ..."
+            "Usage: browse <open|current|back|text|read|links|elements|click> ..."
         )
 
     async def _cmd_browse_open(self, args: list[str]) -> str:
@@ -2583,8 +2595,9 @@ class TerminalExecutor:
         return f"Opened {url} (status {status})"
 
     async def _cmd_browse_current(self, args: list[str]) -> str:
-        if args:
-            raise TerminalCommandError("Usage: browse current")
+        _pane_index, remaining = self._parse_browser_pane(args)
+        if remaining:
+            raise TerminalCommandError("Usage: browse current [--pane 0]")
         session = await self._get_browser_session()
         try:
             return await session.current()
@@ -2592,8 +2605,9 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
 
     async def _cmd_browse_back(self, args: list[str]) -> str:
-        if args:
-            raise TerminalCommandError("Usage: browse back")
+        _pane_index, remaining = self._parse_browser_pane(args)
+        if remaining:
+            raise TerminalCommandError("Usage: browse back [--pane 0]")
         session = await self._get_browser_session()
         try:
             payload = await session.back()
@@ -2603,13 +2617,18 @@ class TerminalExecutor:
 
     async def _cmd_browse_text(self, args: list[str], *, capture_output: bool = False) -> str:
         output_path, remaining = self._parse_output_path(args)
-        if remaining:
-            raise TerminalCommandError("Usage: browse text [--output /path.txt]")
+        _pane_index, remaining = self._parse_browser_pane(remaining)
+        if len(remaining) > 1:
+            raise TerminalCommandError("Usage: browse text [url] [--pane 0] [--output /path.txt]")
+        inline_url = remaining[0] if remaining else None
         session = await self._get_browser_session()
+        await self._browse_open_inline_url(session, inline_url)
         try:
             content = await session.extract_text()
         except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+            raise TerminalCommandError(
+                self._format_browser_extraction_error(str(exc), inline_command="browse text")
+            ) from exc
         if output_path:
             try:
                 resolved_output = await self.vfs.resolve_output_path(output_path)
@@ -2625,17 +2644,24 @@ class TerminalExecutor:
 
     async def _cmd_browse_links(self, args: list[str], *, capture_output: bool = False) -> str:
         output_path, remaining = self._parse_output_path(args)
+        _pane_index, remaining = self._parse_browser_pane(remaining)
         absolute = False
+        inline_url = None
         for token in remaining:
             if token == "--absolute":
                 absolute = True
+            elif inline_url is None:
+                inline_url = token
             else:
-                raise TerminalCommandError("Usage: browse links [--absolute] [--output /path.json]")
+                raise TerminalCommandError("Usage: browse links [url] [--pane 0] [--absolute] [--output /path.json]")
         session = await self._get_browser_session()
+        await self._browse_open_inline_url(session, inline_url)
         try:
             links = await session.extract_links(absolute=absolute)
         except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+            raise TerminalCommandError(
+                self._format_browser_extraction_error(str(exc), inline_command="browse links")
+            ) from exc
         if output_path:
             written = await self._write_json_output(output_path, links)
             return self._format_write_result(f"Wrote page links to {written.path}", written)
@@ -2644,18 +2670,23 @@ class TerminalExecutor:
 
     async def _cmd_browse_elements(self, args: list[str], *, capture_output: bool = False) -> str:
         output_path, remaining = self._parse_output_path(args)
+        _pane_index, remaining = self._parse_browser_pane(remaining)
         attributes, remaining = self._parse_multi_flag(remaining, "--attr")
-        if len(remaining) != 1:
+        if len(remaining) not in {1, 2}:
             raise TerminalCommandError(
-                "Usage: browse elements <selector> [--attr NAME ...] [--output /path.json]"
+                "Usage: browse elements <selector> [url] [--pane 0] [--attr NAME ...] [--output /path.json]"
             )
         selector = remaining[0]
-        attrs = attributes or ["innerText"]
+        inline_url = remaining[1] if len(remaining) == 2 else None
+        attrs = attributes or list(BROWSER_DEFAULT_ELEMENT_ATTRIBUTES)
         session = await self._get_browser_session()
+        await self._browse_open_inline_url(session, inline_url)
         try:
             elements = await session.get_elements(selector, attrs)
         except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+            raise TerminalCommandError(
+                self._format_browser_extraction_error(str(exc), inline_command="browse elements")
+            ) from exc
         payload = {
             "selector": selector,
             "attributes": attrs,
@@ -2668,11 +2699,12 @@ class TerminalExecutor:
         return rendered if capture_output else self._truncate_output(rendered)
 
     async def _cmd_browse_click(self, args: list[str]) -> str:
-        if len(args) != 1:
-            raise TerminalCommandError("Usage: browse click <selector>")
+        _pane_index, remaining = self._parse_browser_pane(args)
+        if len(remaining) != 1:
+            raise TerminalCommandError("Usage: browse click <selector> [--pane 0]")
         session = await self._get_browser_session()
         try:
-            return await session.click(args[0])
+            return await session.click(remaining[0])
         except BrowserSessionError as exc:
             raise TerminalCommandError(str(exc)) from exc
 
@@ -2763,6 +2795,33 @@ class TerminalExecutor:
                 remaining.append(token)
             index += 1
         return value, remaining
+
+    def _parse_browser_pane(self, args: list[str]) -> tuple[int | None, list[str]]:
+        pane_value, remaining = self._parse_flag_value(args, "--pane")
+        if pane_value is None:
+            return None, remaining
+        pane_index = self._parse_int_flag("--pane", pane_value)
+        if pane_index != 0:
+            raise TerminalCommandError(BROWSER_SINGLE_PANE_ERROR)
+        return pane_index, remaining
+
+    @staticmethod
+    def _format_browser_extraction_error(message: str, *, inline_command: str) -> str:
+        text = str(message or "").strip()
+        if text.startswith("No active page in the current browser session."):
+            return (
+                "No active page in the current browser session. "
+                f"Use `browse open <url>` first or run `{inline_command} <url>` directly."
+            )
+        return text
+
+    async def _browse_open_inline_url(self, session: BrowserSession, url: str | None) -> None:
+        if not str(url or "").strip():
+            return
+        try:
+            await session.open(str(url))
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
 
     def _parse_multi_flag(self, args: list[str], flag: str) -> tuple[list[str], list[str]]:
         values: list[str] = []

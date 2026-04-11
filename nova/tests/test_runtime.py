@@ -46,7 +46,12 @@ from nova.runtime.task_executor import (
     ReactTerminalSummarizationTaskExecutor,
     ReactTerminalTaskExecutor,
 )
-from nova.runtime.terminal import TerminalCommandError, TerminalExecutor
+from nova.runtime.terminal import (
+    BROWSER_DEFAULT_ELEMENT_ATTRIBUTES,
+    BROWSER_SINGLE_PANE_ERROR,
+    TerminalCommandError,
+    TerminalExecutor,
+)
 from nova.runtime.vfs import VirtualFileSystem
 from nova.tasks.tasks import build_source_message_prompt
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
@@ -1552,6 +1557,80 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /links.json"))[0]["href"], "https://example.com/a")
         self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /elements.json"))["selector"], "a")
 
+    def test_browse_read_alias_inline_url_and_pane_zero_work(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
+            read_preview = async_to_sync(executor.execute)("browse read https://example.com/gallery")
+            links_preview = async_to_sync(executor.execute)("browse links https://example.com/list --absolute")
+            async_to_sync(executor.execute)("browse open https://example.com/current")
+            current = async_to_sync(executor.execute)("browse current --pane 0")
+            clicked = async_to_sync(executor.execute)('browse click "a.link" --pane 0')
+
+        self.assertIn("Page text", read_preview)
+        self.assertIn("https://example.com/a", links_preview)
+        self.assertEqual(fake_session.open.await_args_list[0].args[0], "https://example.com/gallery")
+        self.assertEqual(fake_session.open.await_args_list[1].args[0], "https://example.com/list")
+        self.assertEqual(current, "https://example.com/result")
+        self.assertIn("Clicked element", clicked)
+
+    def test_browse_pane_one_or_more_is_rejected_with_clear_error(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+
+        with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
+            async_to_sync(executor.execute)("browse read --pane 1")
+        with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
+            async_to_sync(executor.execute)('browse elements "img" --pane 2')
+
+    def test_browse_elements_inline_url_uses_default_useful_attributes(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+        fake_session.get_elements = AsyncMock(
+            return_value=[{"tagName": "img", "src": "https://example.com/image.png", "alt": "Preview"}]
+        )
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
+            written = async_to_sync(executor.execute)(
+                'browse elements "img" https://example.com/gallery --output /images.json'
+            )
+
+        payload = json.loads(async_to_sync(executor.execute)("cat /images.json"))
+        self.assertIn("/images.json", written)
+        self.assertEqual(fake_session.open.await_args.args[0], "https://example.com/gallery")
+        self.assertEqual(fake_session.get_elements.await_args.args[0], "img")
+        self.assertEqual(fake_session.get_elements.await_args.args[1], list(BROWSER_DEFAULT_ELEMENT_ATTRIBUTES))
+        self.assertEqual(payload["selector"], "img")
+        self.assertEqual(payload["elements"][0]["tagName"], "img")
+        self.assertEqual(payload["elements"][0]["src"], "https://example.com/image.png")
+
+    def test_browse_text_without_active_page_suggests_open_or_inline_url(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fresh_session = _FakeBrowserSession()
+        fresh_session.extract_text = AsyncMock(
+            side_effect=BrowserSessionError(
+                "No active page in the current browser session. Use `browse open` first."
+            )
+        )
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fresh_session):
+            with self.assertRaisesRegex(TerminalCommandError, r"browse open <url>"):
+                async_to_sync(executor.execute)("browse text")
+            with self.assertRaisesRegex(TerminalCommandError, r"browse text <url>"):
+                async_to_sync(executor.execute)("browse text")
+
     def test_browse_text_supports_shell_redirection(self):
         browser_tool = self._create_builtin_tool("browser", name="Browser")
         executor = self._build_executor(
@@ -2335,6 +2414,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("browse.md", skills)
         self.assertIn("browse open --result 0", skills["search.md"])
         self.assertIn("browse click", skills["browse.md"])
+        self.assertIn("browse read", skills["browse.md"])
+        self.assertIn("browse text https://example.com", skills["browse.md"])
+        self.assertIn('browse elements "img" --output /images.json', skills["browse.md"])
         self.assertIn("browse text > /page.txt", skills["browse.md"])
 
     def test_skill_registry_adds_mcp_and_api_guides_when_enabled(self):

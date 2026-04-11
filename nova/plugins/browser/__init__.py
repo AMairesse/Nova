@@ -15,14 +15,19 @@ Useful commands:
 - `browse current`
 - `browse back`
 - `browse text`
+- `browse read`
+- `browse text https://example.com`
 - `browse text > /page.txt`
 - `browse links --absolute`
+- `browse links https://example.com --absolute`
 - `browse links --absolute --output /links.json`
+- `browse elements "img" --output /images.json`
 - `browse elements "a" --attr href --attr innerText`
 - `browse click "button.submit"`
 
 The browser session only exists for the current run. It does not persist across later thread messages.
 Use `--output` when you want to keep extracted text, links, or elements in the filesystem.
+`--pane 0` is accepted as a compatibility shim for the current page, but Nova does not support real multi-pane browser sessions yet.
 Use `curl` or `wget` when you need direct downloads rather than page interaction.
 """,
     }
