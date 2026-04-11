@@ -5,11 +5,11 @@ import time
 
 from asgiref.sync import sync_to_async
 
+from nova.agent_markdown import render_agent_markdown
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor, Message
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.thread_titles import is_default_thread_subject
-from nova.utils import markdown_to_html
 from nova.agent_execution import resolve_effective_response_mode
 
 from .agent import (
@@ -206,7 +206,11 @@ class ReactTerminalTaskExecutor(TaskExecutor):
                 "actor": fresh_message.actor,
                 "internal_data": fresh_message.internal_data,
                 "created_at": str(fresh_message.created_at),
-                "rendered_html": markdown_to_html(display_text),
+                "rendered_html": render_agent_markdown(
+                    display_text,
+                    user=fresh_message.user,
+                    thread=fresh_message.thread,
+                ),
             }
 
         return await sync_to_async(_load_message, thread_sensitive=True)()

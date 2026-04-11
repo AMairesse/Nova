@@ -2358,6 +2358,20 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         self.assertIn("ask_user", prompt)
 
+    def test_system_prompt_mentions_markdown_vfs_file_references(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+
+        self.assertIn("[label](/path/file.ext)", prompt)
+        self.assertIn("![alt](/path/image.png)", prompt)
+
     def _create_webapp_tool(self) -> Tool:
         return Tool.objects.create(
             user=self.user,
@@ -3004,6 +3018,79 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(generated_mime, "image/png")
 
     @patch("nova.runtime.provider_client.ProviderClient.invoke_native_completion", new_callable=AsyncMock)
+    def test_native_image_response_uses_explicit_markdown_generated_path(self, mocked_native_completion):
+        png_data_url = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmXcAAAAASUVORK5CYII="
+        )
+        native_provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenRouter Images",
+            provider_type=ProviderType.OPENROUTER,
+            model="openai/gpt-image-1",
+            api_key="router-key",
+        )
+        self._apply_provider_capabilities(
+            native_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+        image_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Runtime Agent",
+            llm_provider=native_provider,
+            system_prompt="Generate images.",
+            recursion_limit=4,
+            default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
+        )
+        mocked_native_completion.return_value = {
+            "text": "Here is the final flyer.\n\n![Flyer](/generated/flyer-trentemoult.png)",
+            "images": [
+                {
+                    "data": png_data_url,
+                    "mime_type": "image/png",
+                    "filename": "poster.png",
+                }
+            ],
+            "audio": None,
+            "raw_response": {"usage": {"total_tokens": 42}},
+        }
+        self._stored_contents = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=image_agent,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime.run)(ephemeral_user_prompt="Create a flyer.")
+            generated_content, generated_mime = async_to_sync(runtime.vfs.read_bytes)(
+                "/generated/flyer-trentemoult.png"
+            )
+
+        self.assertIn("![Flyer](/generated/flyer-trentemoult.png)", result.final_answer)
+        self.assertNotIn("Generated file:", result.final_answer)
+        self.assertTrue(generated_content.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(generated_mime, "image/png")
+
+    @patch("nova.runtime.provider_client.ProviderClient.invoke_native_completion", new_callable=AsyncMock)
     def test_delegate_to_native_image_subagent_copies_generated_file_back(self, mocked_native_completion):
         png_data_url = (
             "data:image/png;base64,"
@@ -3075,11 +3162,14 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 input_paths=[],
             )
             copied_paths = async_to_sync(runtime.vfs.find)("/subagents", "")
-            copied_image_path = next(path for path in copied_paths if path.endswith("/generated/flyer.png"))
+            copied_image_path = next(path for path in copied_paths if path.endswith("/flyer.png"))
             copied_content, copied_mime = async_to_sync(runtime.vfs.read_bytes)(copied_image_path)
 
         self.assertIn("finished with 1 output file(s)", result)
         self.assertIn("/subagents/", result)
+        self.assertNotIn("/generated/flyer.png", copied_image_path)
+        self.assertRegex(copied_image_path, r"^/subagents/image-child-[0-9a-f]{8}/flyer\.png$")
+        self.assertIn("Reference them in your final reply with Markdown links or images", result)
         self.assertTrue(copied_content.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(copied_mime, "image/png")
 

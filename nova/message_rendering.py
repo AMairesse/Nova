@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.db.models import Prefetch
 
+from nova.agent_markdown import render_agent_markdown, resolve_markdown_vfs_targets
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor
 from nova.models.UserFile import UserFile
@@ -18,7 +19,9 @@ MESSAGE_ATTACHMENT_DISPLAY_PREFETCH = Prefetch(
 
 
 def with_message_display_relations(queryset):
-    return queryset.select_related("interaction").prefetch_related(MESSAGE_ATTACHMENT_DISPLAY_PREFETCH)
+    return queryset.select_related("interaction", "thread", "user").prefetch_related(
+        MESSAGE_ATTACHMENT_DISPLAY_PREFETCH
+    )
 
 
 def prepare_messages_for_display(
@@ -44,11 +47,39 @@ def prepare_messages_for_display(
                 last_agent_message_id = message.id
                 break
 
+    agent_markdown_targets = {}
+    agent_markdown_texts = [
+        (
+            message.internal_data.get("display_markdown") or message.text
+            if isinstance(message.internal_data, dict)
+            else message.text
+        )
+        for message in visible_messages
+        if message.actor == Actor.AGENT
+    ]
+    if visible_messages and agent_markdown_texts:
+        reference_message = next(
+            (message for message in visible_messages if message.actor == Actor.AGENT),
+            None,
+        )
+        if reference_message is not None:
+            agent_markdown_targets = resolve_markdown_vfs_targets(
+                agent_markdown_texts,
+                user=reference_message.user,
+                thread=reference_message.thread,
+            )
+
     for message in visible_messages:
         display_text = message.text
         if message.actor == Actor.AGENT and isinstance(message.internal_data, dict):
             display_text = message.internal_data.get("display_markdown") or message.text
-        message.rendered_html = markdown_to_html(display_text)
+        if message.actor == Actor.AGENT:
+            message.rendered_html = render_agent_markdown(
+                display_text,
+                resolved_targets=agent_markdown_targets,
+            )
+        else:
+            message.rendered_html = markdown_to_html(display_text)
         annotate_user_message(message)
         if (
             render_system_summaries

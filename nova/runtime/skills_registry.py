@@ -27,7 +27,7 @@ Use sub-agents when a specialized configured agent can handle a focused task.
 Pass terminal file paths in `input_paths` when the child agent needs local files.
 The child agent receives copied inputs under `/inbox`.
 Files created or modified by the child are copied back automatically under
-`/subagents/<agent-id>-<run-id>/`.
+`/subagents/<subagent-slug>-<run-id>/`.
 """
 
     return skills

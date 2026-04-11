@@ -16,7 +16,9 @@ from urllib.parse import urlparse
 import httpx
 
 from asgiref.sync import sync_to_async
+from django.utils.text import slugify
 
+from nova.agent_markdown import collect_markdown_vfs_targets, extract_markdown_vfs_image_paths
 from nova.agent_execution import (
     provider_tools_explicitly_unavailable,
     requires_tools_for_run,
@@ -292,6 +294,10 @@ class ReactTerminalRuntime:
                 "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
                 "the served app without a separate publish step."
             )
+        extra_guidance.append(
+            "You may reference existing thread files by absolute VFS path in Markdown: "
+            "`[label](/path/file.ext)` creates a link, and `![alt](/path/image.png)` displays an image inline."
+        )
         if self.allow_ask_user:
             extra_guidance.append(
                 "Use `ask_user` only when a missing user detail truly blocks progress. "
@@ -317,7 +323,7 @@ class ReactTerminalRuntime:
             "- /: persistent files for this thread",
             "- /skills: readonly recipes",
             "- /tmp: scratch files hidden from the normal file sidebar",
-            "- /subagents/<agent-id>-<run-id>/: files returned by delegated sub-agents",
+            "- /subagents/<subagent-slug>-<run-id>/: files returned by delegated sub-agents",
         ]
         if self.capabilities.has_memory:
             filesystem_lines.insert(2, "- /memory: shared user-scoped long-term memory")
@@ -688,7 +694,8 @@ class ReactTerminalRuntime:
         ])
         copied_outputs: list[str] = []
         if changed_files:
-            target_dir = f"/subagents/{match.id}-{child_run_id}"
+            subagent_slug = slugify(str(match.name or "").strip()) or f"agent-{match.id}"
+            target_dir = f"/subagents/{subagent_slug}-{child_run_id}"
 
             async def _ensure_parent_dirs(full_path: str) -> None:
                 current = "/"
@@ -699,7 +706,10 @@ class ReactTerminalRuntime:
             await self.vfs.mkdir("/subagents")
             await self.vfs.mkdir(target_dir)
             for created_path in changed_files:
-                relative_path = created_path.lstrip("/")
+                if created_path.startswith("/generated/"):
+                    relative_path = created_path[len("/generated/"):].lstrip("/")
+                else:
+                    relative_path = created_path.lstrip("/")
                 parent_target = posixpath.join(target_dir, relative_path)
                 await _ensure_parent_dirs(parent_target)
                 content, mime_type = await child_runtime.vfs.read_bytes(created_path)
@@ -719,7 +729,12 @@ class ReactTerminalRuntime:
         )
         output_suffix = ""
         if copied_outputs:
-            output_suffix = "\nOutput files copied back to the parent runtime:\n" + "\n".join(copied_outputs)
+            output_suffix = (
+                "\nOutput files copied back to the parent runtime:\n"
+                + "\n".join(copied_outputs)
+                + "\nReference them in your final reply with Markdown links or images, "
+                + "for example `[file](/path/file.ext)` or `![preview](/path/image.png)`."
+            )
         return f"{status_line}\n\n{answer}{output_suffix}"
 
     @classmethod
@@ -924,6 +939,37 @@ class ReactTerminalRuntime:
                 return candidate
         raise ValueError(f"Could not allocate a unique output filename for {filename}.")
 
+    def _extract_explicit_generated_image_paths(self, text: str | None) -> list[str]:
+        paths: list[str] = []
+        for path in extract_markdown_vfs_image_paths(text):
+            if not path.startswith("/generated/"):
+                continue
+            if path in paths:
+                continue
+            paths.append(path)
+        return paths
+
+    def _coerce_generated_output_path(
+        self,
+        path: str,
+        *,
+        mime_type: str,
+        default_extension: str,
+    ) -> str | None:
+        normalized = posixpath.normpath(str(path or "").strip())
+        if not normalized.startswith("/generated/"):
+            return None
+        basename = posixpath.basename(normalized)
+        stem, extension = posixpath.splitext(basename)
+        if not stem:
+            return None
+        if not extension:
+            extension = self._guess_extension_for_mime(
+                mime_type,
+                default=default_extension,
+            )
+        return f"/generated/{stem}{extension}"
+
     @classmethod
     def _decode_data_url(cls, payload: str) -> tuple[bytes, str]:
         match = cls._DATA_URL_RE.match(str(payload or "").strip())
@@ -1009,6 +1055,9 @@ class ReactTerminalRuntime:
 
     async def _materialize_native_outputs(self, parsed_response: dict[str, Any]) -> list[str]:
         output_paths: list[str] = []
+        explicit_image_paths = self._extract_explicit_generated_image_paths(
+            parsed_response.get("text"),
+        )
 
         for index, image_entry in enumerate(list(parsed_response.get("images") or []), start=1):
             if not isinstance(image_entry, dict):
@@ -1027,7 +1076,14 @@ class ReactTerminalRuntime:
                 payload,
                 default_mime_type=mime_type,
             )
-            target_path = await self._allocate_generated_output_path(filename)
+            explicit_path = explicit_image_paths[index - 1] if index - 1 < len(explicit_image_paths) else ""
+            target_path = self._coerce_generated_output_path(
+                explicit_path,
+                mime_type=resolved_mime_type,
+                default_extension=".png",
+            )
+            if target_path is None:
+                target_path = await self._allocate_generated_output_path(filename)
             await self.vfs.write_file(target_path, content, mime_type=resolved_mime_type)
             output_paths.append(target_path)
 
@@ -1075,8 +1131,11 @@ class ReactTerminalRuntime:
         if text:
             parts.append(text)
         if output_paths:
-            label = "Generated file:" if len(output_paths) == 1 else "Generated files:"
-            parts.append(label + "\n" + "\n".join(f"- `{path}`" for path in output_paths))
+            referenced_paths = collect_markdown_vfs_targets(text)
+            missing_paths = [path for path in output_paths if path not in referenced_paths]
+            if missing_paths:
+                label = "Generated file:" if len(missing_paths) == 1 else "Generated files:"
+                parts.append(label + "\n" + "\n".join(f"- `{path}`" for path in missing_paths))
         elif response_mode == "image":
             parts.append("No image file was produced.")
         elif response_mode == "audio":
