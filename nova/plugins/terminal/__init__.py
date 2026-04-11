@@ -18,7 +18,7 @@ Examples:
 
 Use relative paths only if you are confident about the current working directory.
 If you are unsure, run `pwd` first.
-Text pipes plus `<`, `>`, and `>>` are supported, but this is not a full shell.
+Text pipes plus `<`, `>`, `>>`, `;`, `&&`, and `||` are supported, but this is not a full shell.
 """,
     }
 

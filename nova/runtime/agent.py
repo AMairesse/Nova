@@ -248,8 +248,8 @@ class ReactTerminalRuntime:
         ) or "none"
         extra_guidance: list[str] = [
             "Create text files with `touch`, `tee`, or text shell redirection. "
-            "Text pipelines, `<`, `>`, `>>`, and sequential commands with `;` are supported, "
-            "but this is not a full shell: do not rely on heredocs, `&&`, `||`, or command substitution.",
+            "Text pipelines, `<`, `>`, `>>`, `;`, `&&`, and `||` are supported, "
+            "but this is not a full shell: do not rely on heredocs, stderr redirections, or command substitution.",
         ]
         if not self.tools_enabled:
             extra_guidance.append(
@@ -682,6 +682,7 @@ class ReactTerminalRuntime:
         failure_kind = ""
         segment_count = 1
         segment_head_commands: list[str] = []
+        execution_result = None
         try:
             parsed_command = self.terminal._parse_shell_command(command)
         except TerminalCommandError:
@@ -693,15 +694,22 @@ class ReactTerminalRuntime:
                 for segment in parsed_command.segments
             ]
         try:
-            output = await self.terminal.execute(command)
+            execution_result = await self.terminal.execute_result(command)
             await self._persist_session()
-            content = output or ""
-            failed_segment_indexes: list[int] = []
+            content = execution_result.render_text()
+            failure_kind = str(execution_result.failure_kind or "") if execution_result.status != 0 else ""
+            failed_segment_indexes = list(execution_result.failed_segment_indexes)
+            skipped_segment_indexes = list(execution_result.skipped_segment_indexes)
         except TerminalCommandError as exc:
             await self._persist_session()
             failure_kind = str(getattr(exc, "failure_kind", "") or classify_terminal_failure(str(exc)))
             content = f"Command error: {exc}"
             failed_segment_indexes = [failure.segment_index for failure in list(exc.segment_failures or [])]
+            skipped_segment_indexes: list[int] = []
+            execution_result = getattr(exc, "execution_result", None)
+        else:
+            if failure_kind:
+                content = f"Command error: {content or execution_result.stderr or 'Command failed.'}"
         after_files = await self.vfs.snapshot_visible_files()
         output_paths = sorted(
             path
@@ -718,6 +726,7 @@ class ReactTerminalRuntime:
             "progress_end_message": "Terminal command finished",
             "segment_count": segment_count,
             "segment_head_commands": segment_head_commands,
+            "status": int(getattr(execution_result, "status", 0) or 0) if execution_result is not None else (1 if failure_kind else 0),
             "output_kind": self._infer_terminal_output_kind(
                 content,
                 output_paths=output_paths,
@@ -725,11 +734,15 @@ class ReactTerminalRuntime:
             ),
             "output_paths": output_paths,
             "removed_paths": removed_paths,
+            "stdout_bytes": len(str(getattr(execution_result, "stdout", "") or "").encode("utf-8")) if execution_result is not None else 0,
+            "stderr_bytes": len(str(getattr(execution_result, "stderr", "") or "").encode("utf-8")) if execution_result is not None else 0,
         }
         if failure_kind:
             trace_meta["error_kind"] = failure_kind
         if failed_segment_indexes:
             trace_meta["failed_segment_indexes"] = failed_segment_indexes
+        if skipped_segment_indexes:
+            trace_meta["skipped_segment_indexes"] = skipped_segment_indexes
         return ToolExecutionResult(
             content=content,
             trace_meta=trace_meta,

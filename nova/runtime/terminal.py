@@ -44,11 +44,16 @@ class TerminalCommandError(Exception):
         message: str,
         *,
         failure_kind: str | None = None,
+        execution_result: "ShellExecutionResult | None" = None,
         segment_failures: list["SegmentExecutionFailure"] | None = None,
     ):
         super().__init__(message)
         self.failure_kind = str(failure_kind or "").strip() or classify_terminal_failure(message)
-        self.segment_failures = list(segment_failures or [])
+        self.execution_result = execution_result
+        self.segment_failures = list(
+            segment_failures
+            or (execution_result.segment_failures if execution_result is not None else [])
+        )
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +66,7 @@ class ParsedShellCommand:
     input_path: str | None = None
     output_path: str | None = None
     output_append: bool = False
+    operator_before: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -83,6 +89,113 @@ class SegmentExecutionFailure:
     head_command: str
     failure_kind: str
     error: str
+
+
+@dataclass(slots=True, frozen=True)
+class ShellStageResult:
+    stdout: str = ""
+    stderr: str = ""
+    status: int = 0
+    failure_kind: str = ""
+    status_label: str = ""
+    display_text: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class ShellSegmentResult:
+    segment_index: int
+    command: str
+    head_command: str
+    stdout: str = ""
+    stderr: str = ""
+    status: int | None = 0
+    failure_kind: str = ""
+    skipped: bool = False
+    status_label: str = ""
+    display_text: str = ""
+
+    def render_text(self) -> str:
+        if self.skipped:
+            return ""
+        if self.display_text:
+            return str(self.display_text or "")
+
+        if self.status_label:
+            lines = [f"Status: {self.status_label}"]
+            lines.append(f"Stdout: {self.stdout}" if self.stdout else "Stdout: ")
+            if self.stderr:
+                lines.append(f"Stderr: {self.stderr.rstrip()}")
+            return "\n".join(lines)
+
+        text = str(self.stdout or "")
+        stderr = str(self.stderr or "").rstrip("\n")
+        if stderr:
+            if text and not text.endswith("\n"):
+                text = f"{text}\n"
+            if "\n" in stderr:
+                text = f"{text}stderr:\n{stderr}"
+            else:
+                text = f"{text}stderr: {stderr}"
+        return text
+
+
+@dataclass(slots=True, frozen=True)
+class ShellExecutionResult:
+    stdout: str = ""
+    stderr: str = ""
+    status: int = 0
+    failure_kind: str = ""
+    segments: list[ShellSegmentResult] = field(default_factory=list)
+
+    @property
+    def executed_segment_indexes(self) -> list[int]:
+        return [segment.segment_index for segment in self.segments if not segment.skipped]
+
+    @property
+    def skipped_segment_indexes(self) -> list[int]:
+        return [segment.segment_index for segment in self.segments if segment.skipped]
+
+    @property
+    def failed_segment_indexes(self) -> list[int]:
+        return [
+            segment.segment_index
+            for segment in self.segments
+            if not segment.skipped and int(segment.status or 0) != 0
+        ]
+
+    @property
+    def segment_failures(self) -> list[SegmentExecutionFailure]:
+        failures: list[SegmentExecutionFailure] = []
+        for segment in self.segments:
+            if segment.skipped or int(segment.status or 0) == 0:
+                continue
+            error_text = segment.render_text() or segment.stderr or "Command failed."
+            failures.append(
+                SegmentExecutionFailure(
+                    segment_index=segment.segment_index,
+                    command=segment.command,
+                    head_command=segment.head_command,
+                    failure_kind=str(segment.failure_kind or classify_terminal_failure(error_text)),
+                    error=error_text,
+                )
+            )
+        return failures
+
+    def render_text(self) -> str:
+        rendered: list[str] = []
+        for segment in self.segments:
+            text = segment.render_text()
+            if text:
+                rendered.append(text)
+        merged = ""
+        for text in rendered:
+            if not merged:
+                merged = text
+            elif merged.endswith("\n") or text.startswith("\n"):
+                merged = f"{merged}{text}"
+            else:
+                merged = f"{merged}\n{text}"
+        return merged
 
 
 class TerminalExecutor:
@@ -123,11 +236,6 @@ class TerminalExecutor:
                 index += 1
                 continue
 
-            if raw.startswith("&&", index) or raw.startswith("||", index):
-                raise TerminalCommandError(
-                    "Shell chaining with && and || is not supported.",
-                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
-                )
             if raw.startswith("<<<", index) or raw.startswith("<<", index):
                 raise TerminalCommandError(
                     "Heredocs and << redirections are not supported.",
@@ -150,47 +258,72 @@ class TerminalExecutor:
                 )
             index += 1
 
-    def _split_shell_segments(self, raw: str) -> list[str]:
-        segments: list[str] = []
+    @staticmethod
+    def _missing_segment_error(operator: str) -> TerminalCommandError:
+        label = operator or ";"
+        return TerminalCommandError(
+            f"Command chaining with {label} requires a command on both sides.",
+            failure_kind=FAILURE_KIND_PARSE_ERROR,
+        )
+
+    def _split_shell_segments(self, raw: str) -> list[tuple[str | None, str]]:
+        segments: list[tuple[str | None, str]] = []
         in_single = False
         in_double = False
         escaped = False
         start = 0
-
-        for index, char in enumerate(raw):
+        operator_before: str | None = None
+        index = 0
+        while index < len(raw):
+            char = raw[index]
             if escaped:
                 escaped = False
+                index += 1
                 continue
             if char == "\\" and not in_single:
                 escaped = True
+                index += 1
                 continue
             if char == "'" and not in_double:
                 in_single = not in_single
+                index += 1
                 continue
             if char == '"' and not in_single:
                 in_double = not in_double
+                index += 1
                 continue
             if in_single or in_double:
+                index += 1
                 continue
-            if char != ";":
+
+            matched_operator: str | None = None
+            operator_length = 0
+            if raw.startswith("&&", index):
+                matched_operator = "&&"
+                operator_length = 2
+            elif raw.startswith("||", index):
+                matched_operator = "||"
+                operator_length = 2
+            elif char == ";":
+                matched_operator = ";"
+                operator_length = 1
+
+            if matched_operator is None:
+                index += 1
                 continue
 
             segment = raw[start:index].strip()
             if not segment:
-                raise TerminalCommandError(
-                    "Command chaining with ; requires a command on both sides.",
-                    failure_kind=FAILURE_KIND_PARSE_ERROR,
-                )
-            segments.append(segment)
-            start = index + 1
+                raise self._missing_segment_error(matched_operator)
+            segments.append((operator_before, segment))
+            operator_before = matched_operator
+            start = index + operator_length
+            index += operator_length
 
         final_segment = raw[start:].strip()
         if not final_segment:
-            raise TerminalCommandError(
-                "Command chaining with ; requires a command on both sides.",
-                failure_kind=FAILURE_KIND_PARSE_ERROR,
-            )
-        segments.append(final_segment)
+            raise self._missing_segment_error(operator_before or ";")
+        segments.append((operator_before, final_segment))
         return segments
 
     def _tokenize_shell(self, command: str) -> list[str]:
@@ -314,7 +447,18 @@ class TerminalExecutor:
         if not raw:
             raise TerminalCommandError("Empty command.", failure_kind=FAILURE_KIND_PARSE_ERROR)
         self._validate_shell_operators(raw)
-        segments = [self._parse_shell_segment(segment) for segment in self._split_shell_segments(raw)]
+        segments = [
+            ParsedShellCommand(
+                raw=parsed_segment.raw,
+                pipeline=parsed_segment.pipeline,
+                input_path=parsed_segment.input_path,
+                output_path=parsed_segment.output_path,
+                output_append=parsed_segment.output_append,
+                operator_before=operator_before,
+            )
+            for operator_before, segment in self._split_shell_segments(raw)
+            for parsed_segment in [self._parse_shell_segment(segment)]
+        ]
         return ParsedShellProgram(segments=segments)
 
     @staticmethod
@@ -346,117 +490,191 @@ class TerminalExecutor:
 
     @staticmethod
     def _merge_command_outputs(outputs: list[str]) -> str:
-        cleaned = [str(item or "").rstrip("\n") for item in outputs if str(item or "").strip()]
-        return "\n".join(cleaned)
+        merged = ""
+        for item in outputs:
+            text = str(item or "")
+            if not text:
+                continue
+            if not merged:
+                merged = text
+                continue
+            if merged.endswith("\n") or text.startswith("\n"):
+                merged = f"{merged}{text}"
+            else:
+                merged = f"{merged}\n{text}"
+        return merged
 
-    def _build_segment_failure_message(
+    @staticmethod
+    def _should_execute_segment(operator: str | None, previous_status: int) -> bool:
+        if operator in {None, ""}:
+            return True
+        if operator == ";":
+            return True
+        if operator == "&&":
+            return previous_status == 0
+        if operator == "||":
+            return previous_status != 0
+        return True
+
+    async def _run_shell_segment_result(
         self,
-        failures: list[SegmentExecutionFailure],
+        parsed: ParsedShellCommand,
         *,
-        partial_output: str,
-    ) -> str:
-        lines = ["One or more command segments failed:"]
-        for failure in failures:
-            label = failure.head_command or failure.command or "command"
-            lines.append(
-                f"- Segment {failure.segment_index} (`{label}`): {failure.error}"
-            )
-        if partial_output:
-            lines.extend(
-                [
-                    "",
-                    "Partial output from successful segments:",
-                    self._truncate_output(partial_output, limit=4000),
-                ]
-            )
-        return "\n".join(lines).strip()
-
-    async def _run_shell_segment(self, parsed: ParsedShellCommand) -> str:
+        segment_index: int,
+    ) -> ShellSegmentResult:
         stdin_text = None
+        head_command = normalize_head_command(parsed.raw)
         if parsed.input_path:
             try:
                 stdin_text = await self.vfs.read_text(parsed.input_path)
             except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
+                message = str(exc)
+                return ShellSegmentResult(
+                    segment_index=segment_index,
+                    command=parsed.raw,
+                    head_command=head_command,
+                    stderr=message,
+                    status=1,
+                    failure_kind=classify_terminal_failure(message),
+                )
 
         output = ""
+        stderr_parts: list[str] = []
+        display_text = ""
         for index, tokens in enumerate(parsed.pipeline):
             capture_output = index < len(parsed.pipeline) - 1 or parsed.output_path is not None
-            output = await self._execute_stage(
+            stage_result = await self._execute_stage_result(
                 tokens,
                 stdin_text=stdin_text,
                 capture_output=capture_output,
             )
-            stdin_text = output
+            if stage_result.stderr:
+                stderr_parts.append(stage_result.stderr)
+            if stage_result.status != 0:
+                return ShellSegmentResult(
+                    segment_index=segment_index,
+                    command=parsed.raw,
+                    head_command=head_command,
+                    stderr=self._merge_command_outputs(stderr_parts),
+                    status=1,
+                    failure_kind=stage_result.failure_kind or classify_terminal_failure(
+                        self._merge_command_outputs(stderr_parts)
+                    ),
+                    status_label=stage_result.status_label,
+                    display_text=stage_result.display_text,
+                )
+            output = stage_result.stdout
+            stdin_text = stage_result.stdout
+            display_text = stage_result.display_text
 
         if parsed.output_path is not None:
-            written = await self._write_shell_output(
-                parsed.output_path,
-                output,
-                append=parsed.output_append,
-            )
-            return self._format_write_result(
+            try:
+                written = await self._write_shell_output(
+                    parsed.output_path,
+                    output,
+                    append=parsed.output_append,
+                )
+            except TerminalCommandError as exc:
+                message = str(exc)
+                if message:
+                    stderr_parts.append(message)
+                return ShellSegmentResult(
+                    segment_index=segment_index,
+                    command=parsed.raw,
+                    head_command=head_command,
+                    stderr=self._merge_command_outputs(stderr_parts),
+                    status=1,
+                    failure_kind=str(getattr(exc, "failure_kind", "") or classify_terminal_failure(message)),
+                )
+            output = self._format_write_result(
                 f"Wrote {len(output.encode('utf-8'))} bytes to {written.path}",
                 written,
             )
-        return output or ""
+            display_text = output
 
-    async def _run_shell_command(self, parsed: ParsedShellProgram) -> str:
-        if len(parsed.segments) == 1:
-            return await self._run_shell_segment(parsed.segments[0])
+        return ShellSegmentResult(
+            segment_index=segment_index,
+            command=parsed.raw,
+            head_command=head_command,
+            stdout=output or "",
+            stderr=self._merge_command_outputs(stderr_parts),
+            status=0,
+            display_text=display_text,
+        )
 
-        outputs: list[str] = []
-        failures: list[SegmentExecutionFailure] = []
+    async def _run_shell_command_result(self, parsed: ParsedShellProgram) -> ShellExecutionResult:
+        segment_results: list[ShellSegmentResult] = []
+        last_status = 0
 
         for segment_index, segment in enumerate(parsed.segments, start=1):
-            try:
-                output = await self._run_shell_segment(segment)
-            except TerminalCommandError as exc:
-                failures.append(
-                    SegmentExecutionFailure(
+            if not self._should_execute_segment(segment.operator_before, last_status):
+                segment_results.append(
+                    ShellSegmentResult(
                         segment_index=segment_index,
                         command=segment.raw,
                         head_command=normalize_head_command(segment.raw),
-                        failure_kind=str(
-                            getattr(exc, "failure_kind", "") or classify_terminal_failure(str(exc))
-                        ),
-                        error=str(exc),
+                        status=None,
+                        skipped=True,
                     )
                 )
                 continue
-            if output:
-                outputs.append(output)
 
-        merged_output = self._merge_command_outputs(outputs)
-        if failures:
-            first_failure_kind = failures[0].failure_kind if len(failures) == 1 else FAILURE_KIND_COMMAND_ERROR
-            raise TerminalCommandError(
-                self._build_segment_failure_message(failures, partial_output=merged_output),
-                failure_kind=first_failure_kind,
-                segment_failures=failures,
-            )
-        return merged_output
+            segment_result = await self._run_shell_segment_result(segment, segment_index=segment_index)
+            segment_results.append(segment_result)
+            last_status = int(segment_result.status or 0)
 
-    async def _execute_stage(
+        executed_segments = [segment for segment in segment_results if not segment.skipped]
+        stdout = self._merge_command_outputs([segment.stdout for segment in executed_segments])
+        stderr = self._merge_command_outputs([segment.stderr for segment in executed_segments])
+        status = int(executed_segments[-1].status or 0) if executed_segments else 0
+        failure_kind = ""
+        if status != 0:
+            for segment in reversed(executed_segments):
+                if int(segment.status or 0) != 0:
+                    failure_kind = str(segment.failure_kind or classify_terminal_failure(segment.render_text()))
+                    break
+
+        return ShellExecutionResult(
+            stdout=stdout,
+            stderr=stderr,
+            status=status,
+            failure_kind=failure_kind,
+            segments=segment_results,
+        )
+
+    async def _execute_stage_result(
         self,
         tokens: list[str],
         *,
         stdin_text: str | None = None,
         capture_output: bool = False,
-    ) -> str:
+    ) -> ShellStageResult:
         if not tokens:
-            raise TerminalCommandError(
-                "Empty pipeline stage.",
+            return ShellStageResult(
+                stderr="Empty pipeline stage.",
+                status=1,
                 failure_kind=FAILURE_KIND_PARSE_ERROR,
             )
         name = str(tokens[0] or "").strip()
         args = tokens[1:]
-        return await self._dispatch_command(
-            name,
-            args,
-            stdin_text=stdin_text,
-            capture_output=capture_output,
-        )
+        try:
+            if name == "python":
+                return await self._cmd_python_result(args)
+            return ShellStageResult(
+                stdout=await self._dispatch_command(
+                    name,
+                    args,
+                    stdin_text=stdin_text,
+                    capture_output=capture_output,
+                )
+            )
+        except TerminalCommandError as exc:
+            message = str(exc)
+            return ShellStageResult(
+                stderr=message,
+                status=1,
+                failure_kind=str(getattr(exc, "failure_kind", "") or classify_terminal_failure(message)),
+            )
 
     async def _dispatch_command(
         self,
@@ -535,21 +753,24 @@ class TerminalExecutor:
             failure_kind="unknown_command",
         )
 
-    async def execute(self, command: str) -> str:
+    async def _record_segment_failures(self, failures: list[SegmentExecutionFailure]) -> None:
+        for failure in failures:
+            await record_terminal_command_failure(
+                command=failure.command,
+                failure_kind=failure.failure_kind,
+                error_message=failure.error,
+            )
+
+    async def execute_result(self, command: str) -> ShellExecutionResult:
         self.vfs.remember_command(command)
         try:
             parsed = self._parse_shell_command(command)
-            return await self._run_shell_command(parsed)
+            result = await self._run_shell_command_result(parsed)
+            if result.segment_failures:
+                await self._record_segment_failures(result.segment_failures)
+            return result
         except TerminalCommandError as exc:
-            if exc.segment_failures:
-                for failure in exc.segment_failures:
-                    await record_terminal_command_failure(
-                        command=failure.command,
-                        failure_kind=failure.failure_kind,
-                        error_message=failure.error,
-                    )
-            else:
-                await self._record_terminal_failure(command, exc)
+            await self._record_terminal_failure(command, exc)
             raise
         except Exception as exc:
             wrapped = TerminalCommandError(
@@ -558,6 +779,28 @@ class TerminalExecutor:
             )
             await self._record_terminal_failure(command, wrapped)
             raise
+
+    async def execute(self, command: str) -> str:
+        result = await self.execute_result(command)
+        rendered = result.render_text()
+        if result.status != 0:
+            executed_segments = [segment for segment in result.segments if not segment.skipped]
+            if len(executed_segments) == 1:
+                segment = executed_segments[0]
+                message = (
+                    segment.display_text
+                    or segment.stderr
+                    or segment.render_text()
+                    or "Command failed."
+                )
+            else:
+                message = rendered or result.stderr or "Command failed."
+            raise TerminalCommandError(
+                message,
+                failure_kind=result.failure_kind or classify_terminal_failure(message),
+                execution_result=result,
+            )
+        return rendered
 
     async def _cmd_echo(self, args: list[str]) -> str:
         append_newline = True
@@ -3113,19 +3356,14 @@ class TerminalExecutor:
         return f"Email sent successfully to {to}"
 
     @staticmethod
-    def _extract_python_stdout(result: str) -> str:
-        marker_stdout = "\nStdout: "
-        marker_stderr = "\nStderr: "
-        stdout_index = result.find(marker_stdout)
-        if stdout_index == -1:
-            return ""
-        start = stdout_index + len(marker_stdout)
-        stderr_index = result.find(marker_stderr, start)
-        if stderr_index == -1:
-            return result[start:]
-        return result[start:stderr_index]
+    def _format_python_result_text(result: python_service.Judge0ExecutionResult) -> str:
+        lines = [f"Status: {result.status_description}"]
+        lines.append(f"Stdout: {result.stdout}" if result.stdout else "Stdout: ")
+        if result.stderr:
+            lines.append(f"Stderr: {result.stderr}")
+        return "\n".join(lines).rstrip()
 
-    async def _cmd_python(self, args: list[str]) -> str:
+    async def _cmd_python_result(self, args: list[str]) -> ShellStageResult:
         if not self.capabilities.has_python:
             raise TerminalCommandError("Python execution is not enabled for this agent.")
         tool = self.capabilities.code_execution_tool
@@ -3141,13 +3379,26 @@ class TerminalExecutor:
             if len(remaining) != 2:
                 raise TerminalCommandError("Usage: python [--output PATH] -c \"...\"")
             code = remaining[1]
-            result = await python_service.execute_code(host, code, language="python", timeout=timeout)
+            result = await python_service.execute_code_result(
+                host,
+                code,
+                language="python",
+                timeout=timeout,
+            )
         else:
             if len(remaining) != 1:
                 raise TerminalCommandError("Usage: python [--output PATH] <script.py>")
             script_path = remaining[0]
             code = await self.vfs.read_text(script_path)
-            result = await python_service.execute_code(host, code, language="python", timeout=timeout)
+            result = await python_service.execute_code_result(
+                host,
+                code,
+                language="python",
+                timeout=timeout,
+            )
+
+        visible_text = self._format_python_result_text(result)
+        status = 0 if result.ok else 1
 
         if output_path:
             output_name = "python-stdout.txt"
@@ -3162,13 +3413,38 @@ class TerminalExecutor:
                 )
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
-            stdout = self._extract_python_stdout(result)
             written = await self._write_file_and_notify(
                 resolved_output,
-                stdout.encode("utf-8"),
+                result.stdout.encode("utf-8"),
                 mime_type="text/plain",
                 overwrite=True,
             )
-            return self._append_warnings(result, written.warnings)
+            return ShellStageResult(
+                stdout=self._append_warnings(visible_text, written.warnings),
+                stderr=result.stderr,
+                status=status,
+                failure_kind="" if status == 0 else FAILURE_KIND_COMMAND_ERROR,
+                status_label=result.status_description,
+                display_text=self._append_warnings(visible_text, written.warnings),
+            )
 
-        return result
+        return ShellStageResult(
+            stdout=result.stdout,
+            stderr=result.stderr,
+            status=status,
+            failure_kind="" if status == 0 else FAILURE_KIND_COMMAND_ERROR,
+            status_label=result.status_description,
+            display_text=visible_text,
+        )
+
+    async def _cmd_python(self, args: list[str]) -> str:
+        result = await self._cmd_python_result(args)
+        if result.display_text:
+            return result.display_text
+        return self._format_python_result_text(
+            python_service.Judge0ExecutionResult(
+                status_description=result.status_label or ("Accepted" if result.status == 0 else "Error"),
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        )

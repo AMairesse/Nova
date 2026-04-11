@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 import logging
 import base64
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 from django.utils.translation import gettext_lazy as _
 from asgiref.sync import sync_to_async
@@ -13,6 +14,17 @@ logger = logging.getLogger(__name__)
 
 # Cache for languages to avoid repeated API calls
 _languages_cache: Optional[List[Dict[str, Union[int, str]]]] = None
+
+
+@dataclass(slots=True, frozen=True)
+class Judge0ExecutionResult:
+    status_description: str
+    stdout: str = ""
+    stderr: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status_description == "Accepted"
 
 
 async def test_judge0_access(tool: Tool) -> Dict[str, str]:
@@ -130,13 +142,23 @@ async def get_language_id(host: str, language: Union[str, int]) -> int:
 
 async def get_execution_status(host: str, token: str) -> str:
     """Get status of a submission."""
+    result = await get_execution_status_result(host, token)
+    return format_execution_result(result)
+
+
+async def get_execution_status_result(host: str, token: str) -> Judge0ExecutionResult:
+    """Get structured status of a submission."""
     response = await api_request('GET', f"{host}/submissions/{token}?base64_encoded=true")
     status = response.get('status', {}).get('description', 'Unknown')
     stdout = response.get('stdout', '')
     decoded_stdout = base64.b64decode(stdout).decode('utf-8') if stdout else ''
     stderr = response.get('stderr', '')
     decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
-    return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
+    return Judge0ExecutionResult(
+        status_description=status,
+        stdout=decoded_stdout,
+        stderr=decoded_stderr,
+    )
 
 
 async def compile_code(host: str, code: str, language: Union[str, int]) -> str:
@@ -165,6 +187,19 @@ async def compile_code(host: str, code: str, language: Union[str, int]) -> str:
 async def execute_code(host: str, code: str, language: Union[str, int] = "python",
                        input_data: Optional[str] = None, timeout: int = 5) -> str:
     """Execute code and return output."""
+    result = await execute_code_result(
+        host,
+        code,
+        language=language,
+        input_data=input_data,
+        timeout=timeout,
+    )
+    return format_execution_result(result)
+
+
+async def execute_code_result(host: str, code: str, language: Union[str, int] = "python",
+                              input_data: Optional[str] = None, timeout: int = 5) -> Judge0ExecutionResult:
+    """Execute code and return a structured result."""
     language_id = await get_language_id(host, language)
     encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
     encoded_input_data = base64.b64encode(input_data.encode('utf-8')).decode('utf-8') if input_data else ""
@@ -181,7 +216,15 @@ async def execute_code(host: str, code: str, language: Union[str, int] = "python
     stderr = response.get('stderr', '')
     decoded_stderr = base64.b64decode(stderr).decode('utf-8') if stderr else ''
     status = response.get('status', {}).get('description', 'Unknown')
-    return f"Status: {status}\nStdout: {decoded_stdout}\nStderr: {decoded_stderr}"
+    return Judge0ExecutionResult(
+        status_description=status,
+        stdout=decoded_stdout,
+        stderr=decoded_stderr,
+    )
+
+
+def format_execution_result(result: Judge0ExecutionResult) -> str:
+    return f"Status: {result.status_description}\nStdout: {result.stdout}\nStderr: {result.stderr}"
 
 
 async def run_code_with_input(host: str, code: str, language: Union[str, int] = "python",

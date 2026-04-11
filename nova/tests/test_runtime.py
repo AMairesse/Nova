@@ -29,6 +29,7 @@ from nova.models.Thread import Thread
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserFile import UserFile
 from nova.models.WebApp import WebApp
+from nova.plugins.python import service as python_service
 from nova.runtime.agent import (
     ReactTerminalInterruptResult,
     ReactTerminalRunResult,
@@ -914,17 +915,33 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("status.txt", output)
         self.assertEqual(async_to_sync(executor.execute)("cat /tmp/flyer-v8/status.txt"), "ok\n")
 
-    def test_terminal_semicolon_sequences_continue_after_failure_but_fail_overall(self):
+    def test_terminal_execute_result_exposes_stdout_stderr_and_status(self):
         executor = self._build_executor()
 
-        with self.assertRaises(TerminalCommandError) as cm:
-            async_to_sync(executor.execute)(
-                'mkdir /tmp/semicolon-test; unknowncmd; echo "done" > /tmp/semicolon-test/result.txt'
-            )
+        success = async_to_sync(executor.execute_result)("pwd")
+        failure = async_to_sync(executor.execute_result)("unknowncmd")
 
-        self.assertIn("Segment 2", str(cm.exception))
-        self.assertIn("Unknown command: unknowncmd", str(cm.exception))
+        self.assertEqual(success.status, 0)
+        self.assertEqual(success.stdout, "/")
+        self.assertEqual(success.stderr, "")
+        self.assertEqual(failure.status, 1)
+        self.assertEqual(failure.stdout, "")
+        self.assertIn("Unknown command: unknowncmd", failure.stderr)
+
+    def test_terminal_semicolon_sequences_follow_shell_status_semantics(self):
+        executor = self._build_executor()
+
+        output = async_to_sync(executor.execute)(
+            'mkdir /tmp/semicolon-test; unknowncmd; echo "done" > /tmp/semicolon-test/result.txt'
+        )
+
+        self.assertIn("Unknown command: unknowncmd", output)
         self.assertEqual(async_to_sync(executor.execute)("cat /tmp/semicolon-test/result.txt"), "done\n")
+
+        with self.assertRaises(TerminalCommandError) as cm:
+            async_to_sync(executor.execute)("pwd; unknowncmd")
+
+        self.assertIn("Unknown command: unknowncmd", str(cm.exception))
 
     def test_terminal_semicolon_sequences_reject_empty_segments(self):
         executor = self._build_executor()
@@ -1876,14 +1893,41 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         executor = self._build_executor()
 
         for command in [
-            "pwd && ls",
-            "pwd || ls",
             "echo $(pwd)",
             "echo `pwd`",
         ]:
             with self.subTest(command=command):
                 with self.assertRaises(TerminalCommandError):
                     async_to_sync(executor.execute)(command)
+
+    def test_terminal_supports_logical_and_and_or(self):
+        executor = self._build_executor()
+
+        success = async_to_sync(executor.execute)("pwd && ls /")
+        skipped = async_to_sync(executor.execute_result)("unknowncmd && pwd")
+        fallback = async_to_sync(executor.execute)("unknowncmd || pwd")
+        short_circuit = async_to_sync(executor.execute_result)("pwd || ls /")
+        chained = async_to_sync(executor.execute)("unknowncmd || pwd && ls /")
+
+        self.assertIn("skills/", success)
+        self.assertEqual(skipped.status, 1)
+        self.assertEqual(skipped.skipped_segment_indexes, [2])
+        self.assertIn("Unknown command: unknowncmd", fallback)
+        self.assertIn("/", fallback)
+        self.assertEqual(short_circuit.status, 0)
+        self.assertEqual(short_circuit.skipped_segment_indexes, [2])
+        self.assertIn("skills/", chained)
+
+    def test_terminal_pipeline_failure_blocks_following_and_segment(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('echo "hello" > /tmp/note.txt')
+
+        result = async_to_sync(executor.execute_result)("cat /tmp/note.txt | unknowncmd && pwd")
+
+        self.assertEqual(result.status, 1)
+        self.assertEqual(result.failed_segment_indexes, [1])
+        self.assertEqual(result.skipped_segment_indexes, [2])
 
     def test_terminal_failure_metrics_aggregate_and_sanitize_examples(self):
         executor = self._build_executor()
@@ -1913,8 +1957,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
     def test_terminal_failure_metrics_record_failed_semicolon_segments_individually(self):
         executor = self._build_executor()
 
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("pwd; unknowncmd --token secret-value; ls -z")
+        output = async_to_sync(executor.execute)(
+            "pwd; unknowncmd --token secret-value; ls -z || pwd"
+        )
 
         unknown_metric = TerminalCommandFailureMetric.objects.get(
             head_command="unknowncmd",
@@ -1929,15 +1974,16 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(invalid_metric.count, 1)
         self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
         self.assertFalse(TerminalCommandFailureMetric.objects.filter(head_command="pwd").exists())
+        self.assertIn("Unknown command: unknowncmd", output)
 
     def test_terminal_failure_metrics_record_unsupported_syntax(self):
         executor = self._build_executor()
 
         with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("pwd && ls")
+            async_to_sync(executor.execute)("echo $(pwd)")
 
         metric = TerminalCommandFailureMetric.objects.get(
-            head_command="pwd",
+            head_command="echo",
             failure_kind="unsupported_syntax",
         )
 
@@ -2212,9 +2258,13 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code",
+                "nova.plugins.python.service.execute_code_result",
                 new_callable=AsyncMock,
-                return_value="Status: Accepted\nStdout: hello\nworld\nStderr: ",
+                return_value=python_service.Judge0ExecutionResult(
+                    status_description="Accepted",
+                    stdout="hello\nworld",
+                    stderr="",
+                ),
             ) as mocked_execute,
         ):
             result = async_to_sync(executor.execute)(
@@ -2885,9 +2935,13 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code",
+                "nova.plugins.python.service.execute_code_result",
                 new_callable=AsyncMock,
-                return_value="Status: Accepted\nStdout: 1575\nStderr: ",
+                return_value=python_service.Judge0ExecutionResult(
+                    status_description="Accepted",
+                    stdout="1575",
+                    stderr="",
+                ),
             ) as mocked_execute,
         ):
             result = async_to_sync(runtime.run)()
@@ -2936,9 +2990,13 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code",
+                "nova.plugins.python.service.execute_code_result",
                 new_callable=AsyncMock,
-                return_value="Status: Accepted\nStdout: 1575\nStderr: ",
+                return_value=python_service.Judge0ExecutionResult(
+                    status_description="Accepted",
+                    stdout="1575",
+                    stderr="",
+                ),
             ) as mocked_execute,
         ):
             result = async_to_sync(runtime.run)()
@@ -3985,11 +4043,12 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             "pwd; unknowncmd; ls /"
         )
 
-        self.assertTrue(result.failed)
+        self.assertFalse(result.failed)
         self.assertEqual(result.trace_meta["segment_count"], 3)
         self.assertEqual(result.trace_meta["segment_head_commands"], ["pwd", "unknowncmd", "ls"])
         self.assertEqual(result.trace_meta["failed_segment_indexes"], [2])
-        self.assertIn("Segment 2", result.content)
+        self.assertEqual(result.trace_meta["status"], 0)
+        self.assertIn("Unknown command: unknowncmd", result.content)
         self.assertIn("skills/", result.content)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
