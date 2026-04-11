@@ -102,6 +102,11 @@ class TaskExecutor:
         try:
             await self._initialize_task(interruption_response=interruption_response)
             await self._ensure_trace_handler(resumed=bool(interruption_response))
+            if interruption_response and self.trace_handler:
+                await self.trace_handler.resolve_latest_interaction(
+                    interaction_status=str(interruption_response.get("interaction_status") or ""),
+                    answer_preview=interruption_response.get("user_response"),
+                )
             await self._create_llm_agent()
 
             if interruption_response:

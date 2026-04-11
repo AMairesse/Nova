@@ -140,6 +140,8 @@
             this.isComposerSubmitting = false;
             this.pendingComposerPasteDecision = null;
             this.composerDragDepth = 0;
+            this.executionTraceTaskId = '';
+            this.executionTraceRefreshTimer = null;
 
             this.streamingManager = new window.StreamingManager();
 
@@ -336,6 +338,13 @@
                         void this.openExecutionTrace(link);
                     }
                 },
+                '.task-progress-trace-link': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.task-progress-trace-link');
+                    if (button) {
+                        void this.openExecutionTrace(button);
+                    }
+                },
                 '.message-context-menu-trigger': (e, target) => {
                     e.preventDefault();
                     const button = target.closest('.message-context-menu-trigger');
@@ -417,6 +426,18 @@
                     if (form) this.triggerComposerSubmit(form);
                 }
             });
+
+            const traceModal = document.getElementById('execution-trace-modal');
+            if (traceModal && !traceModal._novaTraceBound) {
+                traceModal._novaTraceBound = true;
+                traceModal.addEventListener('hidden.bs.modal', () => {
+                    this.executionTraceTaskId = '';
+                    if (this.executionTraceRefreshTimer) {
+                        window.clearTimeout(this.executionTraceRefreshTimer);
+                        this.executionTraceRefreshTimer = null;
+                    }
+                });
+            }
         }
 
         appendMessage(messageElement) {
@@ -549,6 +570,7 @@
         getExecutionNodeTypeLabel(nodeType) {
             const mapping = {
                 agent_run: gettext('Agent'),
+                model_call: gettext('Model'),
                 tool: gettext('Tool'),
                 subagent: gettext('Sub-agent'),
                 interaction: gettext('Interaction'),
@@ -562,10 +584,21 @@
             const mapping = {
                 completed: { label: gettext('Completed'), className: 'text-bg-success' },
                 failed: { label: gettext('Failed'), className: 'text-bg-danger' },
+                canceled: { label: gettext('Canceled'), className: 'text-bg-secondary' },
                 awaiting_input: { label: gettext('Awaiting input'), className: 'text-bg-warning' },
                 running: { label: gettext('Running'), className: 'text-bg-primary' },
             };
             return mapping[normalized] || { label: normalized || gettext('Unknown'), className: 'text-bg-secondary' };
+        }
+
+        buildExecutionProviderLabel(meta) {
+            const data = (meta && typeof meta === 'object') ? meta : {};
+            const provider = `${data.provider || ''}`.trim();
+            const model = `${data.model || ''}`.trim();
+            if (provider && model) {
+                return `${provider} / ${model}`;
+            }
+            return provider || model;
         }
 
         buildExecutionSummaryLine(summary) {
@@ -592,6 +625,10 @@
                     : gettext('approximated');
                 parts.push(`${gettext('Context')}: ${consumed} / ${context.max_context} (${mode})`);
             }
+            const providerLabel = this.buildExecutionProviderLabel(data);
+            if (providerLabel) {
+                parts.push(providerLabel);
+            }
             return parts.join(' • ');
         }
 
@@ -608,6 +645,121 @@
             `;
         }
 
+        buildExecutionNodeFacts(node) {
+            const facts = [];
+            const meta = (node?.meta && typeof node.meta === 'object') ? node.meta : {};
+            const providerLabel = this.buildExecutionProviderLabel(meta);
+
+            if (node?.type === 'model_call') {
+                if (providerLabel) facts.push(providerLabel);
+                if (meta.response_mode && meta.response_mode !== 'text') {
+                    facts.push(`${meta.response_mode}`);
+                }
+                const toolCallCount = Array.isArray(meta.tool_call_names) ? meta.tool_call_names.length : 0;
+                if (toolCallCount > 0) {
+                    facts.push(`${toolCallCount} ${gettext(toolCallCount === 1 ? 'tool call' : 'tool calls')}`);
+                }
+            } else if (node?.type === 'tool') {
+                if (meta.kind === 'terminal' && meta.head_command) {
+                    facts.push(`${meta.head_command}`);
+                }
+                if (meta.kind === 'delegate_to_agent' && meta.target_agent_name) {
+                    facts.push(`${meta.target_agent_name}`);
+                }
+                const outputCount = Array.isArray(meta.output_paths) ? meta.output_paths.length : 0;
+                const copiedOutputCount = Array.isArray(meta.output_paths_copied_back) ? meta.output_paths_copied_back.length : 0;
+                if (outputCount > 0) {
+                    facts.push(`${outputCount} ${gettext(outputCount === 1 ? 'file' : 'files')}`);
+                } else if (copiedOutputCount > 0) {
+                    facts.push(`${copiedOutputCount} ${gettext(copiedOutputCount === 1 ? 'file' : 'files')}`);
+                }
+                if (meta.error_kind) {
+                    facts.push(`${meta.error_kind}`);
+                }
+            } else if (node?.type === 'subagent') {
+                if (meta.agent_name) facts.push(`${meta.agent_name}`);
+                if (meta.response_mode && meta.response_mode !== 'text') {
+                    facts.push(`${meta.response_mode}`);
+                }
+                if (providerLabel) facts.push(providerLabel);
+                const outputCount = Array.isArray(meta.output_paths) ? meta.output_paths.length : 0;
+                if (outputCount > 0) {
+                    facts.push(`${outputCount} ${gettext(outputCount === 1 ? 'file' : 'files')}`);
+                }
+            } else if (node?.type === 'interaction') {
+                if (meta.schema_type) facts.push(`${meta.schema_type}`);
+                if (meta.interaction_status) facts.push(`${meta.interaction_status.toLowerCase()}`);
+            }
+
+            return facts.slice(0, 3);
+        }
+
+        buildExecutionNodeSideLines(node) {
+            const lines = [];
+            const startedAt = node?.started_at ? new Date(node.started_at).toLocaleString() : '';
+            if (startedAt) {
+                lines.push(startedAt);
+            }
+
+            const facts = this.buildExecutionNodeFacts(node);
+            if (!facts.length) {
+                return lines;
+            }
+
+            if (node?.type === 'model_call') {
+                const [providerLabel, ...otherFacts] = facts;
+                if (providerLabel) {
+                    lines.push(providerLabel);
+                }
+                if (otherFacts.length) {
+                    lines.push(otherFacts.join(' • '));
+                }
+                return lines;
+            }
+
+            lines.push(facts.join(' • '));
+            return lines;
+        }
+
+        renderExecutionFileLinks(files) {
+            const items = Array.isArray(files) ? files : [];
+            if (!items.length) {
+                return '';
+            }
+            return `
+                <div class="execution-node-section">
+                    <div class="execution-node-section-label">${window.DOMUtils.escapeHTML(gettext('Files'))}</div>
+                    <div class="execution-node-file-links">
+                        ${items.map((fileRef) => `
+                            <a
+                              class="btn btn-sm btn-outline-secondary"
+                              href="${window.DOMUtils.escapeHTML(String(fileRef.content_url || ''))}"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              ${window.DOMUtils.escapeHTML(String(fileRef.label || fileRef.path || 'file'))}
+                            </a>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        renderExecutionTechnicalDetails(node) {
+            const meta = (node?.meta && typeof node.meta === 'object') ? { ...node.meta } : {};
+            delete meta.progress_message;
+            delete meta.progress_end_message;
+            if (!Object.keys(meta).length) {
+                return '';
+            }
+            return `
+                <details class="execution-node-technical">
+                    <summary>${window.DOMUtils.escapeHTML(gettext('Technical details'))}</summary>
+                    <pre class="execution-node-preview mb-0"><code>${window.DOMUtils.escapeHTML(JSON.stringify(meta, null, 2))}</code></pre>
+                </details>
+            `;
+        }
+
         renderExecutionTraceNode(node, { isRoot = false } = {}) {
             if (!node || typeof node !== 'object') {
                 return '';
@@ -616,28 +768,41 @@
             const typeLabel = this.getExecutionNodeTypeLabel(node.type);
             const status = this.getExecutionStatusBadge(node.status);
             const durationLabel = this.formatExecutionDuration(node.duration_ms);
-            const startedAt = node.started_at ? new Date(node.started_at).toLocaleString() : '';
             const outputPreview = this.renderExecutionPreviewSection(gettext('Output'), node.output_preview);
             const inputPreview = this.renderExecutionPreviewSection(gettext('Input'), node.input_preview);
-            const metaHtml = startedAt
-                ? `<div class="execution-node-meta text-muted">${window.DOMUtils.escapeHTML(startedAt)}</div>`
+            const fileLinksHtml = this.renderExecutionFileLinks(node.resolved_files);
+            const technicalHtml = this.renderExecutionTechnicalDetails(node);
+            const sideLines = this.buildExecutionNodeSideLines(node);
+            const sideHtml = sideLines.length
+                ? `
+                    <div class="execution-node-summary-side">
+                        ${sideLines.map((line) => `<div class="execution-node-summary-side-line">${window.DOMUtils.escapeHTML(String(line))}</div>`).join('')}
+                    </div>
+                `
                 : '';
+            const shouldOpen = isRoot || ['failed', 'running', 'awaiting_input'].includes(`${node.status || ''}`.trim().toLowerCase());
             const contentHtml = `
-                ${metaHtml}
                 ${inputPreview}
                 ${outputPreview}
+                ${fileLinksHtml}
+                ${technicalHtml}
                 ${children.length ? `<div class="execution-node-children">${children.map((child) => this.renderExecutionTraceNode(child)).join('')}</div>` : ''}
             `;
 
             if (children.length || isRoot) {
                 return `
-                    <details class="execution-trace-node" ${isRoot ? 'open' : ''}>
+                    <details class="execution-trace-node" data-node-id="${window.DOMUtils.escapeHTML(String(node.id || ''))}" ${shouldOpen ? 'open' : ''}>
                         <summary class="execution-trace-node-summary">
-                            <div class="execution-node-title-row">
-                                <span class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</span>
-                                <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
-                                <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
-                                ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                            <div class="execution-node-summary-layout">
+                                <div class="execution-node-summary-main">
+                                    <div class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</div>
+                                    <div class="execution-node-title-row">
+                                        <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
+                                        <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
+                                        ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                                    </div>
+                                </div>
+                                ${sideHtml}
                             </div>
                         </summary>
                         <div class="execution-trace-node-body">
@@ -648,13 +813,18 @@
             }
 
             return `
-                <div class="execution-trace-node execution-trace-node-leaf">
+                <div class="execution-trace-node execution-trace-node-leaf" data-node-id="${window.DOMUtils.escapeHTML(String(node.id || ''))}">
                     <div class="execution-trace-node-summary">
-                        <div class="execution-node-title-row">
-                            <span class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</span>
-                            <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
-                            <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
-                            ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                        <div class="execution-node-summary-layout">
+                            <div class="execution-node-summary-main">
+                                <div class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</div>
+                                <div class="execution-node-title-row">
+                                    <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
+                                    <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
+                                    ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                                </div>
+                            </div>
+                            ${sideHtml}
                         </div>
                     </div>
                     <div class="execution-trace-node-body">
@@ -664,28 +834,113 @@
             `;
         }
 
-        async openExecutionTrace(triggerOrTaskId) {
-            const taskId = typeof triggerOrTaskId === 'string' || typeof triggerOrTaskId === 'number'
-                ? String(triggerOrTaskId)
-                : triggerOrTaskId?.dataset?.taskId;
+        collectExecutionIssues(node, issues = [], { isRoot = true, parentIssue = false } = {}) {
+            if (!node || typeof node !== 'object') {
+                return issues;
+            }
+            const status = `${node.status || ''}`.trim().toLowerCase();
+            const isIssue = (
+                status === 'failed' &&
+                node.type !== 'error' &&
+                !(isRoot && node.type === 'agent_run')
+            );
+            if (isIssue && !parentIssue) {
+                issues.push(node);
+            }
+            const children = Array.isArray(node.children) ? node.children : [];
+            children.forEach((child) => this.collectExecutionIssues(child, issues, {
+                isRoot: false,
+                parentIssue: parentIssue || isIssue,
+            }));
+            return issues;
+        }
+
+        renderExecutionOverview(summary) {
+            const data = (summary && typeof summary === 'object') ? summary : {};
+            const status = this.getExecutionStatusBadge(data.status);
+            const overviewCards = [];
+            const providerLabel = this.buildExecutionProviderLabel(data);
+            const executionSummary = window.MessageRenderer.buildExecutionSummary(data);
+            const durationLabel = this.formatExecutionDuration(data.duration_ms);
+            const context = (data.context && typeof data.context === 'object') ? data.context : {};
+
+            overviewCards.push({ label: gettext('Status'), value: status.label });
+            if (providerLabel) overviewCards.push({ label: gettext('Model'), value: providerLabel });
+            if (data.response_mode) overviewCards.push({ label: gettext('Mode'), value: String(data.response_mode) });
+            if (executionSummary) overviewCards.push({ label: gettext('Activity'), value: executionSummary });
+            if (durationLabel) overviewCards.push({ label: gettext('Duration'), value: durationLabel });
+            if (context.max_context && (context.real_tokens !== null && context.real_tokens !== undefined || context.approx_tokens)) {
+                const consumed = context.real_tokens !== null && context.real_tokens !== undefined
+                    ? context.real_tokens
+                    : context.approx_tokens;
+                const mode = context.real_tokens !== null && context.real_tokens !== undefined
+                    ? gettext('real')
+                    : gettext('approximated');
+                overviewCards.push({
+                    label: gettext('Context'),
+                    value: `${consumed} / ${context.max_context} (${mode})`,
+                });
+            }
+            if (Number(data.files_created_count || 0) > 0) {
+                overviewCards.push({
+                    label: gettext('Files created'),
+                    value: String(data.files_created_count),
+                });
+            }
+
+            const filesHtml = this.renderExecutionFileLinks(data.resolved_output_files);
+            return `
+                <div class="execution-trace-section">
+                    <div class="execution-trace-section-title">${window.DOMUtils.escapeHTML(gettext('Overview'))}</div>
+                    <div class="execution-overview-grid">
+                        ${overviewCards.map((card) => `
+                            <div class="execution-overview-card">
+                                <span class="execution-overview-label">${window.DOMUtils.escapeHTML(String(card.label))}</span>
+                                <span class="execution-overview-value">${window.DOMUtils.escapeHTML(String(card.value))}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                    ${filesHtml}
+                </div>
+            `;
+        }
+
+        renderExecutionIssuesWarning(root) {
+            const issueCount = this.collectExecutionIssues(root, []).length;
+            if (!issueCount) {
+                return '';
+            }
+            return `
+                <div class="alert alert-warning execution-issues-warning" role="alert">
+                    <strong>${window.DOMUtils.escapeHTML(String(issueCount))}</strong>
+                    ${window.DOMUtils.escapeHTML(gettext(issueCount === 1 ? 'issue during processing.' : 'issues during processing.'))}
+                    <span class="execution-issues-warning-detail">${window.DOMUtils.escapeHTML(gettext('See the timeline below for details.'))}</span>
+                </div>
+            `;
+        }
+
+        async loadExecutionTrace(taskId) {
             const url = this.buildExecutionTraceUrl(taskId);
             const modalEl = document.getElementById('execution-trace-modal');
-            if (!url || !modalEl || !window.bootstrap?.Modal) {
-                this.showToast(gettext('Execution trace is not available on this page.'), 'warning');
+            if (!url || !modalEl) {
                 return;
             }
 
             const summaryEl = document.getElementById('execution-trace-modal-summary');
             const loadingEl = document.getElementById('execution-trace-modal-loading');
             const emptyEl = document.getElementById('execution-trace-modal-empty');
+            const contentEl = document.getElementById('execution-trace-modal-content');
+            const overviewEl = document.getElementById('execution-trace-modal-overview');
+            const issuesEl = document.getElementById('execution-trace-modal-problems');
             const treeEl = document.getElementById('execution-trace-modal-tree');
-            const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
 
             if (summaryEl) summaryEl.textContent = '';
+            if (overviewEl) overviewEl.innerHTML = '';
+            if (issuesEl) issuesEl.innerHTML = '';
             if (treeEl) treeEl.innerHTML = '';
             if (emptyEl) emptyEl.classList.add('d-none');
+            if (contentEl) contentEl.classList.add('d-none');
             if (loadingEl) loadingEl.classList.remove('d-none');
-            modal.show();
 
             try {
                 const response = await fetch(url, {
@@ -708,9 +963,24 @@
                     return;
                 }
 
-                if (treeEl) {
-                    treeEl.innerHTML = this.renderExecutionTraceNode(root, { isRoot: true });
+                if (overviewEl) {
+                    overviewEl.innerHTML = this.renderExecutionOverview(summary);
                 }
+                if (issuesEl) {
+                    issuesEl.innerHTML = this.renderExecutionIssuesWarning(root);
+                }
+                if (treeEl) {
+                    treeEl.innerHTML = `
+                        <div class="execution-trace-section">
+                            <div class="execution-trace-section-title">${window.DOMUtils.escapeHTML(gettext('Timeline'))}</div>
+                            ${this.renderExecutionTraceNode(root, { isRoot: true })}
+                        </div>
+                    `;
+                }
+                if (contentEl) {
+                    contentEl.classList.remove('d-none');
+                }
+                this.executionTraceTaskId = String(taskId || '');
             } catch (error) {
                 console.error('Error loading execution trace:', error);
                 if (emptyEl) {
@@ -720,6 +990,40 @@
             } finally {
                 if (loadingEl) loadingEl.classList.add('d-none');
             }
+        }
+
+        scheduleExecutionTraceRefresh(taskId) {
+            const normalized = `${taskId || ''}`.trim();
+            const modalEl = document.getElementById('execution-trace-modal');
+            if (!normalized || !this.executionTraceTaskId || normalized !== this.executionTraceTaskId) {
+                return;
+            }
+            if (!modalEl || !modalEl.classList.contains('show')) {
+                return;
+            }
+            if (this.executionTraceRefreshTimer) {
+                window.clearTimeout(this.executionTraceRefreshTimer);
+            }
+            this.executionTraceRefreshTimer = window.setTimeout(() => {
+                this.executionTraceRefreshTimer = null;
+                void this.loadExecutionTrace(normalized);
+            }, 250);
+        }
+
+        async openExecutionTrace(triggerOrTaskId) {
+            const taskId = typeof triggerOrTaskId === 'string' || typeof triggerOrTaskId === 'number'
+                ? String(triggerOrTaskId)
+                : triggerOrTaskId?.dataset?.taskId;
+            const url = this.buildExecutionTraceUrl(taskId);
+            const modalEl = document.getElementById('execution-trace-modal');
+            if (!url || !modalEl || !window.bootstrap?.Modal) {
+                this.showToast(gettext('Execution trace is not available on this page.'), 'warning');
+                return;
+            }
+
+            const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+            await this.loadExecutionTrace(taskId);
         }
 
         showToast(message, type = 'info') {

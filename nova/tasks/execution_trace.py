@@ -13,7 +13,7 @@ from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
 
-TRACE_VERSION = 1
+TRACE_VERSION = 2
 _PREVIEW_MAX_CHARS = 280
 _REDACTED_VALUE = "[redacted]"
 _REDACT_KEYS = {
@@ -29,6 +29,11 @@ _REDACT_KEYS = {
 }
 _BLOB_PATTERN = re.compile(r"^[A-Za-z0-9+/=]{160,}$")
 DELEGATED_AGENT_TOOL_MARKER = "_nova_delegated_agent_tool"
+_OUTPUT_PATH_META_KEYS = {
+    "output_path",
+    "output_paths",
+    "output_paths_copied_back",
+}
 
 
 def build_agent_tool_safe_name(agent_name: str) -> str:
@@ -128,6 +133,31 @@ def sanitize_preview(value: Any) -> str:
         return ""
     if isinstance(value, str):
         return _sanitize_string(value)
+
+
+def _sanitize_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {}
+    sanitized = _sanitize_json_like(meta)
+    return sanitized if isinstance(sanitized, dict) else {}
+
+
+def _merge_meta(existing: dict[str, Any] | None, new: dict[str, Any] | None) -> dict[str, Any]:
+    merged = dict(existing or {})
+    merged.update(_sanitize_meta(new))
+    return merged
+
+
+def _coerce_vfs_paths(value: Any) -> list[str]:
+    if isinstance(value, str):
+        candidate = str(value).strip()
+        return [candidate] if candidate.startswith("/") else []
+    if isinstance(value, (list, tuple, set)):
+        paths: list[str] = []
+        for item in value:
+            paths.extend(_coerce_vfs_paths(item))
+        return paths
+    return []
     try:
         sanitized_value = _sanitize_json_like(value)
         return _truncate_preview(
@@ -202,6 +232,7 @@ class TaskExecutionTraceHandler:
             "version": TRACE_VERSION,
             "summary": {
                 "has_trace": False,
+                "status": "running",
                 "tool_calls": 0,
                 "subagent_calls": 0,
                 "interaction_count": 0,
@@ -209,6 +240,11 @@ class TaskExecutionTraceHandler:
                 "duration_ms": None,
                 "started_at": root_started_at,
                 "finished_at": None,
+                "provider": "",
+                "model": "",
+                "response_mode": "",
+                "files_created_count": 0,
+                "output_paths": [],
             },
             "root": {
                 "id": "agent_run_root",
@@ -268,7 +304,7 @@ class TaskExecutionTraceHandler:
             "input_preview": sanitize_preview(input_preview),
             "output_preview": sanitize_preview(output_preview),
             "children": [],
-            "meta": deepcopy(meta) if isinstance(meta, dict) else {},
+            "meta": _sanitize_meta(meta),
         }
 
     def _append_child(self, parent_node_id: str | None, node: dict[str, Any]) -> None:
@@ -295,9 +331,24 @@ class TaskExecutionTraceHandler:
         if output_preview is not None:
             node["output_preview"] = sanitize_preview(output_preview)
         if isinstance(meta, dict):
-            merged_meta = dict(node.get("meta") or {})
-            merged_meta.update(meta)
-            node["meta"] = merged_meta
+            node["meta"] = _merge_meta(node.get("meta"), meta)
+
+    @staticmethod
+    def _collect_output_paths(meta: dict[str, Any] | None) -> list[str]:
+        if not isinstance(meta, dict):
+            return []
+        paths: list[str] = []
+        for key in _OUTPUT_PATH_META_KEYS:
+            paths.extend(_coerce_vfs_paths(meta.get(key)))
+        return sorted(dict.fromkeys(paths))
+
+    def _find_latest_interaction_node(self) -> dict[str, Any] | None:
+        latest: dict[str, Any] | None = None
+        for node in self._iter_nodes():
+            if str(node.get("type") or "").strip() != "interaction":
+                continue
+            latest = node
+        return latest
 
     def _iter_nodes(self, node: dict[str, Any] | None = None):
         trace = self._get_trace()
@@ -313,6 +364,7 @@ class TaskExecutionTraceHandler:
         subagent_calls = 0
         interaction_count = 0
         error_count = 0
+        output_paths: list[str] = []
 
         for node in self._iter_nodes(root):
             node_type = str(node.get("type") or "").strip()
@@ -324,9 +376,14 @@ class TaskExecutionTraceHandler:
                 interaction_count += 1
             elif node_type == "error":
                 error_count += 1
+            output_paths.extend(self._collect_output_paths(node.get("meta")))
+
+        root_meta = dict(root.get("meta") or {})
+        unique_output_paths = sorted(dict.fromkeys(path for path in output_paths if path))
 
         return {
             "has_trace": bool(root.get("id")),
+            "status": str(root.get("status") or "").strip() or "unknown",
             "tool_calls": tool_calls,
             "subagent_calls": subagent_calls,
             "interaction_count": interaction_count,
@@ -334,6 +391,11 @@ class TaskExecutionTraceHandler:
             "duration_ms": root.get("duration_ms"),
             "started_at": root.get("started_at"),
             "finished_at": root.get("finished_at"),
+            "provider": str(root_meta.get("provider") or "").strip(),
+            "model": str(root_meta.get("model") or "").strip(),
+            "response_mode": str(root_meta.get("response_mode") or "").strip(),
+            "files_created_count": len(unique_output_paths),
+            "output_paths": unique_output_paths,
             "context": deepcopy((trace.get("summary") or {}).get("context") or {}),
         }
 
@@ -380,7 +442,7 @@ class TaskExecutionTraceHandler:
                 meta["agent_id"] = int(agent_id)
             if resumed:
                 meta["resumed"] = True
-            root["meta"] = meta
+            root["meta"] = _sanitize_meta(meta)
             self._persist_locked()
 
     async def ensure_root_run(
@@ -430,6 +492,17 @@ class TaskExecutionTraceHandler:
             approx_tokens=approx_tokens,
             max_context=max_context,
         )
+
+    def _update_root_meta_sync(self, meta: dict[str, Any] | None = None) -> None:
+        if not isinstance(meta, dict) or not meta:
+            return
+        with self._state["lock"]:
+            root = (self._get_trace().get("root") or {})
+            root["meta"] = _merge_meta(root.get("meta"), meta)
+            self._persist_locked()
+
+    async def update_root_meta(self, meta: dict[str, Any] | None = None) -> None:
+        await self._run_serialized(self._update_root_meta_sync, meta)
 
     def _complete_root_run_sync(self, output_preview: Any = None) -> None:
         with self._state["lock"]:
@@ -488,7 +561,11 @@ class TaskExecutionTraceHandler:
                 label=label,
                 status="awaiting_input",
                 input_preview=question,
-                meta={"schema": deepcopy(schema) if isinstance(schema, dict) else {}},
+                meta={
+                    "schema": deepcopy(schema) if isinstance(schema, dict) else {},
+                    "schema_type": str((schema or {}).get("type") or "").strip(),
+                    "agent_name": str(agent_name or "").strip(),
+                },
             )
             self._complete_node(node, status="awaiting_input", output_preview="")
             self._append_child(None, node)
@@ -507,6 +584,46 @@ class TaskExecutionTraceHandler:
             question=question,
             schema=schema,
             agent_name=agent_name,
+        )
+
+    def _resolve_latest_interaction_sync(
+        self,
+        *,
+        interaction_status: str,
+        answer_preview: Any = None,
+    ) -> None:
+        with self._state["lock"]:
+            node = self._find_latest_interaction_node()
+            if node is None:
+                return
+            normalized_status = str(interaction_status or "").strip().upper()
+            if normalized_status == "ANSWERED":
+                node_status = "completed"
+                preview = answer_preview
+            elif normalized_status == "CANCELED":
+                node_status = "canceled"
+                preview = answer_preview or "Canceled by user."
+            else:
+                node_status = "completed"
+                preview = answer_preview
+            self._complete_node(
+                node,
+                status=node_status,
+                output_preview=preview,
+                meta={"interaction_status": normalized_status},
+            )
+            self._persist_locked()
+
+    async def resolve_latest_interaction(
+        self,
+        *,
+        interaction_status: str,
+        answer_preview: Any = None,
+    ) -> None:
+        await self._run_serialized(
+            self._resolve_latest_interaction_sync,
+            interaction_status=interaction_status,
+            answer_preview=answer_preview,
         )
 
     def _start_subagent_sync(
@@ -538,6 +655,108 @@ class TaskExecutionTraceHandler:
             self._start_subagent_sync,
             label=label,
             input_preview=input_preview,
+            meta=meta,
+        )
+
+    def _start_model_call_sync(
+        self,
+        *,
+        label: str,
+        input_preview: Any = "",
+        meta: dict[str, Any] | None = None,
+    ) -> str:
+        with self._state["lock"]:
+            node = self._new_node(
+                node_type="model_call",
+                label=label,
+                input_preview=input_preview,
+                meta=meta,
+            )
+            self._append_child(self.parent_node_id, node)
+            self._persist_locked()
+            return node["id"]
+
+    async def start_model_call(
+        self,
+        *,
+        label: str,
+        input_preview: Any = "",
+        meta: dict[str, Any] | None = None,
+    ) -> str:
+        return await self._run_serialized(
+            self._start_model_call_sync,
+            label=label,
+            input_preview=input_preview,
+            meta=meta,
+        )
+
+    def _complete_model_call_sync(
+        self,
+        node_id: str,
+        *,
+        output_preview: Any = None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        with self._state["lock"]:
+            node = self._find_node(node_id)
+            if node is None:
+                return
+            self._complete_node(
+                node,
+                status="completed",
+                output_preview=output_preview,
+                meta=meta,
+            )
+            self._persist_locked()
+
+    async def complete_model_call(
+        self,
+        node_id: str,
+        *,
+        output_preview: Any = None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        await self._run_serialized(
+            self._complete_model_call_sync,
+            node_id,
+            output_preview=output_preview,
+            meta=meta,
+        )
+
+    def _fail_model_call_sync(
+        self,
+        node_id: str,
+        *,
+        error: Any,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        with self._state["lock"]:
+            node = self._find_node(node_id)
+            if node is None:
+                return
+            self._complete_node(node, status="failed", output_preview=error, meta=meta)
+            error_node = self._new_node(
+                node_type="error",
+                label=f"{node.get('label') or 'Model call'} failed",
+                status="failed",
+                output_preview=error,
+                meta=meta,
+            )
+            self._complete_node(error_node, status="failed", output_preview=error, meta=meta)
+            self._append_child(node_id, error_node)
+            self._persist_locked()
+
+    async def fail_model_call(
+        self,
+        node_id: str,
+        *,
+        error: Any,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        await self._run_serialized(
+            self._fail_model_call_sync,
+            node_id,
+            error=error,
             meta=meta,
         )
 
@@ -616,6 +835,7 @@ class TaskExecutionTraceHandler:
             summary = deepcopy(self._build_summary())
             return {
                 "has_trace": bool(summary.get("has_trace")),
+                "status": str(summary.get("status") or "").strip(),
                 "tool_calls": int(summary.get("tool_calls") or 0),
                 "subagent_calls": int(summary.get("subagent_calls") or 0),
                 "interaction_count": int(summary.get("interaction_count") or 0),
@@ -673,6 +893,8 @@ class TaskExecutionTraceHandler:
         output: Any,
         *,
         run_id: UUID,
+        metadata: dict[str, Any] | None = None,
+        status: str = "completed",
     ) -> None:
         with self._state["lock"]:
             node_id = self._state["run_nodes"].pop(str(run_id), None)
@@ -681,9 +903,20 @@ class TaskExecutionTraceHandler:
                 return None
             self._complete_node(
                 node,
-                status="completed",
+                status=status,
                 output_preview=output,
+                meta=metadata,
             )
+            if status == "failed":
+                error_node = self._new_node(
+                    node_type="error",
+                    label=f"Tool {node.get('label') or 'tool'} failed",
+                    status="failed",
+                    output_preview=output,
+                    meta=metadata,
+                )
+                self._complete_node(error_node, status="failed", output_preview=output, meta=metadata)
+                self._append_child(node_id, error_node)
             self._persist_locked()
         return None
 
@@ -693,15 +926,24 @@ class TaskExecutionTraceHandler:
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
+        metadata: dict[str, Any] | None = None,
+        status: str = "completed",
         **kwargs: Any,
     ) -> Any:
-        return await self._run_serialized(self._on_tool_end_sync, output, run_id=run_id)
+        return await self._run_serialized(
+            self._on_tool_end_sync,
+            output,
+            run_id=run_id,
+            metadata=metadata,
+            status=status,
+        )
 
     def _on_tool_error_sync(
         self,
         error: BaseException,
         *,
         run_id: UUID,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         with self._state["lock"]:
             node_id = self._state["run_nodes"].pop(str(run_id), None)
@@ -709,15 +951,16 @@ class TaskExecutionTraceHandler:
             if node is None:
                 return None
             error_text = str(error)
-            self._complete_node(node, status="failed", output_preview=error_text)
+            self._complete_node(node, status="failed", output_preview=error_text, meta=metadata)
             error_node = self._new_node(
                 node_type="error",
                 label=f"Tool {node.get('label') or 'tool'} failed",
                 status="failed",
                 output_preview=error_text,
+                meta=metadata,
             )
-            self._complete_node(error_node, status="failed", output_preview=error_text)
-            self._append_child(self.parent_node_id, error_node)
+            self._complete_node(error_node, status="failed", output_preview=error_text, meta=metadata)
+            self._append_child(node_id, error_node)
             self._persist_locked()
         return None
 
@@ -727,6 +970,12 @@ class TaskExecutionTraceHandler:
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
+        metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        return await self._run_serialized(self._on_tool_error_sync, error, run_id=run_id)
+        return await self._run_serialized(
+            self._on_tool_error_sync,
+            error,
+            run_id=run_id,
+            metadata=metadata,
+        )

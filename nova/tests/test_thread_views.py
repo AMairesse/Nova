@@ -16,6 +16,7 @@ from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
+from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
 
@@ -850,6 +851,81 @@ class MainViewsTests(TestCase):
         response = self.client.get(reverse("task_execution_trace", args=[foreign_task.id]))
         self.assertEqual(response.status_code, 404)
 
+    def test_execution_trace_endpoint_enriches_files_and_status(self):
+        thread = Thread.objects.create(user=self.user, subject="Trace files")
+        source_message = thread.add_message("Use the attachment", actor=Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            status=TaskStatus.RUNNING,
+            execution_trace={
+                "version": 2,
+                "summary": {
+                    "has_trace": True,
+                    "status": "running",
+                    "tool_calls": 1,
+                    "subagent_calls": 0,
+                    "interaction_count": 0,
+                    "error_count": 0,
+                    "duration_ms": 1200,
+                    "output_paths": ["/subagents/image-agent-123/flyer.png"],
+                },
+                "root": {
+                    "id": "agent_run_root",
+                    "type": "agent_run",
+                    "status": "running",
+                    "meta": {"source_message_id": source_message.id},
+                    "children": [
+                        {
+                            "id": "tool_1",
+                            "type": "tool",
+                            "label": "delegate_to_agent",
+                            "status": "completed",
+                            "children": [],
+                            "meta": {
+                                "input_paths": ["/inbox/IMG_6433.jpg"],
+                                "output_paths_copied_back": ["/subagents/image-agent-123/flyer.png"],
+                            },
+                        }
+                    ],
+                },
+            },
+        )
+        thread_file = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            key="users/1/threads/1/subagents/image-agent-123/flyer.png",
+            original_filename="/subagents/image-agent-123/flyer.png",
+            mime_type="image/png",
+            size=123,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+        attachment_file = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=source_message,
+            key="users/1/threads/1/attachments/IMG_6433.jpg",
+            original_filename="/uploads/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=456,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        self.client.login(username="alice", password="pass")
+        response = self.client.get(reverse("task_execution_trace", args=[task.id]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["task_status"], TaskStatus.RUNNING)
+        summary_refs = payload["execution_trace"]["summary"]["resolved_output_files"]
+        self.assertEqual(summary_refs[0]["content_url"], reverse("file_content", args=[thread_file.id]))
+        node_refs = payload["execution_trace"]["root"]["children"][0]["resolved_files"]
+        resolved_paths = {item["path"] for item in node_refs}
+        self.assertIn("/subagents/image-agent-123/flyer.png", resolved_paths)
+        self.assertIn("/inbox/IMG_6433.jpg", resolved_paths)
+        attachment_ref = next(item for item in node_refs if item["path"] == "/inbox/IMG_6433.jpg")
+        self.assertEqual(attachment_ref["content_url"], reverse("file_content", args=[attachment_file.id]))
+
     def test_message_list_renders_execution_link_when_trace_summary_exists(self):
         thread = Thread.objects.create(user=self.user, subject="Execution footer")
         message = thread.add_message("Final answer", actor=Actor.AGENT)
@@ -879,6 +955,7 @@ class MainViewsTests(TestCase):
         self.assertContains(response, 'agent-footer-chip agent-footer-chip-info card-footer-consumption')
         self.assertContains(response, "3 tools")
         self.assertContains(response, "1 sub-agents")
+        self.assertContains(response, 'id="task-progress-trace-btn"')
 
     def test_message_list_renders_execution_link_when_trace_task_exists_even_if_legacy_summary_says_false(self):
         thread = Thread.objects.create(user=self.user, subject="Execution footer compat")

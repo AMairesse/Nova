@@ -273,14 +273,20 @@ class TaskProgressHandler:
                 self._needs_segment_break = True
             self.current_tool = tool_name
             self.tool_depth += 1
-            await self.on_progress(f"Tool '{tool_name}' started")
+            progress_message = ""
+            if isinstance(metadata, dict):
+                progress_message = str(metadata.get("progress_message") or "").strip()
+            await self.on_progress(progress_message or f"Tool '{tool_name}' started")
         except Exception as e:
             logger.error(f"Error in on_tool_start: {e}")
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, parent_run_id: Optional[UUID] = None,
-                          **kwargs: Any) -> Any:
+                          metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any:
         try:
-            await self.on_progress(f"Tool '{self.current_tool}' finished")
+            progress_message = ""
+            if isinstance(metadata, dict):
+                progress_message = str(metadata.get("progress_end_message") or "").strip()
+            await self.on_progress(progress_message or f"Tool '{self.current_tool}' finished")
             # If a tool is ending, reset the current tool so that we may
             # send response chunks if the main agent is generating
             self.current_tool = None

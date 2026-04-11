@@ -74,6 +74,79 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         self.assertEqual(trace["root"]["status"], "failed")
         self.assertEqual(trace["root"]["meta"]["category"], "tool_failure")
 
+    async def test_records_model_call_metadata_and_summary_output_paths(self):
+        task = SimpleNamespace(id=904, execution_trace={})
+        handler = TaskExecutionTraceHandler(task)
+
+        await handler.ensure_root_run(label="Planner")
+        await handler.update_root_meta(
+            {
+                "provider": "OpenRouter",
+                "model": "gpt-4o-mini",
+                "response_mode": "text",
+            }
+        )
+        model_node_id = await handler.start_model_call(
+            label="Model call 1",
+            input_preview="Do the thing",
+            meta={"messages_count": 4, "tools_enabled": True},
+        )
+        await handler.complete_model_call(
+            model_node_id,
+            output_preview="Tool call: terminal",
+            meta={
+                "tool_call_names": ["terminal"],
+                "output_paths": ["/generated/result.txt"],
+                "token_usage": {"total_tokens": 42},
+            },
+        )
+        await handler.complete_root_run("Done")
+
+        trace = task.execution_trace
+        self.assertEqual(trace["version"], 2)
+        self.assertEqual(trace["summary"]["status"], "completed")
+        self.assertEqual(trace["summary"]["provider"], "OpenRouter")
+        self.assertEqual(trace["summary"]["model"], "gpt-4o-mini")
+        self.assertEqual(trace["summary"]["files_created_count"], 1)
+        self.assertEqual(trace["summary"]["output_paths"], ["/generated/result.txt"])
+        self.assertEqual(trace["root"]["children"][0]["type"], "model_call")
+
+    async def test_resolves_latest_interaction_answer_and_cancel(self):
+        task = SimpleNamespace(id=905, execution_trace={})
+        handler = TaskExecutionTraceHandler(task)
+
+        await handler.ensure_root_run(label="Planner")
+        await handler.record_interaction(
+            question="Continue?",
+            schema={"type": "boolean"},
+            agent_name="Planner",
+        )
+        await handler.mark_root_awaiting_input()
+        await handler.resolve_latest_interaction(
+            interaction_status="ANSWERED",
+            answer_preview=True,
+        )
+
+        trace = task.execution_trace
+        interaction_node = trace["root"]["children"][0]
+        self.assertEqual(interaction_node["status"], "completed")
+        self.assertEqual(interaction_node["meta"]["interaction_status"], "ANSWERED")
+
+        await handler.record_interaction(
+            question="Continue again?",
+            schema={"type": "boolean"},
+            agent_name="Planner",
+        )
+        await handler.resolve_latest_interaction(
+            interaction_status="CANCELED",
+            answer_preview="Canceled by user.",
+        )
+
+        trace = task.execution_trace
+        canceled_node = trace["root"]["children"][-1]
+        self.assertEqual(canceled_node["status"], "canceled")
+        self.assertEqual(canceled_node["meta"]["interaction_status"], "CANCELED")
+
 
 class TaskExecutionTraceHandlerCrossLoopTests(TestCase):
     @patch("nova.models.Task.Task.objects.filter")

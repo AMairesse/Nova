@@ -370,7 +370,15 @@
       <div class="flex-grow-1">
         <small id="progress-logs" class="text-muted"></small>
       </div>
-      <div id="task-status"></div>
+      <div id="task-status" class="d-flex align-items-center gap-2">
+        <button
+          type="button"
+          id="task-progress-trace-btn"
+          class="btn btn-sm btn-outline-secondary task-progress-trace-link d-none"
+        >
+          {% trans "Execution details" %}
+        </button>
+      </div>
     </div>
   </div>
 
@@ -389,7 +397,11 @@
           <div id="execution-trace-modal-empty" class="alert alert-light border d-none mb-0">
             {% trans "No execution details are available for this message." %}
           </div>
-          <div id="execution-trace-modal-tree"></div>
+          <div id="execution-trace-modal-content" class="d-none">
+            <div id="execution-trace-modal-overview"></div>
+            <div id="execution-trace-modal-problems"></div>
+            <div id="execution-trace-modal-tree"></div>
+          </div>
         </div>
       </div>
     </div>

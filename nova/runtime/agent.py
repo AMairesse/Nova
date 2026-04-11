@@ -47,6 +47,7 @@ from .sessions import (
 )
 from .skills_registry import build_skill_registry
 from .terminal import TerminalCommandError, TerminalExecutor
+from .terminal_metrics import classify_terminal_failure, normalize_head_command
 from .vfs import VirtualFileSystem
 
 
@@ -56,6 +57,13 @@ class ReactTerminalRunResult:
     real_tokens: int | None
     approx_tokens: int | None
     max_context: int | None
+
+
+@dataclass(slots=True)
+class ToolExecutionResult:
+    content: str
+    trace_meta: dict[str, Any]
+    failed: bool = False
 
 
 @dataclass(slots=True)
@@ -609,16 +617,114 @@ class ReactTerminalRuntime:
             total_bytes += len(str(final_answer).encode("utf-8", "ignore"))
         return total_bytes // 4 + 1 if total_bytes else 0
 
-    async def _execute_terminal_command(self, command: str) -> str:
+    def _provider_trace_meta(self, *, response_mode: str) -> dict[str, Any]:
+        provider = getattr(self.provider_client, "provider", None)
+        provider_name = str(
+            getattr(provider, "name", "") or getattr(provider, "provider_type", "")
+        ).strip()
+        return {
+            "provider": provider_name,
+            "provider_type": str(getattr(provider, "provider_type", "") or "").strip(),
+            "model": str(getattr(provider, "model", "") or "").strip(),
+            "response_mode": str(response_mode or "").strip(),
+        }
+
+    @staticmethod
+    def _extract_input_paths_from_prompt_inputs(prompt_inputs: list[ResolvedTurnInput]) -> list[str]:
+        paths: list[str] = []
+        for item in list(prompt_inputs or []):
+            metadata = item.metadata if isinstance(getattr(item, "metadata", None), dict) else {}
+            inbox_path = str(metadata.get("inbox_path") or "").strip()
+            if inbox_path.startswith("/") and inbox_path not in paths:
+                paths.append(inbox_path)
+        return paths
+
+    @staticmethod
+    def _summarize_response_output(response: dict[str, Any], *, tool_call_names: list[str]) -> str:
+        content = str(response.get("content") or "").strip()
+        if content:
+            return content
+        if tool_call_names:
+            label = "Tool call" if len(tool_call_names) == 1 else "Tool calls"
+            return f"{label}: {', '.join(tool_call_names)}"
+        return "No text output."
+
+    @staticmethod
+    def _build_token_usage_meta(total_tokens: Any) -> dict[str, int] | None:
+        try:
+            normalized = int(total_tokens) if total_tokens is not None else None
+        except (TypeError, ValueError):
+            normalized = None
+        if normalized is None:
+            return None
+        return {"total_tokens": normalized}
+
+    @staticmethod
+    def _infer_terminal_output_kind(content: str, *, output_paths: list[str], failed: bool) -> str:
+        if failed:
+            return "error"
+        if output_paths:
+            return "file"
+        text = str(content or "").strip()
+        if not text:
+            return "empty"
+        if text.startswith("{") or text.startswith("["):
+            try:
+                json.loads(text)
+                return "json"
+            except Exception:
+                pass
+        return "text"
+
+    async def _execute_terminal_command(self, command: str) -> ToolExecutionResult:
+        before_files = await self.vfs.snapshot_visible_files()
+        cwd_before = self.vfs.cwd
+        failure_kind = ""
         try:
             output = await self.terminal.execute(command)
             await self._persist_session()
-            return output or ""
+            content = output or ""
         except TerminalCommandError as exc:
             await self._persist_session()
-            return f"Command error: {exc}"
+            failure_kind = str(getattr(exc, "failure_kind", "") or classify_terminal_failure(str(exc)))
+            content = f"Command error: {exc}"
+        after_files = await self.vfs.snapshot_visible_files()
+        output_paths = sorted(
+            path
+            for path, snapshot in after_files.items()
+            if before_files.get(path) != snapshot
+        )
+        removed_paths = sorted(path for path in before_files if path not in after_files)
+        trace_meta = {
+            "kind": "terminal",
+            "command": str(command or "").strip(),
+            "head_command": normalize_head_command(command),
+            "cwd": cwd_before,
+            "cwd_after": self.vfs.cwd,
+            "progress_end_message": "Terminal command finished",
+            "output_kind": self._infer_terminal_output_kind(
+                content,
+                output_paths=output_paths,
+                failed=bool(failure_kind),
+            ),
+            "output_paths": output_paths,
+            "removed_paths": removed_paths,
+        }
+        if failure_kind:
+            trace_meta["error_kind"] = failure_kind
+        return ToolExecutionResult(
+            content=content,
+            trace_meta=trace_meta,
+            failed=bool(failure_kind),
+        )
 
-    async def _delegate_to_agent(self, *, agent_id: str, question: str, input_paths: list[str] | None = None) -> str:
+    async def _delegate_to_agent_result(
+        self,
+        *,
+        agent_id: str,
+        question: str,
+        input_paths: list[str] | None = None,
+    ) -> ToolExecutionResult:
         candidates = list(self.capabilities.subagents or [])
         match = None
         normalized = str(agent_id or "").strip()
@@ -627,16 +733,47 @@ class ReactTerminalRuntime:
                 match = subagent
                 break
         if match is None:
-            return f"Unknown sub-agent: {agent_id}"
+            return ToolExecutionResult(
+                content=f"Unknown sub-agent: {agent_id}",
+                trace_meta={
+                    "kind": "delegate_to_agent",
+                    "target_agent_id": normalized,
+                    "input_paths_requested": list(input_paths or []),
+                    "error_kind": "unknown_subagent",
+                },
+                failed=True,
+            )
 
         subagent_label = f"{match.name} ({match.id})"
+        child_provider = getattr(match, "llm_provider", None)
+        delegate_trace_meta = {
+            "kind": "delegate_to_agent",
+            "target_agent_id": int(match.id),
+            "target_agent_name": str(match.name or "").strip(),
+            "input_paths_requested": list(input_paths or []),
+            "input_paths_copied": [],
+            "output_paths_copied_back": [],
+            "child_response_mode": str(getattr(match, "default_response_mode", "") or "").strip(),
+            "child_provider": str(
+                getattr(child_provider, "name", "") or getattr(child_provider, "provider_type", "")
+            ).strip(),
+            "child_model": str(getattr(child_provider, "model", "") or "").strip(),
+            "progress_end_message": "Sub-agent finished",
+        }
         node_id = None
         child_trace = None
         if self.trace_handler:
             node_id = await self.trace_handler.start_subagent(
                 label=subagent_label,
                 input_preview=question,
-                meta={"agent_id": match.id},
+                meta={
+                    "agent_id": int(match.id),
+                    "agent_name": str(match.name or "").strip(),
+                    "response_mode": str(getattr(match, "default_response_mode", "") or "").strip(),
+                    "provider": delegate_trace_meta["child_provider"],
+                    "model": delegate_trace_meta["child_model"],
+                    "input_paths_requested": list(input_paths or []),
+                },
             )
             child_trace = self.trace_handler.clone_for_parent(parent_node_id=node_id)
 
@@ -688,9 +825,23 @@ class ReactTerminalRuntime:
                 if suggestion:
                     error_text = f"{error_text} Did you mean {suggestion}?"
                 if self.trace_handler and node_id:
-                    await self.trace_handler.fail_subagent(node_id, error=error_text)
-                return f"Failed to copy {input_path} into the sub-agent input area: {error_text}"
+                    await self.trace_handler.fail_subagent(
+                        node_id,
+                        error=error_text,
+                        meta={
+                            "input_paths_requested": list(input_paths or []),
+                            "input_paths_copied": list(copied_inputs),
+                        },
+                    )
+                delegate_trace_meta["input_paths_copied"] = list(copied_inputs)
+                delegate_trace_meta["error_kind"] = "copy_input_failed"
+                return ToolExecutionResult(
+                    content=f"Failed to copy {input_path} into the sub-agent input area: {error_text}",
+                    trace_meta=delegate_trace_meta,
+                    failed=True,
+                )
             copied_inputs.append(child_target)
+        delegate_trace_meta["input_paths_copied"] = list(copied_inputs)
 
         before_files = await child_runtime.vfs.snapshot_persistent_files()
         child_question = str(question or "").strip()
@@ -705,8 +856,17 @@ class ReactTerminalRuntime:
             answer = child_result.final_answer
         except Exception as exc:
             if self.trace_handler and node_id:
-                await self.trace_handler.fail_subagent(node_id, error=str(exc))
-            return f"Sub-agent failed: {exc}"
+                await self.trace_handler.fail_subagent(
+                    node_id,
+                    error=str(exc),
+                    meta=delegate_trace_meta,
+                )
+            delegate_trace_meta["error_kind"] = "subagent_failed"
+            return ToolExecutionResult(
+                content=f"Sub-agent failed: {exc}",
+                trace_meta=delegate_trace_meta,
+                failed=True,
+            )
 
         after_files = await child_runtime.vfs.snapshot_persistent_files()
         changed_files = sorted([
@@ -743,8 +903,15 @@ class ReactTerminalRuntime:
             await self.trace_handler.complete_subagent(
                 node_id,
                 output_preview=answer,
-                meta={"output_paths": copied_outputs},
+                meta={
+                    "input_paths": list(copied_inputs),
+                    "output_paths": copied_outputs,
+                    "response_mode": delegate_trace_meta["child_response_mode"],
+                    "provider": delegate_trace_meta["child_provider"],
+                    "model": delegate_trace_meta["child_model"],
+                },
             )
+        delegate_trace_meta["output_paths_copied_back"] = list(copied_outputs)
 
         status_line = (
             f"Sub-agent {subagent_label} finished with {len(copied_outputs)} output file(s)."
@@ -757,7 +924,19 @@ class ReactTerminalRuntime:
                 + "\nReference them in your final reply with Markdown links or images, "
                 + "for example `[file](/path/file.ext)` or `![preview](/path/image.png)`."
             )
-        return f"{status_line}\n\n{answer}{output_suffix}"
+        return ToolExecutionResult(
+            content=f"{status_line}\n\n{answer}{output_suffix}",
+            trace_meta=delegate_trace_meta,
+            failed=False,
+        )
+
+    async def _delegate_to_agent(self, *, agent_id: str, question: str, input_paths: list[str] | None = None) -> str:
+        result = await self._delegate_to_agent_result(
+            agent_id=agent_id,
+            question=question,
+            input_paths=input_paths,
+        )
+        return result.content
 
     @classmethod
     def _repair_single_terminal_command_payload(cls, raw_arguments: str) -> dict[str, str] | None:
@@ -796,24 +975,54 @@ class ReactTerminalRuntime:
             return {"tool_call_id": tool_call_id, "name": tool_name, "content": str(exc)}
 
         run_id = uuid.uuid4()
+        start_metadata: dict[str, Any] = {"tool_name": tool_name}
+        if tool_name == "terminal":
+            command = str(payload.get("command") or "").strip()
+            start_metadata.update(
+                {
+                    "kind": "terminal",
+                    "command": command,
+                    "head_command": normalize_head_command(command),
+                    "cwd": self.vfs.cwd,
+                    "progress_message": "Running terminal command",
+                }
+            )
+        elif tool_name == "delegate_to_agent":
+            target_agent = str(payload.get("agent_id") or "").strip()
+            start_metadata.update(
+                {
+                    "kind": "delegate_to_agent",
+                    "target_agent_id": target_agent,
+                    "input_paths_requested": [
+                        str(item)
+                        for item in list(payload.get("input_paths") or [])
+                        if str(item).strip()
+                    ],
+                    "progress_message": (
+                        f"Delegating to {target_agent}" if target_agent else "Delegating to sub-agent"
+                    ),
+                }
+            )
         if self.progress_handler:
             await self.progress_handler.on_tool_start(
                 {"name": tool_name},
                 str(tool_arguments or "{}"),
                 run_id=run_id,
+                metadata=start_metadata,
             )
         if self.trace_handler:
             await self.trace_handler.on_tool_start(
                 {"name": tool_name},
                 str(tool_arguments or "{}"),
                 run_id=run_id,
+                metadata=start_metadata,
             )
 
         try:
             if tool_name == "terminal":
-                content = await self._execute_terminal_command(str(payload.get("command") or ""))
+                result = await self._execute_terminal_command(str(payload.get("command") or ""))
             elif tool_name == "delegate_to_agent":
-                content = await self._delegate_to_agent(
+                result = await self._delegate_to_agent_result(
                     agent_id=str(payload.get("agent_id") or ""),
                     question=str(payload.get("question") or ""),
                     input_paths=[
@@ -823,15 +1032,42 @@ class ReactTerminalRuntime:
                     ],
                 )
             else:
-                content = f"Unknown tool: {tool_name}"
+                result = ToolExecutionResult(
+                    content=f"Unknown tool: {tool_name}",
+                    trace_meta={"tool_name": tool_name, "error_kind": "unknown_tool"},
+                    failed=True,
+                )
             if self.trace_handler:
-                await self.trace_handler.on_tool_end(content, run_id=run_id)
+                await self.trace_handler.on_tool_end(
+                    result.content,
+                    run_id=run_id,
+                    metadata=result.trace_meta,
+                    status="failed" if result.failed else "completed",
+                )
             if self.progress_handler:
-                await self.progress_handler.on_tool_end(content, run_id=run_id)
-            return {"tool_call_id": tool_call_id, "name": tool_name, "content": content}
+                if result.failed and hasattr(self.progress_handler, "on_tool_failure"):
+                    failure_message = (
+                        "Terminal command failed"
+                        if tool_name == "terminal"
+                        else "Sub-agent failed"
+                        if tool_name == "delegate_to_agent"
+                        else f"Tool '{tool_name}' failed"
+                    )
+                    await self.progress_handler.on_tool_failure(failure_message)
+                else:
+                    await self.progress_handler.on_tool_end(
+                        result.content,
+                        run_id=run_id,
+                        metadata=result.trace_meta,
+                    )
+            return {"tool_call_id": tool_call_id, "name": tool_name, "content": result.content}
         except Exception as exc:
             if self.trace_handler:
-                await self.trace_handler.on_tool_error(exc, run_id=run_id)
+                await self.trace_handler.on_tool_error(
+                    exc,
+                    run_id=run_id,
+                    metadata={"tool_name": tool_name},
+                )
             if self.progress_handler and hasattr(self.progress_handler, "on_tool_failure"):
                 await self.progress_handler.on_tool_failure(f"Tool '{tool_name}' failed")
             return {"tool_call_id": tool_call_id, "name": tool_name, "content": f"Tool execution error: {exc}"}
@@ -913,7 +1149,7 @@ class ReactTerminalRuntime:
         messages: list[dict],
         *,
         response_mode: str,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], list[str]]:
         current_user_index = next(
             (
                 index
@@ -936,15 +1172,19 @@ class ReactTerminalRuntime:
                         "text": f"{context_prompt}\n\nCurrent request:",
                     },
                 )
-            return {
-                "content": content_parts,
-                "response_mode": response_mode,
-            }
+            return (
+                {
+                    "content": content_parts,
+                    "response_mode": response_mode,
+                },
+                [],
+            )
 
         prompt_text = self._extract_text_content(current_content)
         if context_prompt:
             prompt_text = f"{context_prompt}\n\nCurrent request:\n{prompt_text}".strip()
         inbox_prompt_inputs = await self._load_native_inbox_prompt_inputs()
+        input_paths = self._extract_input_paths_from_prompt_inputs(inbox_prompt_inputs)
         if inbox_prompt_inputs:
             content = await prepare_turn_content_for_provider(
                 self.provider_client.provider,
@@ -958,15 +1198,21 @@ class ReactTerminalRuntime:
                 include_missing_file_summary=True,
             )
             if isinstance(content, list):
-                return {
-                    "content": content,
-                    "response_mode": response_mode,
-                }
+                return (
+                    {
+                        "content": content,
+                        "response_mode": response_mode,
+                    },
+                    input_paths,
+                )
             prompt_text = str(content or "").strip()
-        return {
-            "prompt": prompt_text,
-            "response_mode": response_mode,
-        }
+        return (
+            {
+                "prompt": prompt_text,
+                "response_mode": response_mode,
+            },
+            input_paths,
+        )
 
     @staticmethod
     def _guess_extension_for_mime(mime_type: str, *, default: str) -> str:
@@ -1211,19 +1457,57 @@ class ReactTerminalRuntime:
         return "\n\n".join(part for part in parts if part).strip() or "No final response produced."
 
     async def _run_native_response_mode(self, messages: list[dict], *, response_mode: str) -> ReactTerminalRunResult:
-        invocation_request = await self._build_native_invocation_request(
+        invocation_request, input_paths = await self._build_native_invocation_request(
             messages,
             response_mode=response_mode,
         )
-        parsed_response = await self.provider_client.invoke_native_completion(
-            invocation_request=invocation_request,
-        )
-        output_paths = await self._materialize_native_outputs(parsed_response)
-        final_answer = self._build_native_final_answer(
-            parsed_response,
-            output_paths=output_paths,
-            response_mode=response_mode,
-        )
+        model_node_id = None
+        if self.trace_handler:
+            model_node_id = await self.trace_handler.start_model_call(
+                label=f"{response_mode.title()} model call",
+                input_preview=self._extract_text_content(
+                    invocation_request.get("content") or invocation_request.get("prompt") or ""
+                ),
+                meta={
+                    **self._provider_trace_meta(response_mode=response_mode),
+                    "messages_count": len(messages),
+                    "tools_enabled": False,
+                    "input_file_paths": input_paths,
+                },
+            )
+        try:
+            parsed_response = await self.provider_client.invoke_native_completion(
+                invocation_request=invocation_request,
+            )
+            output_paths = await self._materialize_native_outputs(parsed_response)
+            final_answer = self._build_native_final_answer(
+                parsed_response,
+                output_paths=output_paths,
+                response_mode=response_mode,
+            )
+            if self.trace_handler and model_node_id:
+                model_meta = {
+                    "output_paths": output_paths,
+                    "input_file_paths": input_paths,
+                }
+                token_usage = self._build_token_usage_meta(
+                    self._extract_native_total_tokens(parsed_response),
+                )
+                if token_usage:
+                    model_meta["token_usage"] = token_usage
+                await self.trace_handler.complete_model_call(
+                    model_node_id,
+                    output_preview=str(parsed_response.get("text") or "").strip() or final_answer,
+                    meta=model_meta,
+                )
+        except Exception as exc:
+            if self.trace_handler and model_node_id:
+                await self.trace_handler.fail_model_call(
+                    model_node_id,
+                    error=str(exc),
+                    meta={"input_file_paths": input_paths},
+                )
+            raise
         return ReactTerminalRunResult(
             final_answer=final_answer,
             real_tokens=self._extract_native_total_tokens(parsed_response),
@@ -1370,11 +1654,15 @@ class ReactTerminalRuntime:
                     )
                 )
 
-            await self._record_progress("Preparing React Terminal context")
+            await self._record_progress("Preparing context")
             effective_response_mode = await self._get_effective_response_mode()
+            if self.trace_handler:
+                await self.trace_handler.update_root_meta(
+                    self._provider_trace_meta(response_mode=effective_response_mode),
+                )
             if effective_response_mode in {"image", "audio"}:
                 await self._record_progress(
-                    f"Generating native {effective_response_mode} response"
+                    f"Generating native {effective_response_mode}"
                 )
                 result = await self._run_native_response_mode(
                     messages,
@@ -1390,13 +1678,58 @@ class ReactTerminalRuntime:
             approx_tokens = None
 
             for iteration in range(max_iterations):
-                await self._record_progress(f"Generating model response ({iteration + 1}/{max_iterations})")
-                response = await self._create_model_response(messages)
+                await self._record_progress(f"Calling model ({iteration + 1}/{max_iterations})")
+                model_node_id = None
+                if self.trace_handler:
+                    model_node_id = await self.trace_handler.start_model_call(
+                        label=f"Model call {iteration + 1}",
+                        input_preview=self._extract_text_content(messages[-1].get("content") if messages else ""),
+                        meta={
+                            **self._provider_trace_meta(response_mode=effective_response_mode),
+                            "iteration": iteration + 1,
+                            "messages_count": len(messages),
+                            "tools_enabled": bool(self.tools_enabled),
+                        },
+                    )
+                try:
+                    response = await self._create_model_response(messages)
+                except Exception as exc:
+                    if self.trace_handler and model_node_id:
+                        await self.trace_handler.fail_model_call(
+                            model_node_id,
+                            error=str(exc),
+                            meta={"iteration": iteration + 1},
+                        )
+                    raise
                 assistant_message = {
                     "role": "assistant",
                     "content": str(response.get("content") or ""),
                 }
                 tool_calls = list(response.get("tool_calls") or [])
+                tool_call_names = [
+                    str(item.get("name") or "").strip()
+                    for item in tool_calls
+                    if str(item.get("name") or "").strip()
+                ]
+                if self.trace_handler and model_node_id:
+                    model_meta = {
+                        "iteration": iteration + 1,
+                        "tool_call_names": tool_call_names,
+                        "streamed": bool(response.get("streamed")),
+                    }
+                    token_usage = self._build_token_usage_meta(response.get("total_tokens"))
+                    if token_usage:
+                        model_meta["token_usage"] = token_usage
+                    if response.get("streaming_fallback"):
+                        model_meta["streaming_fallback"] = True
+                    await self.trace_handler.complete_model_call(
+                        model_node_id,
+                        output_preview=self._summarize_response_output(
+                            response,
+                            tool_call_names=tool_call_names,
+                        ),
+                        meta=model_meta,
+                    )
                 if tool_calls:
                     assistant_message["tool_calls"] = [
                         {

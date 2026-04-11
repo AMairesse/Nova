@@ -1019,3 +1019,19 @@ class VirtualFileSystem:
                 item.mime_type,
             )
         return snapshot
+
+    async def snapshot_visible_files(
+        self,
+        *,
+        include_inbox: bool = False,
+    ) -> dict[str, tuple[int | None, int, str]]:
+        snapshot: dict[str, tuple[int | None, int, str]] = {}
+        for item in await self._load_real_files():
+            if not include_inbox and (item.path == INBOX_ROOT or item.path.startswith(f"{INBOX_ROOT}/")):
+                continue
+            snapshot[item.path] = (
+                getattr(item.user_file, "id", None),
+                item.size,
+                item.mime_type,
+            )
+        return snapshot

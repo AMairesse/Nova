@@ -23,6 +23,15 @@
             });
         }
 
+        setExecutionTraceButton(taskId, visible = true) {
+            const button = document.getElementById('task-progress-trace-btn');
+            if (!button) {
+                return;
+            }
+            button.dataset.taskId = visible ? String(taskId || '') : '';
+            button.classList.toggle('d-none', !visible || !taskId);
+        }
+
         createMessageElement(task_id) {
             // Create agent message element with a streaming class
             const agentMessageEl = window.MessageRenderer.createMessageElement({
@@ -55,6 +64,7 @@
                     spinner.classList.remove('d-none');
                 }
             }
+            this.setExecutionTraceButton(taskId, true);
 
             // Disable input area while agent is working
             this.setInputAreaDisabled(true);
@@ -108,6 +118,7 @@
                 if (progressDiv) {
                     setTimeout(() => {
                         progressDiv.classList.add('d-none');
+                        this.setExecutionTraceButton('', false);
                     }, 3000); // Hide progress after 3 seconds
                 }
 
@@ -157,6 +168,7 @@
                     const progressLogs = document.getElementById('progress-logs');
                     const log = data.progress_log || "undefined";
                     if (progressLogs) progressLogs.textContent = log;
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                 },
                 'response_chunk': (data) => {
                     this.onStreamChunk(taskId, data.chunk);
@@ -215,6 +227,7 @@
                     if (data.thread_id && data.thread_subject) {
                         this.updateThreadSubject(data.thread_id, data.thread_subject);
                     }
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onStreamComplete(taskId);
                     requestSidebarRefresh({
                         files: true,
@@ -227,9 +240,11 @@
                     this.updateThreadSubject(data.thread_id, data.thread_subject);
                 },
                 'user_prompt': (data) => {
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onUserPrompt(taskId, data);
                 },
                 'interaction_update': (data) => {
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onInteractionUpdate(taskId, data);
                 },
 
@@ -246,6 +261,7 @@
                 },
 
                 'task_error': (data) => {
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onTaskError(taskId, data);
                     requestSidebarRefresh({
                         files: true,
@@ -295,6 +311,7 @@
                     progressLogs.textContent = "Processing...";
                 }
             }
+            this.setExecutionTraceButton(taskId, true);
 
             // Start WebSocket connection for progress updates
             this.startWebSocket(taskId);
@@ -325,6 +342,7 @@
                     spinner.classList.remove('d-none');
                 }
             }
+            this.setExecutionTraceButton(taskId, true);
 
             // Set last known progress message
             const progressLogs = document.getElementById('progress-logs');
@@ -582,6 +600,7 @@
             if (progressLogs) {
                 progressLogs.textContent = error.message || gettext('An error occurred.');
             }
+            this.setExecutionTraceButton(taskId, true);
             // Re-enable input area on error
             this.setInputAreaDisabled(false);
         }
