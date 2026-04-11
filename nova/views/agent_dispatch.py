@@ -1,11 +1,12 @@
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 
-from nova.agent_execution import requires_tools_for_run
+from nova.agent_execution import requires_tools_for_run, resolve_effective_response_mode
 from nova.message_attachments import detect_attachment_kind
 from nova.message_panel import get_user_default_agent
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Thread import Thread
+from nova.providers.registry import provider_supports_native_response_mode
 from nova.runtime.support import get_runtime_error
 from nova.tasks.tasks import create_and_dispatch_agent_task
 from nova.turn_inputs import is_modality_explicitly_unavailable
@@ -60,7 +61,12 @@ def get_agent_execution_capability_error(
     thread_mode: str | None,
     response_mode: str = "text",
 ) -> str | None:
-    runtime_error = get_runtime_error(agent_config, thread_mode=thread_mode)
+    effective_response_mode = resolve_effective_response_mode(agent_config, response_mode)
+    runtime_error = get_runtime_error(
+        agent_config,
+        thread_mode=thread_mode,
+        response_mode=effective_response_mode,
+    )
     if runtime_error:
         return runtime_error
 
@@ -71,15 +77,23 @@ def get_agent_execution_capability_error(
     if provider.is_capability_explicitly_unavailable("tools") and requires_tools_for_run(
         agent_config,
         thread_mode,
+        response_mode=effective_response_mode,
     ):
         return _(
             "The selected provider does not support tool use, but this agent depends on tools or sub-agents."
         )
 
-    normalized_response_mode = str(response_mode or "text").strip().lower()
-    if normalized_response_mode == "image" and provider.get_known_snapshot_status("outputs", "image") == "unsupported":
+    if (
+        effective_response_mode in {"image", "audio"}
+        and not provider_supports_native_response_mode(provider, effective_response_mode)
+    ):
+        return _(
+            "The selected provider does not support native %(mode)s output in Nova."
+        ) % {"mode": effective_response_mode}
+
+    if effective_response_mode == "image" and provider.get_known_snapshot_status("outputs", "image") == "unsupported":
         return _("The selected provider does not support image output for this model.")
-    if normalized_response_mode == "audio" and provider.get_known_snapshot_status("outputs", "audio") == "unsupported":
+    if effective_response_mode == "audio" and provider.get_known_snapshot_status("outputs", "audio") == "unsupported":
         return _("The selected provider does not support audio output for this model.")
 
     return None

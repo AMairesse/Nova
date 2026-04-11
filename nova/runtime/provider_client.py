@@ -4,6 +4,9 @@ from typing import Awaitable, Callable
 
 from nova.providers.registry import (
     complete_provider_chat,
+    invoke_native_provider,
+    parse_native_provider_response,
+    provider_supports_native_response_mode,
     stream_provider_chat,
 )
 
@@ -47,3 +50,10 @@ class ProviderClient:
             tools=tools,
             on_content_delta=on_content_delta,
         )
+
+    def supports_native_response_mode(self, response_mode: str) -> bool:
+        return provider_supports_native_response_mode(self.provider, response_mode)
+
+    async def invoke_native_completion(self, *, invocation_request: dict) -> dict:
+        raw_response = await invoke_native_provider(self.provider, invocation_request)
+        return await parse_native_provider_response(self.provider, raw_response)

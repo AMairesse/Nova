@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import mimetypes
 import posixpath
 import re
 import uuid
@@ -8,10 +11,17 @@ from copy import deepcopy
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from asgiref.sync import sync_to_async
 
-from nova.agent_execution import provider_tools_explicitly_unavailable, requires_tools_for_run
+from nova.agent_execution import (
+    provider_tools_explicitly_unavailable,
+    requires_tools_for_run,
+    resolve_effective_response_mode,
+)
 from nova.continuous.context_builder import load_continuous_context
 from nova.models.Message import Actor, Message, MessageType
 from nova.models.Thread import Thread
@@ -56,6 +66,10 @@ class ReactTerminalRuntime:
         r'^\s*\{\s*"command"\s*:\s*"(.*)"\s*\}\s*$',
         re.DOTALL,
     )
+    _DATA_URL_RE = re.compile(
+        r"^data:(?P<mime>[^;,]+)?(?:;charset=[^;,]+)?;base64,(?P<data>.+)$",
+        re.IGNORECASE | re.DOTALL,
+    )
 
     def __init__(
         self,
@@ -96,6 +110,8 @@ class ReactTerminalRuntime:
         self.vfs = None
         self.terminal = None
         self._llm_provider = None
+        self._requested_response_mode = None
+        self._effective_response_mode = None
         self.tools_enabled = True
 
     async def _get_llm_provider(self):
@@ -118,11 +134,62 @@ class ReactTerminalRuntime:
         self._llm_provider = provider
         return provider
 
+    def _has_explicit_tool_dependencies(self) -> bool:
+        plugin_ids = set((self.capabilities.plugins or {}).keys()) - {"terminal", "history"}
+        return bool(plugin_ids or list(self.capabilities.subagents or []))
+
+    async def _load_requested_response_mode(self) -> str | None:
+        if self.source_message_id is None:
+            return None
+
+        def _load():
+            message = (
+                Message.objects.filter(
+                    id=self.source_message_id,
+                    user=self.user,
+                    thread=self.thread,
+                )
+                .only("internal_data")
+                .first()
+            )
+            internal_data = message.internal_data if message and isinstance(message.internal_data, dict) else {}
+            return internal_data.get("response_mode")
+
+        return await sync_to_async(_load, thread_sensitive=True)()
+
+    async def _get_requested_response_mode(self) -> str | None:
+        if self._requested_response_mode is None:
+            self._requested_response_mode = await self._load_requested_response_mode()
+        return self._requested_response_mode
+
+    async def _get_effective_response_mode(self) -> str:
+        if self._effective_response_mode is None:
+            self._effective_response_mode = resolve_effective_response_mode(
+                self.agent_config,
+                await self._get_requested_response_mode(),
+            )
+        return self._effective_response_mode
+
     async def initialize(self):
         self.capabilities = await sync_to_async(resolve_terminal_capabilities, thread_sensitive=True)(self.agent_config)
+        effective_response_mode = await self._get_effective_response_mode()
         provider = await self._get_llm_provider()
-        self.tools_enabled = not provider_tools_explicitly_unavailable(provider)
-        if not self.tools_enabled and requires_tools_for_run(self.agent_config, getattr(self.thread, "mode", None)):
+        self.tools_enabled = (
+            effective_response_mode == "text" and not provider_tools_explicitly_unavailable(provider)
+        )
+        self.provider_client = ProviderClient(provider)
+        if effective_response_mode in {"image", "audio"} and not self.provider_client.supports_native_response_mode(
+            effective_response_mode
+        ):
+            raise ValueError(
+                f"The selected provider is not wired for native {effective_response_mode} output in Nova."
+            )
+        if not self.tools_enabled and requires_tools_for_run(
+            self.agent_config,
+            getattr(self.thread, "mode", None),
+            explicit_tool_dependency=self._has_explicit_tool_dependencies(),
+            response_mode=effective_response_mode,
+        ):
             raise ValueError(
                 "The selected provider does not support tool use, but this agent depends on tools or sub-agents."
             )
@@ -153,7 +220,6 @@ class ReactTerminalRuntime:
         if self.progress_handler:
             self.terminal.realtime_task_id = getattr(self.progress_handler, "task_id", None)
             self.terminal.realtime_channel_layer = getattr(self.progress_handler, "channel_layer", None)
-        self.provider_client = ProviderClient(await self._get_llm_provider())
         return self
 
     def build_system_prompt(self) -> str:
@@ -167,7 +233,7 @@ class ReactTerminalRuntime:
         extra_guidance: list[str] = [
             "Create text files with `touch`, `tee`, or text shell redirection. "
             "Text pipelines and `<`, `>`, `>>` redirections are supported, "
-            "but this is not a full shell: do not rely on `&&`, `||`, `;`, or command substitution.",
+            "but this is not a full shell: do not rely on heredocs, `&&`, `||`, `;`, or command substitution.",
         ]
         if not self.tools_enabled:
             extra_guidance.append(
@@ -648,10 +714,13 @@ class ReactTerminalRuntime:
                 meta={"output_paths": copied_outputs},
             )
 
+        status_line = (
+            f"Sub-agent {subagent_label} finished with {len(copied_outputs)} output file(s)."
+        )
         output_suffix = ""
         if copied_outputs:
             output_suffix = "\nOutput files copied back to the parent runtime:\n" + "\n".join(copied_outputs)
-        return f"Sub-agent {subagent_label} finished.\n\n{answer}{output_suffix}"
+        return f"{status_line}\n\n{answer}{output_suffix}"
 
     @classmethod
     def _repair_single_terminal_command_payload(cls, raw_arguments: str) -> dict[str, str] | None:
@@ -729,6 +798,311 @@ class ReactTerminalRuntime:
             if self.progress_handler and hasattr(self.progress_handler, "on_tool_failure"):
                 await self.progress_handler.on_tool_failure(f"Tool '{tool_name}' failed")
             return {"tool_call_id": tool_call_id, "name": tool_name, "content": f"Tool execution error: {exc}"}
+
+    @staticmethod
+    def _extract_text_content(content: Any) -> str:
+        if isinstance(content, str):
+            return str(content).strip()
+        if not isinstance(content, list):
+            return str(content or "").strip()
+
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    parts.append(text)
+                continue
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type in {"text", "output_text"}:
+                text = str(item.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+            elif item_type == "refusal":
+                text = str(item.get("refusal") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+
+    def _build_native_context_prompt(self, messages: list[dict], current_user_index: int) -> str:
+        context_lines: list[str] = []
+        for message in messages[:current_user_index]:
+            role = str(message.get("role") or "").strip().lower()
+            if role == "tool":
+                continue
+            text = self._extract_text_content(message.get("content"))
+            if not text:
+                continue
+            if role == "system":
+                label = "System"
+            elif role == "assistant":
+                label = "Assistant"
+            else:
+                label = "User"
+            context_lines.append(f"{label}:\n{text}")
+        return "\n\n".join(context_lines).strip()
+
+    def _build_native_invocation_request(
+        self,
+        messages: list[dict],
+        *,
+        response_mode: str,
+    ) -> dict[str, Any]:
+        current_user_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if str(messages[index].get("role") or "").strip().lower() == "user"
+            ),
+            len(messages) - 1,
+        )
+        current_message = messages[current_user_index] if messages else {"content": ""}
+        current_content = current_message.get("content")
+        context_prompt = self._build_native_context_prompt(messages, current_user_index)
+
+        if isinstance(current_content, list):
+            content_parts = deepcopy(list(current_content))
+            if context_prompt:
+                content_parts.insert(
+                    0,
+                    {
+                        "type": "text",
+                        "text": f"{context_prompt}\n\nCurrent request:",
+                    },
+                )
+            return {
+                "content": content_parts,
+                "response_mode": response_mode,
+            }
+
+        prompt_text = self._extract_text_content(current_content)
+        if context_prompt:
+            prompt_text = f"{context_prompt}\n\nCurrent request:\n{prompt_text}".strip()
+        return {
+            "prompt": prompt_text,
+            "response_mode": response_mode,
+        }
+
+    @staticmethod
+    def _guess_extension_for_mime(mime_type: str, *, default: str) -> str:
+        guessed = mimetypes.guess_extension(str(mime_type or "").strip().lower()) or ""
+        if guessed == ".jpe":
+            return ".jpg"
+        return guessed or default
+
+    @staticmethod
+    def _normalize_output_filename(
+        filename: str | None,
+        *,
+        default_stem: str,
+        mime_type: str,
+        default_extension: str,
+    ) -> str:
+        candidate = posixpath.basename(str(filename or "").strip())
+        stem, extension = posixpath.splitext(candidate)
+        if not stem:
+            stem = default_stem
+        if not extension:
+            extension = ReactTerminalRuntime._guess_extension_for_mime(
+                mime_type,
+                default=default_extension,
+            )
+        return f"{stem}{extension}"
+
+    async def _allocate_generated_output_path(self, filename: str) -> str:
+        await self.vfs.mkdir("/generated")
+        candidate = f"/generated/{filename}"
+        if not await self.vfs.path_exists(candidate):
+            return candidate
+
+        stem, extension = posixpath.splitext(filename)
+        for index in range(2, 1000):
+            candidate = f"/generated/{stem}-{index}{extension}"
+            if not await self.vfs.path_exists(candidate):
+                return candidate
+        raise ValueError(f"Could not allocate a unique output filename for {filename}.")
+
+    @classmethod
+    def _decode_data_url(cls, payload: str) -> tuple[bytes, str]:
+        match = cls._DATA_URL_RE.match(str(payload or "").strip())
+        if not match:
+            raise ValueError("Unsupported data URL payload.")
+        mime_type = str(match.group("mime") or "application/octet-stream").strip()
+        encoded = str(match.group("data") or "").strip()
+        try:
+            return base64.b64decode(encoded, validate=False), mime_type
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("Invalid base64 data URL payload.") from exc
+
+    @staticmethod
+    def _decode_base64_payload(payload: str) -> bytes:
+        encoded = "".join(str(payload or "").split())
+        if not encoded:
+            raise ValueError("Empty base64 payload.")
+        padding = "=" * ((4 - len(encoded) % 4) % 4)
+        try:
+            return base64.b64decode(encoded + padding, validate=False)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("Invalid base64 payload.") from exc
+
+    async def _resolve_binary_output_payload(
+        self,
+        payload: str,
+        *,
+        default_mime_type: str,
+    ) -> tuple[bytes, str]:
+        normalized = str(payload or "").strip()
+        if not normalized:
+            raise ValueError("Empty binary output payload.")
+        if normalized.startswith("data:"):
+            return self._decode_data_url(normalized)
+
+        parsed_url = urlparse(normalized)
+        if parsed_url.scheme in {"http", "https"}:
+            timeout = httpx.Timeout(60.0, connect=10.0)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                response = await client.get(normalized)
+                response.raise_for_status()
+            mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip()
+            return bytes(response.content), (mime_type or default_mime_type)
+
+        return self._decode_base64_payload(normalized), default_mime_type
+
+    @staticmethod
+    def _coerce_audio_entries(audio_payload: Any) -> list[dict[str, str]]:
+        raw_entries = audio_payload if isinstance(audio_payload, list) else [audio_payload] if audio_payload else []
+        entries: list[dict[str, str]] = []
+        for entry in raw_entries:
+            if isinstance(entry, str):
+                entries.append({"data": entry, "mime_type": "audio/wav", "filename": ""})
+                continue
+            if not isinstance(entry, dict):
+                continue
+            nested = entry.get("audio") if isinstance(entry.get("audio"), dict) else {}
+            data = (
+                entry.get("data")
+                or entry.get("b64_json")
+                or entry.get("url")
+                or nested.get("data")
+                or nested.get("b64_json")
+                or nested.get("url")
+                or ""
+            )
+            if not data:
+                continue
+            entries.append(
+                {
+                    "data": str(data).strip(),
+                    "mime_type": str(
+                        entry.get("mime_type")
+                        or entry.get("media_type")
+                        or nested.get("mime_type")
+                        or nested.get("media_type")
+                        or "audio/wav"
+                    ).strip(),
+                    "filename": str(entry.get("filename") or nested.get("filename") or "").strip(),
+                }
+            )
+        return entries
+
+    async def _materialize_native_outputs(self, parsed_response: dict[str, Any]) -> list[str]:
+        output_paths: list[str] = []
+
+        for index, image_entry in enumerate(list(parsed_response.get("images") or []), start=1):
+            if not isinstance(image_entry, dict):
+                continue
+            payload = str(image_entry.get("data") or "").strip()
+            if not payload:
+                continue
+            mime_type = str(image_entry.get("mime_type") or "image/png").strip() or "image/png"
+            filename = self._normalize_output_filename(
+                image_entry.get("filename"),
+                default_stem=f"generated-image-{index}",
+                mime_type=mime_type,
+                default_extension=".png",
+            )
+            content, resolved_mime_type = await self._resolve_binary_output_payload(
+                payload,
+                default_mime_type=mime_type,
+            )
+            target_path = await self._allocate_generated_output_path(filename)
+            await self.vfs.write_file(target_path, content, mime_type=resolved_mime_type)
+            output_paths.append(target_path)
+
+        for index, audio_entry in enumerate(self._coerce_audio_entries(parsed_response.get("audio")), start=1):
+            payload = str(audio_entry.get("data") or "").strip()
+            if not payload:
+                continue
+            mime_type = str(audio_entry.get("mime_type") or "audio/wav").strip() or "audio/wav"
+            filename = self._normalize_output_filename(
+                audio_entry.get("filename"),
+                default_stem=f"generated-audio-{index}",
+                mime_type=mime_type,
+                default_extension=".wav",
+            )
+            content, resolved_mime_type = await self._resolve_binary_output_payload(
+                payload,
+                default_mime_type=mime_type,
+            )
+            target_path = await self._allocate_generated_output_path(filename)
+            await self.vfs.write_file(target_path, content, mime_type=resolved_mime_type)
+            output_paths.append(target_path)
+
+        await self._persist_session()
+        return output_paths
+
+    @staticmethod
+    def _extract_native_total_tokens(parsed_response: dict[str, Any]) -> int | None:
+        raw_response = parsed_response.get("raw_response") if isinstance(parsed_response, dict) else {}
+        usage = raw_response.get("usage") if isinstance(raw_response, dict) else {}
+        total_tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+        try:
+            return int(total_tokens) if total_tokens is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _build_native_final_answer(
+        parsed_response: dict[str, Any],
+        *,
+        output_paths: list[str],
+        response_mode: str,
+    ) -> str:
+        parts: list[str] = []
+        text = str(parsed_response.get("text") or "").strip()
+        if text:
+            parts.append(text)
+        if output_paths:
+            label = "Generated file:" if len(output_paths) == 1 else "Generated files:"
+            parts.append(label + "\n" + "\n".join(f"- `{path}`" for path in output_paths))
+        elif response_mode == "image":
+            parts.append("No image file was produced.")
+        elif response_mode == "audio":
+            parts.append("No audio file was produced.")
+        return "\n\n".join(part for part in parts if part).strip() or "No final response produced."
+
+    async def _run_native_response_mode(self, messages: list[dict], *, response_mode: str) -> ReactTerminalRunResult:
+        invocation_request = self._build_native_invocation_request(
+            messages,
+            response_mode=response_mode,
+        )
+        parsed_response = await self.provider_client.invoke_native_completion(
+            invocation_request=invocation_request,
+        )
+        output_paths = await self._materialize_native_outputs(parsed_response)
+        final_answer = self._build_native_final_answer(
+            parsed_response,
+            output_paths=output_paths,
+            response_mode=response_mode,
+        )
+        return ReactTerminalRunResult(
+            final_answer=final_answer,
+            real_tokens=self._extract_native_total_tokens(parsed_response),
+            approx_tokens=self._approximate_tokens(messages, final_answer=final_answer),
+            max_context=self.provider_client.max_context_tokens,
+        )
 
     async def _create_model_response(self, messages: list[dict]) -> dict:
         if not self.progress_handler:
@@ -870,6 +1244,18 @@ class ReactTerminalRuntime:
                 )
 
             await self._record_progress("Preparing React Terminal context")
+            effective_response_mode = await self._get_effective_response_mode()
+            if effective_response_mode in {"image", "audio"}:
+                await self._record_progress(
+                    f"Generating native {effective_response_mode} response"
+                )
+                result = await self._run_native_response_mode(
+                    messages,
+                    response_mode=effective_response_mode,
+                )
+                await self._complete_stream()
+                await self._record_progress("Finalizing response")
+                return result
 
             max_iterations = max(int(getattr(self.agent_config, "recursion_limit", 8) or 8), 1)
             final_answer = ""

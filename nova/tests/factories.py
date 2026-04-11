@@ -30,7 +30,7 @@ def create_provider(user, provider_type=ProviderType.OLLAMA, name="Test Provider
 
 def create_agent(user, provider, name="Test Agent",
                  system_prompt="You are a helpful assistant.",
-                 is_tool=False, tool_description=""):
+                 is_tool=False, tool_description="", default_response_mode="text"):
     return AgentConfig.objects.create(
         user=user,
         name=name,
@@ -38,6 +38,7 @@ def create_agent(user, provider, name="Test Agent",
         system_prompt=system_prompt,
         is_tool=is_tool,
         tool_description=tool_description,
+        default_response_mode=default_response_mode,
     )
 
 

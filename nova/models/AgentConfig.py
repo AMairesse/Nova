@@ -9,6 +9,11 @@ from nova.models.Thread import Thread
 
 
 class AgentConfig(models.Model):
+    class DefaultResponseMode(models.TextChoices):
+        TEXT = "text", _("Text")
+        IMAGE = "image", _("Image")
+        AUDIO = "audio", _("Audio")
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='user_agents',
@@ -46,6 +51,13 @@ class AgentConfig(models.Model):
         null=True,
         verbose_name=_("Tool description"),
         help_text=_("Description of this agent when used as a tool (required if is_tool=True)")
+    )
+    default_response_mode = models.CharField(
+        max_length=16,
+        choices=DefaultResponseMode.choices,
+        default=DefaultResponseMode.TEXT,
+        verbose_name=_("Default response mode"),
+        help_text=_("Default output type used when the user has not explicitly selected a response mode."),
     )
 
     # Summarization settings

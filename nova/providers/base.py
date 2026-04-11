@@ -125,3 +125,6 @@ class BaseProviderAdapter:
 
     async def parse_native_response(self, provider, raw_response: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
+
+    def supports_native_response_mode(self, provider, response_mode: str) -> bool:
+        return False

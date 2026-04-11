@@ -10,6 +10,7 @@ from nova.models.Message import Actor, Message
 from nova.tasks.TaskExecutor import TaskExecutor
 from nova.thread_titles import is_default_thread_subject
 from nova.utils import markdown_to_html
+from nova.agent_execution import resolve_effective_response_mode
 
 from .agent import (
     ReactTerminalInterruptResult,
@@ -32,6 +33,25 @@ logger = logging.getLogger(__name__)
 
 
 class ReactTerminalTaskExecutor(TaskExecutor):
+    async def _get_requested_response_mode(self) -> str | None:
+        if not self.source_message_id:
+            return None
+
+        def _load_response_mode():
+            message = (
+                Message.objects.filter(
+                    pk=self.source_message_id,
+                    thread=self.thread,
+                    user=self.user,
+                )
+                .only("internal_data")
+                .first()
+            )
+            internal_data = message.internal_data if message and isinstance(message.internal_data, dict) else {}
+            return internal_data.get("response_mode")
+
+        return await sync_to_async(_load_response_mode, thread_sensitive=True)()
+
     async def _create_prompt(self):
         if not self.source_message_id:
             return self.prompt
@@ -70,9 +90,14 @@ class ReactTerminalTaskExecutor(TaskExecutor):
         return streamed_markdown
 
     async def _create_llm_agent(self):
+        effective_response_mode = resolve_effective_response_mode(
+            self.agent_config,
+            await self._get_requested_response_mode(),
+        )
         runtime_error = get_runtime_error(
             self.agent_config,
             thread_mode=getattr(self.thread, "mode", None),
+            response_mode=effective_response_mode,
         )
         if runtime_error:
             raise ValueError(runtime_error)

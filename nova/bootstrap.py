@@ -5,6 +5,7 @@ from typing import List, Dict, Optional, Tuple
 from django.db import transaction
 from django.db.models import Q
 
+from nova.providers.registry import provider_supports_native_response_mode
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
 from nova.models.Tool import Tool, ToolCredential, check_and_create_searxng_tool, check_and_create_judge0_tool
@@ -106,6 +107,8 @@ def select_bootstrap_image_provider(user) -> Optional[LLMProvider]:
         image_output_status = provider.known_image_output_status
         image_generation_status = provider.get_known_capability_status("image_generation") or ""
         if image_output_status != "pass" and image_generation_status != "pass":
+            continue
+        if not provider_supports_native_response_mode(provider, AgentConfig.DefaultResponseMode.IMAGE):
             continue
 
         image_input_status = provider.known_image_input_status
@@ -323,6 +326,7 @@ def _ensure_agent(
     special_tools: Optional[List[Tool]] = None,
     sub_agents: Optional[List[AgentConfig]] = None,
     set_as_default: bool = False,
+    default_response_mode: str = AgentConfig.DefaultResponseMode.TEXT,
 ) -> Optional[AgentConfig]:
     """
     Generic function to ensure an agent exists with proper configuration.
@@ -348,6 +352,7 @@ def _ensure_agent(
             "recursion_limit": recursion_limit,
             "is_tool": is_tool,
             "tool_description": tool_description,
+            "default_response_mode": default_response_mode,
         },
     )
     if created and name not in summary.created_agents:
@@ -371,6 +376,10 @@ def _ensure_agent(
 
     if agent.recursion_limit < recursion_limit:
         agent.recursion_limit = recursion_limit
+        changed = True
+
+    if agent.default_response_mode != default_response_mode:
+        agent.default_response_mode = default_response_mode
         changed = True
 
     if changed:
@@ -427,6 +436,7 @@ def ensure_internet_agent(user, provider, tools: Dict[str, Tool], summary: Boots
         recursion_limit=100,
         is_tool=True,
         tool_description="Use this agent to retrieve information from the internet.",
+        default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
 
 
@@ -452,6 +462,7 @@ def ensure_code_agent(user, provider, tools: Dict[str, Tool], summary: Bootstrap
         tool_description=(
             "Use this agent to create and execute code or process data using sandboxed runtimes."
         ),
+        default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
 
 
@@ -482,10 +493,16 @@ def ensure_image_agent(
 ) -> Optional[AgentConfig]:
     existing = AgentConfig.objects.filter(user=user, name="Image Agent").first()
     selected_provider = existing.llm_provider if existing else provider
-    if selected_provider is None:
+    if (
+        selected_provider is None
+        or not provider_supports_native_response_mode(
+            selected_provider,
+            AgentConfig.DefaultResponseMode.IMAGE,
+        )
+    ):
         summary.skipped_agents.append({
             "name": "Image Agent",
-            "reason": "No image-capable provider with current capabilities is available.",
+            "reason": "No provider with native image output support is available.",
         })
         return None
 
@@ -501,8 +518,9 @@ def ensure_image_agent(
         is_tool=True,
         tool_description=(
             "Use this agent to generate or transform images from text instructions and optional media inputs. "
-            "Pass file_ids only for thread file IDs returned by file_ls."
+            "When you pass files into the delegated task, read them from `/inbox` and produce persisted image files."
         ),
+        default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
     )
 
 
@@ -546,6 +564,7 @@ def ensure_nova_agent(
         special_tools=special_tools,
         sub_agents=sub_agents,
         set_as_default=True,
+        default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
     if not nova_agent:
         return None

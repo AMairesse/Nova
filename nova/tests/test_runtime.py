@@ -2040,6 +2040,46 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.thread = Thread.objects.create(user=self.user, subject="Test thread")
         self.thread.add_message("Check the current directory.", Actor.USER)
 
+    def _apply_provider_capabilities(
+        self,
+        provider,
+        *,
+        tools="unknown",
+        image_input="unknown",
+        image_output="unknown",
+        image_generation="unknown",
+        audio_output="unknown",
+    ):
+        provider.apply_declared_capabilities(
+            {
+                "metadata_source_label": "Runtime test metadata",
+                "inputs": {
+                    "text": "pass",
+                    "image": image_input,
+                    "pdf": "unknown",
+                    "audio": "unknown",
+                },
+                "outputs": {
+                    "text": "pass",
+                    "image": image_output,
+                    "audio": audio_output,
+                },
+                "operations": {
+                    "chat": "pass",
+                    "streaming": "pass",
+                    "tools": tools,
+                    "vision": "pass" if image_input == "pass" else "unknown",
+                    "structured_output": "unknown",
+                    "reasoning": "unknown",
+                    "image_generation": image_generation,
+                    "audio_generation": "unknown",
+                },
+                "limits": {"context_tokens": 100000},
+                "model_state": {},
+            }
+        )
+        provider.refresh_from_db()
+
     def _create_webdav_tool(
         self,
         *,
@@ -2885,6 +2925,163 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("continuous thread", prompt)
         self.assertIn("history search", prompt)
         self.assertIn("history get", prompt)
+
+    @patch("nova.runtime.provider_client.ProviderClient.invoke_native_completion", new_callable=AsyncMock)
+    def test_native_image_response_writes_generated_file_when_requested(self, mocked_native_completion):
+        png_data_url = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmXcAAAAASUVORK5CYII="
+        )
+        native_provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenRouter Images",
+            provider_type=ProviderType.OPENROUTER,
+            model="openai/gpt-image-1",
+            api_key="router-key",
+        )
+        self._apply_provider_capabilities(
+            native_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+        image_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Runtime Agent",
+            llm_provider=native_provider,
+            system_prompt="Generate images.",
+            recursion_limit=4,
+            default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
+        )
+        source_message = self.thread.add_message("Create a flyer.", Actor.USER)
+        source_message.internal_data = {"response_mode": "image"}
+        source_message.save(update_fields=["internal_data"])
+        mocked_native_completion.return_value = {
+            "text": "Poster ready.",
+            "images": [
+                {
+                    "data": png_data_url,
+                    "mime_type": "image/png",
+                    "filename": "poster.png",
+                }
+            ],
+            "audio": None,
+            "raw_response": {"usage": {"total_tokens": 42}},
+        }
+        self._stored_contents = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=image_agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime.run)(ephemeral_user_prompt="Create a flyer.")
+            generated_paths = async_to_sync(runtime.vfs.find)("/generated", "")
+            generated_path = next(path for path in generated_paths if path.endswith("poster.png"))
+            generated_content, generated_mime = async_to_sync(runtime.vfs.read_bytes)(generated_path)
+
+        self.assertIn("Poster ready.", result.final_answer)
+        self.assertIn("`/generated/poster.png`", result.final_answer)
+        self.assertTrue(generated_content.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(generated_mime, "image/png")
+
+    @patch("nova.runtime.provider_client.ProviderClient.invoke_native_completion", new_callable=AsyncMock)
+    def test_delegate_to_native_image_subagent_copies_generated_file_back(self, mocked_native_completion):
+        png_data_url = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmXcAAAAASUVORK5CYII="
+        )
+        child_provider = LLMProvider.objects.create(
+            user=self.user,
+            name="OpenRouter Image Child",
+            provider_type=ProviderType.OPENROUTER,
+            model="openai/gpt-image-1",
+            api_key="router-key",
+        )
+        self._apply_provider_capabilities(
+            child_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Image Child",
+            llm_provider=child_provider,
+            system_prompt="Generate images.",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Image child",
+            default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
+        )
+        self.agent.agent_tools.add(child_agent)
+        mocked_native_completion.return_value = {
+            "text": "Generated.",
+            "images": [
+                {
+                    "data": png_data_url,
+                    "mime_type": "image/png",
+                    "filename": "flyer.png",
+                }
+            ],
+            "audio": None,
+            "raw_response": {},
+        }
+        self._stored_contents = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(user_file):
+            return self._stored_contents.get(user_file.key, b"")
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Create a flyer image.",
+                input_paths=[],
+            )
+            copied_paths = async_to_sync(runtime.vfs.find)("/subagents", "")
+            copied_image_path = next(path for path in copied_paths if path.endswith("/generated/flyer.png"))
+            copied_content, copied_mime = async_to_sync(runtime.vfs.read_bytes)(copied_image_path)
+
+        self.assertIn("finished with 1 output file(s)", result)
+        self.assertIn("/subagents/", result)
+        self.assertTrue(copied_content.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(copied_mime, "image/png")
 
     def test_subagent_outputs_are_copied_back_under_subagents_directory(self):
         child_agent = AgentConfig.objects.create(

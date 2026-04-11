@@ -11,6 +11,7 @@ from nova.providers.registry import (
     list_provider_models,
     normalize_multimodal_content_for_provider,
     parse_native_provider_response,
+    provider_supports_native_response_mode,
     prepare_turn_content_for_provider,
     resolve_provider_capability_snapshot,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "list_provider_models",
     "normalize_multimodal_content_for_provider",
     "parse_native_provider_response",
+    "provider_supports_native_response_mode",
     "prepare_turn_content_for_provider",
     "resolve_provider_capability_snapshot",
     "stream_provider_chat",

@@ -105,3 +105,15 @@ async def invoke_native_provider(provider, invocation_request: dict) -> dict:
 
 async def parse_native_provider_response(provider, raw_response: dict) -> dict:
     return await get_provider_adapter(provider).parse_native_response(provider, raw_response)
+
+
+def provider_supports_native_response_mode(provider, response_mode: str) -> bool:
+    try:
+        return bool(
+            get_provider_adapter(provider).supports_native_response_mode(
+                provider,
+                response_mode,
+            )
+        )
+    except Exception:
+        return False

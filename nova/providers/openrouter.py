@@ -516,6 +516,10 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
                 payload["audio"] = audio_options
         return payload
 
+    def supports_native_response_mode(self, provider, response_mode: str) -> bool:
+        normalized = str(response_mode or "").strip().lower()
+        return normalized in {"image", "audio"}
+
     async def invoke_native(self, provider, invocation_request: dict[str, object]) -> dict[str, object]:
         payload = await self.build_native_request(provider, invocation_request)
         headers = {
