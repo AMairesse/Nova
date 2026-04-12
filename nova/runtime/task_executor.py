@@ -19,11 +19,11 @@ from .agent import (
 )
 from .compaction import (
     approximate_token_count_from_text,
-    build_v2_compaction_messages,
+    build_compaction_messages,
     format_messages_for_compaction,
-    get_v2_compaction_error,
-    get_v2_compaction_payload,
-    store_v2_compaction_state,
+    get_compaction_error,
+    get_compaction_payload,
+    store_compaction_state,
 )
 from .provider_client import ProviderClient
 from .sessions import get_or_create_agent_thread_session
@@ -102,7 +102,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
         if runtime_error:
             raise ValueError(runtime_error)
 
-        await self.handler.record_progress("Creating React Terminal runtime")
+        await self.handler.record_progress("Creating Nova runtime")
         await self._ensure_trace_handler()
         self.runtime = await ReactTerminalRuntime(
             user=self.user,
@@ -116,14 +116,14 @@ class ReactTerminalTaskExecutor(TaskExecutor):
         self.llm = None
 
     async def _run_agent(self):
-        await self.handler.record_progress("Running React Terminal agent")
+        await self.handler.record_progress("Running Nova agent")
         ephemeral_prompt = self.prompt
         if isinstance(ephemeral_prompt, str) and not ephemeral_prompt.strip():
             ephemeral_prompt = None
         return await self.runtime.run(ephemeral_user_prompt=ephemeral_prompt)
 
     async def _resume_agent(self, interruption_response):
-        await self.handler.record_progress("Resuming React Terminal agent")
+        await self.handler.record_progress("Resuming Nova agent")
         return await self.runtime.run(
             resume_context=dict(interruption_response.get("resume_context") or {}),
             interruption_response=interruption_response,
@@ -228,7 +228,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
                 max_context=getattr(provider, "max_context_tokens", None),
             )
 
-        await self.handler.record_progress("Processing React Terminal result")
+        await self.handler.record_progress("Processing final response")
         final_answer = run_result.final_answer
         self.task.result = final_answer
 
@@ -299,14 +299,14 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             )
             duration_ms = int((time.perf_counter() - enqueue_start) * 1000)
             logger.debug(
-                "Enqueued v2 thread title generation (thread_id=%s, task_id=%s) in %sms.",
+                "Enqueued thread title generation (thread_id=%s, task_id=%s) in %sms.",
                 getattr(self.thread, "id", None),
                 getattr(self.task, "id", None),
                 duration_ms,
             )
         except Exception as exc:
             logger.warning(
-                "Could not enqueue v2 thread title generation (thread_id=%s, task_id=%s): %s",
+                "Could not enqueue thread title generation (thread_id=%s, task_id=%s): %s",
                 getattr(self.thread, "id", None),
                 getattr(self.task, "id", None),
                 exc,
@@ -340,25 +340,25 @@ class ReactTerminalSummarizationTaskExecutor(TaskExecutor):
         )
         if runtime_error:
             raise ValueError(runtime_error)
-        compaction_error = get_v2_compaction_error(self.thread)
+        compaction_error = get_compaction_error(self.thread)
         if compaction_error:
             raise ValueError(compaction_error)
-        await self.handler.record_progress("Preparing React Terminal compaction")
+        await self.handler.record_progress("Preparing conversation compaction")
         self.provider_client = ProviderClient(await self._get_llm_provider())
         self.session = await get_or_create_agent_thread_session(self.thread, self.agent_config)
         self.llm = None
 
     async def _perform_compaction(self):
-        payload = await get_v2_compaction_payload(self.thread, self.agent_config)
+        payload = await get_compaction_payload(self.thread, self.agent_config)
         state = payload["state"]
         messages_to_compact = list(payload["messages_to_compact"] or [])
         if not messages_to_compact:
-            raise ValueError("Not enough messages to compact for React Terminal.")
+            raise ValueError("Not enough messages to compact.")
 
         transcript = format_messages_for_compaction(messages_to_compact)
         await self.handler.record_progress("Generating compacted history summary")
         completion = await self.provider_client.create_chat_completion(
-            messages=build_v2_compaction_messages(
+            messages=build_compaction_messages(
                 previous_summary=state["summary_markdown"],
                 transcript=transcript,
             ),
@@ -368,7 +368,7 @@ class ReactTerminalSummarizationTaskExecutor(TaskExecutor):
         if not summary_markdown:
             raise ValueError("Compaction produced an empty summary.")
 
-        await store_v2_compaction_state(
+        await store_compaction_state(
             self.session,
             summary_markdown=summary_markdown,
             summary_until_message_id=messages_to_compact[-1].id,
@@ -380,14 +380,14 @@ class ReactTerminalSummarizationTaskExecutor(TaskExecutor):
             )
         )
         summary_tokens = approximate_token_count_from_text(summary_markdown)
-        self.task.result = "React Terminal history compaction completed."
+        self.task.result = "Conversation compaction completed."
         await self.handler.on_summarization_complete(
             summary_markdown,
             original_tokens,
             summary_tokens,
-            "react_terminal",
+            "nova",
         )
-        await self.handler.record_progress("React Terminal compaction completed", severity="success")
+        await self.handler.record_progress("Conversation compaction completed", severity="success")
 
     async def _cleanup(self):
         return None

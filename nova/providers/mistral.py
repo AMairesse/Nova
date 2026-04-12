@@ -10,6 +10,7 @@ from mistralai.client import Mistral
 from nova.providers.base import BaseProviderAdapter, ProviderDefaults
 from nova.providers.openai_compatible import (
     build_openai_compatible_messages,
+    collect_openai_like_stream,
     normalize_openai_compatible_multimodal_content,
     normalize_openai_completion_payload,
 )
@@ -337,6 +338,32 @@ class MistralProviderAdapter(BaseProviderAdapter):
         )
         return normalize_openai_completion_payload(
             response.model_dump(mode="json", exclude_none=True)
+        )
+
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        client = Mistral(
+            api_key=provider.api_key,
+            server_url=get_mistral_base_url(provider.base_url),
+            timeout_ms=60_000,
+        )
+        stream = await client.chat.stream_async(
+            model=provider.model,
+            messages=build_openai_compatible_messages(
+                messages,
+                normalize_content=self.normalize_multimodal_content,
+            ),
+            tools=tools,
+            temperature=0,
+            tool_choice="auto" if tools else None,
+        )
+
+        async def _iter_chunks():
+            async for event in stream:
+                yield getattr(event, "data", event)
+
+        return await collect_openai_like_stream(
+            _iter_chunks(),
+            on_content_delta=on_content_delta,
         )
 
     def normalize_multimodal_content(self, content):

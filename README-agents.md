@@ -1,6 +1,6 @@
 # Nova - Agent Setup Guide
 
-This guide explains how to configure providers, tools, and agents for the current React Terminal runtime.
+This guide explains how to configure providers, capabilities/connections, and agents for the current Nova runtime.
 
 ## Mental Model
 
@@ -49,35 +49,46 @@ Recommended rule:
 | Base URL | `https://openrouter.ai/api/v1` |
 | Max context tokens | `400000` |
 
-## 2. Configure Tools
+## 2. Configure Capabilities and Connections
 
-Attach only the integrations you actually want an agent to use.
+Nova now separates three product concepts:
 
-Common builtins:
+- built-in capabilities that exist by default
+- backend-backed capabilities where one backend is selected per agent
+- user connections that you create only when needed
+
+Attach only the capabilities and connections you actually want an agent to use.
+
+Built-in capabilities available by default:
 
 - `Date / Time`
 - `Browser`
 - `Memory`
 - `WebApp`
+
+Backend-backed capabilities:
+
+- `Search`
+  - deployment default when SearXNG is enabled in Docker
+  - optional custom backends per user
+- `Python`
+  - deployment default when Judge0 is enabled in Docker
+  - optional custom backends per user
+
+Connections you add explicitly:
+
 - `Email`
 - `CalDAV`
 - `WebDAV`
-
-Optional system services:
-
-- `SearXNG` if enabled in Docker
-- `Judge0` if enabled in Docker
-
-Optional external adapters:
-
 - MCP servers
 - custom API services with declared operations
 
 Notes:
 
-- `ask_user` is built into the runtime and is not configured as a tool
-- email and calendar can be configured multiple times for one user
-- MCP tools can use managed OAuth when the server requires it
+- `ask_user` is built into the runtime and is not configured separately
+- email, calendar, WebDAV, MCP, and API connections can be configured multiple times for one user
+- `Search` and `Python` are selected per agent as one backend each
+- MCP connections can use managed OAuth when the server requires it
 
 ### MCP Authentication
 
@@ -92,7 +103,7 @@ Use managed OAuth for MCP servers that return an OAuth challenge, such as You.co
 
 ### Custom API Services
 
-For API tools, define:
+For API connections, define:
 
 - the service endpoint
 - auth mode
@@ -122,6 +133,7 @@ Suggested attached capabilities:
 - `Date / Time`
 - `Memory`
 - `WebApp`
+- `Search` when a backend is available
 - one or more `Email`
 - one or more `CalDAV`
 - optional `WebDAV`
@@ -138,7 +150,7 @@ Suggested delegated sub-agents:
 Suggested attached capabilities:
 
 - `Browser`
-- `SearXNG` when available
+- `Search` when a backend is available
 - optional `Date / Time`
 
 Use it for:
@@ -151,7 +163,7 @@ Use it for:
 
 Suggested attached capabilities:
 
-- `Judge0` when available
+- `Python` when a backend is available
 
 Use it for:
 
@@ -164,6 +176,7 @@ Once configured, agents can use command families such as:
 
 - files: `ls`, `cat`, `find`, `tee`, `mv`, `rm`, ...
 - web: `search`, `browse`, `curl`, `wget`
+- Python: `python ...`
 - memory: `grep`, `memory search`
 - mail: `mail ...`
 - calendar: `calendar ...`
@@ -173,9 +186,12 @@ Once configured, agents can use command families such as:
 
 They also see:
 
+- `/inbox` for files attached to the current user message
+- `/history` for files attached to earlier live messages in the conversation
 - `/skills` for guidance docs
 - `/memory` when memory is attached
 - `/webdav` when WebDAV is attached
+- `/subagents/...` for outputs copied back from delegated sub-agents
 
 ## 5. Long-Term Memory
 

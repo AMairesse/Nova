@@ -116,7 +116,7 @@ class _FakeDownloadStreamResponse:
 
 class RuntimeSupportTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username="v2-user", password="pwd")
+        self.user = User.objects.create_user(username="runtime-user", password="pwd")
         self.provider = LLMProvider.objects.create(
             user=self.user,
             name="OpenAI",
@@ -2718,7 +2718,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with patch(
             "nova.runtime.terminal.caldav_service.update_event",
             new_callable=AsyncMock,
-            side_effect=ValueError("Recurring events are read-only in React Terminal v2."),
+            side_effect=ValueError("Recurring events are read-only in Nova."),
         ):
             with self.assertRaises(TerminalCommandError):
                 async_to_sync(executor.execute)(
@@ -3222,6 +3222,23 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
         self.assertIn("/history", prompt)
+        self.assertNotIn("React Terminal", prompt)
+
+    def test_delegate_tool_description_is_neutral(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        tool_schema = next(
+            item for item in runtime._tool_schemas()
+            if item.get("function", {}).get("name") == "delegate_to_agent"
+        )
+
+        self.assertNotIn("v2", tool_schema["function"]["description"].lower())
 
     def test_runtime_mounts_source_message_attachments_under_inbox(self):
         jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
@@ -3936,6 +3953,68 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("progress_update", event_types)
         self.assertIn("The current directory is /.", task.streamed_markdown)
         self.assertIsNotNone(task.current_response)
+
+    def test_runtime_marks_model_trace_when_streaming_falls_back(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = _FakeChannelLayer()
+        handler = TaskProgressHandler(
+            task.id,
+            channel_layer,
+            user_id=self.user.id,
+            thread_id=self.thread.id,
+            thread_mode=self.thread.mode,
+            push_notifications_enabled=False,
+        )
+        trace_handler = TaskExecutionTraceHandler(task)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                task=task,
+                trace_handler=trace_handler,
+                progress_handler=handler,
+            ).initialize
+        )()
+
+        runtime.provider_client.stream_chat_completion = AsyncMock(
+            side_effect=NotImplementedError("Native streaming is not implemented for this provider.")
+        )
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            return_value={
+                "content": "Fallback answer.",
+                "tool_calls": [],
+                "total_tokens": 42,
+                "streamed": False,
+                "streaming_mode": "none",
+            }
+        )
+
+        result = async_to_sync(runtime.run)()
+        task.refresh_from_db()
+
+        def _find_first_model_node(node):
+            if not isinstance(node, dict):
+                return None
+            if node.get("type") == "model_call":
+                return node
+            for child in node.get("children", []) or []:
+                found = _find_first_model_node(child)
+                if found is not None:
+                    return found
+            return None
+
+        model_node = _find_first_model_node(task.execution_trace.get("root"))
+
+        self.assertEqual(result.final_answer, "Fallback answer.")
+        self.assertEqual(task.streamed_markdown, "Fallback answer.")
+        self.assertIsNotNone(model_node)
+        self.assertEqual(model_node["meta"]["streaming_mode"], "fallback")
+        self.assertTrue(model_node["meta"]["streaming_fallback"])
 
     def test_runtime_closes_browser_session_on_success(self):
         runtime = async_to_sync(

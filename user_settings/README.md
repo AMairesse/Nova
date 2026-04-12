@@ -6,7 +6,7 @@ It owns the UI for:
 
 - providers
 - agents
-- tools and credentials
+- capabilities, connections, and credentials
 - memory settings
 - task definitions and templates
 - API tokens and general preferences
@@ -46,7 +46,9 @@ Key behaviors:
 Agent forms let users select:
 
 - one provider/model
-- attached tools
+- standard capabilities
+- one backend choice for `Search` and `Python`
+- attached connections
 - delegated sub-agents
 - summarization behavior
 
@@ -56,13 +58,44 @@ Important UX rules:
 - default bootstrap is role-aware
 - the runtime choice is no longer exposed in settings
 
-## Tool Settings
+## Capabilities & Connections
 
-Builtin tools are driven by the internal plugin registry, not by scanning Python modules.
+The settings UI is organized around product concepts rather than a flat list of raw tools.
 
-The configure screen is shared across API and MCP tools and uses a unified `connection_mode`.
+Built-in capabilities:
 
-Supported modes:
+- `Date / Time`
+- `Browser`
+- `Memory`
+- `WebApp`
+
+These exist by default and are not user-created connections.
+
+Capabilities with backends:
+
+- `Search`
+- `Python`
+
+These can use:
+
+- a deployment-default backend provided by Nova
+- one or more custom user backends
+
+Each agent selects at most one backend per family.
+
+Connections:
+
+- `Email`
+- `Calendar`
+- `WebDAV`
+- `MCP`
+- `API`
+
+These are user-created multi-instance connections.
+
+The add/edit flow is unified in one `Settings` screen.
+
+Connection/auth modes remain:
 
 - `none`
 - `basic`
@@ -70,9 +103,12 @@ Supported modes:
 - `api_key`
 - `oauth_managed` for MCP only
 
+`Tool.is_active` is no longer part of the model. UI readiness is calculated from the
+saved configuration and connection state instead.
+
 ### MCP Managed OAuth
 
-For MCP servers that require OAuth:
+For MCP connections that require OAuth:
 
 - select `Managed OAuth`
 - use `Connect with OAuth` / `Reconnect with OAuth`
@@ -82,7 +118,7 @@ This flow is explicit in the UI and distinct from the manual `Access token` mode
 
 ### API Services
 
-Custom API tools can define multiple `APIToolOperation` rows with:
+Custom API connections can define multiple `APIToolOperation` rows with:
 
 - method
 - path template
@@ -101,7 +137,8 @@ The memory settings page controls:
 - rebuild confirmation when the effective embeddings provider changes
 - document-centric inspection of user memory
 
-Memory itself is stored as Markdown documents and chunks.
+Memory is a user-scoped capability shared by agents that have `Memory` enabled. It is
+not configured as a connection.
 
 ## Task Settings
 

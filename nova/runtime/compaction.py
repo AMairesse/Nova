@@ -13,7 +13,7 @@ SESSION_KEY_HISTORY_SUMMARY = "history_summary_markdown"
 SESSION_KEY_SUMMARY_UNTIL_MESSAGE_ID = "summary_until_message_id"
 SESSION_KEY_COMPACTED_AT = "compacted_at"
 CONTINUOUS_MODE_COMPACTION_ERROR = (
-    "React Terminal compaction is not available in continuous mode. "
+    "Conversation compaction is not available in continuous mode. "
     "Continuous mode relies on day summaries and history search/get."
 )
 
@@ -25,13 +25,13 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
-def get_v2_compaction_error(thread) -> str | None:
+def get_compaction_error(thread) -> str | None:
     if getattr(thread, "mode", None) == Thread.Mode.CONTINUOUS:
         return CONTINUOUS_MODE_COMPACTION_ERROR
     return None
 
 
-def get_v2_compaction_state(thread, agent_config) -> dict[str, Any]:
+def get_compaction_state(thread, agent_config) -> dict[str, Any]:
     session = AgentThreadSession.objects.filter(
         thread=thread,
         agent_config=agent_config,
@@ -45,7 +45,7 @@ def get_v2_compaction_state(thread, agent_config) -> dict[str, Any]:
 
 
 def _load_compactable_messages(thread, agent_config, *, source_message_id: int | None = None):
-    state = get_v2_compaction_state(thread, agent_config)
+    state = get_compaction_state(thread, agent_config)
     summary_until_message_id = state["summary_until_message_id"]
     preserve_recent = max(int(getattr(agent_config, "preserve_recent", 0) or 0), 0)
 
@@ -62,7 +62,7 @@ def _load_compactable_messages(thread, agent_config, *, source_message_id: int |
     return state, messages, messages_to_compact
 
 
-def get_v2_compactable_message_count(thread, agent_config, *, source_message_id: int | None = None) -> int:
+def get_compactable_message_count(thread, agent_config, *, source_message_id: int | None = None) -> int:
     _state, _messages, messages_to_compact = _load_compactable_messages(
         thread,
         agent_config,
@@ -71,14 +71,14 @@ def get_v2_compactable_message_count(thread, agent_config, *, source_message_id:
     return len(messages_to_compact)
 
 
-async def get_v2_compactable_message_count_async(
+async def get_compactable_message_count_async(
     thread,
     agent_config,
     *,
     source_message_id: int | None = None,
 ) -> int:
     return await sync_to_async(
-        get_v2_compactable_message_count,
+        get_compactable_message_count,
         thread_sensitive=True,
     )(
         thread,
@@ -87,7 +87,7 @@ async def get_v2_compactable_message_count_async(
     )
 
 
-async def get_v2_compaction_payload(thread, agent_config, *, source_message_id: int | None = None) -> dict[str, Any]:
+async def get_compaction_payload(thread, agent_config, *, source_message_id: int | None = None) -> dict[str, Any]:
     def _load():
         state, messages, messages_to_compact = _load_compactable_messages(
             thread,
@@ -119,7 +119,7 @@ def format_messages_for_compaction(messages: list[Message]) -> str:
     return "\n\n".join(lines).strip()
 
 
-def build_v2_compaction_messages(
+def build_compaction_messages(
     *,
     previous_summary: str,
     transcript: str,
@@ -130,7 +130,7 @@ def build_v2_compaction_messages(
         {
             "role": "system",
             "content": (
-                "You compact conversation history for Nova's React Terminal runtime.\n"
+                "You compact conversation history for Nova.\n"
                 "Write a concise Markdown summary that preserves user goals, important facts, "
                 "decisions, open questions, file references, and pending next steps.\n"
                 "Do not mention that this is a summary. Do not add preambles. Keep it useful as context."
@@ -155,7 +155,7 @@ def approximate_token_count_from_text(text: str) -> int:
     return len(content.encode("utf-8", "ignore")) // 4 + 1
 
 
-async def store_v2_compaction_state(
+async def store_compaction_state(
     session,
     *,
     summary_markdown: str,

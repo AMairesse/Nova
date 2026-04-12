@@ -153,7 +153,7 @@ def execute_agent_task_with_executor(
     source_message_id: int | None = None,
     push_notifications_enabled: bool = True,
 ) -> None:
-    """Run a task execution with the React Terminal executor in a synchronous context."""
+    """Run a task execution with the Nova executor in a synchronous context."""
     executor = ReactTerminalTaskExecutor(
         task,
         user,
@@ -268,7 +268,7 @@ def generate_thread_title_task(
 @shared_task(bind=True, name="run_ai_task")
 def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
     """
-    Optimized Celery task with batched database queries and the React Terminal executor.
+    Optimized Celery task with batched database queries and the Nova executor.
     """
     try:
         # Optimized database queries with select_related
@@ -357,7 +357,7 @@ def resume_ai_task_celery(self, interaction_pk: int):
 def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id,
                           include_sub_agents=False, sub_agent_ids=None):
     """
-    Celery task to manually summarize a thread with React Terminal compaction.
+    Celery task to manually summarize a thread with conversation compaction.
     """
     try:
         # Get objects (sync database access)

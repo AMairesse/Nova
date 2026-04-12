@@ -17,6 +17,7 @@ from nova.providers.base import (
 from nova.providers.openai_compatible import (
     complete_openai_compatible_chat,
     normalize_openai_compatible_multimodal_content,
+    stream_openai_compatible_chat,
 )
 
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -407,6 +408,17 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             messages=messages,
             tools=tools,
             normalize_content=self.normalize_multimodal_content,
+        )
+
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        return await stream_openai_compatible_chat(
+            model=provider.model,
+            api_key=provider.api_key,
+            base_url=get_openrouter_base_url(provider.base_url),
+            messages=messages,
+            tools=tools,
+            normalize_content=self.normalize_multimodal_content,
+            on_content_delta=on_content_delta,
         )
 
     def normalize_multimodal_content(self, content):

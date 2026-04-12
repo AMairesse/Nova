@@ -190,7 +190,7 @@ async def _probe_streaming(adapter, provider) -> dict:
         nonlocal chunk_count
         chunk_count += 1
 
-    await adapter.stream_chat(
+    response = await adapter.stream_chat(
         provider,
         messages=[{"role": "user", "content": "Reply with stream."}],
         tools=None,
@@ -198,6 +198,12 @@ async def _probe_streaming(adapter, provider) -> dict:
     )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
+    if str(response.get("streaming_mode") or "").strip().lower() != "native":
+        return _capability_result(
+            STATUS_UNSUPPORTED,
+            "Provider fell back to a non-native streaming response.",
+            latency_ms,
+        )
     if chunk_count < 1:
         return _capability_result(STATUS_FAIL, "No streamed chunk was received.", latency_ms)
     return _capability_result(STATUS_PASS, "Streaming probe returned at least one chunk.", latency_ms)

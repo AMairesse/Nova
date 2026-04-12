@@ -14,7 +14,7 @@ from nova.providers.registry import (
 class ProviderClient:
     def __init__(self, provider):
         if provider is None:
-            raise ValueError("React Terminal requires an LLM provider.")
+            raise ValueError("Nova runtime requires an LLM provider.")
         model = str(getattr(provider, "model", "") or "").strip()
         if not model:
             raise ValueError("The selected provider has no model configured.")

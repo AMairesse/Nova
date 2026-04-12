@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
 
@@ -65,6 +65,16 @@ def _extract_text_content(content: Any) -> str:
     return "".join(text_parts)
 
 
+def _coerce_model_dump(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(mode="json", exclude_none=True)
+    return dict(payload)
+
+
 def _normalize_tool_calls(raw_tool_calls: list[Any] | None) -> list[dict[str, str]]:
     tool_calls: list[dict[str, str]] = []
     for index, item in enumerate(list(raw_tool_calls or []), start=1):
@@ -94,6 +104,106 @@ def _normalize_tool_calls(raw_tool_calls: list[Any] | None) -> list[dict[str, st
             }
         )
     return tool_calls
+
+
+def _merge_stream_tool_calls(
+    tool_states: dict[int, dict[str, Any]],
+    raw_tool_calls: list[Any] | None,
+) -> None:
+    for position, item in enumerate(list(raw_tool_calls or [])):
+        item = _coerce_model_dump(item)
+        if not isinstance(item, dict):
+            continue
+        function_payload = item.get("function")
+        if hasattr(function_payload, "model_dump"):
+            function_payload = function_payload.model_dump(mode="json", exclude_none=True)
+        if not isinstance(function_payload, dict):
+            function_payload = {}
+
+        raw_index = item.get("index")
+        try:
+            tool_index = int(raw_index) if raw_index is not None else position
+        except (TypeError, ValueError):
+            tool_index = position
+
+        state = tool_states.setdefault(
+            tool_index,
+            {
+                "id": "",
+                "name": "",
+                "arguments_parts": [],
+            },
+        )
+        tool_id = str(item.get("id") or "").strip()
+        if tool_id:
+            state["id"] = tool_id
+
+        name = str(function_payload.get("name") or item.get("name") or "").strip()
+        if name:
+            state["name"] = name
+
+        arguments = function_payload.get("arguments")
+        if isinstance(arguments, str):
+            state["arguments_parts"].append(arguments)
+        elif isinstance(arguments, dict):
+            state["arguments_parts"].append(json.dumps(arguments, ensure_ascii=False))
+
+
+def _finalize_stream_tool_calls(tool_states: dict[int, dict[str, Any]]) -> list[dict[str, str]]:
+    tool_calls: list[dict[str, str]] = []
+    for index, state in sorted(tool_states.items()):
+        tool_calls.append(
+            {
+                "id": str(state.get("id") or f"call_{index + 1}"),
+                "name": str(state.get("name") or "").strip(),
+                "arguments": "".join(state.get("arguments_parts") or []) or "{}",
+            }
+        )
+    return tool_calls
+
+
+async def collect_openai_like_stream(
+    stream,
+    *,
+    on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
+    content_parts: list[str] = []
+    tool_states: dict[int, dict[str, Any]] = {}
+    usage: dict[str, Any] | None = None
+    last_payload: dict[str, Any] | None = None
+
+    async for chunk in stream:
+        payload = _coerce_model_dump(chunk)
+        last_payload = payload
+        usage = _normalize_usage(payload.get("usage")) or usage
+        for choice in list(payload.get("choices") or []):
+            if hasattr(choice, "model_dump"):
+                choice = choice.model_dump(mode="json", exclude_none=True)
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if hasattr(delta, "model_dump"):
+                delta = delta.model_dump(mode="json", exclude_none=True)
+            if not isinstance(delta, dict):
+                continue
+
+            content_delta = _extract_text_content(delta.get("content"))
+            if content_delta:
+                content_parts.append(content_delta)
+                if on_content_delta:
+                    await on_content_delta(content_delta)
+
+            _merge_stream_tool_calls(tool_states, delta.get("tool_calls"))
+
+    return {
+        "content": "".join(content_parts),
+        "tool_calls": _finalize_stream_tool_calls(tool_states),
+        "usage": usage,
+        "total_tokens": _extract_total_tokens(usage),
+        "streamed": True,
+        "streaming_mode": "native",
+        "raw_response": last_payload or {},
+    }
 
 
 def build_openai_compatible_messages(
@@ -142,6 +252,7 @@ def normalize_openai_completion_payload(payload: dict[str, Any]) -> dict[str, An
         "usage": usage,
         "total_tokens": _extract_total_tokens(usage),
         "streamed": False,
+        "streaming_mode": "none",
         "raw_response": payload,
     }
 
@@ -172,6 +283,38 @@ async def complete_openai_compatible_chat(
     response = await client.chat.completions.create(**request_payload)
     payload = response.model_dump(mode="json", exclude_none=True)
     return normalize_openai_completion_payload(payload)
+
+
+async def stream_openai_compatible_chat(
+    *,
+    model: str,
+    api_key: str | None,
+    base_url: str | None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    normalize_content,
+    on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    client = create_openai_compatible_client(api_key=api_key, base_url=base_url)
+    request_payload: dict[str, Any] = {
+        "model": model,
+        "messages": build_openai_compatible_messages(
+            messages,
+            normalize_content=normalize_content,
+        ),
+        "temperature": 0,
+        "stream": True,
+    }
+    if tools:
+        request_payload["tools"] = tools
+    if extra_kwargs:
+        request_payload.update(extra_kwargs)
+    stream = await client.chat.completions.create(**request_payload)
+    return await collect_openai_like_stream(
+        stream,
+        on_content_delta=on_content_delta,
+    )
 
 
 def normalize_openai_compatible_multimodal_content(content):

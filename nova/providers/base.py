@@ -66,16 +66,8 @@ class BaseProviderAdapter:
         tools: list[dict[str, Any]] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
-        completion = await self.complete_chat(
-            provider,
-            messages=messages,
-            tools=tools,
-        )
-        content = str(completion.get("content") or "")
-        if content and on_content_delta:
-            await on_content_delta(content)
-        completion["streamed"] = True
-        return completion
+        del provider, messages, tools, on_content_delta
+        raise NotImplementedError("Native streaming is not implemented for this provider.")
 
     async def prepare_turn_content(self, provider, intro_text, resolved_inputs, **kwargs):
         from nova.turn_inputs import prepare_turn_content

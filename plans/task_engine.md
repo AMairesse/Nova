@@ -38,7 +38,7 @@ High-level flow:
 1. render prompt variables
 2. create the target thread/message based on `run_mode`
 3. create a `Task`
-4. execute through the React Terminal runtime
+4. execute through the Nova runtime
 5. delete ephemeral threads in `finally` when required
 
 ## Run Modes

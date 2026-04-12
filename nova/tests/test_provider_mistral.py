@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -33,6 +34,18 @@ class ResponseStub:
         if self._json_error is not None:
             raise self._json_error
         return self._payload
+
+
+class _FakeAsyncStream:
+    def __init__(self, events):
+        self._events = list(events)
+
+    def __aiter__(self):
+        async def _iterate():
+            for event in self._events:
+                yield event
+
+        return _iterate()
 
 
 class MistralProviderTests(SimpleTestCase):
@@ -138,6 +151,47 @@ class MistralProviderTests(SimpleTestCase):
         self.assertEqual(snapshot["operations"]["tools"], "unsupported")
         self.assertEqual(snapshot["operations"]["vision"], "pass")
 
+    @patch("nova.providers.mistral.Mistral")
+    def test_adapter_stream_chat_returns_native_streaming_payload(self, mocked_mistral):
+        client = Mock()
+        client.chat.stream_async = AsyncMock(
+            return_value=_FakeAsyncStream(
+                [
+                    SimpleNamespace(data={"choices": [{"delta": {"content": "Bon"}}]}),
+                    SimpleNamespace(
+                        data={
+                            "choices": [{"delta": {"content": "jour"}}],
+                            "usage": {
+                                "prompt_tokens": 9,
+                                "completion_tokens": 2,
+                                "total_tokens": 11,
+                            },
+                        }
+                    ),
+                ]
+            )
+        )
+        mocked_mistral.return_value = client
+
+        streamed_deltas: list[str] = []
+
+        async def _record_delta(delta: str) -> None:
+            streamed_deltas.append(delta)
+
+        response = async_to_sync(MistralProviderAdapter().stream_chat)(
+            self._provider(),
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None,
+            on_content_delta=_record_delta,
+        )
+
+        client.chat.stream_async.assert_awaited_once()
+        self.assertEqual(streamed_deltas, ["Bon", "jour"])
+        self.assertEqual(response["content"], "Bonjour")
+        self.assertTrue(response["streamed"])
+        self.assertEqual(response["streaming_mode"], "native")
+        self.assertEqual(response["total_tokens"], 11)
+
     @patch("nova.providers.mistral.httpx.AsyncClient")
     def test_fetch_mistral_model_catalog_accepts_data_payload_shape(self, mocked_client_class):
         mocked_response = Mock()
@@ -179,4 +233,3 @@ class MistralProviderTests(SimpleTestCase):
     def test_fetch_mistral_model_catalog_requires_api_key(self):
         with self.assertRaises(RuntimeError):
             async_to_sync(fetch_mistral_model_catalog)("", None)
-

@@ -108,6 +108,7 @@ def _normalize_ollama_response(payload: dict[str, Any]) -> dict[str, Any]:
         "usage": usage,
         "total_tokens": (usage or {}).get("total_tokens"),
         "streamed": False,
+        "streaming_mode": "none",
         "raw_response": payload,
     }
 
@@ -135,11 +136,8 @@ class OllamaProviderAdapter(BaseProviderAdapter):
 
     async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
         if tools:
-            return await super().stream_chat(
-                provider,
-                messages=messages,
-                tools=tools,
-                on_content_delta=on_content_delta,
+            raise NotImplementedError(
+                "Native streaming with tool calls is not implemented for Ollama."
             )
 
         client = ollama.AsyncClient(host=provider.base_url or OLLAMA_DEFAULT_BASE_URL)
@@ -163,4 +161,5 @@ class OllamaProviderAdapter(BaseProviderAdapter):
         normalized = _normalize_ollama_response(last_payload or {"message": {}})
         normalized["content"] = "".join(content_parts) or normalized.get("content") or ""
         normalized["streamed"] = True
+        normalized["streaming_mode"] = "native"
         return normalized

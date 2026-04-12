@@ -383,7 +383,7 @@ class ReactTerminalRuntime:
             else "Answer directly in natural language and do not attempt to call tools.\n"
         )
         base_prompt = (
-            "You are Nova running in React Terminal.\n"
+            "You are Nova running in the Nova terminal.\n"
             f"{surface_line}"
             f"{ask_user_line}"
             "The terminal session is persistent for this agent and thread.\n"
@@ -561,7 +561,7 @@ class ReactTerminalRuntime:
                 "type": "function",
                 "function": {
                     "name": "delegate_to_agent",
-                    "description": "Delegate a focused task to one configured v2 sub-agent.",
+                    "description": "Delegate a focused task to one configured sub-agent.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -1675,6 +1675,8 @@ class ReactTerminalRuntime:
             else:
                 await self._complete_stream()
             response["streaming_fallback"] = True
+            response["streaming_mode"] = "fallback"
+            response["streamed"] = False
             return response
 
     @staticmethod
@@ -1758,7 +1760,7 @@ class ReactTerminalRuntime:
         try:
             if ensure_root_trace and self.trace_handler:
                 await self.trace_handler.ensure_root_run(
-                    label=getattr(self.agent_config, "name", "") or "React Terminal agent",
+                    label=getattr(self.agent_config, "name", "") or "Nova agent",
                     source_message_id=self.source_message_id,
                     agent_id=getattr(self.agent_config, "id", None),
                 )
@@ -1853,6 +1855,9 @@ class ReactTerminalRuntime:
                         "tool_call_names": tool_call_names,
                         "streamed": bool(response.get("streamed")),
                     }
+                    streaming_mode = str(response.get("streaming_mode") or "").strip().lower()
+                    if streaming_mode:
+                        model_meta["streaming_mode"] = streaming_mode
                     token_usage = self._build_token_usage_meta(response.get("total_tokens"))
                     if token_usage:
                         model_meta["token_usage"] = token_usage

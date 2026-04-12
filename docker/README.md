@@ -107,10 +107,12 @@ newer dynamic upstream configuration.
 ## Available optional modules
 
 - `docker-compose.add-searxng.yml`
-  - Enables SearXNG system search tool for all users.
+  - Enables the deployment-default `Search` backend in Nova.
+  - Users can still add their own custom remote search backends.
   - Requires `SEARXNG_SECRET` in `.env`.
 - `docker-compose.add-judge0.yml`
-  - Enables Judge0 code execution system tool for all users.
+  - Enables the deployment-default `Python` backend in Nova.
+  - Users can still add their own custom remote Python backends.
   - Requires host cgroups configuration (see Judge0 upstream docs for v1.13+).
 - `docker-compose.add-ollama.yml`
   - Starts Ollama and exposes a system provider in Nova.

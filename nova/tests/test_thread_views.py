@@ -1073,18 +1073,18 @@ class MainViewsTests(TestCase):
         self.assertIn("Not enough messages to summarize", response.json()["message"])
 
     @patch("nova.views.thread_views.start_summarization")
-    def test_summarize_thread_starts_v2_compaction_without_confirmation(self, mocked_start):
+    def test_summarize_thread_starts_compaction_without_confirmation(self, mocked_start):
         self.client.login(username="alice", password="pass")
         provider = LLMProvider.objects.create(
             user=self.user,
-            name="Prov V2",
+            name="Prov Runtime",
             provider_type=ProviderType.OPENAI,
             model="gpt-4o-mini",
             api_key="dummy",
         )
         agent = AgentConfig.objects.create(
             user=self.user,
-            name="V2 Agent",
+            name="Runtime Agent",
             is_tool=False,
             system_prompt="x",
             llm_provider=provider,
@@ -1149,7 +1149,7 @@ class MainViewsTests(TestCase):
         )
         agent = AgentConfig.objects.create(
             user=self.user,
-            name="V2 Agent continuous",
+            name="Runtime Agent continuous",
             is_tool=False,
             system_prompt="x",
             llm_provider=provider,
@@ -1160,7 +1160,7 @@ class MainViewsTests(TestCase):
         profile.save(update_fields=["default_agent"])
         thread = Thread.objects.create(
             user=self.user,
-            subject="Continuous v2",
+            subject="Continuous thread",
             mode=Thread.Mode.CONTINUOUS,
         )
         thread.add_message("m1", actor=Actor.USER)

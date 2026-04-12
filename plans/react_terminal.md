@@ -1,4 +1,4 @@
-# React Terminal
+# Nova Runtime
 
 Last reviewed: 2026-04-06  
 Status: implemented

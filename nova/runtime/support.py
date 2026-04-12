@@ -15,7 +15,7 @@ def get_runtime_error(
     explicit_tool_dependency: bool | None = None,
 ) -> str | None:
     if thread_mode not in {Thread.Mode.THREAD, Thread.Mode.CONTINUOUS}:
-        return "React Terminal only supports standard and continuous thread modes."
+        return "Nova runtime only supports standard and continuous thread modes."
 
     provider = getattr(agent_config, "llm_provider", None)
     effective_response_mode = resolve_effective_response_mode(agent_config, response_mode)

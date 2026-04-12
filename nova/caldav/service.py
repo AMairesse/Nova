@@ -461,7 +461,7 @@ def _create_ical_event(
         event.add("description", description)
 
     calendar = ICalendar()
-    calendar.add("prodid", "-//Nova//React Terminal//EN")
+    calendar.add("prodid", "-//Nova//EN")
     calendar.add("version", "2.0")
     calendar.add_component(event)
     return calendar.to_ical().decode("utf-8")
@@ -544,7 +544,7 @@ def _update_event_sync(
         calendar_name=calendar_name,
     )
     if payload.get("is_recurring"):
-        raise ValueError("Recurring events are read-only in React Terminal v2.")
+        raise ValueError("Recurring events are read-only in Nova.")
 
     effective_all_day = payload.get("all_day") if all_day is None else bool(all_day)
     if summary is not None:
@@ -613,7 +613,7 @@ def _delete_event_sync(
         calendar_name=calendar_name,
     )
     if payload.get("is_recurring"):
-        raise ValueError("Recurring events are read-only in React Terminal v2.")
+        raise ValueError("Recurring events are read-only in Nova.")
     resource.delete()
     return payload
 

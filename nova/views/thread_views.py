@@ -28,7 +28,7 @@ from nova.message_submission import (
     SubmissionContext,
     submit_user_message,
 )
-from nova.runtime.compaction import get_v2_compactable_message_count, get_v2_compaction_error
+from nova.runtime.compaction import get_compactable_message_count, get_compaction_error
 from nova.message_utils import upload_message_attachments
 from nova.tasks.runtime_state import reconcile_stale_running_tasks
 from nova.realtime.sidebar_updates import publish_file_update
@@ -281,13 +281,13 @@ def summarize_thread(request, thread_id):
             "status": "ERROR",
             "message": "No default agent configured"
         }, status=400)
-    compaction_error = get_v2_compaction_error(thread)
+    compaction_error = get_compaction_error(thread)
     if compaction_error:
         return JsonResponse({
             "status": "ERROR",
             "message": compaction_error,
         }, status=400)
-    compactable_count = get_v2_compactable_message_count(thread, agent_config)
+    compactable_count = get_compactable_message_count(thread, agent_config)
     if compactable_count <= 0:
         min_messages_for_summarization = agent_config.preserve_recent + 1
         total_messages = (
@@ -346,7 +346,7 @@ def confirm_summarize_thread(request, thread_id):
             "status": "ERROR",
             "message": "No default agent configured"
         }, status=400)
-    compaction_error = get_v2_compaction_error(thread)
+    compaction_error = get_compaction_error(thread)
     if compaction_error:
         return JsonResponse({
             "status": "ERROR",

@@ -29,7 +29,7 @@ Default credentials:
 
 Optional services are enabled through `COMPOSE_FILE` in `docker/.env`.
 
-Then configure your providers, tools, and agents: [README-agents.md](README-agents.md).
+Then configure your providers, capabilities/connections, and agents: [README-agents.md](README-agents.md).
 
 ## What Nova Provides
 
@@ -37,7 +37,9 @@ Then configure your providers, tools, and agents: [README-agents.md](README-agen
   - `terminal(command: str)`
   - `delegate_to_agent(...)`
   - `ask_user(...)`
-- Persistent thread-scoped files plus terminal-only mounts such as `/memory` and `/webdav`
+- Built-in capabilities such as Browser, Memory, WebApp, and Date/Time available by default
+- Configurable connections and backends only where they are actually needed
+- Persistent thread-scoped files plus runtime mounts such as `/inbox`, `/history`, `/memory`, and `/webdav`
 - User-scoped long-term memory stored as Markdown documents and searched via chunks/embeddings
 - Email, CalDAV, WebDAV, web search, browsing, MCP, and custom API integrations
 - Continuous discussion mode with day summaries and history search/get commands
@@ -47,11 +49,12 @@ Then configure your providers, tools, and agents: [README-agents.md](README-agen
 
 ## Key Capabilities
 
-### React Terminal Runtime
+### Nova Runtime
 
 Nova agents work through a persistent pseudo-terminal mental model:
 
 - normal file operations (`ls`, `cat`, `find`, `tee`, `mv`, `rm`, ...)
+- current-message inputs under `/inbox` and earlier live-message attachments under `/history`
 - specialized command families (`mail`, `calendar`, `memory search`, `webapp`, `mcp`, `api`, ...)
 - delegated sub-agents that exchange files through `/subagents/...`
 - blocking clarifications through `ask_user`
@@ -80,9 +83,10 @@ Continuous mode relies on stored messages, summaries, and embeddings.
 Nova supports:
 
 - built-in capabilities exposed through internal plugins
+- backend-backed capabilities for search and Python, with deployment defaults and optional custom backends
 - MCP servers with optional managed OAuth
 - custom API services defined through `APIToolOperation`
-- optional system services such as SearXNG and Judge0 when enabled in Docker
+- optional deployment services such as SearXNG and Judge0 when enabled in Docker
 
 ### Web Apps
 
@@ -122,7 +126,7 @@ Nova
 │  ├─ models/             # One model per file
 │  ├─ plugins/            # Internal plugin registry and builtin descriptors
 │  ├─ providers/          # Provider adapters and capability logic
-│  ├─ runtime/            # React Terminal runtime
+│  ├─ runtime/            # Nova runtime
 │  ├─ tasks/              # Celery tasks and task templates
 │  ├─ views/              # Django views
 │  ├─ web/                # Search, browser, and download services
@@ -136,7 +140,7 @@ Nova
 ## Documentation Map
 
 - [docker/README.md](docker/README.md): Docker stacks and environment configuration
-- [README-agents.md](README-agents.md): provider/tool/agent setup
+- [README-agents.md](README-agents.md): provider/capability/connection/agent setup
 - [README-dev.md](README-dev.md): repository structure and runtime internals
 - [plans/react_terminal.md](plans/react_terminal.md): runtime architecture
 - [plans/memory.md](plans/memory.md): long-term memory model

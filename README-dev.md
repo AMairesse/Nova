@@ -6,14 +6,14 @@ Nova is a Django application with a single agent runtime centered on `nova/runti
 
 Important backend slices:
 
-- `nova/runtime/`: React Terminal runtime, provider client, VFS, task executor
+- `nova/runtime/`: Nova runtime, provider client, VFS, task executor
 - `nova/plugins/`: internal plugin registry for builtins/system capabilities
 - `nova/providers/`: provider-specific model discovery and capability handling
 - `nova/continuous/`: continuous-mode summaries, recall, and context builder
 - `nova/tasks/`: Celery tasks, scheduled task execution, maintenance flows
 - `nova/web/`: web search, browsing, and downloads
 - `nova/webapp/`: live web app publication and serving
-- `user_settings/`: providers, tools, agents, memory, and tasks UI
+- `user_settings/`: providers, capabilities/connections, agents, memory, and tasks UI
 
 ## Repository Layout
 
@@ -29,7 +29,7 @@ Nova
 │  ├─ models/                   # One model per file
 │  ├─ plugins/                  # Internal plugin descriptors and shared helpers
 │  ├─ providers/                # Provider adapters and capability logic
-│  ├─ runtime/                  # React Terminal runtime
+│  ├─ runtime/                  # Nova runtime
 │  ├─ static/                   # JS/CSS assets
 │  ├─ tasks/                    # Celery tasks and task templates
 │  ├─ templates/                # Django templates
@@ -58,9 +58,9 @@ Nova
 ### Files
 
 - `UserFile(scope=THREAD_SHARED)`: durable thread files
-- `UserFile(scope=MESSAGE_ATTACHMENT)`: attachments and hidden runtime scratch/output files
+- `UserFile(scope=MESSAGE_ATTACHMENT)`: user message attachments and message-scoped file outputs
 
-Thread files, attachments, and runtime scratch files are all represented through `UserFile`.
+Thread files, attachments, and message-scoped outputs are all represented through `UserFile`.
 
 ### Memory
 
@@ -96,9 +96,12 @@ Everything else is exposed through terminal commands, virtual files, or attached
 
 Examples:
 
+- current-message inputs: `/inbox/...`
+- earlier live-message attachments: `/history/...`
 - mail: `mail ...`
 - calendar: `calendar ...`
 - memory: `grep ...`, `memory search ...`
+- Python backend: `python ...`
 - webapp: `webapp expose ...`
 - MCP: `mcp ...`
 - API tools: `api ...`
@@ -111,6 +114,7 @@ Each internal plugin describes:
 
 - metadata/settings
 - builtin subtype mapping
+- capability family / selection behavior
 - runtime capability resolution
 - skill docs
 - optional connection-test hook
@@ -118,11 +122,18 @@ Each internal plugin describes:
 `Tool.tool_subtype` remains the persisted product-facing selector, but the registry in
 `nova/plugins/registry.py` is the source of truth for builtin behavior.
 
+At the product level, the registry distinguishes:
+
+- built-in capabilities available by default
+- backend-backed capabilities where an agent selects one backend (`Search`, `Python`)
+- multi-instance user connections such as mail, calendar, WebDAV, MCP, and API
+
 ## Provider-Aware Behavior
 
 - `LLMProvider.capability_profile` is the persisted source of model capability state
 - metadata refresh and active verification are separate flows
 - providers verified with `tools=unsupported` are gated correctly in agent/task UX
+- provider adapters normalize chat, native media responses, and explicit streaming modes
 - MCP managed OAuth is handled in settings and refreshed silently at runtime when possible
 
 ## Local Environment

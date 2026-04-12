@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 MEMORY_README_CONTENT = """# Memory
 
 `/memory` is a user-scoped virtual filesystem shared across the current user's
-React Terminal agents that have memory access.
+Nova agents that have memory access.
 
 Use it like this:
 - `ls /memory`

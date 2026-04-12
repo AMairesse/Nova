@@ -227,7 +227,7 @@ class TaskExecutor:
 
     async def _process_interuption(self, result):
         '''
-        Backward-compatible wrapper around the new runtime-agnostic interruption payload flow.
+        Backward-compatible wrapper around the runtime-agnostic interruption payload flow.
         '''
         interruption = self._extract_interruption_payload(result)
         if interruption is None:

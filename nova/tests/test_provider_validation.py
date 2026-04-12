@@ -47,7 +47,12 @@ class _HappyAdapter:
         del provider, messages, tools
         if on_content_delta:
             await on_content_delta("chunk")
-        return {"content": "chunk", "tool_calls": [], "streamed": True}
+        return {
+            "content": "chunk",
+            "tool_calls": [],
+            "streamed": True,
+            "streaming_mode": "native",
+        }
 
     def supports_active_pdf_input_probe(self, provider) -> bool:
         return provider.provider_type != ProviderType.LLMSTUDIO
@@ -96,6 +101,17 @@ class _BrokenStreamingAdapter(_HappyAdapter):
     async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
         del provider, messages, tools, on_content_delta
         raise RuntimeError("Streaming not available")
+
+
+class _FallbackStreamingAdapter(_HappyAdapter):
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        del provider, messages, tools, on_content_delta
+        return {
+            "content": "chunk",
+            "tool_calls": [],
+            "streamed": False,
+            "streaming_mode": "fallback",
+        }
 
 
 class ProviderValidationServiceTests(SimpleTestCase):
@@ -161,6 +177,14 @@ class ProviderValidationServiceTests(SimpleTestCase):
         self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
         self.assertEqual(result["verified_operations"]["streaming"]["status"], "unsupported")
         self.assertEqual(result["verified_inputs"]["pdf"]["status"], "pass")
+
+    @patch("nova.providers.validation.get_provider_adapter", return_value=_FallbackStreamingAdapter())
+    def test_validate_provider_configuration_rejects_synthetic_streaming(self, _mock_get_provider_adapter):
+        result = async_to_sync(validate_provider_configuration)(self._provider())
+
+        self.assertEqual(result["validation_status"], LLMProvider.ValidationStatus.VALID)
+        self.assertEqual(result["verified_operations"]["streaming"]["status"], "unsupported")
+        self.assertIn("non-native", result["verified_operations"]["streaming"]["message"])
 
     @patch("nova.providers.validation.get_provider_adapter", return_value=_NoPdfAdapter())
     def test_validate_provider_configuration_marks_partial_without_pdf_input(self, _mock_get_provider_adapter):
