@@ -9,13 +9,18 @@ def _skill_docs(_capabilities, _thread_mode):
 
 The main action surface is the persistent Nova terminal.
 
-Start by checking `pwd`, `ls`, and `ls /skills` when you need orientation.
+Start by checking `pwd`, `ls /`, and `ls /skills` when you need orientation.
+
+Files added from the Files panel live under `/`.
+Use `/inbox` only for files attached to the current user message.
+Use `/history` only for earlier message attachments.
 
 Examples:
+- `ls /`
 - `mkdir -p /memory/preferences`
 - `mkdir -p /tmp/demo; ls -l /tmp/demo`
 - `echo "hello" > /note.txt`
-- `find /inbox /history -name "*.png" -o -name "*.jpg"`
+- `find / -name "*.pdf"`
 - `printf "b\na\nc\n" | sort`
 - `ls -laR /subagents`
 

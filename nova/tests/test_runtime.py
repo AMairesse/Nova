@@ -2782,9 +2782,13 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("date +%F %T", skills["date.md"])
         self.assertIn("server locale", skills["date.md"])
         self.assertIn("pwd", skills["terminal.md"])
+        self.assertIn("ls /", skills["terminal.md"])
         self.assertIn("mkdir -p /memory/preferences", skills["terminal.md"])
         self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
-        self.assertIn("find /inbox /history -name", skills["terminal.md"])
+        self.assertIn("Files added from the Files panel live under `/`.", skills["terminal.md"])
+        self.assertIn("Use `/inbox` only for files attached to the current user message.", skills["terminal.md"])
+        self.assertIn("Use `/history` only for earlier message attachments.", skills["terminal.md"])
+        self.assertIn('find / -name "*.pdf"', skills["terminal.md"])
         self.assertIn("sort", skills["terminal.md"])
         self.assertIn("ls -laR /subagents", skills["terminal.md"])
         self.assertIn("printf", skills["terminal.md"])
@@ -3222,6 +3226,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
         self.assertIn("/history", prompt)
+        self.assertIn("Files uploaded in the thread Files panel", prompt)
         self.assertNotIn("React Terminal", prompt)
 
     def test_delegate_tool_description_is_neutral(self):
@@ -4186,9 +4191,30 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("`ls -R`", prompt)
         self.assertIn("Use `date` for current date/time queries.", prompt)
         self.assertIn("--mailbox <email>", prompt)
-        self.assertIn("- /: persistent files for this thread", prompt)
+        self.assertIn("Files uploaded in the thread Files panel are persistent thread files available under `/`.", prompt)
+        self.assertIn("inspect `/` first", prompt)
+        self.assertIn("- /: persistent files for this thread, including files added from the Files panel", prompt)
         self.assertNotIn("/thread", prompt)
         self.assertNotIn("/workspace", prompt)
+
+    def test_system_prompt_with_source_message_keeps_root_files_as_the_first_reflex(self):
+        source_message = self.thread.add_message("Check the file please.", Actor.USER)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                source_message_id=source_message.id,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+
+        self.assertIn("Files attached to the current user message are available under `/inbox`", prompt)
+        self.assertIn("older live-message attachments are available under `/history`", prompt)
+        self.assertIn("inspect `/` first", prompt)
+        self.assertIn("only fall back to `/inbox` or `/history`", prompt)
 
     def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
         memory_tool = Tool.objects.create(

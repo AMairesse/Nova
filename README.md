@@ -5,12 +5,20 @@
 
 Nova is a privacy-first, multi-tenant AI agent workspace built around a persistent terminal-style runtime.
 
-![Get the news](./screenshots/Webbrowsing%20by%20agent.png)
+The product includes a desktop-first workspace, a mobile-friendly conversation UI, dedicated settings for providers, capabilities, and managed connections, plus an execution details view for understanding what happened during a run.
 
-| | | | |
-| --- | --- | --- | --- |
-| ![Your agent can use CalDav](./screenshots/Caldav%20use.png) | ![Work on files](./screenshots/Work%20on%20files.png) | ![Define your caldav agent](./screenshots/Define%20your%20caldav%20agent.png) | ![Define your main agent](./screenshots/Define%20your%20main%20agent.png) |
-| ![Providers' config](./screenshots/Providers%20config.png) | ![Caldav config](./screenshots/Caldav%20config.png) | ![Multiple tools](./screenshots/Multiple%20tools.png) | ![Various agents](./screenshots/Various%20agents.png) |
+![Thread workspace](./screenshots/Thread.png)
+
+| | |
+| --- | --- |
+| ![Continuous mode](./screenshots/Continuous.png) | ![Tasks and run monitoring](./screenshots/Tasks.png) |
+| ![Provider configuration](./screenshots/Providers.png) | ![Capabilities and connections](./screenshots/Tools.png) |
+
+| | |
+| --- | --- |
+| ![Execution details](./screenshots/Execution%20detail.png) | ![Mobile conversation view](./screenshots/Mobile.png) |
+
+![Managed OAuth for MCP](./screenshots/Managed%20OAuth%20for%20MCP.png)
 
 ## Quickstart
 
@@ -45,6 +53,8 @@ Then configure your providers, capabilities/connections, and agents: [README-age
 - Continuous discussion mode with day summaries and history search/get commands
 - Live thread-scoped static web apps published from normal workspace files
 - Provider-aware model configuration, metadata refresh, and active verification
+- Execution details with a readable overview, timeline, and technical drill-down
+- A responsive UI that remains usable on mobile as well as desktop
 - Scheduled tasks, email polling, and maintenance flows
 
 ## Key Capabilities

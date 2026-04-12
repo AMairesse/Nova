@@ -329,11 +329,19 @@ class ReactTerminalRuntime:
                 "the served app without a separate publish step. When writing HTML/CSS/JS files, use raw "
                 "characters rather than HTML entities and prefer `tee ... --text` for long markup."
             )
+        extra_guidance.append(
+            "Files uploaded in the thread Files panel are persistent thread files available under `/`. "
+            "If the user refers to a file without giving a path, inspect `/` first with commands like "
+            "`ls /` or `find / -name ...`. Use `/inbox` only for files attached to the current user message "
+            "and `/history` only for attachments from earlier live messages."
+        )
         if self.source_message_id is not None:
             extra_guidance.append(
-                "Files attached to the current user message are available under `/inbox` when present. "
-                "Older live-message attachments are available under `/history`. Only claim to have used a "
-                "reference file if you can read it there or pass it explicitly to a sub-agent."
+                "Files attached to the current user message are available under `/inbox` when present, and "
+                "older live-message attachments are available under `/history`. If the user mentions a file "
+                "without giving a path, inspect `/` first and only fall back to `/inbox` or `/history` when "
+                "the request clearly points to current or earlier chat attachments. Only claim to have used "
+                "a reference file if you can read it there or pass it explicitly to a sub-agent."
             )
         extra_guidance.append(
             "You may reference existing thread files by absolute VFS path in Markdown: "
@@ -361,7 +369,7 @@ class ReactTerminalRuntime:
                 "When using mail commands, always pass `--mailbox <email>` to choose the mailbox explicitly."
             )
         filesystem_lines = [
-            "- /: persistent files for this thread",
+            "- /: persistent files for this thread, including files added from the Files panel",
             "- /inbox: files attached to the current user message, when present",
             "- /history: files attached to earlier live messages in this conversation",
             "- /skills: readonly recipes",

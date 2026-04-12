@@ -90,7 +90,7 @@
         id="pane-general"
         role="tabpanel"
         hx-get="{% url 'user_settings:general' %}?partial=1"
-        hx-trigger="revealed"
+        hx-trigger="settings-pane:load once"
         hx-target="this"
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading…" %}</div>
@@ -100,7 +100,7 @@
         id="pane-memory"
         role="tabpanel"
         hx-get="{% url 'user_settings:memory' %}?partial=1"
-        hx-trigger="revealed once"
+        hx-trigger="settings-pane:load once"
         hx-target="this"
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading memory…" %}</div>
