@@ -638,6 +638,7 @@ def ensure_nova_agent(
         summary=summary,
         name="Nova",
         required_tools=["memory", "date_time"],
+        extra_tools=["webapp"],
         system_prompt=nova_prompt,
         recursion_limit=25,
         is_tool=False,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from django.conf import settings
 from django.db.models import Count, Q
@@ -52,6 +53,122 @@ def _default_backend_name(subtype: str) -> str:
 def _builtin_python_path(subtype: str) -> str:
     metadata = _plugin_metadata_for_subtype(subtype)
     return str(metadata.get("python_path") or "").strip()
+
+
+def _prefetched_tool_credentials(tool: Tool) -> list[ToolCredential]:
+    prefetched = getattr(tool, "_prefetched_objects_cache", {})
+    credentials = prefetched.get("credentials")
+    if credentials is not None:
+        return list(credentials)
+    return list(tool.credentials.all())
+
+
+def _tool_credential_for_status(tool: Tool) -> ToolCredential | None:
+    credentials = _prefetched_tool_credentials(tool)
+    if tool.user_id is None:
+        return next((credential for credential in credentials if credential.user_id is None), None)
+    return next((credential for credential in credentials if credential.user_id == tool.user_id), None)
+
+
+def _status_payload(key: str, label: str, badge_class: str) -> dict[str, str]:
+    return {
+        "key": key,
+        "label": label,
+        "badge_class": badge_class,
+    }
+
+
+def _config_field_is_visible(field_definition: dict[str, Any], values: dict[str, Any]) -> bool:
+    visible_if = field_definition.get("visible_if")
+    if not isinstance(visible_if, dict):
+        return True
+    field_name = str(visible_if.get("field") or "").strip()
+    if not field_name or "equals" not in visible_if:
+        return True
+    return values.get(field_name) == visible_if.get("equals")
+
+
+def _builtin_connection_status(tool: Tool) -> dict[str, str]:
+    plugin = get_plugin_for_builtin_subtype(tool.tool_subtype or "")
+    metadata = plugin.build_builtin_metadata() if plugin is not None else {}
+    config_fields = list(metadata.get("config_fields") or [])
+    if not config_fields:
+        return _status_payload("ready", "Ready", "bg-success-subtle text-success-emphasis")
+
+    credential = _tool_credential_for_status(tool)
+    if credential is None:
+        return _status_payload("needs_setup", "Needs setup", "bg-warning-subtle text-warning-emphasis")
+
+    values = dict(credential.config or {})
+    for field_definition in config_fields:
+        if not field_definition.get("required"):
+            continue
+        if not _config_field_is_visible(field_definition, values):
+            continue
+        field_name = str(field_definition.get("name") or "").strip()
+        if not field_name:
+            continue
+        field_value = values.get(field_name)
+        if field_value in (None, ""):
+            return _status_payload("needs_setup", "Needs setup", "bg-warning-subtle text-warning-emphasis")
+    return _status_payload("ready", "Ready", "bg-success-subtle text-success-emphasis")
+
+
+def _manual_connection_status(tool: Tool) -> dict[str, str]:
+    credential = _tool_credential_for_status(tool)
+    if credential is None:
+        return _status_payload("needs_setup", "Needs setup", "bg-warning-subtle text-warning-emphasis")
+
+    auth_type = str(credential.auth_type or "").strip().lower() or "none"
+    if auth_type == "oauth_managed" and tool.tool_type == Tool.ToolType.MCP:
+        oauth_config = {}
+        if isinstance(credential.config, dict):
+            oauth_config = credential.config.get("mcp_oauth") or {}
+        if not isinstance(oauth_config, dict):
+            oauth_config = {}
+        status = str(oauth_config.get("status") or "").strip().lower()
+        if status == "connected":
+            return _status_payload("connected", "Connected", "bg-success-subtle text-success-emphasis")
+        if status == "reconnect_required":
+            return _status_payload(
+                "reconnect_required",
+                "Reconnect required",
+                "bg-warning-subtle text-warning-emphasis",
+            )
+        return _status_payload("not_connected", "Not connected", "bg-secondary-subtle text-secondary-emphasis")
+
+    if auth_type == "none":
+        return _status_payload("ready", "Ready", "bg-success-subtle text-success-emphasis")
+    if auth_type == "basic":
+        ready = bool(credential.username and credential.password)
+    elif auth_type == "token":
+        ready = bool(credential.token)
+    elif auth_type == "api_key":
+        api_key_name = ""
+        api_key_in = ""
+        if isinstance(credential.config, dict):
+            api_key_name = str(credential.config.get("api_key_name") or "").strip()
+            api_key_in = str(credential.config.get("api_key_in") or "").strip().lower()
+        ready = bool(credential.token and api_key_name and api_key_in in {"header", "query"})
+    else:
+        ready = False
+    if ready:
+        return _status_payload("ready", "Ready", "bg-success-subtle text-success-emphasis")
+    return _status_payload("needs_setup", "Needs setup", "bg-warning-subtle text-warning-emphasis")
+
+
+def get_tool_connection_status(tool: Tool) -> dict[str, str]:
+    if tool.tool_type == Tool.ToolType.BUILTIN:
+        return _builtin_connection_status(tool)
+    return _manual_connection_status(tool)
+
+
+def get_tool_connection_type_label(tool: Tool) -> str:
+    if tool.tool_type == Tool.ToolType.BUILTIN:
+        plugin = get_plugin_for_builtin_subtype(tool.tool_subtype or "")
+        if plugin is not None:
+            return plugin.label
+    return tool.get_tool_type_display()
 
 
 def _get_system_builtin_tool(subtype: str) -> Tool | None:
@@ -158,7 +275,9 @@ def ensure_capability_tooling() -> None:
 
 
 def get_accessible_tools_queryset(user):
-    return Tool.objects.filter(Q(user=user) | Q(user__isnull=True)).annotate(
+    return Tool.objects.filter(Q(user=user) | Q(user__isnull=True)).prefetch_related(
+        "credentials",
+    ).annotate(
         agent_count=Count(
             "agents",
             filter=Q(agents__user=user),
@@ -209,7 +328,6 @@ def get_preferred_backend_tool(user, subtype: str) -> Tool | None:
             user=None,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype=subtype,
-            is_active=True,
         )
         .order_by("id")
         .first()
@@ -222,7 +340,6 @@ def get_preferred_backend_tool(user, subtype: str) -> Tool | None:
             user=user,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype=subtype,
-            is_active=True,
         ).order_by("name", "id")
     )
     if len(custom_tools) == 1:
@@ -244,12 +361,8 @@ def build_agent_tool_selection_catalog(user, *, include_selected_ids: set[int] |
     ensure_capability_tooling()
     include_selected_ids = include_selected_ids or set()
 
-    def _active_or_selected():
-        return Q(is_active=True) | Q(pk__in=include_selected_ids)
-
     standard_tools = list(
         Tool.objects.filter(
-            _active_or_selected(),
             user=None,
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype__in=STANDARD_CAPABILITY_SUBTYPES,
@@ -258,7 +371,6 @@ def build_agent_tool_selection_catalog(user, *, include_selected_ids: set[int] |
 
     search_backends = list(
         Tool.objects.filter(
-            _active_or_selected(),
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="searxng",
         )
@@ -267,7 +379,6 @@ def build_agent_tool_selection_catalog(user, *, include_selected_ids: set[int] |
     )
     python_backends = list(
         Tool.objects.filter(
-            _active_or_selected(),
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="code_execution",
         )
@@ -275,8 +386,6 @@ def build_agent_tool_selection_catalog(user, *, include_selected_ids: set[int] |
         .order_by("user_id", "name", "id")
     )
     connection_tools = Tool.objects.filter(
-        _active_or_selected(),
-    ).filter(
         Q(user=user) | Q(user__isnull=True)
     ).filter(
         Q(tool_subtype__in=MULTI_INSTANCE_SUBTYPES)
@@ -297,6 +406,8 @@ def build_tools_page_catalog(user, *, tools: list[Tool] | None = None) -> dict:
     connections: list[Tool] = []
 
     for tool in annotated_tools:
+        tool.connection_status = get_tool_connection_status(tool)
+        tool.connection_type_label = get_tool_connection_type_label(tool)
         if tool.tool_subtype:
             tools_by_subtype.setdefault(tool.tool_subtype, []).append(tool)
         if tool.tool_type in {Tool.ToolType.API, Tool.ToolType.MCP} or tool.tool_subtype in MULTI_INSTANCE_SUBTYPES:

@@ -44,6 +44,7 @@ PLUGIN = InternalPluginDescriptor(
     },
     runtime_capability_resolver=resolve_single_builtin_tool("searxng"),
     skill_docs_provider=_skill_docs,
+    test_connection_handler="nova.plugins.search.service.test_searxng_access",
     python_path="nova.plugins.search",
     legacy_python_paths=("nova.plugins.search",),
     catalog_section="backend_capabilities",

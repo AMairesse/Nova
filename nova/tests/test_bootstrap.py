@@ -203,6 +203,15 @@ class BootstrapSkillsTests(TestCase):
         self.assertIn("Keep thread-scoped filesystem work", nova.system_prompt)
         self.assertIn("Python Agent", nova.system_prompt)
 
+    def test_bootstrap_attaches_webapp_tool_to_nova(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+
+        bootstrap_default_setup(self.user)
+
+        nova = AgentConfig.objects.get(user=self.user, name="Nova")
+
+        self.assertTrue(nova.tools.filter(tool_subtype="webapp").exists())
+
     def test_bootstrap_creates_and_attaches_image_agent_with_best_image_provider(self):
         main_provider = self.provider
         image_provider = create_provider(

@@ -103,14 +103,14 @@ class ToolsViewsTests(TestCase):
             "output_schema": {},
         },
     )
-    def test_create_search_backend_redirects_to_configure(self, mock_get_tool_type, mock_get_available):
+    def test_create_search_backend_redirects_to_settings(self, mock_get_tool_type, mock_get_available):
         response = self.client.post(
             reverse("user_settings:tool-add"),
             data={"connection_kind": "search", "name": "My Search", "is_active": True},
         )
         self.assertEqual(response.status_code, 302)
         tool = Tool.objects.get(user=self.user, tool_subtype="searxng")
-        self.assertEqual(response["Location"], reverse("user_settings:tool-configure", args=[tool.pk]))
+        self.assertEqual(response["Location"], reverse("user_settings:tool-edit", args=[tool.pk]))
         self.assertEqual(tool.python_path, "nova.plugins.search")
 
     def test_create_builtin_email_tool_keeps_custom_alias_name(self):
@@ -215,16 +215,30 @@ class ToolsViewsTests(TestCase):
                 "description": "Updated desc",
                 "tool_type": Tool.ToolType.API,
                 "endpoint": "https://api.example.com/v2",
+                "connection_mode": "none",
                 "is_active": True,
             },
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], reverse("user_settings:dashboard") + "#pane-tools")
+        self.assertEqual(response["Location"], reverse("user_settings:tool-edit", args=[tool.id]))
         tool.refresh_from_db()
         self.assertEqual(tool.name, "Updated")
         self.assertEqual(tool.endpoint, "https://api.example.com/v2")
 
-    def test_configure_api_tool_lists_operations_and_creates_api_key_credential(self):
+    def test_configure_route_redirects_to_settings(self):
+        tool = create_tool(
+            self.user,
+            name="CRM API",
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+
+        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("user_settings:tool-edit", args=[tool.id]))
+
+    def test_tool_settings_page_lists_operations_and_creates_api_key_credential(self):
         tool = create_tool(
             self.user,
             name="CRM API",
@@ -240,15 +254,18 @@ class ToolsViewsTests(TestCase):
             path_template="/contacts",
         )
 
-        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+        response = self.client.get(reverse("user_settings:tool-edit", args=[tool.id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "API operations")
         self.assertContains(response, "Create contact")
 
         response = self.client.post(
-            reverse("user_settings:tool-configure", args=[tool.id]),
+            reverse("user_settings:tool-edit", args=[tool.id]),
             data={
+                "name": tool.name,
+                "description": tool.description,
+                "endpoint": tool.endpoint,
                 "connection_mode": "api_key",
                 "username": "",
                 "password": "",
@@ -377,8 +394,8 @@ class ToolsViewsTests(TestCase):
             python_path="nova.plugins.calendar",
         )
         response = self.client.post(
-            reverse("user_settings:tool-configure", args=[tool.id]),
-            data={"username": "alice", "password": "secret"},
+            reverse("user_settings:tool-edit", args=[tool.id]),
+            data={"name": tool.name, "username": "alice", "password": "secret"},
         )
         self.assertEqual(response.status_code, 302)
         credential = tool.credentials.get(user=self.user)
@@ -394,7 +411,7 @@ class ToolsViewsTests(TestCase):
             python_path="nova.plugins.mail",
         )
 
-        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+        response = self.client.get(reverse("user_settings:tool-edit", args=[tool.id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "IMAP")
@@ -410,7 +427,7 @@ class ToolsViewsTests(TestCase):
             python_path="legacy.invalid.path",
         )
 
-        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+        response = self.client.get(reverse("user_settings:tool-edit", args=[tool.id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "IMAP")
@@ -433,7 +450,7 @@ class ToolsViewsTests(TestCase):
             },
         )
 
-        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.id]))
+        response = self.client.get(reverse("user_settings:tool-edit", args=[tool.id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'name="app_password"', html=False)
@@ -442,8 +459,11 @@ class ToolsViewsTests(TestCase):
     def test_configure_non_builtin_creates_credential_if_missing(self):
         tool = create_tool(self.user, tool_type=Tool.ToolType.API, endpoint="https://api.example.com")
         response = self.client.post(
-            reverse("user_settings:tool-configure", args=[tool.id]),
+            reverse("user_settings:tool-edit", args=[tool.id]),
             data={
+                "name": tool.name,
+                "description": tool.description,
+                "endpoint": tool.endpoint,
                 "connection_mode": "basic",
                 "username": "foo",
                 "password": "bar",
@@ -473,6 +493,30 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "success")
         mock_test_access.assert_awaited()
+
+    @patch("nova.plugins.search.service.test_searxng_access", new_callable=AsyncMock)
+    def test_tool_test_connection_search_backend(self, mock_test_access):
+        mock_test_access.return_value = {"status": "success", "message": "OK"}
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.plugins.search",
+        )
+        create_tool_credential(
+            self.user,
+            tool,
+            config={"searxng_url": "https://search.example.com", "num_results": 5},
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-test", args=[tool.id]),
+            data={},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "success")
+        mock_test_access.assert_awaited_once_with(tool=tool)
 
     @patch("user_settings.views.tool.MCPClient")
     def test_tool_test_connection_mcp(self, mock_client):
@@ -643,7 +687,7 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
-    def test_mcp_oauth_callback_redirects_to_configure_on_success(self):
+    def test_mcp_oauth_callback_redirects_to_settings_on_success(self):
         tool = create_tool(
             self.user,
             tool_type=Tool.ToolType.MCP,
@@ -669,7 +713,7 @@ class ToolsViewsTests(TestCase):
         messages = [str(message) for message in get_messages(response.wsgi_request)]
         self.assertEqual(
             response["Location"],
-            reverse("user_settings:tool-configure", args=[tool.pk]),
+            reverse("user_settings:tool-edit", args=[tool.pk]),
             messages,
         )
 
@@ -686,7 +730,7 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response["Location"], reverse("user_settings:tools"))
 
-    def test_tool_configure_renders_managed_oauth_inline_controls(self):
+    def test_tool_settings_renders_managed_oauth_inline_controls(self):
         tool = create_tool(
             self.user,
             tool_type=Tool.ToolType.MCP,
@@ -699,7 +743,7 @@ class ToolsViewsTests(TestCase):
             config={"mcp_oauth": {"status": "connected"}},
         )
 
-        response = self.client.get(reverse("user_settings:tool-configure", args=[tool.pk]))
+        response = self.client.get(reverse("user_settings:tool-edit", args=[tool.pk]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Reconnect with OAuth")

@@ -1,13 +1,5 @@
 <!-- user_settings/templates/user_settings/fragments/tool_table.html -->
 {% load i18n %}
-<div class="d-flex justify-content-between align-items-center mb-2">
-  <h5 class="mb-0">{% trans "Capabilities & Connections" %}</h5>
-  <a href="{% url 'user_settings:tool-add' %}?from=tools"
-     class="btn btn-sm btn-primary">
-    <i class="bi bi-plus-lg me-1"></i>{% trans "Add connection" %}
-  </a>
-</div>
-
 <div class="mb-4">
   <h6 class="text-uppercase text-muted mb-3">{% trans "Built-in capabilities" %}</h6>
   <div class="row g-3">
@@ -66,7 +58,7 @@
                   <thead>
                     <tr>
                       <th>{% trans "Custom backend" %}</th>
-                      <th>{% trans "Active" %}</th>
+                      <th>{% trans "Status" %}</th>
                       <th>{% trans "Models Using" %}</th>
                       <th class="text-end">{% trans "Actions" %}</th>
                     </tr>
@@ -76,18 +68,12 @@
                       <tr>
                         <td>{{ tool.name }}</td>
                         <td>
-                          {% if tool.is_active %}
-                            <span class="badge bg-success">{% trans "Active" %}</span>
-                          {% else %}
-                            <span class="badge bg-secondary">{% trans "Inactive" %}</span>
-                          {% endif %}
+                          <span class="badge {{ tool.connection_status.badge_class }}">{{ tool.connection_status.label }}</span>
                         </td>
                         <td>{{ tool.agent_count }}</td>
                         <td class="text-end">
                           <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"
-                             class="btn btn-sm btn-outline-primary me-1">{% trans "Edit" %}</a>
-                          <a href="{% url 'user_settings:tool-configure' tool.pk %}?from=tools"
-                             class="btn btn-sm btn-outline-primary me-1">{% trans "Configure" %}</a>
+                             class="btn btn-sm btn-outline-primary me-1">{% trans "Settings" %}</a>
                           <a href="{% url 'user_settings:tool-delete' tool.pk %}?from=tools"
                              class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
                         </td>
@@ -107,7 +93,13 @@
 </div>
 
 <div>
-  <h6 class="text-uppercase text-muted mb-3">{% trans "Connections" %}</h6>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h6 class="text-uppercase text-muted mb-0">{% trans "Connections" %}</h6>
+    <a href="{% url 'user_settings:tool-add' %}?from=tools"
+       class="btn btn-sm btn-primary">
+      <i class="bi bi-plus-lg me-1"></i>{% trans "Add connection" %}
+    </a>
+  </div>
   {% if tool_catalog.has_connections %}
     <div class="table-responsive">
       <table class="table table-hover align-middle">
@@ -115,7 +107,7 @@
           <tr>
             <th>{% trans "Name" %}</th>
             <th>{% trans "Type" %}</th>
-            <th>{% trans "Active" %}</th>
+            <th>{% trans "Status" %}</th>
             <th>{% trans "Models Using" %}</th>
             <th class="text-end">{% trans "Actions" %}</th>
           </tr>
@@ -124,21 +116,15 @@
           {% for tool in tool_catalog.connections %}
             <tr>
               <td>{{ tool.name }}</td>
-              <td>{{ tool.get_tool_type_display }}</td>
+              <td>{{ tool.connection_type_label }}</td>
               <td>
-                {% if tool.is_active %}
-                  <span class="badge bg-success">{% trans "Active" %}</span>
-                {% else %}
-                  <span class="badge bg-secondary">{% trans "Inactive" %}</span>
-                {% endif %}
+                <span class="badge {{ tool.connection_status.badge_class }}">{{ tool.connection_status.label }}</span>
               </td>
               <td>{{ tool.agent_count }}</td>
               <td class="text-end">
                 {% if tool.user == request.user %}
                   <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"
-                     class="btn btn-sm btn-outline-primary me-1">{% trans "Edit" %}</a>
-                  <a href="{% url 'user_settings:tool-configure' tool.pk %}?from=tools"
-                     class="btn btn-sm btn-outline-primary me-1">{% trans "Configure" %}</a>
+                     class="btn btn-sm btn-outline-primary me-1">{% trans "Settings" %}</a>
                   <a href="{% url 'user_settings:tool-delete' tool.pk %}?from=tools"
                      class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
                 {% endif %}
@@ -149,6 +135,11 @@
       </table>
     </div>
   {% else %}
-    <p class="text-muted mb-0">{% trans "No custom connections configured yet." %}</p>
+    <div class="border rounded p-4 text-center">
+      <p class="text-muted mb-3">{% trans "No custom connections configured yet." %}</p>
+      <a href="{% url 'user_settings:tool-add' %}?from=tools" class="btn btn-sm btn-primary">
+        <i class="bi bi-plus-lg me-1"></i>{% trans "Add connection" %}
+      </a>
+    </div>
   {% endif %}
 </div>

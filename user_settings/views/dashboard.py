@@ -11,6 +11,5 @@ class DashboardView(LoginRequiredMixin, TemplateView):
         # Check if user has memory tool enabled
         context['has_memory_tool'] = self.request.user.tools.filter(
             tool_subtype="memory",
-            is_active=True
         ).exists()
         return context

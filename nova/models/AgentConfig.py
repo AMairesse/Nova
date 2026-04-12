@@ -136,7 +136,7 @@ class AgentConfig(models.Model):
         if not self.pk:
             return False
         return (
-            self.tools.filter(is_active=True).exists()
+            self.tools.exists()
             or self.agent_tools.filter(is_tool=True).exists()
         )
 

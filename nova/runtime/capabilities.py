@@ -153,7 +153,7 @@ class TerminalCapabilities:
 
 
 def resolve_terminal_capabilities(agent_config) -> TerminalCapabilities:
-    tools = list(agent_config.tools.filter(is_active=True).order_by("id"))
+    tools = list(agent_config.tools.order_by("id"))
     subagents = list(
         agent_config.agent_tools.filter(
             is_tool=True,

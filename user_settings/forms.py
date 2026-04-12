@@ -502,14 +502,20 @@ class ToolForm(forms.ModelForm):
             "tool_subtype",
             "endpoint",
             "transport_type",
-            "is_active",
         ]
 
     # ------------------------------------------------------------------ #
     #  Constructor                                                        #
     # ------------------------------------------------------------------ #
-    def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        user=None,
+        fixed_connection_kind: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.user = user
+        self.fixed_connection_kind = str(fixed_connection_kind or "").strip()
         super().__init__(*args, **kwargs)
 
         # Crispy helper
@@ -528,6 +534,9 @@ class ToolForm(forms.ModelForm):
         self.fields["connection_kind"].choices = [("", "---------")] + get_user_creatable_connection_choices()
         if self.instance.pk:
             self.fields["connection_kind"].initial = self._connection_kind_from_instance()
+            self.fields["connection_kind"].widget = forms.HiddenInput()
+        elif self.fixed_connection_kind:
+            self.fields["connection_kind"].initial = self.fixed_connection_kind
             self.fields["connection_kind"].widget = forms.HiddenInput()
         else:
             self.fields["connection_kind"].initial = (
@@ -551,7 +560,6 @@ class ToolForm(forms.ModelForm):
             "description",
             "endpoint",
             "transport_type",
-            "is_active",
         )
 
     # ------------------------------------------------------------------ #
@@ -624,9 +632,6 @@ class ToolForm(forms.ModelForm):
         if commit:
             instance.save()
         return instance
-
-    class Media:
-        js = ["user_settings/js/tool.js"]
 
     def _connection_kind_from_instance(self) -> str:
         if self.instance.tool_type == Tool.ToolType.BUILTIN:
@@ -746,6 +751,25 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
     def __init__(self, *args: Any, user=None, tool: Tool | None = None, **kw):
         self.user = user
         self.tool = kw.pop("tool", tool)
+        if args:
+            bound_data = args[0]
+        else:
+            bound_data = kw.get("data")
+        if bound_data is not None and "connection_mode" not in bound_data:
+            fallback_mode = "none"
+            instance = kw.get("instance")
+            auth_type = str(getattr(instance, "auth_type", "") or "").strip().lower()
+            if auth_type == "oauth":
+                fallback_mode = "token"
+            elif auth_type:
+                fallback_mode = auth_type
+            if hasattr(bound_data, "copy"):
+                updated_data = bound_data.copy()
+                updated_data["connection_mode"] = fallback_mode
+                if args:
+                    args = (updated_data, *args[1:])
+                else:
+                    kw["data"] = updated_data
         super().__init__(*args, **kw)
         self._previous_auth_type = str(getattr(self.instance, "auth_type", "") or "").strip().lower()
         self.connection_mode_definitions = self._get_connection_mode_definitions()

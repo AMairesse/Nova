@@ -4,24 +4,24 @@ from __future__ import annotations
 import logging
 import json
 from collections import OrderedDict
+from urllib.parse import urlencode
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Q, Count
 from django.http import HttpResponseRedirect, JsonResponse
+from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.decorators.http import require_POST
-from django.views.generic import ListView, DeleteView, FormView
+from django.views.generic import ListView, DeleteView, FormView, TemplateView
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Div, Fieldset, Field
 from asgiref.sync import async_to_sync, sync_to_async
 
 from user_settings.mixins import (
     UserOwnedQuerySetMixin,
-    OwnerCreateView,
-    OwnerUpdateView,
     SystemReadonlyMixin,
     OwnerAccessMixin,
     SecretPreserveMixin,
@@ -36,9 +36,13 @@ from nova.models.Tool import (
     check_and_create_judge0_tool,
     check_and_create_searxng_tool,
 )
+from nova.plugins import get_plugin_for_builtin_subtype
 from nova.plugins.catalog import (
     build_tools_page_catalog,
     ensure_standard_capability_tools,
+    get_tool_connection_status,
+    get_user_creatable_plugins,
+    resolve_connection_kind,
 )
 from nova.plugins.builtins import get_metadata, get_tool_type
 from nova.mcp.client import MCPClient
@@ -134,7 +138,7 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
                 filter=Q(agents__user=self.request.user),
                 distinct=True,
             )
-        ).order_by("user", "name", "id")
+        ).prefetch_related("credentials").order_by("user", "name", "id")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -146,69 +150,275 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
 
 
 # ---------------------------------------------------------------------------#
-#  CREATE / UPDATE (without credential formset)                              #
+#  CREATE / UPDATE (unified settings screen)                                 #
 # ---------------------------------------------------------------------------#
-class _ToolBaseMixin(DashboardRedirectMixin,
-                     LoginRequiredMixin,
-                     SuccessMessageMixin):
-    """
-    Common logic for Tool create / update views.
-    """
+def _tool_redirect_url(name: str, *, pk: int, origin: str = "") -> str:
+    base_url = reverse(name, args=[pk])
+    if not origin:
+        return base_url
+    return f"{base_url}?{urlencode({'from': origin})}"
+
+
+def _tool_kind_sections() -> list[dict]:
+    backend_ids = {"search", "python"}
+    sections = [
+        {"title": _("Capabilities with backends"), "items": []},
+        {"title": _("Connections"), "items": []},
+    ]
+    for plugin in get_user_creatable_plugins():
+        item = {
+            "kind": plugin.plugin_id,
+            "label": plugin.add_label or plugin.label,
+            "description": (plugin.settings_metadata or {}).get("description", ""),
+        }
+        if plugin.plugin_id in backend_ids:
+            sections[0]["items"].append(item)
+        else:
+            sections[1]["items"].append(item)
+    return [section for section in sections if section["items"]]
+
+
+def _tool_mapping_from_instance(tool: Tool) -> dict[str, str]:
+    return {
+        "tool_type": tool.tool_type,
+        "tool_subtype": tool.tool_subtype or "",
+    }
+
+
+class _ToolSettingsBaseView(DashboardRedirectMixin, LoginRequiredMixin, TemplateView):
     model = Tool
-    form_class = ToolForm
     template_name = "user_settings/tool_form.html"
     dashboard_tab = "tools"
+    object: Tool | None = None
 
-    def get_form_kwargs(self):
-        kw = super().get_form_kwargs()
-        kw["user"] = self.request.user
-        return kw
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+        self.object = self.get_tool_object()
+        return super().dispatch(request, *args, **kwargs)
 
-    def form_valid(self, form):
-        """
-        Custom save to inject the user and redirect to the *configure* view
-        right after creation.
-        """
-        is_new = form.instance.pk is None
+    def get_tool_object(self) -> Tool | None:
+        return None
 
-        obj = form.save(commit=False)
-        if is_new:
-            obj.user = self.request.user
-        obj.save()
-        if hasattr(form, "save_m2m"):
-            form.save_m2m()
+    def get(self, request, *args, **kwargs):
+        return self._render()
 
-        self.object = obj
-        messages.success(self.request, "Tool saved successfully.")
+    def post(self, request, *args, **kwargs):
+        return self._handle_submit()
 
-        # New tool → go to configuration screen
-        if is_new:
-            return HttpResponseRedirect(
-                reverse("user_settings:tool-configure", args=[obj.pk])
-            )
+    def _origin(self) -> str:
+        return str(self.request.POST.get("from") or self.request.GET.get("from") or "").strip()
 
-        # Updated tool → back to dashboard tab
-        return HttpResponseRedirect(self.get_success_url())
-
-    def form_invalid(self, form):
-        """Return HTTP 400 so dev-tools clearly show the validation error."""
-        return self.render_to_response(
-            self.get_context_data(form=form), status=400
+    def _tool_settings_url(self, tool: Tool) -> str:
+        return _tool_redirect_url(
+            "user_settings:tool-edit",
+            pk=tool.pk,
+            origin=self._origin(),
         )
 
+    def _selected_connection_kind(self) -> str:
+        if self.object is not None:
+            if self.object.tool_type == Tool.ToolType.BUILTIN:
+                plugin = get_plugin_for_builtin_subtype(self.object.tool_subtype or "")
+                return plugin.plugin_id if plugin is not None else ""
+            return str(self.object.tool_type or "")
+        return str(
+            self.request.POST.get("connection_kind")
+            or self.request.GET.get("kind")
+            or ""
+        ).strip()
 
-class ToolCreateView(_ToolBaseMixin, OwnerCreateView):
-    success_message = "Tool created successfully"
+    def _selected_mapping(self) -> dict[str, str] | None:
+        if self.object is not None:
+            return _tool_mapping_from_instance(self.object)
+        selected_kind = self._selected_connection_kind()
+        if not selected_kind:
+            return None
+        mapping = resolve_connection_kind(selected_kind)
+        if mapping is None:
+            return None
+        return {
+            "tool_type": mapping["tool_type"],
+            "tool_subtype": mapping["tool_subtype"],
+        }
 
-    def get_initial(self):
-        initial = super().get_initial()
-        if self.request.GET.get("kind"):
-            initial["connection_kind"] = self.request.GET["kind"]
-        return initial
+    def _build_tool_draft(self, mapping: dict[str, str] | None) -> Tool | None:
+        if mapping is None:
+            return None
+        tool = Tool(
+            user=self.request.user,
+            tool_type=mapping["tool_type"],
+            tool_subtype=mapping["tool_subtype"],
+        )
+        if tool.tool_type != Tool.ToolType.MCP:
+            tool.transport_type = Tool.TransportType.STREAMABLE_HTTP
+        return tool
+
+    def _build_tool_form(self, *, bind: bool) -> ToolForm | None:
+        if self.object is None and not self._selected_connection_kind():
+            return None
+        data = self.request.POST if bind else None
+        return ToolForm(
+            data=data,
+            instance=self.object or Tool(),
+            user=self.request.user,
+            fixed_connection_kind=self._selected_connection_kind(),
+        )
+
+    def _config_credential(self, tool: Tool) -> ToolCredential | None:
+        if not tool.pk:
+            return None
+        return ToolCredential.objects.filter(
+            user=self.request.user,
+            tool=tool,
+        ).first()
+
+    def _build_settings_form(self, *, bind: bool, tool: Tool | None):
+        if tool is None:
+            return None
+        data = self.request.POST if bind else None
+        if tool.tool_type == Tool.ToolType.BUILTIN:
+            meta = _get_builtin_metadata_for_tool(tool)
+            credential = self._config_credential(tool)
+            initial = dict(credential.config or {}) if credential else {}
+            return _BuiltInConfigForm(
+                data=data,
+                meta=meta,
+                tool=tool,
+                user=self.request.user,
+                initial=initial,
+            )
+
+        credential = self._config_credential(tool)
+        if credential is None:
+            credential = ToolCredential(
+                user=self.request.user,
+                tool=tool,
+                auth_type="none",
+            )
+        return ToolCredentialForm(
+            data=data,
+            instance=credential,
+            tool=tool,
+            user=self.request.user,
+        )
+
+    def _save_settings_form(self, *, form, tool: Tool) -> ToolCredential | None:
+        if tool.tool_type == Tool.ToolType.BUILTIN:
+            credential, _ = ToolCredential.objects.get_or_create(
+                user=self.request.user,
+                tool=tool,
+                defaults={"auth_type": "basic"},
+            )
+            credential.config.update(form.cleaned_data)
+            credential.save()
+            return credential
+
+        credential = form.save(commit=False)
+        credential.user = self.request.user
+        credential.tool = tool
+        credential.save()
+        return credential
+
+    def _kind_label(self, tool: Tool | None) -> str:
+        if tool is None:
+            return ""
+        if tool.tool_type == Tool.ToolType.BUILTIN:
+            plugin = get_plugin_for_builtin_subtype(tool.tool_subtype or "")
+            if plugin is not None:
+                return plugin.add_label or plugin.label
+        return tool.get_tool_type_display()
+
+    def _render(self, *, status: int = 200, tool_form=None, settings_form=None):
+        selected_mapping = self._selected_mapping()
+        draft_tool = self.object or self._build_tool_draft(selected_mapping)
+        tool_form = tool_form or self._build_tool_form(bind=False)
+        settings_form = settings_form or self._build_settings_form(bind=False, tool=draft_tool)
+        current_tool = self.object or draft_tool
+        current_credential = self._config_credential(self.object) if self.object else None
+        selected_connection_mode = ""
+        if settings_form is not None and "connection_mode" in getattr(settings_form, "fields", {}):
+            selected_connection_mode = str(
+                settings_form.data.get("connection_mode")
+                or settings_form.initial.get("connection_mode")
+                or ""
+            ).strip()
+        metadata = _get_builtin_metadata_for_tool(current_tool) if current_tool and current_tool.tool_type == Tool.ToolType.BUILTIN else {}
+        can_test_connection = bool(
+            self.object
+            and current_tool
+            and (
+                (current_tool.tool_type == Tool.ToolType.BUILTIN and metadata.get("requires_config"))
+                or current_tool.tool_type == Tool.ToolType.MCP
+            )
+        )
+
+        context = {
+            "tool": current_tool,
+            "object": self.object,
+            "tool_form": tool_form,
+            "settings_form": settings_form,
+            "form": tool_form or ToolForm(user=self.request.user),
+            "show_kind_chooser": self.object is None and not self._selected_connection_kind(),
+            "connection_kind_sections": _tool_kind_sections(),
+            "page_title": _("Settings") if self.object else _("Add connection"),
+            "connection_kind_label": self._kind_label(current_tool),
+            "connection_status": get_tool_connection_status(self.object) if self.object else None,
+            "can_test_connection": can_test_connection,
+            "selected_connection_mode": selected_connection_mode,
+            "dashboard_tab": self.dashboard_tab,
+        }
+        if metadata:
+            context["metadata"] = metadata
+        if settings_form is not None and hasattr(settings_form, "connection_mode_definitions"):
+            context["connection_modes"] = list(settings_form.connection_mode_definitions)
+        if current_tool and current_tool.tool_type == Tool.ToolType.MCP:
+            context["mcp_oauth"] = _build_mcp_oauth_context(current_credential)
+        if self.object and self.object.tool_type == Tool.ToolType.API:
+            context["api_operations"] = list(
+                APIToolOperation.objects.filter(tool=self.object).order_by("name", "id")
+            )
+        return self.render_to_response(context, status=status)
+
+    def _handle_submit(self):
+        tool_form = self._build_tool_form(bind=True)
+        if tool_form is None:
+            messages.error(self.request, _("Choose a connection type to continue."))
+            return self._render(status=400)
+
+        selected_mapping = self._selected_mapping()
+        draft_tool = self.object or self._build_tool_draft(selected_mapping)
+        settings_form = self._build_settings_form(bind=True, tool=draft_tool)
+
+        tool_valid = tool_form.is_valid()
+        settings_valid = settings_form.is_valid() if settings_form is not None else True
+        if not (tool_valid and settings_valid):
+            return self._render(
+                status=400,
+                tool_form=tool_form,
+                settings_form=settings_form,
+            )
+
+        is_new = self.object is None
+        tool = tool_form.save(commit=False)
+        if is_new:
+            tool.user = self.request.user
+        tool.save()
+        if settings_form is not None:
+            self._save_settings_form(form=settings_form, tool=tool)
+
+        self.object = tool
+        messages.success(self.request, _("Connection saved."))
+        return HttpResponseRedirect(self._tool_settings_url(tool))
 
 
-class ToolUpdateView(_ToolBaseMixin, SystemReadonlyMixin, OwnerUpdateView):
-    success_message = "Tool updated successfully"
+class ToolCreateView(_ToolSettingsBaseView):
+    pass
+
+
+class ToolUpdateView(_ToolSettingsBaseView):
+    def get_tool_object(self) -> Tool | None:
+        return get_object_or_404(Tool, pk=self.kwargs["pk"], user=self.request.user)
 
 
 class ToolDeleteView(
@@ -257,7 +467,7 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
         # Build dynamic fields
         for cfg in config_fields:
             ftype = cfg["type"]
-            required = cfg.get("required", False)
+            required = False
             name = cfg["name"]
             label = cfg["label"]
             default = cfg.get("default")
@@ -351,6 +561,10 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
 
     def clean(self):
         cleaned = super().clean()
+        for secret_name in self.secret_fields:
+            if cleaned.get(secret_name) in ("", None) and secret_name in self._existing_secrets:
+                cleaned[secret_name] = self._existing_secrets[secret_name]
+
         if not self.tool or not self.user:
             return cleaned
 
@@ -362,7 +576,9 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
                 tool__tool_subtype="searxng",
                 config__searxng_url=cleaned.get("searxng_url"),
                 config__num_results=cleaned.get("num_results"),
-            ).exclude(tool=self.tool)
+            )
+            if self.tool.pk:
+                duplicate_qs = duplicate_qs.exclude(tool_id=self.tool.pk)
             if cleaned.get("searxng_url") and duplicate_qs.exists():
                 raise forms.ValidationError(
                     _("A search backend with the same server URL and result limit already exists.")
@@ -376,7 +592,9 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
                 tool__tool_subtype="code_execution",
                 config__judge0_url=cleaned.get("judge0_url"),
                 config__timeout=cleaned.get("timeout"),
-            ).exclude(tool=self.tool)
+            )
+            if self.tool.pk:
+                duplicate_qs = duplicate_qs.exclude(tool_id=self.tool.pk)
             if cleaned.get("judge0_url") and duplicate_qs.exists():
                 raise forms.ValidationError(
                     _("A Python backend with the same Judge0 server settings already exists.")
@@ -384,94 +602,22 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
 
         return cleaned
 
-    def clean(self):
-        data = super().clean()
-        # Preserve existing secrets if the field is left blank
-        for f in self.secret_fields:
-            if data.get(f) in ("", None) and f in self._existing_secrets:
-                data[f] = self._existing_secrets[f]
-        return data
+# Compatibility route: keep old configure URLs working while the canonical
+# screen is now the unified settings page.
+class ToolConfigureView(LoginRequiredMixin, DashboardRedirectMixin, TemplateView):
+    dashboard_tab = "tools"
 
-
-class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
-    template_name = "user_settings/tool_configure.html"
-
-    # ------------------------------------------------------------------ #
-    #  Dispatch                                                          #
-    # ------------------------------------------------------------------ #
     def dispatch(self, request, *args, **kwargs):
-        self.tool: Tool = Tool.objects.get(
-            pk=kwargs["pk"], user=self.request.user
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
+        tool = get_object_or_404(Tool, pk=kwargs["pk"], user=request.user)
+        return HttpResponseRedirect(
+            _tool_redirect_url(
+                "user_settings:tool-edit",
+                pk=tool.pk,
+                origin=str(request.GET.get("from") or request.POST.get("from") or "").strip(),
+            )
         )
-        return super().dispatch(request, *args, **kwargs)
-
-    # ------------------------------------------------------------------ #
-    #  Build the proper form                                             #
-    # ------------------------------------------------------------------ #
-    def get_form_class(self):
-        if self.tool.tool_type == Tool.ToolType.BUILTIN:
-            meta = _get_builtin_metadata_for_tool(self.tool)
-            return lambda *a, **kw: _BuiltInConfigForm(*a, meta=meta, tool=self.tool, **kw)
-        return ToolCredentialForm
-
-    def get_form_kwargs(self):
-        kw = super().get_form_kwargs()
-        if self.tool.tool_type != Tool.ToolType.BUILTIN:
-            # For ToolCredentialForm
-            credential, _ = ToolCredential.objects.get_or_create(
-                user=self.request.user,
-                tool=self.tool,
-                defaults={"auth_type": "none"},
-            )
-            self.credential = credential
-            kw["instance"] = credential
-            kw["tool"] = self.tool
-        else:
-            # For built-in form, preload current config
-            cred = self.tool.credentials.first()
-            kw["initial"] = cred.config if cred else {}
-        kw["user"] = self.request.user
-        return kw
-
-    # ------------------------------------------------------------------ #
-    #  Save                                                              #
-    # ------------------------------------------------------------------ #
-    def form_valid(self, form):
-        if self.tool.tool_type == Tool.ToolType.BUILTIN:
-            cred, _ = ToolCredential.objects.get_or_create(
-                user=self.request.user,
-                tool=self.tool,
-                defaults={"auth_type": "basic"},
-            )
-            cred.config.update(form.cleaned_data)
-            cred.save()
-        else:
-            form.save()
-
-        messages.success(self.request, "Configuration saved.")
-        return HttpResponseRedirect(self.get_success_url())
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        ctx["tool"] = self.tool
-        if self.tool.tool_type == Tool.ToolType.BUILTIN:
-            ctx["metadata"] = _get_builtin_metadata_for_tool(self.tool)
-        if self.tool.tool_type == Tool.ToolType.API:
-            ctx["api_operations"] = list(
-                APIToolOperation.objects.filter(tool=self.tool).order_by("name", "id")
-            )
-        form = ctx.get("form")
-        if form is not None and hasattr(form, "connection_mode_definitions"):
-            ctx["connection_modes"] = list(form.connection_mode_definitions)
-        if self.tool.tool_type == Tool.ToolType.MCP:
-            credential = getattr(self, "credential", None)
-            if credential is None:
-                credential = ToolCredential.objects.filter(
-                    user=self.request.user,
-                    tool=self.tool,
-                ).first()
-            ctx["mcp_oauth"] = _build_mcp_oauth_context(credential)
-        return ctx
 
 
 class _APIToolOperationViewBase(DashboardRedirectMixin, LoginRequiredMixin):
@@ -487,7 +633,7 @@ class _APIToolOperationViewBase(DashboardRedirectMixin, LoginRequiredMixin):
         return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
-        return reverse("user_settings:tool-configure", args=[self.tool.pk])
+        return reverse("user_settings:tool-edit", args=[self.tool.pk])
 
 
 class APIToolOperationCreateView(_APIToolOperationViewBase, FormView):
@@ -568,7 +714,7 @@ class APIToolOperationDeleteView(
         return APIToolOperation.objects.filter(tool=self.tool)
 
     def get_success_url(self):
-        return reverse("user_settings:tool-configure", args=[self.tool.pk])
+        return reverse("user_settings:tool-edit", args=[self.tool.pk])
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -779,4 +925,4 @@ def mcp_oauth_callback(request):
         return HttpResponseRedirect(reverse("user_settings:tools"))
 
     messages.success(request, f'MCP OAuth connected successfully for "{tool.name}".')
-    return HttpResponseRedirect(reverse("user_settings:tool-configure", args=[tool.pk]))
+    return HttpResponseRedirect(reverse("user_settings:tool-edit", args=[tool.pk]))

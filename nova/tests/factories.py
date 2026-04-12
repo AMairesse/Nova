@@ -55,7 +55,6 @@ def create_tool(user, name="Test Tool", tool_type=Tool.ToolType.BUILTIN, descrip
         tool_type=tool_type,
         endpoint=endpoint if tool_type in {Tool.ToolType.API, Tool.ToolType.MCP} else None,
         tool_subtype=tool_subtype,
-        is_active=is_active,
         python_path=(python_path or builtin_python_path),
         transport_type=transport_type,
     )

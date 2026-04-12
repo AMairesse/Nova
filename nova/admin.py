@@ -270,8 +270,8 @@ class TaskDefinitionAdmin(admin.ModelAdmin):
 
 @admin.register(Tool)
 class ToolAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "tool_type", "tool_subtype", "user", "is_active", "updated_at")
-    list_filter = ("tool_type", "tool_subtype", "is_active", "updated_at")
+    list_display = ("id", "name", "tool_type", "tool_subtype", "user", "updated_at")
+    list_filter = ("tool_type", "tool_subtype", "updated_at")
     search_fields = ("name", "description", "python_path", "user__username")
 
 
