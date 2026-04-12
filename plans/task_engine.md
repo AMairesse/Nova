@@ -28,10 +28,11 @@ This document describes the current execution model for scheduled and interactiv
 
 ## Execution Path
 
-Agent tasks run through the current runtime/task executors:
+Agent tasks run through the current runtime task executors implemented in
+`nova/runtime/task_executor.py`:
 
-- `ReactTerminalTaskExecutor`
-- `ReactTerminalSummarizationTaskExecutor`
+- the main agent task executor
+- the summarization task executor
 
 High-level flow:
 

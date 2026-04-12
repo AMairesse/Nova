@@ -68,9 +68,12 @@ Current plugin families include:
 ### Virtual mounts
 
 - `/skills`: readonly runtime docs
+- `/inbox`: readonly files attached to the current user message
+- `/history`: readonly files attached to earlier live messages still present in runtime context
 - `/memory`: user-scoped Markdown memory workspace
 - `/webdav`: remote WebDAV mounts when configured
-- `/tmp`: hidden scratch area backed by `UserFile(scope=MESSAGE_ATTACHMENT)`
+- `/tmp`: per-run scratch area backed by `UserFile(scope=MESSAGE_ATTACHMENT)`
+- `/generated`: conventional output area for provider-native media/files created during the run
 - `/subagents/<agent-id>-<run-id>/`: copied-back outputs from delegated runs
 
 ## Memory Model
@@ -158,7 +161,7 @@ Web apps are live publications from normal workspace files:
 
 ### MCP
 
-MCP servers are attached as tools with `tool_type=mcp` and surfaced through:
+MCP servers are attached as connections (persisted as `Tool(tool_type=mcp)`) and surfaced through:
 
 - `mcp servers`
 - `mcp tools`
@@ -170,7 +173,7 @@ MCP managed OAuth is configured in settings and refreshed silently at runtime wh
 
 ### Custom API
 
-Custom API services are attached as tools with `tool_type=api` and surfaced through:
+Custom API services are attached as connections (persisted as `Tool(tool_type=api)`) and surfaced through:
 
 - `api services`
 - `api operations`
