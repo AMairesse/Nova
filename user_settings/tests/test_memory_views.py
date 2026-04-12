@@ -12,6 +12,7 @@ from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
 from nova.models.MemoryDocument import MemoryDocument
 from nova.models.memory_common import MemoryRecordStatus
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
+from nova.plugins.catalog import build_tools_page_catalog
 from user_settings.views.memory import MemorySettingsView
 
 
@@ -105,8 +106,9 @@ class MemorySettingsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/memory_form.html")
-        self.assertContains(response, "Memory: embeddings settings")
-        self.assertContains(response, "Memory browser")
+        self.assertContains(response, "Semantic retrieval settings")
+        self.assertContains(response, "Memory records")
+        self.assertContains(response, "No agent currently has the Memory capability enabled.")
 
     def test_memory_browser_fragment_loads_immediately_when_memory_form_renders(self):
         response = self.client.get(self.partial_url)
@@ -419,3 +421,76 @@ class MemorySettingsViewTests(TestCase):
         self.assertContains(response, "System embeddings provider")
         self.assertContains(response, "https://system.example.com/v1")
         self.assertContains(response, "embed-system")
+
+
+class MemoryDashboardAccessTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="memory-dashboard-user",
+            email="memory-dashboard@example.com",
+            password="pass123",
+        )
+        self.client.login(username="memory-dashboard-user", password="pass123")
+        self.url = reverse("user_settings:dashboard")
+
+    def test_dashboard_always_shows_memory_tab(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="tab-memory"', html=False)
+        self.assertContains(response, 'data-bs-target="#pane-memory"', html=False)
+        self.assertContains(
+            response,
+            f'hx-get="{reverse("user_settings:memory")}?partial=1"',
+            html=False,
+        )
+
+
+class MemoryToolsCatalogTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="memory-tools-user",
+            email="memory-tools@example.com",
+            password="pass123",
+        )
+        self.client.login(username="memory-tools-user", password="pass123")
+        self.url = reverse("user_settings:tools")
+        self.parameters, _ = UserParameters.objects.get_or_create(user=self.user)
+
+    def _memory_capability(self):
+        catalog = build_tools_page_catalog(self.user)
+        return next(item for item in catalog["built_in_capabilities"] if item["label"] == "Memory")
+
+    def test_tools_page_exposes_memory_settings_shortcut(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Open memory settings")
+        self.assertContains(
+            response,
+            f'href="{reverse("user_settings:dashboard")}#pane-memory"',
+            html=False,
+        )
+        self.assertContains(response, "Lexical only")
+
+    def test_memory_capability_status_summary_tracks_user_embeddings_mode(self):
+        capability = self._memory_capability()
+        self.assertEqual(capability["status_summary"]["value"], "Lexical only")
+
+        self.parameters.memory_embeddings_source = MemoryEmbeddingsSource.DISABLED
+        self.parameters.save(update_fields=["memory_embeddings_source"])
+        capability = self._memory_capability()
+        self.assertEqual(capability["status_summary"]["value"], "Embeddings disabled")
+
+        self.parameters.memory_embeddings_source = MemoryEmbeddingsSource.CUSTOM
+        self.parameters.memory_embeddings_url = "https://embeddings.example.com/v1"
+        self.parameters.memory_embeddings_model = "embed-1"
+        self.parameters.save(
+            update_fields=[
+                "memory_embeddings_source",
+                "memory_embeddings_url",
+                "memory_embeddings_model",
+            ]
+        )
+        capability = self._memory_capability()
+        self.assertEqual(capability["status_summary"]["value"], "Semantic search ready")

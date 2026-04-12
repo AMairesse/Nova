@@ -37,7 +37,7 @@ PLUGIN = InternalPluginDescriptor(
     command_families=("webapp",),
     settings_metadata={
         "name": "WebApp",
-        "description": "Expose a live static webapp from a terminal source directory.",
+        "description": "Create and publish lightweight web apps directly from the files you build in Nova.",
         "loading": {
             "mode": "skill",
             "skill_id": "webapp",

@@ -5,8 +5,12 @@ from typing import Any
 
 from django.conf import settings
 from django.db.models import Count, Q
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
 
+from nova.llm.embeddings import resolve_embeddings_provider_for_values
 from nova.models.Tool import Tool, ToolCredential
+from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.plugins import get_internal_plugins, get_plugin, get_plugin_for_builtin_subtype
 
 
@@ -357,6 +361,69 @@ def get_standard_capability_tools():
     return tools
 
 
+def _resolve_builtin_settings_action(plugin) -> dict[str, str] | None:
+    if plugin is None:
+        return None
+    metadata = plugin.build_builtin_metadata()
+    route_name = str(metadata.get("settings_route_name") or "").strip()
+    if not route_name:
+        return None
+    url = reverse(route_name)
+    anchor = str(metadata.get("settings_anchor") or "").strip()
+    if anchor:
+        url = f"{url}{anchor}"
+    label = str(metadata.get("settings_label") or _("Open settings")).strip()
+    return {
+        "url": url,
+        "label": label,
+    }
+
+
+def _memory_status_summary_for_user(user) -> dict[str, str]:
+    params = UserParameters.objects.filter(user=user).first()
+    source = MemoryEmbeddingsSource.SYSTEM
+    base_url = ""
+    model = ""
+    api_key = None
+    if params is not None:
+        source = str(params.memory_embeddings_source or MemoryEmbeddingsSource.SYSTEM)
+        base_url = (params.memory_embeddings_url or "").strip()
+        model = (params.memory_embeddings_model or "").strip()
+        api_key = params.memory_embeddings_api_key or None
+
+    resolved = resolve_embeddings_provider_for_values(
+        selected_source=source,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        sync_system_state=False,
+    )
+
+    if resolved.provider is not None:
+        return {
+            "label": _("Semantic retrieval"),
+            "value": _("Semantic search ready"),
+            "badge_class": "bg-success-subtle text-success-emphasis",
+        }
+    if resolved.selected_source == MemoryEmbeddingsSource.DISABLED:
+        return {
+            "label": _("Semantic retrieval"),
+            "value": _("Embeddings disabled"),
+            "badge_class": "bg-secondary-subtle text-secondary-emphasis",
+        }
+    return {
+        "label": _("Semantic retrieval"),
+        "value": _("Lexical only"),
+        "badge_class": "bg-warning-subtle text-warning-emphasis",
+    }
+
+
+def _builtin_status_summary_for_user(user, subtype: str) -> dict[str, str] | None:
+    if subtype == "memory":
+        return _memory_status_summary_for_user(user)
+    return None
+
+
 def build_agent_tool_selection_catalog(user, *, include_selected_ids: set[int] | None = None) -> dict:
     ensure_capability_tooling()
     include_selected_ids = include_selected_ids or set()
@@ -424,6 +491,8 @@ def build_tools_page_catalog(user, *, tools: list[Tool] | None = None) -> dict:
                 "label": plugin.label if plugin is not None else subtype,
                 "description": (plugin.settings_metadata or {}).get("description", "") if plugin is not None else "",
                 "agent_count": getattr(system_tool, "agent_count", 0) if system_tool is not None else 0,
+                "settings_action": _resolve_builtin_settings_action(plugin),
+                "status_summary": _builtin_status_summary_for_user(user, subtype),
             }
         )
 

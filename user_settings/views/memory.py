@@ -14,6 +14,7 @@ from nova.llm.embeddings import (
     resolve_embeddings_provider_for_values,
 )
 from nova.memory.service import count_memory_chunk_embeddings
+from nova.models.AgentConfig import AgentConfig
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.tasks.conversation_embedding_tasks import rebuild_user_conversation_embeddings_task
 from nova.tasks.memory_rebuild_tasks import rebuild_user_memory_embeddings_task
@@ -298,8 +299,15 @@ class MemorySettingsView(
         context["show_custom_embeddings_warning"] = (
             selected_source == MemoryEmbeddingsSource.CUSTOM and resolved.provider is None
         )
+        memory_enabled_agent_count = (
+            AgentConfig.objects.filter(user=self.request.user, tools__tool_subtype="memory")
+            .distinct()
+            .count()
+        )
+        context["memory_enabled_agent_count"] = memory_enabled_agent_count
+        context["show_memory_usage_info"] = memory_enabled_agent_count == 0
         context["help_text"] = _(
-            "Choose whether long-term memory should use the deployment-level embeddings provider, "
-            "a custom endpoint, or lexical search only."
+            "Memory is user-scoped and shared across the agents that have the Memory capability enabled. "
+            "Configure semantic retrieval here, while lexical search over visible memory files remains available either way."
         )
         return context

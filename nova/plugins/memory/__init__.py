@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from django.utils.translation import gettext_lazy as _
+
 from nova.plugins.base import InternalPluginDescriptor, resolve_single_builtin_tool
 
 
@@ -36,9 +38,12 @@ PLUGIN = InternalPluginDescriptor(
     command_families=("memory",),
     settings_metadata={
         "name": "Memory",
-        "description": "Expose a user-scoped /memory mount in the React Terminal runtime.",
+        "description": "Store reusable notes, preferences, and long-term knowledge that your agents can use later.",
         "requires_config": False,
         "config_fields": [],
+        "settings_route_name": "user_settings:dashboard",
+        "settings_anchor": "#pane-memory",
+        "settings_label": _("Open memory settings"),
     },
     runtime_capability_resolver=resolve_single_builtin_tool("memory"),
     skill_docs_provider=_skill_docs,
