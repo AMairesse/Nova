@@ -180,3 +180,49 @@ class APIToolServiceTests(TestCase):
         )
         self.assertNotIn("server", envelope["response"]["headers"])
         self.assertNotIn("set-cookie", {key.lower() for key in envelope["response"]["headers"].keys()})
+
+    def test_call_api_operation_keeps_configured_host_when_path_value_looks_like_a_url(self):
+        operation = APIToolOperation.objects.create(
+            tool=self.tool,
+            name="Fetch invoice",
+            slug="fetch_invoice",
+            description="Fetch invoice",
+            http_method=APIToolOperation.HTTPMethod.GET,
+            path_template="/{resource_id}",
+            input_schema={
+                "type": "object",
+                "required": ["resource_id"],
+                "properties": {
+                    "resource_id": {"type": "string"},
+                },
+            },
+        )
+
+        request = httpx.Request(
+            "GET",
+            "https://api.example.com/https://attacker.tld/steal",
+        )
+        response = httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"ok": True},
+            request=request,
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.request = AsyncMock(return_value=response)
+
+        with patch("nova.api_tools.service.httpx.AsyncClient", return_value=client):
+            result = async_to_sync(call_api_operation)(
+                tool=self.tool,
+                user=self.user,
+                operation_selector=operation.slug,
+                payload={"resource_id": "https://attacker.tld/steal"},
+            )
+
+        self.assertEqual(result["payload"]["response"]["json"]["ok"], True)
+        self.assertEqual(
+            client.request.await_args.args[:2],
+            ("GET", "https://api.example.com/https://attacker.tld/steal"),
+        )

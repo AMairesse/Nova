@@ -28,3 +28,10 @@ class SettingsDashboardFrontendTests(PlaywrightLiveServerTestCase):
         self.page.wait_for_selector('#tab-memory[aria-selected="true"]')
         self.page.wait_for_selector("text=Semantic retrieval settings")
         self.page.wait_for_selector("text=Memory records")
+
+    def test_hash_selected_memory_tab_loads_on_initial_dashboard_render(self):
+        self.open_path(f"{reverse('user_settings:dashboard')}#pane-memory")
+
+        self.page.wait_for_selector('#tab-memory[aria-selected="true"]')
+        self.page.wait_for_selector("text=Semantic retrieval settings")
+        self.page.wait_for_selector("text=Memory records")

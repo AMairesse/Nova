@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from asgiref.sync import sync_to_async
@@ -185,6 +185,25 @@ def _normalize_operation_payload(operation: APIToolOperation, payload: dict[str,
     return path, query, body
 
 
+def _build_operation_url(endpoint: str, path: str) -> str:
+    base = urlsplit(str(endpoint or "").strip())
+    if base.scheme not in {"http", "https"} or not base.netloc:
+        raise APIServiceError("API service endpoint must be a valid HTTP(S) URL.")
+
+    parsed_path = urlsplit(str(path or "").strip())
+    if parsed_path.scheme or parsed_path.netloc or parsed_path.query or parsed_path.fragment:
+        raise APIServiceError("API operation path must stay relative to the configured endpoint.")
+
+    base_path = str(base.path or "").rstrip("/")
+    relative_path = str(parsed_path.path or "").lstrip("/")
+    if relative_path:
+        final_path = f"{base_path}/{relative_path}" if base_path else f"/{relative_path}"
+    else:
+        final_path = base_path or "/"
+
+    return urlunsplit((base.scheme, base.netloc, final_path, "", ""))
+
+
 async def _get_tool_credential(*, tool: Tool, user) -> ToolCredential | None:
     def _load():
         return ToolCredential.objects.filter(user=user, tool=tool).first()
@@ -271,7 +290,7 @@ async def call_api_operation(
     )
     path, query, body = _normalize_operation_payload(operation, payload)
 
-    url = urljoin(str(tool.endpoint or "").rstrip("/") + "/", path.lstrip("/"))
+    url = _build_operation_url(str(tool.endpoint or ""), path)
     query_params = {**auth_params, **query}
     headers = dict(auth_headers)
     request_kwargs: dict[str, Any] = {

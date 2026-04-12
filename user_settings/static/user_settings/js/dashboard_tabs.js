@@ -41,8 +41,14 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   }
 
-  if (window.location.hash) {
-    showTabForHash(window.location.hash);
+  const initialHash = window.location.hash;
+  if (initialHash && showTabForHash(initialHash)) {
+    loadPaneIfNeeded(initialHash);
+  } else {
+    const activeTrigger = tabTriggers.find((trigger) => trigger.classList.contains("active"));
+    if (activeTrigger) {
+      loadPaneIfNeeded(activeTrigger.getAttribute("data-bs-target"));
+    }
   }
 
   window.addEventListener("hashchange", () => {

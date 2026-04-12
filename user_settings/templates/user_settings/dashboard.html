@@ -60,8 +60,8 @@
          id="pane-providers"
          role="tabpanel"
          hx-get="{% url 'user_settings:providers' %}?partial=1"
-         hx-trigger="load"
-         hx-target="#pane-providers"
+         hx-trigger="settings-pane:load once"
+         hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading providers…" %}</div>
     </div>
@@ -70,8 +70,8 @@
          id="pane-agents"
          role="tabpanel"
          hx-get="{% url 'user_settings:agents' %}?partial=1"
-         hx-trigger="load"
-         hx-target="#pane-agents"
+         hx-trigger="settings-pane:load once"
+         hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading agents…" %}</div>
     </div>
@@ -80,8 +80,8 @@
          id="pane-tools"
          role="tabpanel"
          hx-get="{% url 'user_settings:tools' %}?partial=1"
-         hx-trigger="load"
-         hx-target="#pane-tools"
+         hx-trigger="settings-pane:load once"
+         hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading tools…" %}</div>
     </div>
