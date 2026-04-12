@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import ipaddress
 import json
 import re
@@ -57,6 +58,7 @@ from nova.runtime.terminal import (
 )
 from nova.runtime.vfs import VirtualFileSystem
 from nova.tasks.tasks import build_source_message_prompt
+from nova.tasks.execution_trace import TaskExecutionTraceHandler
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 from nova.thread_titles import build_default_thread_subject
 from nova.web.browser_service import BrowserSessionError
@@ -2755,6 +2757,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("webapp.md", skills)
         self.assertIn("webapp expose", skills["webapp.md"])
         self.assertIn("live", skills["webapp.md"])
+        self.assertIn("tee ... --text", skills["webapp.md"])
+        self.assertIn("Do not HTML-escape shell operators", skills["webapp.md"])
 
     def test_skill_registry_adds_continuous_guide_in_continuous_mode(self):
         skills = build_skill_registry(
@@ -3658,6 +3662,135 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(result.final_answer, "1575")
         self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
 
+    def test_runtime_repairs_html_escaped_terminal_shell_operator_and_records_trace(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        trace_handler = TaskExecutionTraceHandler(task)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                task=task,
+                trace_handler=trace_handler,
+            ).initialize
+        )()
+        stored_contents: dict[str, bytes] = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(file_obj):
+            return stored_contents[file_obj.key]
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.download_file_content", new=fake_download_file_content),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.webapp.service.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            tool_result = async_to_sync(runtime._execute_tool_call)(
+                {
+                    "id": "call_terminal_1",
+                    "name": "terminal",
+                    "arguments": json.dumps(
+                        {"command": "mkdir -p /x &amp;&amp; touch /x/a.txt"}
+                    ),
+                }
+            )
+
+        session = AgentThreadSession.objects.get(
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        task.refresh_from_db()
+
+        def _find_first_tool_node(node):
+            if not isinstance(node, dict):
+                return None
+            if node.get("type") == "tool":
+                return node
+            for child in node.get("children", []) or []:
+                found = _find_first_tool_node(child)
+                if found is not None:
+                    return found
+            return None
+
+        tool_node = _find_first_tool_node(task.execution_trace.get("root"))
+
+        self.assertNotIn("Tool execution error", tool_result["content"])
+        self.assertTrue(async_to_sync(runtime.vfs.path_exists)("/x/a.txt"))
+        self.assertIn("mkdir -p /x && touch /x/a.txt", session.session_state["history"])
+        self.assertIsNotNone(tool_node)
+        self.assertTrue(tool_node["meta"]["input_normalized"])
+        self.assertEqual(tool_node["meta"]["normalization_kind"], "html_entity_unescape")
+        self.assertIn("&amp;&amp;", tool_node["meta"]["original_command_preview"])
+        self.assertIn("&&", tool_node["meta"]["normalized_command_preview"])
+
+    def test_runtime_repairs_html_escaped_terminal_webapp_markup(self):
+        webapp_tool = self._create_webapp_tool()
+        self.agent.tools.add(webapp_tool)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+        raw_command = (
+            'mkdir -p /solar-system && '
+            'tee /solar-system/index.html --text "<!DOCTYPE html><html><body>OK</body></html>" && '
+            'webapp expose /solar-system --name "Solar System"'
+        )
+        stored_contents: dict[str, bytes] = {}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(file_obj):
+            return stored_contents[file_obj.key]
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.download_file_content", new=fake_download_file_content),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.webapp.service.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+        ):
+            tool_result = async_to_sync(runtime._execute_tool_call)(
+                {
+                    "id": "call_webapp_1",
+                    "name": "terminal",
+                    "arguments": json.dumps({"command": html.escape(raw_command, quote=True)}),
+                }
+            )
+
+            webapp = WebApp.objects.get(thread=self.thread, user=self.user)
+            written_html = async_to_sync(runtime.vfs.read_text)("/solar-system/index.html")
+
+        self.assertNotIn("Tool execution error", tool_result["content"])
+        self.assertEqual(webapp.source_root, "/solar-system")
+        self.assertIn("<!DOCTYPE html>", written_html)
+        self.assertNotIn("&lt;!DOCTYPE html&gt;", written_html)
+
+    def test_runtime_does_not_repair_benign_html_entities_in_terminal_command(self):
+        command = 'echo "AT&amp;T"'
+
+        normalized, meta = ReactTerminalRuntime._normalize_model_terminal_command(command)
+
+        self.assertEqual(normalized, command)
+        self.assertIsNone(meta)
+
     def test_runtime_persists_stream_state_for_reconnect(self):
         task = Task.objects.create(
             user=self.user,
@@ -3973,6 +4106,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("webapp expose", prompt)
         self.assertIn("live", prompt)
         self.assertIn("source files", prompt)
+        self.assertIn("raw characters", prompt)
+        self.assertIn("tee ... --text", prompt)
 
     def test_system_prompt_lists_subagent_descriptions_and_response_modes(self):
         child = AgentConfig.objects.create(

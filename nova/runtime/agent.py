@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import html
 import json
 import mimetypes
 import posixpath
@@ -78,6 +79,22 @@ class ReactTerminalRuntime:
     _TERMINAL_COMMAND_FALLBACK_RE = re.compile(
         r'^\s*\{\s*"command"\s*:\s*"(.*)"\s*\}\s*$',
         re.DOTALL,
+    )
+    _HTML_ENTITY_PATTERN = re.compile(
+        r"&(?:amp|lt|gt|quot|apos|#39|#x27);",
+        re.IGNORECASE,
+    )
+    _HTML_REPAIR_REDIRECTION_RE = re.compile(r"(?:^|\s)(?:>>|>|<)(?:\s|$)")
+    _HTML_REPAIR_MARKUP_MARKERS = (
+        "<!doctype",
+        "<html",
+        "<head",
+        "<body",
+        "<script",
+        "<style",
+        "<meta",
+        "<link",
+        "</",
     )
     _SUBAGENT_TRAILING_ID_RE = re.compile(r"^(?P<name>.+?)\s*\((?P<id>\d+)\)\s*$")
     _DATA_URL_RE = re.compile(
@@ -307,7 +324,8 @@ class ReactTerminalRuntime:
             extra_guidance.append(
                 "Build static webapps directly in the persistent filesystem, then publish them with "
                 "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
-                "the served app without a separate publish step."
+                "the served app without a separate publish step. When writing HTML/CSS/JS files, use raw "
+                "characters rather than HTML entities and prefer `tee ... --text` for long markup."
             )
         if self.source_message_id is not None:
             extra_guidance.append(
@@ -1022,6 +1040,36 @@ class ReactTerminalRuntime:
         return {"command": match.group(1)}
 
     @classmethod
+    def _normalize_model_terminal_command(
+        cls,
+        command: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        raw_command = str(command or "")
+        if not cls._HTML_ENTITY_PATTERN.search(raw_command):
+            return raw_command, None
+
+        candidate = html.unescape(raw_command)
+        if candidate == raw_command:
+            return raw_command, None
+
+        normalized_lower = candidate.lower()
+        looks_like_shell_or_markup = (
+            "&&" in candidate
+            or "||" in candidate
+            or bool(cls._HTML_REPAIR_REDIRECTION_RE.search(candidate))
+            or any(marker in normalized_lower for marker in cls._HTML_REPAIR_MARKUP_MARKERS)
+        )
+        if not looks_like_shell_or_markup:
+            return raw_command, None
+
+        return candidate, {
+            "input_normalized": True,
+            "normalization_kind": "html_entity_unescape",
+            "original_command_preview": raw_command,
+            "normalized_command_preview": candidate,
+        }
+
+    @classmethod
     def _decode_tool_payload(cls, tool_name: str, tool_arguments: Any) -> dict[str, Any]:
         if isinstance(tool_arguments, dict):
             payload = tool_arguments
@@ -1052,17 +1100,27 @@ class ReactTerminalRuntime:
 
         run_id = uuid.uuid4()
         start_metadata: dict[str, Any] = {"tool_name": tool_name}
+        tool_input_preview = str(tool_arguments or "{}")
         if tool_name == "terminal":
-            command = str(payload.get("command") or "").strip()
+            command, normalization_meta = self._normalize_model_terminal_command(
+                str(payload.get("command") or "")
+            )
+            payload["command"] = command
+            tool_input_preview = json.dumps(
+                {"command": command},
+                ensure_ascii=False,
+            )
             start_metadata.update(
                 {
                     "kind": "terminal",
-                    "command": command,
+                    "command": str(command or "").strip(),
                     "head_command": normalize_head_command(command),
                     "cwd": self.vfs.cwd,
                     "progress_message": "Running terminal command",
                 }
             )
+            if normalization_meta:
+                start_metadata.update(normalization_meta)
         elif tool_name == "delegate_to_agent":
             target_agent = str(payload.get("agent_id") or "").strip()
             start_metadata.update(
@@ -1082,14 +1140,14 @@ class ReactTerminalRuntime:
         if self.progress_handler:
             await self.progress_handler.on_tool_start(
                 {"name": tool_name},
-                str(tool_arguments or "{}"),
+                tool_input_preview,
                 run_id=run_id,
                 metadata=start_metadata,
             )
         if self.trace_handler:
             await self.trace_handler.on_tool_start(
                 {"name": tool_name},
-                str(tool_arguments or "{}"),
+                tool_input_preview,
                 run_id=run_id,
                 metadata=start_metadata,
             )

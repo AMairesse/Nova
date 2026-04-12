@@ -22,7 +22,9 @@ Useful commands:
 After that, keep editing the files in the source directory normally with `tee`, `touch`, `mv`, `rm`, and `mkdir`.
 The published app reflects those file changes automatically.
 After exposing, run `webapp show <slug>` to confirm the app is `ready`.
+Prefer `tee ... --text` for long markup or scripts.
 Write raw HTML into the entry file; do not paste an escaped version like `&lt;html&gt;...`.
+Do not HTML-escape shell operators or markup.
 """,
     }
 
