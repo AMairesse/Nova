@@ -12,6 +12,8 @@ build/
 develop-eggs/
 dist/
 downloads/
+!nova/plugins/downloads/
+!nova/plugins/downloads/__init__.py
 eggs/
 .eggs/
 lib/
