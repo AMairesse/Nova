@@ -228,6 +228,48 @@
             }
         },
 
+        async refreshThreadListsFromServer() {
+            const baseUrl = window.NovaApp?.urls?.loadMoreThreads;
+            if (!baseUrl) {
+                return;
+            }
+
+            const limit = window.ThreadManager?.config?.pagination?.limit || 10;
+            const response = await fetch(`${baseUrl}?offset=0&limit=${limit}`);
+            if (!response.ok) {
+                throw new Error(gettext('Failed to refresh thread list.'));
+            }
+
+            const data = await response.json();
+            const html = `${data.html || ''}`;
+            ['threads-list', 'mobile-threads-list'].forEach((containerId) => {
+                const container = document.getElementById(containerId);
+                if (container) {
+                    container.innerHTML = html;
+                }
+            });
+
+            [
+                { containerId: 'load-more-container', buttonId: 'load-more-threads' },
+                { containerId: 'mobile-load-more-container', buttonId: 'mobile-load-more-threads' }
+            ].forEach(({ containerId, buttonId }) => {
+                const container = document.getElementById(containerId);
+                const button = document.getElementById(buttonId);
+
+                if (!data.has_more) {
+                    container?.remove();
+                    return;
+                }
+
+                if (button) {
+                    button.dataset.offset = `${data.next_offset || limit}`;
+                    button.disabled = false;
+                    const icon = button.querySelector('i');
+                    if (icon) icon.className = 'bi bi-arrow-down-circle me-1';
+                }
+            });
+        },
+
         async deleteThread(threadId) {
             try {
                 const response = await window.DOMUtils.csrfFetch(
@@ -238,16 +280,28 @@
                 if (!response.ok || data.status !== 'OK') {
                     throw new Error(data.message || gettext('Failed to delete thread.'));
                 }
+                const escapedThreadId = window.CSS?.escape
+                    ? window.CSS.escape(`${threadId}`)
+                    : `${threadId}`.replace(/"/g, '\\"');
+
                 document.querySelectorAll(
-                    `[data-thread-item-id="${threadId}"]`
+                    `[data-thread-item-id="${escapedThreadId}"]`
                 ).forEach((threadElement) => {
                     threadElement.remove();
                 });
 
+                try {
+                    await this.refreshThreadListsFromServer();
+                } catch (refreshError) {
+                    console.warn('Failed to refresh thread lists after deletion:', refreshError);
+                    window.ResponsiveManager?.syncThreadLists?.();
+                }
+
                 const firstThread = document.querySelector(
-                    '#threads-list .thread-link, #mobile-threads-list .thread-link'
+                    '#threads-list .thread-link'
                 );
-                const firstThreadId = firstThread?.dataset.threadId;
+                const firstThreadId = firstThread?.dataset.threadId
+                    || document.querySelector('#mobile-threads-list .thread-link')?.dataset.threadId;
                 await this.loadMessages(firstThreadId || null);
                 document.dispatchEvent(
                     new CustomEvent('threadChanged', {
