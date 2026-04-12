@@ -3265,11 +3265,44 @@ class TerminalExecutor:
             lines.append("Pass --mailbox <email> on mail commands to choose an account explicitly.")
         return "\n".join(lines)
 
+    def _parse_mail_single_selector(
+        self,
+        args: list[str],
+        *,
+        usage: str,
+    ) -> tuple[int | None, int | None]:
+        uid_value, remainder = self._parse_flag_value(args, "--uid")
+        if uid_value is not None:
+            if remainder:
+                raise TerminalCommandError(usage)
+            return None, self._parse_int_flag("--uid", uid_value)
+
+        if len(remainder) != 1:
+            raise TerminalCommandError(usage)
+        return self._parse_int_flag("<id>", remainder[0]), None
+
+    def _parse_mail_multi_selectors(
+        self,
+        args: list[str],
+        *,
+        usage: str,
+    ) -> tuple[list[int], list[int]]:
+        uid_values, remainder = self._parse_multi_flag(args, "--uid")
+        message_ids: list[int] = []
+        for token in remainder:
+            if token.startswith("--"):
+                raise TerminalCommandError(usage)
+            message_ids.append(self._parse_int_flag("<id>", token))
+        uids = [self._parse_int_flag("--uid", value) for value in uid_values]
+        if not message_ids and not uids:
+            raise TerminalCommandError(usage)
+        return message_ids, uids
+
     async def _cmd_mail(self, args: list[str]) -> str:
         if not self.capabilities.has_email:
             raise TerminalCommandError("Mail commands are not enabled for this agent.")
         if not args:
-            raise TerminalCommandError("Usage: mail <accounts|list|read|attachments|import|send|folders> ...")
+            raise TerminalCommandError("Usage: mail <accounts|list|read|attachments|import|folders|move|mark|send> ...")
         subcommand = args[0]
         remainder = args[1:]
         mailbox, remainder = self._parse_flag_value(remainder, "--mailbox")
@@ -3298,28 +3331,30 @@ class TerminalExecutor:
             folder, remainder = self._parse_flag_value(remainder, "--folder")
             full = "--full" in remainder
             remainder = [item for item in remainder if item != "--full"]
-            if len(remainder) != 1:
-                raise TerminalCommandError(
-                    "Usage: mail read [--mailbox <email>] <id> [--folder F] [--full]"
-                )
+            message_id, uid = self._parse_mail_single_selector(
+                remainder,
+                usage="Usage: mail read [--mailbox <email>] [--folder F] (<id> | --uid <uid>) [--full]",
+            )
             return await mail_service.read_email(
                 self.vfs.user,
                 tool_id,
-                int(remainder[0]),
+                message_id,
+                uid=uid,
                 folder=folder or "INBOX",
                 preview_only=not full,
             )
 
         if subcommand == "attachments":
             folder, remainder = self._parse_flag_value(remainder, "--folder")
-            if len(remainder) != 1:
-                raise TerminalCommandError(
-                    "Usage: mail attachments [--mailbox <email>] <id> [--folder F]"
-                )
+            message_id, uid = self._parse_mail_single_selector(
+                remainder,
+                usage="Usage: mail attachments [--mailbox <email>] [--folder F] (<id> | --uid <uid>)",
+            )
             return await mail_service.list_email_attachments(
                 self.vfs.user,
                 tool_id,
-                int(remainder[0]),
+                message_id,
+                uid=uid,
                 folder=folder or "INBOX",
             )
 
@@ -3328,19 +3363,85 @@ class TerminalExecutor:
                 raise TerminalCommandError("Usage: mail folders [--mailbox <email>]")
             return await mail_service.list_mailboxes(self.vfs.user, tool_id)
 
+        if subcommand == "move":
+            folder, remainder = self._parse_flag_value(remainder, "--folder")
+            to_folder, remainder = self._parse_flag_value(remainder, "--to-folder")
+            to_special, remainder = self._parse_flag_value(remainder, "--to-special")
+            message_ids, uids = self._parse_mail_multi_selectors(
+                remainder,
+                usage=(
+                    "Usage: mail move [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
+                    "[--uid <uid> ...] (--to-folder <dest> | --to-special <junk|trash|archive>)"
+                ),
+            )
+            try:
+                return await mail_service.move_emails(
+                    self.vfs.user,
+                    tool_id,
+                    message_ids=message_ids,
+                    uids=uids,
+                    source_folder=folder or "INBOX",
+                    target_folder=to_folder,
+                    target_special=to_special,
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+
+        if subcommand == "mark":
+            folder, remainder = self._parse_flag_value(remainder, "--folder")
+            action_tokens = {
+                "--seen": "seen",
+                "--unseen": "unseen",
+                "--flagged": "flagged",
+                "--unflagged": "unflagged",
+            }
+            selected_actions = [name for flag, name in action_tokens.items() if flag in remainder]
+            remainder = [item for item in remainder if item not in action_tokens]
+            if len(selected_actions) != 1:
+                raise TerminalCommandError(
+                    "Usage: mail mark [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
+                    "[--uid <uid> ...] (--seen | --unseen | --flagged | --unflagged)"
+                )
+            message_ids, uids = self._parse_mail_multi_selectors(
+                remainder,
+                usage=(
+                    "Usage: mail mark [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
+                    "[--uid <uid> ...] (--seen | --unseen | --flagged | --unflagged)"
+                ),
+            )
+            try:
+                return await mail_service.mark_emails(
+                    self.vfs.user,
+                    tool_id,
+                    message_ids=message_ids,
+                    uids=uids,
+                    folder=folder or "INBOX",
+                    action=selected_actions[0],
+                )
+            except ValueError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+
         if subcommand == "import":
             folder, remainder = self._parse_flag_value(remainder, "--folder")
             attachment_id, remainder = self._parse_flag_value(remainder, "--attachment")
             output_path, remainder = self._parse_flag_value(remainder, "--output")
-            if len(remainder) != 1 or not attachment_id:
+            if not attachment_id:
                 raise TerminalCommandError(
-                    "Usage: mail import [--mailbox <email>] <id> --attachment <part> [--folder F] [--output PATH]"
+                    "Usage: mail import [--mailbox <email>] [--folder F] (<id> | --uid <uid>) "
+                    "--attachment <part> [--output PATH]"
                 )
-            message_id = int(remainder[0])
-            _envelope, _message, _uid, attachments = await mail_service._load_email_message_with_attachments(
+            message_id, uid = self._parse_mail_single_selector(
+                remainder,
+                usage=(
+                    "Usage: mail import [--mailbox <email>] [--folder F] (<id> | --uid <uid>) "
+                    "--attachment <part> [--output PATH]"
+                ),
+            )
+            _envelope, _message, resolved_uid, _flags, attachments = await mail_service._load_email_message_with_attachments(
                 self.vfs.user,
                 tool_id,
                 message_id,
+                uid=uid,
                 folder=folder or "INBOX",
             )
             selected = next(
@@ -3348,7 +3449,8 @@ class TerminalExecutor:
                 None,
             )
             if selected is None:
-                raise TerminalCommandError(f"Attachment {attachment_id} not found on email {message_id}.")
+                selector = uid if uid is not None else message_id if message_id is not None else resolved_uid
+                raise TerminalCommandError(f"Attachment {attachment_id} not found on email {selector}.")
             source_name = str(selected.get("filename") or f"attachment-{attachment_id}")
             destination = output_path or posixpath.join(self.vfs.cwd, source_name)
             try:

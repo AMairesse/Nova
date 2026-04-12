@@ -385,8 +385,9 @@ def build_template_prefill_payload(
         "prompt": (
             "Since the last execution at {{ trigger_time_iso }}, new emails were detected:\n"
             "{{ new_emails_markdown }}\n\n"
-            "Identify spam and move each spam message to the appropriate "
-            f"spam/junk folder for mailbox {mailbox_email}. "
+            "Identify spam and move each spam message with `mail move --to-special junk`, "
+            f"using mailbox {mailbox_email}. Prefer the listed UIDs for follow-up actions. "
+            "If no junk folder can be resolved for this mailbox, do not move anything and say so clearly. "
             "Only perform spam moves. Do not send emails. Do not summarize. "
             "Do not ask questions, because this is a batch run."
         ),

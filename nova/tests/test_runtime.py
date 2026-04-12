@@ -2345,6 +2345,63 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         mocked_send.assert_awaited_once()
         self.assertEqual(mocked_send.await_args.kwargs["tool_id"], personal_tool.id)
 
+    def test_mail_read_accepts_uid_selector(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
+
+        with patch("nova.plugins.mail.service.read_email", new_callable=AsyncMock, return_value="message") as mocked_read:
+            result = async_to_sync(executor.execute)("mail read --uid 42 --full")
+
+        self.assertEqual(result, "message")
+        mocked_read.assert_awaited_once_with(
+            self.user,
+            work_tool.id,
+            None,
+            uid=42,
+            folder="INBOX",
+            preview_only=False,
+        )
+
+    def test_mail_move_and_mark_forward_selectors(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
+
+        with patch("nova.plugins.mail.service.move_emails", new_callable=AsyncMock, return_value="moved") as mocked_move:
+            moved = async_to_sync(executor.execute)(
+                "mail move 10 11 --uid 12 --to-special junk --folder Inbox"
+            )
+        self.assertEqual(moved, "moved")
+        mocked_move.assert_awaited_once_with(
+            self.user,
+            work_tool.id,
+            message_ids=[10, 11],
+            uids=[12],
+            source_folder="Inbox",
+            target_folder=None,
+            target_special="junk",
+        )
+
+        with patch("nova.plugins.mail.service.mark_emails", new_callable=AsyncMock, return_value="marked") as mocked_mark:
+            marked = async_to_sync(executor.execute)(
+                "mail mark --uid 99 --uid 100 --flagged"
+            )
+        self.assertEqual(marked, "marked")
+        mocked_mark.assert_awaited_once_with(
+            self.user,
+            work_tool.id,
+            message_ids=[],
+            uids=[99, 100],
+            folder="INBOX",
+            action="flagged",
+        )
+
+    def test_mail_move_requires_exactly_one_destination(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
+
+        with self.assertRaises(TerminalCommandError):
+            async_to_sync(executor.execute)("mail move 10 --to-folder Archive --to-special junk")
+
     def test_calendar_accounts_and_calendars_use_account_registry(self):
         work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
         personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
@@ -2510,6 +2567,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("date.md", skills)
         self.assertIn("mail accounts", skills["mail.md"])
         self.assertIn("--mailbox <email>", skills["mail.md"])
+        self.assertIn("mail move <id> --to-special junk", skills["mail.md"])
+        self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("Judge0 sandbox", skills["python.md"])
         self.assertIn("Do not use it to mutate Nova files", skills["python.md"])

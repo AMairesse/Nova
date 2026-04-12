@@ -17,12 +17,15 @@ Mail is accessed through shell-like commands:
 
 - `mail accounts`
 - `mail list`
-- `mail read <id>`
-- `mail attachments <id>`
+- `mail read <id>` or `mail read --uid <uid>`
+- `mail attachments <id>` or `mail attachments --uid <uid>`
 - `mail import <id> --attachment <part> --output /attachment.bin`
 - `mail folders --mailbox <email>`
+- `mail move <id> --to-special junk`
+- `mail mark <id> --seen`
 - `mail send --mailbox <email> --to ... --subject ... --body-file /body.txt --attach /file.pdf`
 
+Use `mail folders` to inspect special folders, and prefer explicit `--uid` in multi-step workflows.
 Prefer reading attachments metadata first, then importing only the files you need.
 Imported attachments become normal files in the terminal filesystem.
 {mailbox_note}Reuse the same mailbox throughout a workflow unless the user explicitly asks you to switch.

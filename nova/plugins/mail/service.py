@@ -11,7 +11,7 @@ from email.header import decode_header
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from asgiref.sync import sync_to_async
@@ -32,6 +32,29 @@ EMAIL_CLIENT_TIMEOUT = int(os.getenv("NOVA_EMAIL_CLIENT_TIMEOUT", "30"))
 EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 LOCAL_PART_RE = re.compile(r"^[A-Za-z0-9._%+\-]+$")
 KNOWN_MAIL_HOST_PREFIXES = {"imap", "pop", "pop3", "smtp", "mail", "mx"}
+MAILBOX_SPECIAL_USE_FLAGS = {
+    "inbox": "inbox",
+    "junk": "junk",
+    "spam": "junk",
+    "trash": "trash",
+    "archive": "archive",
+    "sent": "sent",
+    "drafts": "drafts",
+}
+MAILBOX_SPECIAL_NAME_FALLBACKS = {
+    "inbox": {"inbox"},
+    "junk": {"junk", "spam", "junkemail", "bulkmail", "gmailspam"},
+    "trash": {"trash", "deleteditems", "deletedmessages", "bin", "gmailtrash"},
+    "archive": {"archive", "allmail", "gmailallmail"},
+    "sent": {"sent", "sentitems", "sentmail", "gmailsentmail"},
+    "drafts": {"drafts", "draft", "draftmessages", "gmaildrafts"},
+}
+MAIL_MARK_ACTIONS = {
+    "seen": ("add", "\\Seen", "seen"),
+    "unseen": ("remove", "\\Seen", "unseen"),
+    "flagged": ("add", "\\Flagged", "flagged"),
+    "unflagged": ("remove", "\\Flagged", "unflagged"),
+}
 
 def safe_imap_logout(client):
     if client:
@@ -155,33 +178,181 @@ def _collect_email_attachments(email_message) -> list[dict[str, Any]]:
     return attachments
 
 
-async def _fetch_email_message_data(user, tool_id, message_id: int, *, folder: str = "INBOX"):
+def _normalize_mailbox_name_key(name: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(name or "").strip().lower())
+
+
+def _normalize_flag_name(flag: Any) -> str:
+    return decode_str(flag).strip().lstrip("\\").lower()
+
+
+def _normalize_mail_flags(flags: Any) -> list[str]:
+    normalized: list[str] = []
+    for flag in list(flags or []):
+        text = decode_str(flag).strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _format_mail_flags(flags: Any) -> str:
+    normalized = _normalize_mail_flags(flags)
+    return ", ".join(normalized) if normalized else "none"
+
+
+def _address_to_text(address_obj) -> str:
+    if not address_obj:
+        return ""
+    name = decode_str(getattr(address_obj, "name", "") or "")
+    mailbox = decode_str(getattr(address_obj, "mailbox", "") or "")
+    host = decode_str(getattr(address_obj, "host", "") or "")
+    addr = f"{mailbox}@{host}" if mailbox and host else mailbox or host
+    if name and addr:
+        return f"{name} <{addr}>"
+    return addr or name or ""
+
+
+def _first_address_text(addresses) -> str:
+    if not addresses:
+        return ""
+    try:
+        first = addresses[0] if isinstance(addresses, (list, tuple)) else addresses
+    except Exception:
+        first = addresses
+    return _address_to_text(first)
+
+
+def _sender_from_envelope(envelope) -> str:
+    if not envelope:
+        return ""
+    return _first_address_text(
+        getattr(envelope, "sender", None) or getattr(envelope, "from_", None)
+    )
+
+
+def _recipient_from_envelope(envelope) -> str:
+    if not envelope:
+        return ""
+    return _first_address_text(getattr(envelope, "to", None))
+
+
+def _format_envelope_date(envelope) -> str:
+    value = getattr(envelope, "date", None) if envelope else None
+    if not value:
+        return "Unknown"
+    try:
+        return value.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "Invalid date"
+
+
+def _detect_mailbox_special_use(name: str, flags: list[str]) -> tuple[str, str] | tuple[None, None]:
+    for flag in flags:
+        special_use = MAILBOX_SPECIAL_USE_FLAGS.get(_normalize_flag_name(flag))
+        if special_use:
+            return special_use, "flag"
+
+    normalized_name = _normalize_mailbox_name_key(name)
+    for special_use, aliases in MAILBOX_SPECIAL_NAME_FALLBACKS.items():
+        if normalized_name in aliases:
+            return special_use, "name"
+
+    return None, None
+
+
+def _list_mailboxes_with_details(client) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for mailbox in client.list_folders():
+        if isinstance(mailbox, tuple) and len(mailbox) >= 3:
+            raw_flags, delimiter, name = mailbox
+        else:
+            raw_flags, delimiter, name = (), "", str(mailbox)
+        flags = _normalize_mail_flags(raw_flags)
+        special_use, special_source = _detect_mailbox_special_use(str(name), flags)
+        details.append(
+            {
+                "name": str(name),
+                "delimiter": str(delimiter or ""),
+                "flags": flags,
+                "special_use": special_use,
+                "special_source": special_source,
+            }
+        )
+    return details
+
+
+def resolve_special_mailbox(client, special_use: str) -> str | None:
+    requested = str(special_use or "").strip().lower()
+    details = _list_mailboxes_with_details(client)
+    for source in ("flag", "name"):
+        for mailbox in details:
+            if mailbox.get("special_use") == requested and mailbox.get("special_source") == source:
+                return str(mailbox.get("name") or "")
+    return None
+
+
+def _resolve_message_uids(
+    *,
+    message_ids: list[int] | None = None,
+    uids: list[int] | None = None,
+) -> list[int]:
+    resolved: list[int] = []
+    for raw in [*(message_ids or []), *(uids or [])]:
+        value = int(raw)
+        if value not in resolved:
+            resolved.append(value)
+    if not resolved:
+        raise ValueError(_("At least one email id or uid is required."))
+    return resolved
+
+
+def _selector_label(message_id: int | None = None, uid: int | None = None) -> str:
+    if uid is not None:
+        return _("UID {uid}").format(uid=uid)
+    return _("ID {id}").format(id=message_id)
+
+
+async def _fetch_email_message_data(
+    user,
+    tool_id,
+    message_id: int | None = None,
+    *,
+    uid: int | None = None,
+    folder: str = "INBOX",
+):
+    target_uid = int(uid if uid is not None else message_id)
     client = await get_imap_client(user, tool_id)
     try:
         client.select_folder(folder)
-        messages = client.fetch([message_id], ["ENVELOPE", "BODY.PEEK[]", "UID"])
-        if message_id not in messages:
-            return None
-        return messages[message_id]
+        messages = client.fetch([target_uid], ["ENVELOPE", "BODY.PEEK[]", "UID", "FLAGS"])
+        return messages.get(target_uid)
     finally:
         safe_imap_logout(client)
 
 
-async def _load_email_message_with_attachments(user, tool_id, message_id: int, *, folder: str = "INBOX"):
-    msg_data = await _fetch_email_message_data(user, tool_id, message_id, folder=folder)
+async def _load_email_message_with_attachments(
+    user,
+    tool_id,
+    message_id: int | None = None,
+    *,
+    uid: int | None = None,
+    folder: str = "INBOX",
+):
+    msg_data = await _fetch_email_message_data(user, tool_id, message_id, uid=uid, folder=folder)
     if not msg_data:
-        return None, None, None, []
+        return None, None, None, [], []
 
     import email
 
     envelope = safe_get(msg_data, "ENVELOPE")
     body = safe_get(msg_data, "BODY[]")
-    uid = safe_get(msg_data, "UID")
+    resolved_uid = safe_get(msg_data, "UID")
+    flags = _normalize_mail_flags(safe_get(msg_data, "FLAGS"))
     if not body:
-        return envelope, None, uid, []
+        return envelope, None, resolved_uid, flags, []
 
     email_message = email.message_from_bytes(body)
-    return envelope, email_message, uid, _collect_email_attachments(email_message)
+    return envelope, email_message, resolved_uid, flags, _collect_email_attachments(email_message)
 
 
 def _build_email_attachment_manifest_lines(attachments: list[dict[str, Any]]) -> list[str]:
@@ -215,26 +386,20 @@ def _attach_binary_parts(msg, attachments: list) -> None:
         msg.attach(part)
 
 
-def format_email_info(msg_id, envelope):
+def format_email_info(msg_id, envelope, *, uid: int | None = None, flags: list[str] | None = None):
     if not envelope:
-        return f"ID: {msg_id} | [No envelope data]"
+        return f"ID: {msg_id} | UID: {uid if uid is not None else msg_id} | Flags: {_format_mail_flags(flags)} | [No envelope data]"
 
     subject = "[No subject]"
     if hasattr(envelope, "subject") and envelope.subject:
         subject = decode_str(envelope.subject)
 
-    sender = "[No sender]"
-    if hasattr(envelope, "sender") and envelope.sender:
-        sender = decode_str(envelope.sender)
-
-    date = "Unknown"
-    if hasattr(envelope, "date") and envelope.date:
-        try:
-            date = envelope.date.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            date = "Invalid date"
-
-    return f"ID: {msg_id} | From: {sender} | Subject: {subject} | Date: {date}"
+    sender = _sender_from_envelope(envelope) or "[No sender]"
+    date = _format_envelope_date(envelope)
+    return (
+        f"ID: {msg_id} | UID: {uid if uid is not None else msg_id} | Flags: {_format_mail_flags(flags)} "
+        f"| From: {sender} | Subject: {subject} | Date: {date}"
+    )
 
 
 async def list_emails(user, tool_id, folder: str = "INBOX", limit: int = 10) -> str:
@@ -246,36 +411,70 @@ async def list_emails(user, tool_id, folder: str = "INBOX", limit: int = 10) -> 
             return _("No emails found in {folder}").format(folder=folder)
 
         recent_messages = sorted(messages, reverse=True)[:limit]
-        fetch_data = client.fetch(recent_messages, ["ENVELOPE"])
+        fetch_data = client.fetch(recent_messages, ["ENVELOPE", "UID", "FLAGS"])
 
         result = _("Recent emails in {folder}:\n").format(folder=folder)
         for msg_id in recent_messages:
             msg_data = fetch_data.get(msg_id, {})
             envelope = safe_get(msg_data, "ENVELOPE")
-            result += format_email_info(msg_id, envelope) + "\n"
+            result += format_email_info(
+                msg_id,
+                envelope,
+                uid=safe_get(msg_data, "UID"),
+                flags=_normalize_mail_flags(safe_get(msg_data, "FLAGS")),
+            ) + "\n"
         return result
     finally:
         safe_imap_logout(client)
 
 
-async def read_email(user, tool_id, message_id: int, folder: str = "INBOX", preview_only: bool = True) -> str:
-    envelope, email_message, _uid, attachments = await _load_email_message_with_attachments(
+def _extract_email_text(email_message) -> str:
+    if not email_message:
+        return ""
+    if email_message.is_multipart():
+        for part in email_message.walk():
+            if part.get_content_type() == "text/plain":
+                charset = part.get_content_charset() or "utf-8"
+                payload = part.get_payload(decode=True) or b""
+                return payload.decode(charset, errors="ignore")
+        return ""
+    charset = email_message.get_content_charset() or "utf-8"
+    payload = email_message.get_payload(decode=True) or b""
+    return payload.decode(charset, errors="ignore")
+
+
+async def read_email(
+    user,
+    tool_id,
+    message_id: int | None = None,
+    *,
+    uid: int | None = None,
+    folder: str = "INBOX",
+    preview_only: bool = True,
+) -> str:
+    envelope, email_message, resolved_uid, flags, attachments = await _load_email_message_with_attachments(
         user,
         tool_id,
         message_id,
+        uid=uid,
         folder=folder,
     )
     if envelope is None and email_message is None:
-        return _("Email with ID {id} not found.").format(id=message_id)
+        return _("Email with {selector} not found.").format(
+            selector=_selector_label(message_id=message_id, uid=uid)
+        )
     if email_message is None:
         return _("Email body not available.")
 
     result = _("Email Details:\n")
+    result += _("ID: {id}\n").format(id=message_id if message_id is not None else resolved_uid or uid or "")
+    result += _("UID: {uid}\n").format(uid=resolved_uid or uid or message_id or "")
+    result += _("Flags: {flags}\n").format(flags=_format_mail_flags(flags))
     if envelope:
-        sender = decode_str(getattr(envelope, "sender", None))
-        to_addr = decode_str(getattr(envelope, "to", [None])[0] if getattr(envelope, "to", None) else None)
+        sender = _sender_from_envelope(envelope) or "[Not available]"
+        to_addr = _recipient_from_envelope(envelope) or "[Not available]"
         subject = decode_str(getattr(envelope, "subject", None))
-        date = envelope.date.strftime("%Y-%m-%d %H:%M") if getattr(envelope, "date", None) else "Unknown"
+        date = _format_envelope_date(envelope)
         result += _("From: {sender}\n").format(sender=sender)
         result += _("To: {to}\n").format(to=to_addr)
         result += _("Subject: {subject}\n").format(subject=subject)
@@ -291,16 +490,7 @@ async def read_email(user, tool_id, message_id: int, folder: str = "INBOX", prev
 
     if preview_only:
         result += "\n\n" + _("Content Preview (first 500 characters):\n")
-        content = ""
-        if email_message.is_multipart():
-            for part in email_message.walk():
-                if part.get_content_type() == "text/plain":
-                    charset = part.get_content_charset() or "utf-8"
-                    content = part.get_payload(decode=True).decode(charset, errors="ignore")
-                    break
-        else:
-            charset = email_message.get_content_charset() or "utf-8"
-            content = email_message.get_payload(decode=True).decode(charset, errors="ignore")
+        content = _extract_email_text(email_message)
 
         if len(content) > 500:
             result += content[:500] + "..."
@@ -310,34 +500,40 @@ async def read_email(user, tool_id, message_id: int, folder: str = "INBOX", prev
         return result
 
     result += "\n\n" + _("Full Content:\n")
-    if email_message.is_multipart():
-        for part in email_message.walk():
-            if part.get_content_type() == "text/plain":
-                charset = part.get_content_charset() or "utf-8"
-                result += part.get_payload(decode=True).decode(charset, errors="ignore")
-                break
-    else:
-        charset = email_message.get_content_charset() or "utf-8"
-        result += email_message.get_payload(decode=True).decode(charset, errors="ignore")
+    result += _extract_email_text(email_message)
     return result
 
 
-async def list_email_attachments(user, tool_id, message_id: int, folder: str = "INBOX") -> str:
-    envelope, email_message, _uid, attachments = await _load_email_message_with_attachments(
+async def list_email_attachments(
+    user,
+    tool_id,
+    message_id: int | None = None,
+    *,
+    uid: int | None = None,
+    folder: str = "INBOX",
+) -> str:
+    envelope, email_message, resolved_uid, flags, attachments = await _load_email_message_with_attachments(
         user,
         tool_id,
         message_id,
+        uid=uid,
         folder=folder,
     )
     if envelope is None and email_message is None:
-        return _("Email with ID {id} not found.").format(id=message_id)
+        return _("Email with {selector} not found.").format(
+            selector=_selector_label(message_id=message_id, uid=uid)
+        )
     if not attachments:
-        return _("No attachments found for email {id}.").format(id=message_id)
+        return _("No attachments found for email {selector}.").format(
+            selector=_selector_label(message_id=message_id, uid=uid)
+        )
 
     subject = decode_str(getattr(envelope, "subject", "") if envelope else "")
     lines = [
-        _("Attachments for email {id} ({subject}):").format(
-            id=message_id,
+        _("Attachments for email {id} (uid={uid}, flags={flags}, subject={subject}):").format(
+            id=message_id if message_id is not None else resolved_uid or uid or "",
+            uid=resolved_uid or uid or message_id or "",
+            flags=_format_mail_flags(flags),
             subject=subject or _("no subject"),
         )
     ]
@@ -345,17 +541,102 @@ async def list_email_attachments(user, tool_id, message_id: int, folder: str = "
     return "\n".join(lines)
 
 
+async def move_emails(
+    user,
+    tool_id,
+    *,
+    message_ids: list[int] | None = None,
+    uids: list[int] | None = None,
+    source_folder: str = "INBOX",
+    target_folder: str | None = None,
+    target_special: str | None = None,
+) -> str:
+    requested_special = str(target_special or "").strip().lower()
+    if bool(target_folder) == bool(requested_special):
+        raise ValueError(_("Choose exactly one destination: --to-folder or --to-special."))
+    if requested_special and requested_special not in {"junk", "trash", "archive"}:
+        raise ValueError(_("Unsupported special mailbox: {special}").format(special=requested_special))
+
+    target_uids = _resolve_message_uids(message_ids=message_ids, uids=uids)
+    client = await get_imap_client(user, tool_id)
+    try:
+        client.select_folder(source_folder)
+        resolved_target_folder = str(target_folder or "").strip()
+        if requested_special:
+            resolved_target_folder = str(resolve_special_mailbox(client, requested_special) or "").strip()
+            if not resolved_target_folder:
+                raise ValueError(
+                    _("No %(special)s mailbox could be resolved for this account.") % {"special": requested_special}
+                )
+
+        if _normalize_mailbox_name_key(resolved_target_folder) == _normalize_mailbox_name_key(source_folder):
+            return _("Emails are already in {folder}.").format(folder=resolved_target_folder)
+
+        if client.has_capability("MOVE"):
+            client.move(target_uids, resolved_target_folder)
+        else:
+            client.copy(target_uids, resolved_target_folder)
+            client.delete_messages(target_uids)
+            client.expunge(target_uids)
+
+        return _("Moved {count} email(s) from {source} to {dest}.").format(
+            count=len(target_uids),
+            source=source_folder,
+            dest=resolved_target_folder,
+        )
+    finally:
+        safe_imap_logout(client)
+
+
+async def mark_emails(
+    user,
+    tool_id,
+    *,
+    message_ids: list[int] | None = None,
+    uids: list[int] | None = None,
+    folder: str = "INBOX",
+    action: str,
+) -> str:
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in MAIL_MARK_ACTIONS:
+        raise ValueError(_("Unsupported mark action: {action}").format(action=action))
+
+    target_uids = _resolve_message_uids(message_ids=message_ids, uids=uids)
+    operation, flag, label = MAIL_MARK_ACTIONS[normalized_action]
+    client = await get_imap_client(user, tool_id)
+    try:
+        client.select_folder(folder)
+        if operation == "add":
+            client.add_flags(target_uids, [flag])
+        else:
+            client.remove_flags(target_uids, [flag])
+        return _("Marked {count} email(s) in {folder} as {label}.").format(
+            count=len(target_uids),
+            folder=folder,
+            label=label,
+        )
+    finally:
+        safe_imap_logout(client)
+
+
 async def list_mailboxes(user, tool_id) -> str:
     client = await get_imap_client(user, tool_id)
     try:
-        mailboxes = client.list_folders()
+        mailboxes = _list_mailboxes_with_details(client)
         result = _("Available mailboxes:\n")
         for mailbox in mailboxes:
-            if isinstance(mailbox, tuple) and len(mailbox) >= 3:
-                _flags, _delimiter, name = mailbox
-                result += f"- {name}\n"
+            name = str(mailbox.get("name") or "")
+            special_use = str(mailbox.get("special_use") or "").strip()
+            flags = _format_mail_flags(mailbox.get("flags"))
+            extras: list[str] = []
+            if special_use:
+                extras.append(f"special: {special_use}")
+            if flags != "none":
+                extras.append(f"flags: {flags}")
+            if extras:
+                result += f"- {name} [{'; '.join(extras)}]\n"
             else:
-                result += f"- {mailbox}\n"
+                result += f"- {name}\n"
         return result
     finally:
         safe_imap_logout(client)

@@ -124,6 +124,11 @@ Runtime commands:
 - `mail accounts`
 - `mail list`
 - `mail read`
+- `mail attachments`
+- `mail import`
+- `mail folders`
+- `mail move`
+- `mail mark`
 - `mail send`
 - related mailbox/file subcommands
 

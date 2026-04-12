@@ -468,6 +468,8 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertEqual(form.initial.get("agent"), self.agent.id)
         self.assertEqual(form.initial.get("email_tool"), email_tool.id)
         self.assertEqual(form.initial.get("name"), "Spam filtering - alice@example.com")
+        self.assertIn("mail move --to-special junk", form.initial.get("prompt", ""))
+        self.assertIn("Prefer the listed UIDs", form.initial.get("prompt", ""))
         self.assertTrue(form.fields["email_tool"].disabled)
 
     def test_task_template_select_mailbox_rejects_invalid_selection(self):
