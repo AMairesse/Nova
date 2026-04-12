@@ -26,28 +26,17 @@ def serve_webapp(request, slug: str, path: str | None = None):
     else:
         response = HttpResponse(content, content_type=mime)
 
-    # CSP for agent-authored static apps:
-    # - Allow XHR/fetch only to:
-    #     - same-origin ('self')
-    #     - internal Nova file endpoints (/nova-files/)
-    # - Allow scripts/styles from self + https (with inline allowed for UX)
-    # - Restrict framing to same-origin
-    #
-    # Security note:
-    # Allowing connect-src 'self' and /nova-files/ enables webapps to fetch
-    # internal resources (e.g. thread files) while still preventing exfiltration
-    # to arbitrary external domains. The main risk is that an agent-generated
-    # malicious webapp could use authenticated requests to read data that the
-    # current user is already authorized to access. Given strong server-side
-    # authorization and no third-party endpoints in connect-src, this is an
-    # acceptable trade-off for this controlled environment.
     csp = (
-        "default-src 'self' https:; "
-        "style-src 'self' 'unsafe-inline' https:; "
-        "script-src 'self' 'unsafe-inline' https:; "
-        "img-src 'self' data: https:; "
-        "connect-src 'self' http://localhost:8080 http://localhost:8080/nova-files/; "
-        "frame-ancestors 'self';"
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'self'; "
+        "form-action 'self';"
     )
     response.headers['Content-Security-Policy'] = csp
     # Keep X-Frame-Options for compatibility; CSP frame-ancestors is the primary control.

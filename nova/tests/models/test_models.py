@@ -554,7 +554,7 @@ class UserFileModelsTest(BaseTestCase):
         self.assertEqual(user_file.key, expected_key)
 
     @patch('boto3.client')
-    def test_user_file_cascade_from_message_deletes_storage(self, mock_boto3_client):
+    def test_user_file_message_delete_preserves_file_and_clears_source_message(self, mock_boto3_client):
         message = self.thread.add_message("Attachment source", actor=Actor.USER)
         user_file = UserFile.objects.create(
             user=self.user,
@@ -572,11 +572,10 @@ class UserFileModelsTest(BaseTestCase):
 
         message.delete()
 
-        self.assertFalse(UserFile.objects.filter(pk=user_file.pk).exists())
-        mock_s3_client.delete_object.assert_called_once_with(
-            Bucket='test-bucket',
-            Key='message-attachment-key',
-        )
+        user_file.refresh_from_db()
+        self.assertTrue(UserFile.objects.filter(pk=user_file.pk).exists())
+        self.assertIsNone(user_file.source_message)
+        mock_s3_client.delete_object.assert_not_called()
 
     def test_user_file_get_download_url_expired(self):
         """

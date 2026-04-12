@@ -140,10 +140,7 @@ def annotate_user_message(message) -> None:
         message.file_count = 0
 
     attachment_manifests: list[dict] = []
-    prefetched_files = None
-    prefetched_cache = getattr(message, "_prefetched_objects_cache", None)
-    if isinstance(prefetched_cache, dict):
-        prefetched_files = prefetched_cache.get("attached_files")
+    prefetched_files = getattr(message, "prefetched_message_attachments", None)
 
     if prefetched_files is not None:
         try:
@@ -166,7 +163,9 @@ def annotate_user_message(message) -> None:
             try:
                 attachment_manifests = [
                     build_message_attachment_manifest_from_user_file(user_file)
-                    for user_file in related_files.order_by("created_at", "id")
+                    for user_file in related_files.filter(
+                        scope=UserFile.Scope.MESSAGE_ATTACHMENT
+                    ).order_by("created_at", "id")
                 ]
             except Exception:
                 attachment_manifests = []

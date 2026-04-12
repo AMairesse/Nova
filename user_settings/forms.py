@@ -513,8 +513,9 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
             "api_key_in",
         ]
         widgets = {
-            "password": forms.PasswordInput(render_value=True),
-            "client_secret": forms.PasswordInput(render_value=True),
+            "password": forms.PasswordInput(render_value=False),
+            "token": forms.PasswordInput(render_value=False),
+            "client_secret": forms.PasswordInput(render_value=False),
         }
 
     # ------------------------------------------------------------------ #

@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
+from nova.web.network_policy import NetworkPolicyError, assert_public_http_url
+
 
 class BrowserSessionError(Exception):
     pass
@@ -19,22 +21,40 @@ class BrowserSession:
         self._context = None
         self._page = None
         self._has_opened_page = False
+        self._blocked_request_error = ""
 
     async def _ensure_page(self):
         if self._page is not None:
             return self._page
 
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=["--no-sandbox"],
-        )
-        self._context = await self._browser.new_context()
-        self._page = await self._context.new_page()
+        try:
+            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._context = await self._browser.new_context()
+            await self._context.route("**/*", self._handle_route)
+            self._page = await self._context.new_page()
+        except Exception as exc:
+            await self.close()
+            raise BrowserSessionError(
+                "Chromium could not start securely. Check the browser sandbox configuration."
+            ) from exc
         return self._page
 
-    def _validate_http_url(self, url: str) -> str:
-        candidate = str(url or "").strip()
+    async def _handle_route(self, route) -> None:
+        request_url = str(route.request.url or "").strip()
+        try:
+            await assert_public_http_url(request_url)
+        except NetworkPolicyError as exc:
+            self._blocked_request_error = str(exc)
+            await route.abort("blockedbyclient")
+            return
+        await route.continue_()
+
+    async def _validate_http_url(self, url: str) -> str:
+        try:
+            candidate = await assert_public_http_url(url)
+        except NetworkPolicyError as exc:
+            raise BrowserSessionError(str(exc)) from exc
         parsed = urlparse(candidate)
         if parsed.scheme not in {"http", "https"}:
             raise BrowserSessionError("Browser navigation only supports http and https URLs.")
@@ -47,8 +67,14 @@ class BrowserSession:
 
     async def open(self, url: str) -> dict[str, Any]:
         page = await self._ensure_page()
-        target_url = self._validate_http_url(url)
-        response = await page.goto(target_url)
+        target_url = await self._validate_http_url(url)
+        self._blocked_request_error = ""
+        try:
+            response = await page.goto(target_url)
+        except Exception as exc:
+            if self._blocked_request_error:
+                raise BrowserSessionError(self._blocked_request_error) from exc
+            raise BrowserSessionError(f"Unable to open {target_url}.") from exc
         self._has_opened_page = True
         return {
             "url": str(page.url or target_url),
@@ -72,7 +98,13 @@ class BrowserSession:
 
     async def back(self) -> dict[str, Any]:
         page = await self._require_open_page()
-        response = await page.go_back()
+        self._blocked_request_error = ""
+        try:
+            response = await page.go_back()
+        except Exception as exc:
+            if self._blocked_request_error:
+                raise BrowserSessionError(self._blocked_request_error) from exc
+            raise BrowserSessionError("Unable to navigate back in the current browser session.") from exc
         if response is None:
             raise BrowserSessionError("Unable to navigate back; no previous page in the history.")
         return {

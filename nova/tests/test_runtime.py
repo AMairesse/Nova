@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import re
 import uuid
@@ -84,9 +85,18 @@ class _FakeBrowserSession:
 
 
 class _FakeDownloadStreamResponse:
-    def __init__(self, *, headers: dict[str, str], chunks: list[bytes]):
+    def __init__(
+        self,
+        *,
+        headers: dict[str, str],
+        chunks: list[bytes],
+        status_code: int = 200,
+        request_url: str = "https://example.com/file",
+    ):
         self.headers = headers
         self._chunks = list(chunks)
+        self.status_code = status_code
+        self.request = SimpleNamespace(url=request_url)
 
     async def __aenter__(self):
         return self
@@ -166,7 +176,10 @@ class DownloadServiceTests(SimpleTestCase):
                     chunks=[b"hello"],
                 )
 
-        with patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
             payload = async_to_sync(download_http_file)("https://example.com/hello.txt")
 
         normalized_headers = {
@@ -199,7 +212,10 @@ class DownloadServiceTests(SimpleTestCase):
                     chunks=[b"ok"],
                 )
 
-        with patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
             payload = async_to_sync(download_http_file)(
                 "https://example.com/data.txt",
                 headers={"Referer": "https://example.com", "User-Agent": "HeaderUA/1.0"},

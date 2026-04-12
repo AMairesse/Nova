@@ -1,30 +1,55 @@
 # nova/consumers.py
 import json
-from channels.generic.websocket import AsyncWebsocketConsumer
 import logging
+
+from asgiref.sync import sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+from nova.models.Task import Task
+from nova.models.Thread import Thread
 
 logger = logging.getLogger(__name__)
 
 
 class TaskProgressConsumer(AsyncWebsocketConsumer):
+    async def _user_can_access_task(self, task_id: str, user_id: int) -> bool:
+        def _exists() -> bool:
+            try:
+                return Task.objects.filter(id=int(task_id), user_id=user_id).exists()
+            except (TypeError, ValueError):
+                return False
+
+        return await sync_to_async(_exists, thread_sensitive=True)()
+
     async def connect(self):
         self.task_id = self.scope['url_route']['kwargs']['task_id']
         self.task_group_name = f'task_{self.task_id}'
+        self._joined_group = False
+        user = self.scope.get("user")
+
+        if not getattr(user, "is_authenticated", False):
+            await self.close(code=4403)
+            return
+        if not await self._user_can_access_task(self.task_id, user.id):
+            await self.close(code=4403)
+            return
 
         # Join room group
         await self.channel_layer.group_add(
             self.task_group_name,
             self.channel_name
         )
+        self._joined_group = True
 
         await self.accept()
 
     async def disconnect(self, close_code):
         # Leave room group
-        await self.channel_layer.group_discard(
-            self.task_group_name,
-            self.channel_name
-        )
+        if getattr(self, "_joined_group", False):
+            await self.channel_layer.group_discard(
+                self.task_group_name,
+                self.channel_name
+            )
 
     # Receive message from WebSocket
     # (handle ping/pong and optional client messages)
@@ -51,16 +76,35 @@ class TaskProgressConsumer(AsyncWebsocketConsumer):
 
 
 class FileProgressConsumer(AsyncWebsocketConsumer):
+    async def _user_can_access_thread(self, thread_id: str, user_id: int) -> bool:
+        def _exists() -> bool:
+            try:
+                return Thread.objects.filter(id=int(thread_id), user_id=user_id).exists()
+            except (TypeError, ValueError):
+                return False
+
+        return await sync_to_async(_exists, thread_sensitive=True)()
+
     async def connect(self):
         self.thread_id = self.scope['url_route']['kwargs']['thread_id']
         self.group_name = f"thread_{self.thread_id}_files"
+        self._joined_group = False
+        user = self.scope.get("user")
 
+        if not getattr(user, "is_authenticated", False):
+            await self.close(code=4403)
+            return
+        if not await self._user_can_access_thread(self.thread_id, user.id):
+            await self.close(code=4403)
+            return
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        self._joined_group = True
         await self.accept()
 
     async def disconnect(self, close_code):
-        await self.channel_layer.group_discard(self.group_name,
-                                               self.channel_name)
+        if getattr(self, "_joined_group", False):
+            await self.channel_layer.group_discard(self.group_name,
+                                                   self.channel_name)
 
     async def receive(self, text_data):
         # Early ping handling similar to TaskProgressConsumer

@@ -144,6 +144,13 @@
             this.composerDragDepth = 0;
             this.executionTraceTaskId = '';
             this.executionTraceRefreshTimer = null;
+            this.bottomFollowSession = null;
+            this.bottomFollowPrimeTimers = new Set();
+            this.bottomFollowThresholdPx = 96;
+            this.bottomFollowMaxDurationMs = 1500;
+            this.bottomFollowMediaMaxDurationMs = 3000;
+            this.bottomFollowIdleMs = 250;
+            this.bottomFollowPrimeDelaysMs = [250, 1000, 2500];
 
             this.streamingManager = new window.StreamingManager();
 
@@ -455,6 +462,7 @@
         }
 
         appendMessage(messageElement) {
+            const shouldFollowBottom = this.isNearBottom();
             const messagesList = document.getElementById('messages-list');
             if (messagesList) {
                 const emptyState = messagesList.querySelector('#messages-empty-state,[data-empty-state="true"]');
@@ -469,8 +477,13 @@
             // Update compact link visibility after adding new message
             this.updateCompactLinkVisibility();
 
-            // Auto-scroll to bottom when new messages are added
-            this.scrollToBottom();
+            if (shouldFollowBottom) {
+                this.followBottomDuringLayout({
+                    force: true,
+                    behavior: 'auto',
+                    observeRoot: messageElement,
+                });
+            }
         }
 
         scrollToMessage(messageId) {
@@ -499,17 +512,295 @@
             if (textarea) textarea.focus();
         }
 
-        scrollToBottom() {
-            const container = document.getElementById('conversation-container');
-            if (container) {
-                // Use setTimeout to ensure DOM is updated before scrolling
-                setTimeout(() => {
-                    container.scrollTo({
-                        top: container.scrollHeight,
-                        behavior: 'smooth'
-                    });
-                }, 100);
+        getConversationContainer() {
+            return document.getElementById('conversation-container');
+        }
+
+        isNearBottom(container = this.getConversationContainer(), thresholdPx = this.bottomFollowThresholdPx) {
+            if (!container) {
+                return false;
             }
+            const distanceToBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+            return distanceToBottom <= thresholdPx;
+        }
+
+        scrollConversationToBottom({ behavior = 'auto' } = {}) {
+            const container = this.getConversationContainer();
+            if (!container) {
+                return;
+            }
+            container.scrollTo({
+                top: container.scrollHeight,
+                behavior,
+            });
+        }
+
+        _clearBottomFollowPrimeTimers() {
+            for (const timerId of this.bottomFollowPrimeTimers) {
+                window.clearTimeout(timerId);
+            }
+            this.bottomFollowPrimeTimers.clear();
+        }
+
+        stopBottomFollow({ cancelPrimeTimers = false } = {}) {
+            if (cancelPrimeTimers) {
+                this._clearBottomFollowPrimeTimers();
+            }
+            const session = this.bottomFollowSession;
+            if (!session) {
+                return;
+            }
+            session.stopped = true;
+            if (session.rafId) {
+                window.cancelAnimationFrame(session.rafId);
+            }
+            if (session.idleTimer) {
+                window.clearTimeout(session.idleTimer);
+            }
+            if (session.hardStopTimer) {
+                window.clearTimeout(session.hardStopTimer);
+            }
+            if (session.resizeObserver) {
+                try {
+                    session.resizeObserver.disconnect();
+                } catch (_error) {
+                    // no-op
+                }
+            }
+            for (const cleanup of session.cleanup) {
+                try {
+                    cleanup();
+                } catch (_error) {
+                    // no-op
+                }
+            }
+            this.bottomFollowSession = null;
+        }
+
+        _scheduleBottomFollowIdleStop(session) {
+            if (
+                this.bottomFollowSession !== session
+                || session.stopped
+                || session.pendingAssets > 0
+                || session.hasTrackedImages
+            ) {
+                return;
+            }
+            if (session.idleTimer) {
+                window.clearTimeout(session.idleTimer);
+            }
+            session.idleTimer = window.setTimeout(() => {
+                if (this.bottomFollowSession === session) {
+                    this.stopBottomFollow();
+                }
+            }, this.bottomFollowIdleMs);
+        }
+
+        _scheduleBottomFollowHardStop(session) {
+            if (session.hardStopTimer) {
+                window.clearTimeout(session.hardStopTimer);
+            }
+            const maxDurationMs = session.hasTrackedImages
+                ? this.bottomFollowMediaMaxDurationMs
+                : this.bottomFollowMaxDurationMs;
+            session.hardStopTimer = window.setTimeout(() => {
+                if (this.bottomFollowSession === session) {
+                    this.stopBottomFollow();
+                }
+            }, maxDurationMs);
+        }
+
+        _queueBottomFollowAdjust(session) {
+            if (this.bottomFollowSession !== session || session.stopped) {
+                return;
+            }
+            if (session.rafId) {
+                return;
+            }
+            session.rafId = window.requestAnimationFrame(() => {
+                session.rafId = 0;
+                if (this.bottomFollowSession !== session || session.stopped) {
+                    return;
+                }
+                this.scrollConversationToBottom({ behavior: session.behavior });
+                this._scheduleBottomFollowIdleStop(session);
+            });
+        }
+
+        _trackBottomFollowImages(session, root) {
+            if (!(root instanceof Element)) {
+                return;
+            }
+            const images = Array.from(root.querySelectorAll('img'));
+            if (images.length > 0) {
+                session.hasTrackedImages = true;
+                this._scheduleBottomFollowHardStop(session);
+            }
+            images.forEach((img) => {
+                if (session.observedImages.has(img)) {
+                    return;
+                }
+                session.observedImages.add(img);
+                if (img.complete) {
+                    return;
+                }
+                session.pendingAssets += 1;
+                const handleAssetSettled = () => {
+                    if (this.bottomFollowSession !== session || session.stopped) {
+                        return;
+                    }
+                    session.pendingAssets = Math.max(0, session.pendingAssets - 1);
+                    this._queueBottomFollowAdjust(session);
+                    this._scheduleBottomFollowIdleStop(session);
+                };
+                img.addEventListener('load', handleAssetSettled, { once: true });
+                img.addEventListener('error', handleAssetSettled, { once: true });
+                session.cleanup.push(() => {
+                    img.removeEventListener('load', handleAssetSettled);
+                    img.removeEventListener('error', handleAssetSettled);
+                });
+            });
+        }
+
+        _observeBottomFollowRoot(session, root) {
+            if (!(root instanceof Element) || session.observedRoots.has(root)) {
+                return;
+            }
+            session.observedRoots.add(root);
+            if (session.resizeObserver) {
+                try {
+                    session.resizeObserver.observe(root);
+                } catch (_error) {
+                    // no-op
+                }
+            }
+            this._trackBottomFollowImages(session, root);
+        }
+
+        followBottomDuringLayout({
+            force = false,
+            behavior = 'auto',
+            observeRoot = null,
+        } = {}) {
+            const container = this.getConversationContainer();
+            if (!container) {
+                return false;
+            }
+            const shouldFollow = force || this.isNearBottom(container);
+            if (!shouldFollow) {
+                return false;
+            }
+
+            let session = this.bottomFollowSession;
+            if (!session || session.container !== container) {
+                this.stopBottomFollow();
+                session = {
+                    container,
+                    behavior,
+                    cleanup: [],
+                    resizeObserver: null,
+                    observedRoots: new WeakSet(),
+                    observedImages: new WeakSet(),
+                    pendingAssets: 0,
+                    hasTrackedImages: false,
+                    idleTimer: null,
+                    hardStopTimer: null,
+                    rafId: 0,
+                    stopped: false,
+                    lastUserScrollIntentAt: 0,
+                };
+
+                const markUserScrollIntent = () => {
+                    session.lastUserScrollIntentAt = Date.now();
+                };
+                const markKeyboardScrollIntent = (event) => {
+                    const key = `${event?.key || ''}`.trim();
+                    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(key)) {
+                        markUserScrollIntent();
+                    }
+                };
+                const onScroll = () => {
+                    const userIntentIsFresh = (Date.now() - session.lastUserScrollIntentAt) <= 350;
+                    if (!this.isNearBottom(container) && userIntentIsFresh) {
+                        this.stopBottomFollow({ cancelPrimeTimers: true });
+                    }
+                };
+                container.addEventListener('wheel', markUserScrollIntent, { passive: true });
+                container.addEventListener('touchstart', markUserScrollIntent, { passive: true });
+                container.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
+                document.addEventListener('keydown', markKeyboardScrollIntent, { passive: true });
+                container.addEventListener('scroll', onScroll, { passive: true });
+                session.cleanup.push(() => {
+                    container.removeEventListener('wheel', markUserScrollIntent);
+                    container.removeEventListener('touchstart', markUserScrollIntent);
+                    container.removeEventListener('pointerdown', markUserScrollIntent);
+                    document.removeEventListener('keydown', markKeyboardScrollIntent);
+                    container.removeEventListener('scroll', onScroll);
+                });
+
+                if (typeof ResizeObserver === 'function') {
+                    session.resizeObserver = new ResizeObserver(() => {
+                        if (this.bottomFollowSession !== session || session.stopped) {
+                            return;
+                        }
+                        this._queueBottomFollowAdjust(session);
+                    });
+                }
+
+                this.bottomFollowSession = session;
+            } else {
+                session.behavior = behavior;
+                session.pendingAssets = Math.max(0, session.pendingAssets);
+            }
+
+            this._observeBottomFollowRoot(
+                session,
+                document.getElementById('messages-list') || container
+            );
+            if (observeRoot) {
+                this._observeBottomFollowRoot(session, observeRoot);
+            }
+            this._scheduleBottomFollowHardStop(session);
+            this.scrollConversationToBottom({ behavior });
+            this._queueBottomFollowAdjust(session);
+            this._scheduleBottomFollowIdleStop(session);
+            return true;
+        }
+
+        primeBottomFollow({
+            force = true,
+            behavior = 'auto',
+            observeRoot = null,
+            delaysMs = null,
+        } = {}) {
+            const activated = this.followBottomDuringLayout({ force, behavior, observeRoot });
+            if (!activated) {
+                return false;
+            }
+
+            this._clearBottomFollowPrimeTimers();
+            const delays = Array.isArray(delaysMs) ? delaysMs : this.bottomFollowPrimeDelaysMs;
+            delays.forEach((delayMs) => {
+                const normalizedDelayMs = Number(delayMs);
+                if (!Number.isFinite(normalizedDelayMs) || normalizedDelayMs <= 0) {
+                    return;
+                }
+                const timerId = window.setTimeout(() => {
+                    this.bottomFollowPrimeTimers.delete(timerId);
+                    this.followBottomDuringLayout({
+                        force: false,
+                        behavior,
+                        observeRoot,
+                    });
+                }, normalizedDelayMs);
+                this.bottomFollowPrimeTimers.add(timerId);
+            });
+
+            return true;
+        }
+
+        scrollToBottom() {
+            this.scrollConversationToBottom({ behavior: 'smooth' });
         }
 
         // Update compact link visibility based on message count and position

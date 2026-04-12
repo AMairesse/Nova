@@ -152,6 +152,19 @@ class WebAppViewsTests(TestCase):
         self.assertIn("<h1>Main</h1>", root_response.content.decode("utf-8"))
         self.assertEqual(asset_response.status_code, 200)
         self.assertIn("application/javascript", asset_response["Content-Type"])
+        self.assertEqual(
+            root_response["Content-Security-Policy"],
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'none'; "
+            "frame-ancestors 'self'; "
+            "form-action 'self';",
+        )
 
     def test_serve_webapp_returns_404_when_entry_file_disappears(self):
         app = self._create_live_webapp(name="Broken app", source_root="/webapps/broken")

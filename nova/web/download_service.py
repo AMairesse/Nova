@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from nova.file_utils import MAX_FILE_SIZE
+from nova.web.network_policy import assert_public_http_url, max_redirects
 
 DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 _FILENAME_RE = re.compile(r'filename\*?=(?:UTF-8\'\')?"?([^\";]+)"?')
@@ -56,23 +57,38 @@ async def download_http_file(
 
     async with httpx.AsyncClient(
         timeout=DOWNLOAD_TIMEOUT,
-        follow_redirects=True,
+        follow_redirects=False,
         headers=request_headers,
     ) as client:
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
-            inferred_name = infer_download_filename(url, response.headers, filename)
-            mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-            async for chunk in response.aiter_bytes():
-                if not chunk:
+        current_url = await assert_public_http_url(url)
+        redirect_count = 0
+
+        while True:
+            async with client.stream("GET", current_url) as response:
+                if 300 <= response.status_code < 400:
+                    location = str(response.headers.get("location") or "").strip()
+                    if not location:
+                        response.raise_for_status()
+                    redirect_count += 1
+                    if redirect_count > max_redirects():
+                        raise ValueError("Too many redirects while downloading the requested URL.")
+                    current_url = await assert_public_http_url(urljoin(str(response.request.url), location))
                     continue
-                bytes_read += len(chunk)
-                if bytes_read > max_size:
-                    raise ValueError(f"Downloaded file exceeds the {max_size} byte limit.")
-                chunks.append(chunk)
+
+                response.raise_for_status()
+                inferred_name = infer_download_filename(current_url, response.headers, filename)
+                mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    bytes_read += len(chunk)
+                    if bytes_read > max_size:
+                        raise ValueError(f"Downloaded file exceeds the {max_size} byte limit.")
+                    chunks.append(chunk)
+                break
 
     return {
-        "url": str(url or ""),
+        "url": str(current_url or ""),
         "filename": inferred_name,
         "mime_type": mime_type or "application/octet-stream",
         "content": b"".join(chunks),

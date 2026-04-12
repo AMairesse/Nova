@@ -5,6 +5,16 @@
     window.WebSocketManager = {
         ws: null,
 
+        _notifyRealtimeUnavailable(message) {
+            const fallbackMessage = message || 'Realtime file updates are unavailable right now.';
+            const manager = window.ThreadManager?.state?.instances?.messageManager;
+            if (manager?.showToast) {
+                manager.showToast(fallbackMessage, 'warning');
+                return;
+            }
+            console.warn(fallbackMessage);
+        },
+
         // Connect WebSocket for file operations
         connectWebSocket() {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
@@ -58,6 +68,13 @@
 
             this.ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
+            };
+
+            this.ws.onclose = (event) => {
+                if (event.code === 4403) {
+                    this._notifyRealtimeUnavailable('Realtime file updates are not available for this thread.');
+                }
+                this.ws = null;
             };
         }
     };

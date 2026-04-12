@@ -13,6 +13,14 @@ from jsonschema import validate as jsonschema_validate
 
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.Tool import Tool, ToolCredential
+from nova.security.redaction import (
+    SAFE_RESPONSE_HEADER_ALLOWLIST,
+    collect_secret_values,
+    redact_http_headers,
+    redact_json_like,
+    redact_mapping,
+    redact_url,
+)
 from nova.web.download_service import infer_download_filename
 
 logger = logging.getLogger(__name__)
@@ -73,6 +81,43 @@ def _build_auth_parts(credential: ToolCredential | None) -> tuple[httpx.Auth | N
                 headers[name] = token
 
     return auth, headers, params
+
+
+def _auth_redaction_context(
+    credential: ToolCredential | None,
+    *,
+    auth_headers: dict[str, str],
+    auth_params: dict[str, str],
+) -> tuple[set[str], set[str], list[str]]:
+    sensitive_headers = {"authorization", "cookie", "set-cookie"}
+    sensitive_query_keys: set[str] = set()
+    if credential is not None and str(credential.auth_type or "").strip().lower() == "api_key":
+        api_key_name, api_key_location = _resolve_api_key_parts(credential)
+        if api_key_location == "query":
+            sensitive_query_keys.add(api_key_name)
+        else:
+            sensitive_headers.add(api_key_name)
+
+    sensitive_headers.update(
+        str(key).strip().lower()
+        for key in dict(auth_headers or {}).keys()
+        if str(key).strip()
+    )
+    sensitive_query_keys.update(
+        str(key).strip().lower()
+        for key in dict(auth_params or {}).keys()
+        if str(key).strip()
+    )
+    secret_values = collect_secret_values(
+        auth_headers,
+        auth_params,
+        getattr(credential, "token", None),
+        getattr(credential, "access_token", None),
+        getattr(credential, "refresh_token", None),
+        getattr(credential, "password", None),
+        getattr(credential, "client_secret", None),
+    )
+    return sensitive_headers, sensitive_query_keys, secret_values
 
 
 def _path_placeholders(path_template: str) -> list[str]:
@@ -219,6 +264,11 @@ async def call_api_operation(
     operation = await resolve_api_operation(tool=tool, operation_selector=operation_selector)
     credential = await _get_tool_credential(tool=tool, user=user)
     auth, auth_headers, auth_params = _build_auth_parts(credential)
+    sensitive_headers, sensitive_query_keys, secret_values = _auth_redaction_context(
+        credential,
+        auth_headers=auth_headers,
+        auth_params=auth_params,
+    )
     path, query, body = _normalize_operation_payload(operation, payload)
 
     url = urljoin(str(tool.endpoint or "").rstrip("/") + "/", path.lstrip("/"))
@@ -286,18 +336,49 @@ async def call_api_operation(
             "path_template": operation.path_template,
         },
         "request": {
-            "url": str(response.request.url),
+            "url": redact_url(
+                str(response.request.url),
+                extra_sensitive_query_keys=sensitive_query_keys,
+                known_secret_values=secret_values,
+            ),
             "method": operation.http_method,
-            "query": _normalize_jsonable(query_params),
-            "body": _normalize_jsonable(body),
+            "query": _normalize_jsonable(
+                redact_mapping(
+                    query_params,
+                    extra_sensitive_keys=sensitive_query_keys,
+                    known_secret_values=secret_values,
+                )
+            ),
+            "body": _normalize_jsonable(
+                redact_json_like(
+                    body,
+                    known_secret_values=secret_values,
+                )
+            ),
         },
         "response": {
             "status_code": response.status_code,
             "content_type": content_type or "application/octet-stream",
-            "headers": _normalize_jsonable(dict(response.headers)),
+            "headers": _normalize_jsonable(
+                redact_http_headers(
+                    dict(response.headers),
+                    allowlist=SAFE_RESPONSE_HEADER_ALLOWLIST,
+                    extra_sensitive_keys=sensitive_headers,
+                    known_secret_values=secret_values,
+                )
+            ),
             "body_kind": body_kind,
-            "json": _normalize_jsonable(json_body),
-            "text": text_body if body_kind in {"json", "text"} else None,
+            "json": _normalize_jsonable(
+                redact_json_like(
+                    json_body,
+                    known_secret_values=secret_values,
+                )
+            ),
+            "text": (
+                str(redact_json_like(text_body, known_secret_values=secret_values) or "")
+                if body_kind in {"json", "text"} and text_body is not None
+                else None
+            ),
             "size": len(binary_content),
             "filename": filename,
         },

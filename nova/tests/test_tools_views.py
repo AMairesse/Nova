@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from django import forms
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.messages import get_messages
@@ -802,3 +803,22 @@ class ToolsViewsTests(TestCase):
         form = ToolCredentialForm(instance=credential, user=self.user, tool=tool)
 
         self.assertEqual(form.initial["connection_mode"], "none")
+
+    def test_tool_credential_form_masks_existing_token_value(self):
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.API,
+            endpoint="https://api.example.com",
+        )
+        credential = create_tool_credential(
+            self.user,
+            tool,
+            auth_type="token",
+            token="super-secret-token",
+        )
+
+        form = ToolCredentialForm(instance=credential, user=self.user, tool=tool)
+
+        self.assertIsInstance(form.fields["token"].widget, forms.PasswordInput)
+        self.assertFalse(form.fields["token"].widget.render_value)
+        self.assertNotIn("super-secret-token", form["token"].as_widget())

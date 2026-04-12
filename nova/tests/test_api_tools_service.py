@@ -13,7 +13,7 @@ from nova.api_tools.service import (
     list_api_operations,
 )
 from nova.models.APIToolOperation import APIToolOperation
-from nova.models.Tool import Tool
+from nova.models.Tool import Tool, ToolCredential
 from nova.tests.factories import (
     create_tool,
     create_tool_credential,
@@ -132,3 +132,51 @@ class APIToolServiceTests(TestCase):
 
         self.assertIn("Unknown input fields", str(cm.exception))
 
+    def test_call_api_operation_redacts_sensitive_request_and_response_fields(self):
+        ToolCredential.objects.filter(user=self.user, tool=self.tool).update(
+            auth_type="api_key",
+            token="secret-api-key",
+            config={"api_key_name": "apiKey", "api_key_in": "query"},
+        )
+        request = httpx.Request(
+            "POST",
+            "https://api.example.com/invoices/42?mode=draft&apiKey=secret-api-key",
+        )
+        response = httpx.Response(
+            200,
+            headers={
+                "content-type": "application/json",
+                "set-cookie": "session=topsecret",
+                "server": "gunicorn",
+                "location": "https://api.example.com/next?apiKey=secret-api-key",
+            },
+            json={"ok": True, "echo": "secret-api-key"},
+            request=request,
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.request = AsyncMock(return_value=response)
+
+        with patch("nova.api_tools.service.httpx.AsyncClient", return_value=client):
+            result = async_to_sync(call_api_operation)(
+                tool=self.tool,
+                user=self.user,
+                operation_selector="create_invoice",
+                payload={
+                    "invoice_id": 42,
+                    "mode": "draft",
+                    "payload": {"amount": 199},
+                },
+            )
+
+        envelope = result["payload"]
+        self.assertEqual(envelope["request"]["query"]["apiKey"], "[redacted]")
+        self.assertIn("apiKey=%5Bredacted%5D", envelope["request"]["url"])
+        self.assertEqual(envelope["response"]["json"]["echo"], "[redacted]")
+        self.assertEqual(
+            envelope["response"]["headers"]["location"],
+            "https://api.example.com/next?apiKey=%5Bredacted%5D",
+        )
+        self.assertNotIn("server", envelope["response"]["headers"])
+        self.assertNotIn("set-cookie", {key.lower() for key in envelope["response"]["headers"].keys()})

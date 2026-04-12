@@ -11,10 +11,13 @@ from nova.utils import markdown_to_html
 
 MESSAGE_ATTACHMENT_DISPLAY_PREFETCH = Prefetch(
     "attached_files",
-    queryset=UserFile.objects.order_by(
+    queryset=UserFile.objects.filter(
+        scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+    ).order_by(
         "created_at",
         "id",
     ),
+    to_attr="prefetched_message_attachments",
 )
 
 

@@ -96,6 +96,11 @@
             // The server is already sending HTML chunks, so we don't need to process them as Markdown
             // Replace the entire content since server sends complete paragraph updates
             contentEl.innerHTML = chunk;
+            this.messageManager?.followBottomDuringLayout?.({
+                force: false,
+                behavior: 'auto',
+                observeRoot: stream.element,
+            });
 
             // Track last chunk to detect duplicates
             stream.lastChunk = chunk;
@@ -134,6 +139,20 @@
 
             const socket = new WebSocket(wsUrl);
             let heartbeatInterval, heartbeatTimeout;
+            let realtimeUnavailableNotified = false;
+
+            const notifyRealtimeUnavailable = (message) => {
+                if (realtimeUnavailableNotified) {
+                    return;
+                }
+                realtimeUnavailableNotified = true;
+                const progressLogs = document.getElementById('progress-logs');
+                if (progressLogs) {
+                    progressLogs.textContent = message;
+                }
+                this.messageManager?.scheduleExecutionTraceRefresh(taskId);
+                this.messageManager?.showToast?.(message, 'warning');
+            };
 
             const startHeartbeat = () => {
                 clearInterval(heartbeatInterval);
@@ -285,13 +304,17 @@
                 }
             };
 
-            socket.onclose = () => {
+            socket.onclose = (event) => {
                 clearInterval(heartbeatInterval);
                 clearTimeout(heartbeatTimeout);
+                if (event.code === 4403) {
+                    notifyRealtimeUnavailable('Realtime task updates are unavailable for this run. Refresh the page to check the latest state.');
+                }
             };
 
             socket.onerror = (err) => {
                 console.error('WebSocket error:', err);
+                notifyRealtimeUnavailable('Realtime task updates are temporarily unavailable.');
             };
         }
 
@@ -373,10 +396,18 @@
             if (taskId && this.activeStreams.has(taskId)) {
                 const stream = this.activeStreams.get(taskId);
                 if (stream?.element?.parentNode) {
+                    const shouldFollowBottom = this.messageManager?.isNearBottom?.() || false;
                     stream.element.replaceWith(messageElement);
                     stream.element = messageElement;
                     if (this.messageManager) {
                         this.messageManager.updateCompactLinkVisibility();
+                        if (shouldFollowBottom) {
+                            this.messageManager.followBottomDuringLayout({
+                                force: true,
+                                behavior: 'auto',
+                                observeRoot: messageElement,
+                            });
+                        }
                     }
                     return;
                 }

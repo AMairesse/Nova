@@ -2,6 +2,17 @@
 
 set -e  # Exit on error
 
+APP_USER="${APP_USER:-nova}"
+
+run_as_app_user() {
+    su -s /bin/bash "$APP_USER" -c "$*"
+}
+
+prepare_runtime_dirs() {
+    mkdir -p /app/static /app/media /app/logs /ms-playwright
+    chown -R "$APP_USER:$APP_USER" /app/static /app/media /app/logs /ms-playwright
+}
+
 if [ -f /app/.env ]; then
     echo "Loading .env file..."
     set -a  # Auto-export subsequent assignments
@@ -37,25 +48,23 @@ while ! redis-cli -h redis -p 6379 ping >/dev/null 2>&1; do
 done
 echo "Redis is ready"
 
+prepare_runtime_dirs
+
 # Collect static files
 echo "Collecting static files..."
-python manage.py collectstatic --noinput --clear
+run_as_app_user "python manage.py collectstatic --noinput --clear"
 
 # Apply database migrations
 echo "Applying database migrations..."
-python manage.py migrate --noinput
+run_as_app_user "python manage.py migrate --noinput"
 
 # Create superuser if env vars are set (idempotent: skip if exists)
 if [ ! -z "$DJANGO_SUPERUSER_USERNAME" ] && [ ! -z "$DJANGO_SUPERUSER_PASSWORD" ]; then
     echo "Checking/creating superuser..."
-    python manage.py createsuperuser --noinput \
-        --username "$DJANGO_SUPERUSER_USERNAME" \
-        --email "${DJANGO_SUPERUSER_EMAIL:-admin@example.com}" || true  # Ignore if exists
+    run_as_app_user "python manage.py createsuperuser --noinput --username \"$DJANGO_SUPERUSER_USERNAME\" --email \"${DJANGO_SUPERUSER_EMAIL:-admin@example.com}\"" || true  # Ignore if exists
     echo "IMPORTANT: Change the superuser password immediately after first login for security!"
 fi
 
 # Start Daphne
 echo "Starting Daphne..."
-exec daphne nova.asgi:application \
-    -b 0.0.0.0 \
-    -p 8000
+exec su -s /bin/bash "$APP_USER" -c "exec daphne nova.asgi:application -b 0.0.0.0 -p 8000"

@@ -11,22 +11,12 @@ from uuid import UUID, uuid4
 
 from asgiref.sync import sync_to_async
 
+from nova.security.redaction import REDACTED_VALUE, is_sensitive_key
+
 logger = logging.getLogger(__name__)
 
 TRACE_VERSION = 2
 _PREVIEW_MAX_CHARS = 280
-_REDACTED_VALUE = "[redacted]"
-_REDACT_KEYS = {
-    "api_key",
-    "authorization",
-    "cookie",
-    "password",
-    "secret",
-    "set-cookie",
-    "token",
-    "access_token",
-    "refresh_token",
-}
 _BLOB_PATTERN = re.compile(r"^[A-Za-z0-9+/=]{160,}$")
 DELEGATED_AGENT_TOOL_MARKER = "_nova_delegated_agent_tool"
 _OUTPUT_PATH_META_KEYS = {
@@ -112,8 +102,8 @@ def _sanitize_json_like(value: Any, *, key_hint: str | None = None) -> Any:
         sanitized = {}
         for key, inner_value in value.items():
             normalized_key = str(key or "").strip().lower()
-            if normalized_key in _REDACT_KEYS:
-                sanitized[str(key)] = _REDACTED_VALUE
+            if is_sensitive_key(normalized_key):
+                sanitized[str(key)] = REDACTED_VALUE
             else:
                 sanitized[str(key)] = _sanitize_json_like(inner_value, key_hint=normalized_key)
         return sanitized
@@ -122,8 +112,8 @@ def _sanitize_json_like(value: Any, *, key_hint: str | None = None) -> Any:
     if isinstance(value, tuple):
         return [_sanitize_json_like(item, key_hint=key_hint) for item in value[:10]]
     if isinstance(value, str):
-        if key_hint and str(key_hint).lower() in _REDACT_KEYS:
-            return _REDACTED_VALUE
+        if key_hint and is_sensitive_key(str(key_hint).lower()):
+            return REDACTED_VALUE
         return _sanitize_string(value)
     return value
 

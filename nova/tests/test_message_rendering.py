@@ -61,6 +61,76 @@ class MessageRenderingTests(TestCase):
         self.assertEqual(prepared[0].message_attachment_count, 1)
         self.assertEqual(prepared[0].message_attachments[0]["label"], "photo.jpg")
 
+    def test_prepare_messages_for_display_prefetch_excludes_thread_files_with_same_source_message(self):
+        message = self.thread.add_message("Hello", actor=Actor.USER)
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/photo.jpg",
+            original_filename="photo.jpg",
+            mime_type="image/jpeg",
+            size=2048,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/output.png",
+            original_filename="/generated/output.png",
+            mime_type="image/png",
+            size=4096,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+
+        prepared = prepare_messages_for_display(
+            list(
+                with_message_display_relations(
+                    Message.objects.filter(id=message.id).order_by("created_at", "id")
+                )
+            )
+        )
+
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0].message_attachment_count, 1)
+        self.assertEqual(
+            [item["label"] for item in prepared[0].message_attachments],
+            ["photo.jpg"],
+        )
+
+    def test_prepare_messages_for_display_fallback_excludes_thread_files_with_same_source_message(self):
+        message = self.thread.add_message("Hello", actor=Actor.USER)
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/photo.jpg",
+            original_filename="photo.jpg",
+            mime_type="image/jpeg",
+            size=2048,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/generated/output.png",
+            original_filename="/generated/output.png",
+            mime_type="image/png",
+            size=4096,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+
+        prepared = prepare_messages_for_display([message])
+
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0].message_attachment_count, 1)
+        self.assertEqual(
+            [item["label"] for item in prepared[0].message_attachments],
+            ["photo.jpg"],
+        )
+
     def test_prepare_messages_for_display_renders_agent_vfs_image_markdown_inline(self):
         user_file = self._create_thread_file(path="/generated/flyer.png")
         message = self.thread.add_message("Done", actor=Actor.AGENT)

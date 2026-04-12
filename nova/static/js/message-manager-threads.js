@@ -18,6 +18,7 @@
                 }
 
                 const html = await response.text();
+                this.stopBottomFollow?.({ cancelPrimeTimers: true });
                 document.getElementById('message-container').innerHTML = html;
                 this.syncComposerAttachmentConfig();
                 this.resetComposerAttachments();
@@ -49,7 +50,11 @@
                 this.updateVoiceButtonState();
                 this.syncResponseModeControl();
                 this.syncComposerCapabilityNotice();
-                this.scrollToBottom();
+                this.primeBottomFollow({
+                    force: true,
+                    behavior: 'auto',
+                    observeRoot: document.getElementById('conversation-container'),
+                });
                 this.checkPendingInteractions();
                 this.updateCompactLinkVisibility();
                 this.checkAndReconnectRunningTasks();
