@@ -1,54 +1,161 @@
 <!-- user_settings/templates/user_settings/fragments/tool_table.html -->
 {% load i18n %}
-<div class="d-flex justify-content-between align-items-center mb-2">
-  <h5 class="mb-0"></h5>
-  <a href="{% url 'user_settings:tool-add' %}?from=tools"
-     class="btn btn-sm btn-primary">
-    <i class="bi bi-plus-lg me-1"></i>{% trans "Add tool" %}
-  </a>
+<div class="mb-4">
+  <h6 class="text-uppercase text-muted mb-3">{% trans "Built-in capabilities" %}</h6>
+  <div class="row g-3">
+    {% for capability in tool_catalog.built_in_capabilities %}
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start gap-3">
+              <div>
+                <h6 class="card-title mb-1">{{ capability.label }}</h6>
+                <p class="card-text text-muted small mb-0">{{ capability.description }}</p>
+              </div>
+              <span class="badge bg-success-subtle text-success-emphasis">{% trans "Available" %}</span>
+            </div>
+            {% if capability.status_summary %}
+              <div class="mt-3 d-flex align-items-center gap-2 flex-wrap">
+                <span class="small text-muted">{{ capability.status_summary.label }}</span>
+                <span class="badge {{ capability.status_summary.badge_class }}">{{ capability.status_summary.value }}</span>
+              </div>
+            {% endif %}
+          </div>
+          <div class="card-footer bg-transparent">
+            <div class="d-flex justify-content-between align-items-center gap-3">
+              <div class="small text-muted">
+                {% blocktrans count count=capability.agent_count %}Used by {{ count }} agent{% plural %}Used by {{ count }} agents{% endblocktrans %}
+              </div>
+              {% if capability.settings_action %}
+                <a href="{{ capability.settings_action.url }}"
+                   class="btn btn-sm btn-outline-primary">
+                  {{ capability.settings_action.label }}
+                </a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
 </div>
 
-<div class="table-responsive">
-  <table class="table table-hover align-middle">
-    <thead class="table-light">
-      <tr><th>{% trans "Name" %}</th><th>{% trans "Type" %}</th><th>{% trans "Active" %}</th><th>{% trans "Models Using" %}</th><th class="text-end">{% trans "Actions" %}</th></tr>
-    </thead>
-    <tbody>
-      {% for tool in tools %}
-        <tr>
-          <td>{{ tool.name }}</td>
-          <td>{{ tool.get_tool_type_display }}</td>
-          <td class="text-center">
-            {% if tool.is_active %}
-              <span class="badge bg-success">
-                <i class="bi bi-check-circle-fill me-1"></i>{% trans "Active" %}
-              </span>
+<div class="mb-4">
+  <h6 class="text-uppercase text-muted mb-3">{% trans "Capabilities with backends" %}</h6>
+  <div class="row g-3">
+    {% for family in tool_catalog.backend_families %}
+      <div class="col-12">
+        <div class="card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+              <div>
+                <h6 class="card-title mb-1">{{ family.label }}</h6>
+                <p class="card-text text-muted small mb-0">{{ family.description }}</p>
+              </div>
+              <a href="{% url 'user_settings:tool-add' %}?from=tools&kind={{ family.plugin_id }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-plus-lg me-1"></i>{% trans "Add custom backend" %}
+              </a>
+            </div>
+
+            <div class="small mb-3">
+              <span class="fw-semibold">{% trans "Default backend" %}:</span>
+              {% if family.default_backend %}
+                <span>{{ family.default_backend.name }}</span>
+                <span class="badge bg-success-subtle text-success-emphasis ms-2">{% trans "Local Nova service" %}</span>
+              {% else %}
+                <span class="text-muted">{% trans "No default backend available" %}</span>
+              {% endif %}
+            </div>
+
+            {% if family.custom_backends %}
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>{% trans "Custom backend" %}</th>
+                      <th>{% trans "Status" %}</th>
+                      <th>{% trans "Models Using" %}</th>
+                      <th class="text-end">{% trans "Actions" %}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for tool in family.custom_backends %}
+                      <tr>
+                        <td>{{ tool.name }}</td>
+                        <td>
+                          <span class="badge {{ tool.connection_status.badge_class }}">{{ tool.connection_status.label }}</span>
+                        </td>
+                        <td>{{ tool.agent_count }}</td>
+                        <td class="text-end">
+                          <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"
+                             class="btn btn-sm btn-outline-primary me-1">{% trans "Settings" %}</a>
+                          <a href="{% url 'user_settings:tool-delete' tool.pk %}?from=tools"
+                             class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
             {% else %}
-              <span class="badge bg-secondary">
-                <i class="bi bi-x-circle-fill me-1"></i>{% trans "Inactive" %}
-              </span>
+              <p class="small text-muted mb-0">{% trans "No custom backends configured yet." %}</p>
             {% endif %}
-          </td>
-          <td class="text-center">
-            {% if tool.agent_count == 0 %}
-              <span class="badge bg-light text-dark">{{ tool.agent_count }}</span>
-            {% else %}
-              <span class="badge bg-info text-dark">{{ tool.agent_count }}</span>
-            {% endif %}
-          </td>
-          <td class="text-end">
-            {% if tool.user == request.user %}
-            <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"
-              class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-pencil"></i>{% trans "Edit" %}</a>
-            <a href="{% url 'user_settings:tool-configure' tool.pk %}?from=tools"
-              class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-gear"></i>{% trans "Configure" %}</a>
-            <a href="{% url 'user_settings:tool-delete' tool.pk %}?from=tools"
-              class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i>{% trans "Delete" %}</a>
-            {% endif %}
-            </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
 </div>
-{% if is_paginated %}{% include "includes/pagination.html" %}{% endif %}
+
+<div>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h6 class="text-uppercase text-muted mb-0">{% trans "Connections" %}</h6>
+    <a href="{% url 'user_settings:tool-add' %}?from=tools"
+       class="btn btn-sm btn-primary">
+      <i class="bi bi-plus-lg me-1"></i>{% trans "Add connection" %}
+    </a>
+  </div>
+  {% if tool_catalog.has_connections %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>{% trans "Name" %}</th>
+            <th>{% trans "Type" %}</th>
+            <th>{% trans "Status" %}</th>
+            <th>{% trans "Models Using" %}</th>
+            <th class="text-end">{% trans "Actions" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for tool in tool_catalog.connections %}
+            <tr>
+              <td>{{ tool.name }}</td>
+              <td>{{ tool.connection_type_label }}</td>
+              <td>
+                <span class="badge {{ tool.connection_status.badge_class }}">{{ tool.connection_status.label }}</span>
+              </td>
+              <td>{{ tool.agent_count }}</td>
+              <td class="text-end">
+                {% if tool.user == request.user %}
+                  <a href="{% url 'user_settings:tool-edit' tool.pk %}?from=tools"
+                     class="btn btn-sm btn-outline-primary me-1">{% trans "Settings" %}</a>
+                  <a href="{% url 'user_settings:tool-delete' tool.pk %}?from=tools"
+                     class="btn btn-sm btn-outline-danger">{% trans "Delete" %}</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="border rounded p-4 text-center">
+      <p class="text-muted mb-3">{% trans "No custom connections configured yet." %}</p>
+      <a href="{% url 'user_settings:tool-add' %}?from=tools" class="btn btn-sm btn-primary">
+        <i class="bi bi-plus-lg me-1"></i>{% trans "Add connection" %}
+      </a>
+    </div>
+  {% endif %}
+</div>

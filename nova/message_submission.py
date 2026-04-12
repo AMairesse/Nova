@@ -8,7 +8,7 @@ from asgiref.sync import async_to_sync
 from django.core.files.uploadedfile import UploadedFile
 
 from nova.file_utils import batch_upload_files
-from nova.message_artifacts import normalize_message_artifacts
+from nova.message_attachments import normalize_message_attachments
 from nova.message_utils import annotate_user_message, upload_message_attachments
 from nova.models.Message import Message
 from nova.models.Task import Task
@@ -58,7 +58,7 @@ class SubmissionResult:
             "actor": self.message.actor,
             "file_count": len(self.uploaded_file_ids),
             "internal_data": self.message.internal_data or {},
-            "artifacts": getattr(self.message, "message_artifacts", []),
+            "attachments": getattr(self.message, "message_attachments", []),
         }
         payload = {
             "status": "OK",
@@ -81,6 +81,7 @@ def _upload_thread_files(
     *,
     thread: Thread,
     user,
+    source_message: Message | None,
     uploaded_files: Sequence[UploadedFile],
     thread_file_uploader=batch_upload_files,
     file_update_publisher=publish_file_update,
@@ -109,7 +110,12 @@ def _upload_thread_files(
         )
 
     try:
-        created_files, errors = async_to_sync(thread_file_uploader)(thread, user, file_data)
+        created_files, errors = async_to_sync(thread_file_uploader)(
+            thread,
+            user,
+            file_data,
+            source_message=source_message,
+        )
     except Exception as exc:
         logger.error("Batch upload failed: %s", exc)
         raise MessageSubmissionError("File upload failed", status_code=500) from exc
@@ -181,10 +187,17 @@ def submit_user_message(
             raise MessageSubmissionError(attachment_error, status_code=400)
 
     context = prepare_context(normalized_text)
+    message = context.message
+    if message is None:
+        if context.create_message is None:
+            raise RuntimeError("Submission context must provide a message or a create_message callback.")
+        message = context.create_message(normalized_text)
+        context.message = message
     try:
         uploaded_file_ids = _upload_thread_files(
             thread=context.thread,
             user=user,
+            source_message=message,
             uploaded_files=uploaded_thread_files,
             thread_file_uploader=thread_file_uploader,
             file_update_publisher=file_update_publisher,
@@ -193,14 +206,7 @@ def submit_user_message(
         _cleanup_submission_message(context)
         raise
 
-    message = context.message
-    if message is None:
-        if context.create_message is None:
-            raise RuntimeError("Submission context must provide a message or a create_message callback.")
-        message = context.create_message(normalized_text)
-        context.message = message
-
-    message_attachment_artifacts: list[dict] = []
+    message_attachment_manifests: list[dict] = []
     if uploaded_message_attachments:
         attachment_meta, attachment_errors = attachment_uploader(
             context.thread,
@@ -208,8 +214,8 @@ def submit_user_message(
             message,
             uploaded_message_attachments,
         )
-        message_attachment_artifacts = list(attachment_meta or [])
-        if attachment_errors and not message_attachment_artifacts:
+        message_attachment_manifests = list(attachment_meta or [])
+        if attachment_errors and not message_attachment_manifests:
             _cleanup_submission_message(context)
             raise MessageSubmissionError("; ".join(attachment_errors), status_code=400)
 
@@ -219,11 +225,11 @@ def submit_user_message(
     }
     message.save(update_fields=["internal_data"])
     annotate_user_message(message)
-    if message_attachment_artifacts and not getattr(message, "message_artifacts", None):
-        message.message_artifacts = normalize_message_artifacts(
-            message_attachment_artifacts
+    if message_attachment_manifests and not getattr(message, "message_attachments", None):
+        message.message_attachments = normalize_message_attachments(
+            message_attachment_manifests
         )
-        message.message_attachment_count = len(message.message_artifacts)
+        message.message_attachment_count = len(message.message_attachments)
 
     task = enqueue_message_agent_task(
         user=user,

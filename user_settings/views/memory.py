@@ -13,7 +13,8 @@ from nova.llm.embeddings import (
     get_custom_http_provider,
     resolve_embeddings_provider_for_values,
 )
-from nova.models.Memory import MemoryItemEmbedding
+from nova.memory.service import count_memory_chunk_embeddings
+from nova.models.AgentConfig import AgentConfig
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.tasks.conversation_embedding_tasks import rebuild_user_conversation_embeddings_task
 from nova.tasks.memory_rebuild_tasks import rebuild_user_memory_embeddings_task
@@ -240,7 +241,7 @@ class MemorySettingsView(
         should_queue_rebuild = signature_changed and new_resolved.signature is not None
 
         if requires_confirmation:
-            count = MemoryItemEmbedding.objects.filter(user=request.user).count()
+            count = async_to_sync(count_memory_chunk_embeddings)(user=request.user)
             request.session["memory_embeddings_pending"] = {
                 "memory_embeddings_source": new_values.get("memory_embeddings_source"),
                 "memory_embeddings_url": new_values.get("memory_embeddings_url"),
@@ -277,9 +278,9 @@ class MemorySettingsView(
         pending = self.request.session.get("memory_embeddings_pending")
         context["has_pending_reembed"] = isinstance(pending, dict)
         if context["has_pending_reembed"]:
-            context["pending_reembed_count"] = MemoryItemEmbedding.objects.filter(
-                user=self.request.user
-            ).count()
+            context["pending_reembed_count"] = async_to_sync(
+                count_memory_chunk_embeddings
+            )(user=self.request.user)
 
         form = context.get("form")
         display_values = self._form_display_values(form)
@@ -298,8 +299,15 @@ class MemorySettingsView(
         context["show_custom_embeddings_warning"] = (
             selected_source == MemoryEmbeddingsSource.CUSTOM and resolved.provider is None
         )
+        memory_enabled_agent_count = (
+            AgentConfig.objects.filter(user=self.request.user, tools__tool_subtype="memory")
+            .distinct()
+            .count()
+        )
+        context["memory_enabled_agent_count"] = memory_enabled_agent_count
+        context["show_memory_usage_info"] = memory_enabled_agent_count == 0
         context["help_text"] = _(
-            "Choose whether long-term memory should use the deployment-level embeddings provider, "
-            "a custom endpoint, or lexical search only."
+            "Memory is user-scoped and shared across the agents that have the Memory capability enabled. "
+            "Configure semantic retrieval here, while lexical search over visible memory files remains available either way."
         )
         return context

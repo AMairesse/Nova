@@ -79,6 +79,15 @@ class SystemReadonlyMixin:
         return obj
 
 
+class StaffRequiredMixin:
+    """Restrict access to staff users."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not getattr(request.user, "is_staff", False):
+            raise Http404("Not allowed")
+        return super().dispatch(request, *args, **kwargs)
+
+
 # ---------------------------------------------------------------------------#
 #  Keep old secret if blank                                                  #
 # ---------------------------------------------------------------------------#

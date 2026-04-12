@@ -11,7 +11,6 @@ from django.utils import timezone
 from nova.models.ConversationEmbedding import DaySegmentEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor
-from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserObjects import UserProfile
 from nova.tasks import conversation_tasks
@@ -33,24 +32,6 @@ class ConversationTasksFormattingTests(SimpleTestCase):
         self.assertIn("Agent: ", transcript)
         self.assertIn("(truncated)", transcript)
         self.assertNotIn("hidden", transcript)
-
-    def test_format_artifacts_for_summary_compacts_counts_and_examples(self):
-        artifact = SimpleNamespace(
-            filename="report.pdf",
-            kind="pdf",
-            direction="input",
-            summary_text="Quarterly report for review",
-        )
-
-        rendered = conversation_tasks._format_artifacts_for_summary(
-            [{"kind": "pdf", "total": 1}],
-            [artifact],
-        )
-
-        self.assertIn("Artifact counts: pdf (1)", rendered)
-        self.assertIn("report.pdf (pdf, input)", rendered)
-        self.assertIn("Quarterly report for review", rendered)
-
 
 class ConversationTasksDbTests(TransactionTestCase):
     def setUp(self):
@@ -176,9 +157,9 @@ class ConversationTasksDbTests(TransactionTestCase):
             status="failed",
         )
 
-    @patch("nova.tasks.conversation_tasks.LLMAgent.create", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_tasks.ProviderClient.create_chat_completion", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)
-    def test_summarize_day_segment_async_empty_transcript_short_circuits(self, mocked_publish, mocked_create_agent):
+    def test_summarize_day_segment_async_empty_transcript_short_circuits(self, mocked_publish, mocked_completion):
         start = self.thread.add_message("system only", actor=Actor.SYSTEM)
         seg = DaySegment.objects.create(
             user=self.user,
@@ -199,13 +180,13 @@ class ConversationTasksDbTests(TransactionTestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["summary"], "")
-        mocked_create_agent.assert_not_awaited()
+        mocked_completion.assert_not_awaited()
         self.assertTrue(any(call.args[1] == "task_complete" for call in mocked_publish.await_args_list))
 
     @patch("nova.tasks.conversation_tasks.compute_day_segment_embedding_task.delay")
-    @patch("nova.tasks.conversation_tasks.LLMAgent.create", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_tasks.ProviderClient.create_chat_completion", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)
-    def test_summarize_day_segment_async_persists_summary(self, mocked_publish, mocked_create_agent, mocked_delay):
+    def test_summarize_day_segment_async_persists_summary(self, mocked_publish, mocked_completion, mocked_delay):
         m1 = self.thread.add_message("Yesterday plan", actor=Actor.USER)
         m2 = self.thread.add_message("Today's action", actor=Actor.AGENT)
         seg = DaySegment.objects.create(
@@ -217,13 +198,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         )
         UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
 
-        fake_checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
-        fake_agent = SimpleNamespace(
-            ainvoke=AsyncMock(return_value="[THINK]internal[/THINK]\n## Summary\nAll good"),
-            checkpointer=fake_checkpointer,
-            cleanup_runtime=AsyncMock(),
-        )
-        mocked_create_agent.return_value = fake_agent
+        mocked_completion.return_value = {"content": "[THINK]internal[/THINK]\n## Summary\nAll good"}
 
         result = asyncio.run(
             conversation_tasks._summarize_day_segment_async(
@@ -241,70 +216,15 @@ class ConversationTasksDbTests(TransactionTestCase):
         emb = DaySegmentEmbedding.objects.get(day_segment=seg)
         self.assertEqual(emb.state, "pending")
         mocked_delay.assert_called_once_with(emb.id)
-        fake_agent.ainvoke.assert_awaited_once_with(
-            ANY,
-            silent_mode=True,
-            thread_id_override=ANY,
-        )
-        fake_checkpointer.adelete_thread.assert_awaited_once()
-        fake_agent.cleanup_runtime.assert_awaited_once()
+        mocked_completion.assert_awaited_once()
+        prompt = mocked_completion.await_args.kwargs["messages"][1]["content"]
+        self.assertIn("Messages for this day:", prompt)
         self.assertTrue(any(call.args[1] == "continuous_summary_ready" for call in mocked_publish.await_args_list))
 
     @patch("nova.tasks.conversation_tasks.compute_day_segment_embedding_task.delay")
-    @patch("nova.tasks.conversation_tasks.LLMAgent.create", new_callable=AsyncMock)
+    @patch("nova.tasks.conversation_tasks.ProviderClient.create_chat_completion", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)
-    def test_summarize_day_segment_async_uses_key_artifacts_when_transcript_is_empty(
-        self,
-        mocked_publish,
-        mocked_create_agent,
-        mocked_delay,
-    ):
-        start = self.thread.add_message("", actor=Actor.USER)
-        seg = DaySegment.objects.create(
-            user=self.user,
-            thread=self.thread,
-            day_label=timezone.now().date(),
-            starts_at_message=start,
-            summary_markdown="",
-        )
-        MessageArtifact.objects.create(
-            user=self.user,
-            thread=self.thread,
-            message=start,
-            direction=ArtifactDirection.INPUT,
-            kind=ArtifactKind.PDF,
-            label="brief.pdf",
-            summary_text="Client brief to summarize",
-        )
-        UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
-
-        fake_checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
-        fake_agent = SimpleNamespace(
-            ainvoke=AsyncMock(return_value="## Summary\nArtifact-only day"),
-            checkpointer=fake_checkpointer,
-            cleanup_runtime=AsyncMock(),
-        )
-        mocked_create_agent.return_value = fake_agent
-
-        result = asyncio.run(
-            conversation_tasks._summarize_day_segment_async(
-                day_segment_id=seg.id,
-                mode="manual",
-                task_id="task-artifact-only",
-            )
-        )
-
-        self.assertEqual(result["status"], "ok")
-        prompt = fake_agent.ainvoke.await_args.args[0]
-        self.assertIn("## Key artifacts", prompt)
-        self.assertIn("brief.pdf", prompt)
-        self.assertIn("Client brief to summarize", prompt)
-        mocked_delay.assert_called_once()
-
-    @patch("nova.tasks.conversation_tasks.compute_day_segment_embedding_task.delay")
-    @patch("nova.tasks.conversation_tasks.LLMAgent.create", new_callable=AsyncMock)
-    @patch("nova.tasks.conversation_tasks._publish_task_update", new_callable=AsyncMock)
-    def test_manual_regenerate_ignores_delta_boundary(self, mocked_publish, mocked_create_agent, mocked_delay):
+    def test_manual_regenerate_ignores_delta_boundary(self, mocked_publish, mocked_completion, mocked_delay):
         m1 = self.thread.add_message("Initial context", actor=Actor.USER)
         m2 = self.thread.add_message("Initial answer", actor=Actor.AGENT)
         seg = DaySegment.objects.create(
@@ -317,13 +237,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         )
         UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
 
-        fake_checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
-        fake_agent = SimpleNamespace(
-            ainvoke=AsyncMock(return_value="## Summary\nRegenerated"),
-            checkpointer=fake_checkpointer,
-            cleanup_runtime=AsyncMock(),
-        )
-        mocked_create_agent.return_value = fake_agent
+        mocked_completion.return_value = {"content": "## Summary\nRegenerated"}
 
         result = asyncio.run(
             conversation_tasks._summarize_day_segment_async(
@@ -334,8 +248,8 @@ class ConversationTasksDbTests(TransactionTestCase):
         )
 
         self.assertEqual(result["status"], "ok")
-        fake_agent.ainvoke.assert_awaited_once()
-        prompt = fake_agent.ainvoke.await_args.args[0]
+        mocked_completion.assert_awaited_once()
+        prompt = mocked_completion.await_args.kwargs["messages"][1]["content"]
         self.assertIn("Messages for this day:", prompt)
         self.assertNotIn("New messages since the previous summary for this day", prompt)
         seg.refresh_from_db()

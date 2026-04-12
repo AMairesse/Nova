@@ -301,7 +301,7 @@
                     ThreadManager.state.instances.responsiveManager = new window.NovaApp.Modules.ResponsiveManager();
                 }
 
-                // Backward compatibility for legacy code expecting window.ResponsiveManager instance
+                // Keep a global alias for older inline hooks expecting window.ResponsiveManager
                 window.ResponsiveManager = ThreadManager.state.instances.responsiveManager;
 
                 if (typeof ThreadManager.state.instances.responsiveManager.bind === 'function') {

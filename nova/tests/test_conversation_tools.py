@@ -19,8 +19,6 @@ from nova.continuous.tools.conversation_tools import (
     _validate_limit_offset,
     conversation_get,
     conversation_search,
-    get_functions,
-    get_prompt_instructions,
 )
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Actor, Message
@@ -32,13 +30,6 @@ User = get_user_model()
 
 
 class ConversationToolHelpersTests(TestCase):
-    def test_get_prompt_instructions_reference_search_and_get(self):
-        instructions = get_prompt_instructions()
-
-        self.assertEqual(len(instructions), 4)
-        self.assertTrue(any("conversation_search" in text for text in instructions))
-        self.assertTrue(any("conversation_get" in text for text in instructions))
-
     def test_validate_limit_offset_clamps_bounds(self):
         self.assertEqual(_validate_limit_offset(99, 999), (50, 500))
         self.assertEqual(_validate_limit_offset(-1, -5), (1, 0))
@@ -558,24 +549,6 @@ class ConversationSearchTests(ConversationToolsBaseTest):
             )
 
         self.assertEqual(out, {"results": [], "notes": ["no matches"]})
-
-    @patch("nova.continuous.tools.conversation_tools.resolve_query_vector", new_callable=AsyncMock)
-    def test_get_functions_returns_wrapped_tools(self, mocked_vector):
-        mocked_vector.return_value = None
-
-        tools = async_to_sync(get_functions)(tool=None, agent=self.agent)
-
-        names = [tool.name for tool in tools]
-        self.assertEqual(names, ["conversation_search", "conversation_get"])
-
-        search_tool = tools[0]
-        get_tool = tools[1]
-        search_result = async_to_sync(search_tool.ainvoke)({"query": "deploy", "limit": 3})
-        get_result = async_to_sync(get_tool.ainvoke)({"message_id": self.msg3.id, "limit": 3})
-
-        self.assertIn("results", search_result)
-        self.assertIn("messages", get_result)
-
 
 class FakePostgresQuerySet:
     def __init__(self, items):

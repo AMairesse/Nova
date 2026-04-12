@@ -54,8 +54,6 @@
         'getComposerAttachmentKind',
         'getComposerAttachmentMaxBytes',
         'getComposerAttachmentTypeLabel',
-        'publishArtifact',
-        'markArtifactAsPublished',
     ];
 
     const MESSAGE_THREAD_METHOD_NAMES = [
@@ -68,6 +66,8 @@
         'summarizeCurrentThread',
         'showSubAgentConfirmationDialog',
         'confirmSummarize',
+        'openDeleteTailPreview',
+        'confirmDeleteTailAfter',
         'loadInitialThread',
         'getInitialThreadIdFromUrl',
         'checkPendingInteractions',
@@ -142,6 +142,15 @@
             this.isComposerSubmitting = false;
             this.pendingComposerPasteDecision = null;
             this.composerDragDepth = 0;
+            this.executionTraceTaskId = '';
+            this.executionTraceRefreshTimer = null;
+            this.bottomFollowSession = null;
+            this.bottomFollowPrimeTimers = new Set();
+            this.bottomFollowThresholdPx = 96;
+            this.bottomFollowMaxDurationMs = 1500;
+            this.bottomFollowMediaMaxDurationMs = 3000;
+            this.bottomFollowIdleMs = 250;
+            this.bottomFollowPrimeDelaysMs = [250, 1000, 2500];
 
             this.streamingManager = new window.StreamingManager();
 
@@ -250,9 +259,17 @@
                     e.preventDefault();
                     const btn = target.closest(".interaction-answer-btn");
                     const interactionId = btn.dataset.interactionId;
-                    // Get the answer from the textarea
-                    const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
-                    const answer = textarea ? textarea.value : '';
+                    let answer;
+                    if (Object.prototype.hasOwnProperty.call(btn.dataset, 'answerJson')) {
+                        try {
+                            answer = JSON.parse(btn.dataset.answerJson);
+                        } catch (_error) {
+                            answer = btn.dataset.answerJson;
+                        }
+                    } else {
+                        const textarea = document.getElementById(`interaction-answer-input-${interactionId}`);
+                        answer = textarea ? textarea.value : '';
+                    }
                     this.answerInteraction(interactionId, answer);
                 },
                 '.interaction-cancel-btn': (e, target) => {
@@ -319,13 +336,6 @@
                     e.preventDefault();
                     this.resolveComposerPasteDecision('file');
                 },
-                '.artifact-publish-btn': (e, target) => {
-                    e.preventDefault();
-                    const button = target.closest('.artifact-publish-btn');
-                    if (button) {
-                        void this.publishArtifact(button);
-                    }
-                },
                 '.compact-thread-link': (e, target) => {
                     e.preventDefault();
                     this.summarizeCurrentThread();
@@ -337,6 +347,21 @@
                         void this.openExecutionTrace(link);
                     }
                 },
+                '.delete-tail-link': (e, target) => {
+                    e.preventDefault();
+                    const link = target.closest('.delete-tail-link');
+                    const messageId = `${link?.dataset?.messageId || link?.closest('.message')?.dataset?.messageId || ''}`.trim();
+                    if (messageId) {
+                        void this.openDeleteTailPreview(messageId);
+                    }
+                },
+                '.task-progress-trace-link': (e, target) => {
+                    e.preventDefault();
+                    const button = target.closest('.task-progress-trace-link');
+                    if (button) {
+                        void this.openExecutionTrace(button);
+                    }
+                },
                 '.message-context-menu-trigger': (e, target) => {
                     e.preventDefault();
                     const button = target.closest('.message-context-menu-trigger');
@@ -344,6 +369,10 @@
                     if (messageCard) {
                         this.showMessageContextMenu(messageCard);
                     }
+                },
+                '#delete-message-tail-confirm-btn': (e) => {
+                    e.preventDefault();
+                    void this.confirmDeleteTailAfter();
                 }
             };
 
@@ -418,9 +447,22 @@
                     if (form) this.triggerComposerSubmit(form);
                 }
             });
+
+            const traceModal = document.getElementById('execution-trace-modal');
+            if (traceModal && !traceModal._novaTraceBound) {
+                traceModal._novaTraceBound = true;
+                traceModal.addEventListener('hidden.bs.modal', () => {
+                    this.executionTraceTaskId = '';
+                    if (this.executionTraceRefreshTimer) {
+                        window.clearTimeout(this.executionTraceRefreshTimer);
+                        this.executionTraceRefreshTimer = null;
+                    }
+                });
+            }
         }
 
         appendMessage(messageElement) {
+            const shouldFollowBottom = this.isNearBottom();
             const messagesList = document.getElementById('messages-list');
             if (messagesList) {
                 const emptyState = messagesList.querySelector('#messages-empty-state,[data-empty-state="true"]');
@@ -435,8 +477,13 @@
             // Update compact link visibility after adding new message
             this.updateCompactLinkVisibility();
 
-            // Auto-scroll to bottom when new messages are added
-            this.scrollToBottom();
+            if (shouldFollowBottom) {
+                this.followBottomDuringLayout({
+                    force: true,
+                    behavior: 'auto',
+                    observeRoot: messageElement,
+                });
+            }
         }
 
         scrollToMessage(messageId) {
@@ -465,17 +512,295 @@
             if (textarea) textarea.focus();
         }
 
-        scrollToBottom() {
-            const container = document.getElementById('conversation-container');
-            if (container) {
-                // Use setTimeout to ensure DOM is updated before scrolling
-                setTimeout(() => {
-                    container.scrollTo({
-                        top: container.scrollHeight,
-                        behavior: 'smooth'
-                    });
-                }, 100);
+        getConversationContainer() {
+            return document.getElementById('conversation-container');
+        }
+
+        isNearBottom(container = this.getConversationContainer(), thresholdPx = this.bottomFollowThresholdPx) {
+            if (!container) {
+                return false;
             }
+            const distanceToBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+            return distanceToBottom <= thresholdPx;
+        }
+
+        scrollConversationToBottom({ behavior = 'auto' } = {}) {
+            const container = this.getConversationContainer();
+            if (!container) {
+                return;
+            }
+            container.scrollTo({
+                top: container.scrollHeight,
+                behavior,
+            });
+        }
+
+        _clearBottomFollowPrimeTimers() {
+            for (const timerId of this.bottomFollowPrimeTimers) {
+                window.clearTimeout(timerId);
+            }
+            this.bottomFollowPrimeTimers.clear();
+        }
+
+        stopBottomFollow({ cancelPrimeTimers = false } = {}) {
+            if (cancelPrimeTimers) {
+                this._clearBottomFollowPrimeTimers();
+            }
+            const session = this.bottomFollowSession;
+            if (!session) {
+                return;
+            }
+            session.stopped = true;
+            if (session.rafId) {
+                window.cancelAnimationFrame(session.rafId);
+            }
+            if (session.idleTimer) {
+                window.clearTimeout(session.idleTimer);
+            }
+            if (session.hardStopTimer) {
+                window.clearTimeout(session.hardStopTimer);
+            }
+            if (session.resizeObserver) {
+                try {
+                    session.resizeObserver.disconnect();
+                } catch (_error) {
+                    // no-op
+                }
+            }
+            for (const cleanup of session.cleanup) {
+                try {
+                    cleanup();
+                } catch (_error) {
+                    // no-op
+                }
+            }
+            this.bottomFollowSession = null;
+        }
+
+        _scheduleBottomFollowIdleStop(session) {
+            if (
+                this.bottomFollowSession !== session
+                || session.stopped
+                || session.pendingAssets > 0
+                || session.hasTrackedImages
+            ) {
+                return;
+            }
+            if (session.idleTimer) {
+                window.clearTimeout(session.idleTimer);
+            }
+            session.idleTimer = window.setTimeout(() => {
+                if (this.bottomFollowSession === session) {
+                    this.stopBottomFollow();
+                }
+            }, this.bottomFollowIdleMs);
+        }
+
+        _scheduleBottomFollowHardStop(session) {
+            if (session.hardStopTimer) {
+                window.clearTimeout(session.hardStopTimer);
+            }
+            const maxDurationMs = session.hasTrackedImages
+                ? this.bottomFollowMediaMaxDurationMs
+                : this.bottomFollowMaxDurationMs;
+            session.hardStopTimer = window.setTimeout(() => {
+                if (this.bottomFollowSession === session) {
+                    this.stopBottomFollow();
+                }
+            }, maxDurationMs);
+        }
+
+        _queueBottomFollowAdjust(session) {
+            if (this.bottomFollowSession !== session || session.stopped) {
+                return;
+            }
+            if (session.rafId) {
+                return;
+            }
+            session.rafId = window.requestAnimationFrame(() => {
+                session.rafId = 0;
+                if (this.bottomFollowSession !== session || session.stopped) {
+                    return;
+                }
+                this.scrollConversationToBottom({ behavior: session.behavior });
+                this._scheduleBottomFollowIdleStop(session);
+            });
+        }
+
+        _trackBottomFollowImages(session, root) {
+            if (!(root instanceof Element)) {
+                return;
+            }
+            const images = Array.from(root.querySelectorAll('img'));
+            if (images.length > 0) {
+                session.hasTrackedImages = true;
+                this._scheduleBottomFollowHardStop(session);
+            }
+            images.forEach((img) => {
+                if (session.observedImages.has(img)) {
+                    return;
+                }
+                session.observedImages.add(img);
+                if (img.complete) {
+                    return;
+                }
+                session.pendingAssets += 1;
+                const handleAssetSettled = () => {
+                    if (this.bottomFollowSession !== session || session.stopped) {
+                        return;
+                    }
+                    session.pendingAssets = Math.max(0, session.pendingAssets - 1);
+                    this._queueBottomFollowAdjust(session);
+                    this._scheduleBottomFollowIdleStop(session);
+                };
+                img.addEventListener('load', handleAssetSettled, { once: true });
+                img.addEventListener('error', handleAssetSettled, { once: true });
+                session.cleanup.push(() => {
+                    img.removeEventListener('load', handleAssetSettled);
+                    img.removeEventListener('error', handleAssetSettled);
+                });
+            });
+        }
+
+        _observeBottomFollowRoot(session, root) {
+            if (!(root instanceof Element) || session.observedRoots.has(root)) {
+                return;
+            }
+            session.observedRoots.add(root);
+            if (session.resizeObserver) {
+                try {
+                    session.resizeObserver.observe(root);
+                } catch (_error) {
+                    // no-op
+                }
+            }
+            this._trackBottomFollowImages(session, root);
+        }
+
+        followBottomDuringLayout({
+            force = false,
+            behavior = 'auto',
+            observeRoot = null,
+        } = {}) {
+            const container = this.getConversationContainer();
+            if (!container) {
+                return false;
+            }
+            const shouldFollow = force || this.isNearBottom(container);
+            if (!shouldFollow) {
+                return false;
+            }
+
+            let session = this.bottomFollowSession;
+            if (!session || session.container !== container) {
+                this.stopBottomFollow();
+                session = {
+                    container,
+                    behavior,
+                    cleanup: [],
+                    resizeObserver: null,
+                    observedRoots: new WeakSet(),
+                    observedImages: new WeakSet(),
+                    pendingAssets: 0,
+                    hasTrackedImages: false,
+                    idleTimer: null,
+                    hardStopTimer: null,
+                    rafId: 0,
+                    stopped: false,
+                    lastUserScrollIntentAt: 0,
+                };
+
+                const markUserScrollIntent = () => {
+                    session.lastUserScrollIntentAt = Date.now();
+                };
+                const markKeyboardScrollIntent = (event) => {
+                    const key = `${event?.key || ''}`.trim();
+                    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(key)) {
+                        markUserScrollIntent();
+                    }
+                };
+                const onScroll = () => {
+                    const userIntentIsFresh = (Date.now() - session.lastUserScrollIntentAt) <= 350;
+                    if (!this.isNearBottom(container) && userIntentIsFresh) {
+                        this.stopBottomFollow({ cancelPrimeTimers: true });
+                    }
+                };
+                container.addEventListener('wheel', markUserScrollIntent, { passive: true });
+                container.addEventListener('touchstart', markUserScrollIntent, { passive: true });
+                container.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
+                document.addEventListener('keydown', markKeyboardScrollIntent, { passive: true });
+                container.addEventListener('scroll', onScroll, { passive: true });
+                session.cleanup.push(() => {
+                    container.removeEventListener('wheel', markUserScrollIntent);
+                    container.removeEventListener('touchstart', markUserScrollIntent);
+                    container.removeEventListener('pointerdown', markUserScrollIntent);
+                    document.removeEventListener('keydown', markKeyboardScrollIntent);
+                    container.removeEventListener('scroll', onScroll);
+                });
+
+                if (typeof ResizeObserver === 'function') {
+                    session.resizeObserver = new ResizeObserver(() => {
+                        if (this.bottomFollowSession !== session || session.stopped) {
+                            return;
+                        }
+                        this._queueBottomFollowAdjust(session);
+                    });
+                }
+
+                this.bottomFollowSession = session;
+            } else {
+                session.behavior = behavior;
+                session.pendingAssets = Math.max(0, session.pendingAssets);
+            }
+
+            this._observeBottomFollowRoot(
+                session,
+                document.getElementById('messages-list') || container
+            );
+            if (observeRoot) {
+                this._observeBottomFollowRoot(session, observeRoot);
+            }
+            this._scheduleBottomFollowHardStop(session);
+            this.scrollConversationToBottom({ behavior });
+            this._queueBottomFollowAdjust(session);
+            this._scheduleBottomFollowIdleStop(session);
+            return true;
+        }
+
+        primeBottomFollow({
+            force = true,
+            behavior = 'auto',
+            observeRoot = null,
+            delaysMs = null,
+        } = {}) {
+            const activated = this.followBottomDuringLayout({ force, behavior, observeRoot });
+            if (!activated) {
+                return false;
+            }
+
+            this._clearBottomFollowPrimeTimers();
+            const delays = Array.isArray(delaysMs) ? delaysMs : this.bottomFollowPrimeDelaysMs;
+            delays.forEach((delayMs) => {
+                const normalizedDelayMs = Number(delayMs);
+                if (!Number.isFinite(normalizedDelayMs) || normalizedDelayMs <= 0) {
+                    return;
+                }
+                const timerId = window.setTimeout(() => {
+                    this.bottomFollowPrimeTimers.delete(timerId);
+                    this.followBottomDuringLayout({
+                        force: false,
+                        behavior,
+                        observeRoot,
+                    });
+                }, normalizedDelayMs);
+                this.bottomFollowPrimeTimers.add(timerId);
+            });
+
+            return true;
+        }
+
+        scrollToBottom() {
+            this.scrollConversationToBottom({ behavior: 'smooth' });
         }
 
         // Update compact link visibility based on message count and position
@@ -484,31 +809,35 @@
             if (!messagesList) return;
             const isContinuousPage = Boolean(window.NovaApp?.isContinuousPage);
 
-            // Get all messages and agent messages
+            // Get all stored messages and agent messages
+            const storedMessages = Array.from(messagesList.querySelectorAll('.message[data-message-id]'));
             const allMessages = messagesList.querySelectorAll('.message');
-            const agentMessages = messagesList.querySelectorAll('.message[data-message-actor="agent"]');
+            const agentMessages = Array.from(messagesList.querySelectorAll('.message[data-message-actor="agent"]'));
+            const lastStoredMessage = storedMessages.length ? storedMessages[storedMessages.length - 1] : null;
 
-            // Hide compact link on all agent messages first
+            // Reset footer controls on all agent messages first
             agentMessages.forEach(messageEl => {
                 const compactLink = messageEl.querySelector('.compact-thread-link');
+                const deleteTailLink = messageEl.querySelector('.delete-tail-link');
                 const footer = messageEl.querySelector('.agent-message-footer');
                 const hasContext = Boolean(this.getMessageContextSummary(messageEl));
                 const hasTrace = Boolean(this.getMessageTraceTaskId(messageEl));
+                const hasLaterMessage = Boolean(lastStoredMessage && lastStoredMessage !== messageEl);
                 messageEl.dataset.canCompact = 'false';
                 if (compactLink) {
                     compactLink.classList.add('d-none');
                 }
-                if (footer && !hasContext && !hasTrace) {
-                    footer.classList.add('d-none');
+                if (deleteTailLink) {
+                    deleteTailLink.classList.toggle('d-none', !hasLaterMessage);
+                }
+                if (footer) {
+                    footer.classList.toggle('d-none', !hasContext && !hasTrace && !hasLaterMessage);
                 }
             });
-            if (isContinuousPage) {
-                return;
-            }
 
             // Show compact link only on the last agent message if there are enough messages for compaction
             // (more messages than preserve_recent setting - we assume default of 2 for client-side)
-            if (allMessages.length > 2 && agentMessages.length > 0) {  // Need more than preserve_recent messages
+            if (!isContinuousPage && allMessages.length > 2 && agentMessages.length > 0) {
                 const lastAgentMessage = agentMessages[agentMessages.length - 1];
                 const compactLink = lastAgentMessage.querySelector('.compact-thread-link');
                 const footer = lastAgentMessage.querySelector('.agent-message-footer');
@@ -550,11 +879,11 @@
         getExecutionNodeTypeLabel(nodeType) {
             const mapping = {
                 agent_run: gettext('Agent'),
+                model_call: gettext('Model'),
                 tool: gettext('Tool'),
                 subagent: gettext('Sub-agent'),
                 interaction: gettext('Interaction'),
                 error: gettext('Error'),
-                artifact: gettext('Artifact'),
             };
             return mapping[nodeType] || gettext('Step');
         }
@@ -564,10 +893,21 @@
             const mapping = {
                 completed: { label: gettext('Completed'), className: 'text-bg-success' },
                 failed: { label: gettext('Failed'), className: 'text-bg-danger' },
+                canceled: { label: gettext('Canceled'), className: 'text-bg-secondary' },
                 awaiting_input: { label: gettext('Awaiting input'), className: 'text-bg-warning' },
                 running: { label: gettext('Running'), className: 'text-bg-primary' },
             };
             return mapping[normalized] || { label: normalized || gettext('Unknown'), className: 'text-bg-secondary' };
+        }
+
+        buildExecutionProviderLabel(meta) {
+            const data = (meta && typeof meta === 'object') ? meta : {};
+            const provider = `${data.provider || ''}`.trim();
+            const model = `${data.model || ''}`.trim();
+            if (provider && model) {
+                return `${provider} / ${model}`;
+            }
+            return provider || model;
         }
 
         buildExecutionSummaryLine(summary) {
@@ -579,9 +919,6 @@
             }
             if (Number(data.error_count || 0) > 0) {
                 parts.push(`${data.error_count} ${gettext(Number(data.error_count) === 1 ? 'error' : 'errors')}`);
-            }
-            if (Number(data.artifact_count || 0) > 0) {
-                parts.push(`${data.artifact_count} ${gettext(Number(data.artifact_count) === 1 ? 'artifact' : 'artifacts')}`);
             }
             const durationLabel = this.formatExecutionDuration(data.duration_ms);
             if (durationLabel) {
@@ -597,26 +934,11 @@
                     : gettext('approximated');
                 parts.push(`${gettext('Context')}: ${consumed} / ${context.max_context} (${mode})`);
             }
-            return parts.join(' • ');
-        }
-
-        renderExecutionArtifactRefs(artifactRefs) {
-            const refs = Array.isArray(artifactRefs) ? artifactRefs : [];
-            if (!refs.length) {
-                return '';
+            const providerLabel = this.buildExecutionProviderLabel(data);
+            if (providerLabel) {
+                parts.push(providerLabel);
             }
-            return `
-                <div class="execution-node-section">
-                    <div class="execution-node-section-label">${window.DOMUtils.escapeHTML(gettext('Artifacts'))}</div>
-                    <div class="execution-node-artifacts">
-                        ${refs.map((artifactRef) => {
-                            const artifactId = artifactRef?.artifact_id;
-                            const label = `${artifactRef?.label || gettext('Artifact')} #${artifactId || ''}`.trim();
-                            return `<span class="badge rounded-pill text-bg-light border">${window.DOMUtils.escapeHTML(label)}</span>`;
-                        }).join('')}
-                    </div>
-                </div>
-            `;
+            return parts.join(' • ');
         }
 
         renderExecutionPreviewSection(label, value) {
@@ -632,6 +954,121 @@
             `;
         }
 
+        buildExecutionNodeFacts(node) {
+            const facts = [];
+            const meta = (node?.meta && typeof node.meta === 'object') ? node.meta : {};
+            const providerLabel = this.buildExecutionProviderLabel(meta);
+
+            if (node?.type === 'model_call') {
+                if (providerLabel) facts.push(providerLabel);
+                if (meta.response_mode && meta.response_mode !== 'text') {
+                    facts.push(`${meta.response_mode}`);
+                }
+                const toolCallCount = Array.isArray(meta.tool_call_names) ? meta.tool_call_names.length : 0;
+                if (toolCallCount > 0) {
+                    facts.push(`${toolCallCount} ${gettext(toolCallCount === 1 ? 'tool call' : 'tool calls')}`);
+                }
+            } else if (node?.type === 'tool') {
+                if (meta.kind === 'terminal' && meta.head_command) {
+                    facts.push(`${meta.head_command}`);
+                }
+                if (meta.kind === 'delegate_to_agent' && meta.target_agent_name) {
+                    facts.push(`${meta.target_agent_name}`);
+                }
+                const outputCount = Array.isArray(meta.output_paths) ? meta.output_paths.length : 0;
+                const copiedOutputCount = Array.isArray(meta.output_paths_copied_back) ? meta.output_paths_copied_back.length : 0;
+                if (outputCount > 0) {
+                    facts.push(`${outputCount} ${gettext(outputCount === 1 ? 'file' : 'files')}`);
+                } else if (copiedOutputCount > 0) {
+                    facts.push(`${copiedOutputCount} ${gettext(copiedOutputCount === 1 ? 'file' : 'files')}`);
+                }
+                if (meta.error_kind) {
+                    facts.push(`${meta.error_kind}`);
+                }
+            } else if (node?.type === 'subagent') {
+                if (meta.agent_name) facts.push(`${meta.agent_name}`);
+                if (meta.response_mode && meta.response_mode !== 'text') {
+                    facts.push(`${meta.response_mode}`);
+                }
+                if (providerLabel) facts.push(providerLabel);
+                const outputCount = Array.isArray(meta.output_paths) ? meta.output_paths.length : 0;
+                if (outputCount > 0) {
+                    facts.push(`${outputCount} ${gettext(outputCount === 1 ? 'file' : 'files')}`);
+                }
+            } else if (node?.type === 'interaction') {
+                if (meta.schema_type) facts.push(`${meta.schema_type}`);
+                if (meta.interaction_status) facts.push(`${meta.interaction_status.toLowerCase()}`);
+            }
+
+            return facts.slice(0, 3);
+        }
+
+        buildExecutionNodeSideLines(node) {
+            const lines = [];
+            const startedAt = node?.started_at ? new Date(node.started_at).toLocaleString() : '';
+            if (startedAt) {
+                lines.push(startedAt);
+            }
+
+            const facts = this.buildExecutionNodeFacts(node);
+            if (!facts.length) {
+                return lines;
+            }
+
+            if (node?.type === 'model_call') {
+                const [providerLabel, ...otherFacts] = facts;
+                if (providerLabel) {
+                    lines.push(providerLabel);
+                }
+                if (otherFacts.length) {
+                    lines.push(otherFacts.join(' • '));
+                }
+                return lines;
+            }
+
+            lines.push(facts.join(' • '));
+            return lines;
+        }
+
+        renderExecutionFileLinks(files) {
+            const items = Array.isArray(files) ? files : [];
+            if (!items.length) {
+                return '';
+            }
+            return `
+                <div class="execution-node-section">
+                    <div class="execution-node-section-label">${window.DOMUtils.escapeHTML(gettext('Files'))}</div>
+                    <div class="execution-node-file-links">
+                        ${items.map((fileRef) => `
+                            <a
+                              class="btn btn-sm btn-outline-secondary"
+                              href="${window.DOMUtils.escapeHTML(String(fileRef.content_url || ''))}"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              ${window.DOMUtils.escapeHTML(String(fileRef.label || fileRef.path || 'file'))}
+                            </a>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        renderExecutionTechnicalDetails(node) {
+            const meta = (node?.meta && typeof node.meta === 'object') ? { ...node.meta } : {};
+            delete meta.progress_message;
+            delete meta.progress_end_message;
+            if (!Object.keys(meta).length) {
+                return '';
+            }
+            return `
+                <details class="execution-node-technical">
+                    <summary>${window.DOMUtils.escapeHTML(gettext('Technical details'))}</summary>
+                    <pre class="execution-node-preview mb-0"><code>${window.DOMUtils.escapeHTML(JSON.stringify(meta, null, 2))}</code></pre>
+                </details>
+            `;
+        }
+
         renderExecutionTraceNode(node, { isRoot = false } = {}) {
             if (!node || typeof node !== 'object') {
                 return '';
@@ -640,30 +1077,41 @@
             const typeLabel = this.getExecutionNodeTypeLabel(node.type);
             const status = this.getExecutionStatusBadge(node.status);
             const durationLabel = this.formatExecutionDuration(node.duration_ms);
-            const startedAt = node.started_at ? new Date(node.started_at).toLocaleString() : '';
             const outputPreview = this.renderExecutionPreviewSection(gettext('Output'), node.output_preview);
             const inputPreview = this.renderExecutionPreviewSection(gettext('Input'), node.input_preview);
-            const artifactsHtml = this.renderExecutionArtifactRefs(node.artifact_refs);
-            const metaHtml = startedAt
-                ? `<div class="execution-node-meta text-muted">${window.DOMUtils.escapeHTML(startedAt)}</div>`
+            const fileLinksHtml = this.renderExecutionFileLinks(node.resolved_files);
+            const technicalHtml = this.renderExecutionTechnicalDetails(node);
+            const sideLines = this.buildExecutionNodeSideLines(node);
+            const sideHtml = sideLines.length
+                ? `
+                    <div class="execution-node-summary-side">
+                        ${sideLines.map((line) => `<div class="execution-node-summary-side-line">${window.DOMUtils.escapeHTML(String(line))}</div>`).join('')}
+                    </div>
+                `
                 : '';
+            const shouldOpen = isRoot || ['failed', 'running', 'awaiting_input'].includes(`${node.status || ''}`.trim().toLowerCase());
             const contentHtml = `
-                ${metaHtml}
                 ${inputPreview}
                 ${outputPreview}
-                ${artifactsHtml}
+                ${fileLinksHtml}
+                ${technicalHtml}
                 ${children.length ? `<div class="execution-node-children">${children.map((child) => this.renderExecutionTraceNode(child)).join('')}</div>` : ''}
             `;
 
             if (children.length || isRoot) {
                 return `
-                    <details class="execution-trace-node" ${isRoot ? 'open' : ''}>
+                    <details class="execution-trace-node" data-node-id="${window.DOMUtils.escapeHTML(String(node.id || ''))}" ${shouldOpen ? 'open' : ''}>
                         <summary class="execution-trace-node-summary">
-                            <div class="execution-node-title-row">
-                                <span class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</span>
-                                <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
-                                <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
-                                ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                            <div class="execution-node-summary-layout">
+                                <div class="execution-node-summary-main">
+                                    <div class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</div>
+                                    <div class="execution-node-title-row">
+                                        <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
+                                        <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
+                                        ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                                    </div>
+                                </div>
+                                ${sideHtml}
                             </div>
                         </summary>
                         <div class="execution-trace-node-body">
@@ -674,13 +1122,18 @@
             }
 
             return `
-                <div class="execution-trace-node execution-trace-node-leaf">
+                <div class="execution-trace-node execution-trace-node-leaf" data-node-id="${window.DOMUtils.escapeHTML(String(node.id || ''))}">
                     <div class="execution-trace-node-summary">
-                        <div class="execution-node-title-row">
-                            <span class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</span>
-                            <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
-                            <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
-                            ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                        <div class="execution-node-summary-layout">
+                            <div class="execution-node-summary-main">
+                                <div class="execution-node-label">${window.DOMUtils.escapeHTML(node.label || typeLabel)}</div>
+                                <div class="execution-node-title-row">
+                                    <span class="execution-node-type text-muted">${window.DOMUtils.escapeHTML(typeLabel)}</span>
+                                    <span class="badge ${status.className}">${window.DOMUtils.escapeHTML(status.label)}</span>
+                                    ${durationLabel ? `<span class="execution-node-duration text-muted">${window.DOMUtils.escapeHTML(durationLabel)}</span>` : ''}
+                                </div>
+                            </div>
+                            ${sideHtml}
                         </div>
                     </div>
                     <div class="execution-trace-node-body">
@@ -690,28 +1143,113 @@
             `;
         }
 
-        async openExecutionTrace(triggerOrTaskId) {
-            const taskId = typeof triggerOrTaskId === 'string' || typeof triggerOrTaskId === 'number'
-                ? String(triggerOrTaskId)
-                : triggerOrTaskId?.dataset?.taskId;
+        collectExecutionIssues(node, issues = [], { isRoot = true, parentIssue = false } = {}) {
+            if (!node || typeof node !== 'object') {
+                return issues;
+            }
+            const status = `${node.status || ''}`.trim().toLowerCase();
+            const isIssue = (
+                status === 'failed' &&
+                node.type !== 'error' &&
+                !(isRoot && node.type === 'agent_run')
+            );
+            if (isIssue && !parentIssue) {
+                issues.push(node);
+            }
+            const children = Array.isArray(node.children) ? node.children : [];
+            children.forEach((child) => this.collectExecutionIssues(child, issues, {
+                isRoot: false,
+                parentIssue: parentIssue || isIssue,
+            }));
+            return issues;
+        }
+
+        renderExecutionOverview(summary) {
+            const data = (summary && typeof summary === 'object') ? summary : {};
+            const status = this.getExecutionStatusBadge(data.status);
+            const overviewCards = [];
+            const providerLabel = this.buildExecutionProviderLabel(data);
+            const executionSummary = window.MessageRenderer.buildExecutionSummary(data);
+            const durationLabel = this.formatExecutionDuration(data.duration_ms);
+            const context = (data.context && typeof data.context === 'object') ? data.context : {};
+
+            overviewCards.push({ label: gettext('Status'), value: status.label });
+            if (providerLabel) overviewCards.push({ label: gettext('Model'), value: providerLabel });
+            if (data.response_mode) overviewCards.push({ label: gettext('Mode'), value: String(data.response_mode) });
+            if (executionSummary) overviewCards.push({ label: gettext('Activity'), value: executionSummary });
+            if (durationLabel) overviewCards.push({ label: gettext('Duration'), value: durationLabel });
+            if (context.max_context && (context.real_tokens !== null && context.real_tokens !== undefined || context.approx_tokens)) {
+                const consumed = context.real_tokens !== null && context.real_tokens !== undefined
+                    ? context.real_tokens
+                    : context.approx_tokens;
+                const mode = context.real_tokens !== null && context.real_tokens !== undefined
+                    ? gettext('real')
+                    : gettext('approximated');
+                overviewCards.push({
+                    label: gettext('Context'),
+                    value: `${consumed} / ${context.max_context} (${mode})`,
+                });
+            }
+            if (Number(data.files_created_count || 0) > 0) {
+                overviewCards.push({
+                    label: gettext('Files created'),
+                    value: String(data.files_created_count),
+                });
+            }
+
+            const filesHtml = this.renderExecutionFileLinks(data.resolved_output_files);
+            return `
+                <div class="execution-trace-section">
+                    <div class="execution-trace-section-title">${window.DOMUtils.escapeHTML(gettext('Overview'))}</div>
+                    <div class="execution-overview-grid">
+                        ${overviewCards.map((card) => `
+                            <div class="execution-overview-card">
+                                <span class="execution-overview-label">${window.DOMUtils.escapeHTML(String(card.label))}</span>
+                                <span class="execution-overview-value">${window.DOMUtils.escapeHTML(String(card.value))}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                    ${filesHtml}
+                </div>
+            `;
+        }
+
+        renderExecutionIssuesWarning(root) {
+            const issueCount = this.collectExecutionIssues(root, []).length;
+            if (!issueCount) {
+                return '';
+            }
+            return `
+                <div class="alert alert-warning execution-issues-warning" role="alert">
+                    <strong>${window.DOMUtils.escapeHTML(String(issueCount))}</strong>
+                    ${window.DOMUtils.escapeHTML(gettext(issueCount === 1 ? 'issue during processing.' : 'issues during processing.'))}
+                    <span class="execution-issues-warning-detail">${window.DOMUtils.escapeHTML(gettext('See the timeline below for details.'))}</span>
+                </div>
+            `;
+        }
+
+        async loadExecutionTrace(taskId) {
             const url = this.buildExecutionTraceUrl(taskId);
             const modalEl = document.getElementById('execution-trace-modal');
-            if (!url || !modalEl || !window.bootstrap?.Modal) {
-                this.showToast(gettext('Execution trace is not available on this page.'), 'warning');
+            if (!url || !modalEl) {
                 return;
             }
 
             const summaryEl = document.getElementById('execution-trace-modal-summary');
             const loadingEl = document.getElementById('execution-trace-modal-loading');
             const emptyEl = document.getElementById('execution-trace-modal-empty');
+            const contentEl = document.getElementById('execution-trace-modal-content');
+            const overviewEl = document.getElementById('execution-trace-modal-overview');
+            const issuesEl = document.getElementById('execution-trace-modal-problems');
             const treeEl = document.getElementById('execution-trace-modal-tree');
-            const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
 
             if (summaryEl) summaryEl.textContent = '';
+            if (overviewEl) overviewEl.innerHTML = '';
+            if (issuesEl) issuesEl.innerHTML = '';
             if (treeEl) treeEl.innerHTML = '';
             if (emptyEl) emptyEl.classList.add('d-none');
+            if (contentEl) contentEl.classList.add('d-none');
             if (loadingEl) loadingEl.classList.remove('d-none');
-            modal.show();
 
             try {
                 const response = await fetch(url, {
@@ -734,9 +1272,24 @@
                     return;
                 }
 
-                if (treeEl) {
-                    treeEl.innerHTML = this.renderExecutionTraceNode(root, { isRoot: true });
+                if (overviewEl) {
+                    overviewEl.innerHTML = this.renderExecutionOverview(summary);
                 }
+                if (issuesEl) {
+                    issuesEl.innerHTML = this.renderExecutionIssuesWarning(root);
+                }
+                if (treeEl) {
+                    treeEl.innerHTML = `
+                        <div class="execution-trace-section">
+                            <div class="execution-trace-section-title">${window.DOMUtils.escapeHTML(gettext('Timeline'))}</div>
+                            ${this.renderExecutionTraceNode(root, { isRoot: true })}
+                        </div>
+                    `;
+                }
+                if (contentEl) {
+                    contentEl.classList.remove('d-none');
+                }
+                this.executionTraceTaskId = String(taskId || '');
             } catch (error) {
                 console.error('Error loading execution trace:', error);
                 if (emptyEl) {
@@ -746,6 +1299,40 @@
             } finally {
                 if (loadingEl) loadingEl.classList.add('d-none');
             }
+        }
+
+        scheduleExecutionTraceRefresh(taskId) {
+            const normalized = `${taskId || ''}`.trim();
+            const modalEl = document.getElementById('execution-trace-modal');
+            if (!normalized || !this.executionTraceTaskId || normalized !== this.executionTraceTaskId) {
+                return;
+            }
+            if (!modalEl || !modalEl.classList.contains('show')) {
+                return;
+            }
+            if (this.executionTraceRefreshTimer) {
+                window.clearTimeout(this.executionTraceRefreshTimer);
+            }
+            this.executionTraceRefreshTimer = window.setTimeout(() => {
+                this.executionTraceRefreshTimer = null;
+                void this.loadExecutionTrace(normalized);
+            }, 250);
+        }
+
+        async openExecutionTrace(triggerOrTaskId) {
+            const taskId = typeof triggerOrTaskId === 'string' || typeof triggerOrTaskId === 'number'
+                ? String(triggerOrTaskId)
+                : triggerOrTaskId?.dataset?.taskId;
+            const url = this.buildExecutionTraceUrl(taskId);
+            const modalEl = document.getElementById('execution-trace-modal');
+            if (!url || !modalEl || !window.bootstrap?.Modal) {
+                this.showToast(gettext('Execution trace is not available on this page.'), 'warning');
+                return;
+            }
+
+            const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+            await this.loadExecutionTrace(taskId);
         }
 
         showToast(message, type = 'info') {

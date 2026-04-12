@@ -72,12 +72,13 @@
             }
         }
 
-        function openPreview(slug, url, threadId = null) {
+        function openPreview(slug, url, threadId = null, options = {}) {
             const resolvedThreadId = threadId || getThreadId();
             const previewPane = el('preview-pane');
             const iframe = el('webapp-iframe');
             const openBtn = el('webapp-open-btn');
             const slugLbl = el('webapp-slug-label');
+            const isBroken = `${options.status || ''}`.trim().toLowerCase() === 'broken';
 
             if (!previewPane || !iframe) return;
 
@@ -96,9 +97,17 @@
             if (resolvedThreadId) {
                 activeThreadId = resolvedThreadId;
             }
-            window.UIUtils.setSpinnerVisible('webapp-spinner', true);
-            iframe.setAttribute('src', targetUrl);
-            if (openBtn) openBtn.setAttribute('href', targetUrl);
+            if (isBroken) {
+                window.UIUtils.setSpinnerVisible('webapp-spinner', false);
+                iframe.classList.add('d-none');
+                iframe.removeAttribute('src');
+                if (openBtn) openBtn.setAttribute('href', '#');
+            } else {
+                iframe.classList.remove('d-none');
+                window.UIUtils.setSpinnerVisible('webapp-spinner', true);
+                iframe.setAttribute('src', targetUrl);
+                if (openBtn) openBtn.setAttribute('href', targetUrl);
+            }
             if (slugLbl) slugLbl.textContent = slug ? `(${slug})` : '';
         }
 
@@ -241,7 +250,7 @@
             // Initial open is handled by explicit `previewConfig` only.
             const cfg = window.NovaApp && window.NovaApp.previewConfig;
             if (cfg && cfg.threadId && cfg.slug) {
-                openPreview(cfg.slug, cfg.url || `/apps/${cfg.slug}/`, cfg.threadId);
+                openPreview(cfg.slug, cfg.url || `/apps/${cfg.slug}/`, cfg.threadId, { status: cfg.status });
             }
 
             // Listen to thread changes

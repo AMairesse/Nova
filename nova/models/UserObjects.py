@@ -6,8 +6,6 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 
-from nova.utils import validate_relaxed_url
-
 
 class MemoryEmbeddingsSource(models.TextChoices):
     SYSTEM = "system", _("System provider")
@@ -22,7 +20,6 @@ class UserParameters(models.Model):
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL,
                                 on_delete=models.CASCADE)
-    allow_langfuse = models.BooleanField(default=False)
 
     # ------------------------------------------------------------------
     # Memory embeddings (optional)
@@ -51,18 +48,6 @@ class UserParameters(models.Model):
         blank=True,
         null=True,
         help_text=_("API key for the embeddings endpoint (optional)"),
-    )
-
-    # Langfuse per-user config
-    langfuse_public_key = EncryptedCharField(max_length=255, blank=True,
-                                             null=True)
-    langfuse_secret_key = EncryptedCharField(max_length=255, blank=True,
-                                             null=True)
-    langfuse_host = models.CharField(
-        max_length=200,
-        blank=True,
-        null=True,
-        validators=[validate_relaxed_url],
     )
 
     # API Token management

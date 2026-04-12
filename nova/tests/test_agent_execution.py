@@ -9,6 +9,7 @@ from nova.agent_execution import (
     EXECUTION_MODE_TOOLLESS_GRAPH,
     provider_tools_explicitly_unavailable,
     requires_tools_for_run,
+    resolve_effective_response_mode,
     resolve_execution_mode,
 )
 
@@ -34,6 +35,22 @@ class AgentExecutionTests(SimpleTestCase):
 
         self.assertTrue(requires_tools_for_run(agent_config, "continuous"))
         self.assertFalse(requires_tools_for_run(agent_config, "thread"))
+
+    def test_requires_tools_for_run_skips_tool_dependency_for_native_media_modes(self):
+        agent_config = SimpleNamespace(
+            is_tool=False,
+            requires_tools_for_thread_mode=lambda thread_mode: True,
+        )
+
+        self.assertFalse(requires_tools_for_run(agent_config, "thread", response_mode="image"))
+        self.assertFalse(requires_tools_for_run(agent_config, "thread", response_mode="audio"))
+
+    def test_resolve_effective_response_mode_prefers_request_then_agent_default(self):
+        agent_config = SimpleNamespace(default_response_mode="image")
+
+        self.assertEqual(resolve_effective_response_mode(agent_config, "auto"), "image")
+        self.assertEqual(resolve_effective_response_mode(agent_config, "audio"), "audio")
+        self.assertEqual(resolve_effective_response_mode(agent_config, None), "image")
 
     def test_resolve_execution_mode_prefers_native_provider_for_openrouter_multimodal(self):
         provider = SimpleNamespace(

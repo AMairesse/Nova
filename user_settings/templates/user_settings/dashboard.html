@@ -45,7 +45,6 @@
         {% trans "General" %}
       </button>
     </li>
-    {% if has_memory_tool %}
     <li class="nav-item" role="presentation">
       <button class="nav-link" id="tab-memory"
               data-bs-toggle="tab"
@@ -54,7 +53,6 @@
         {% trans "Memory" %}
       </button>
     </li>
-    {% endif %}
   </ul>
 
   <div class="tab-content pt-3">
@@ -62,8 +60,8 @@
          id="pane-providers"
          role="tabpanel"
          hx-get="{% url 'user_settings:providers' %}?partial=1"
-         hx-trigger="load"
-         hx-target="#pane-providers"
+         hx-trigger="settings-pane:load once"
+         hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading providers…" %}</div>
     </div>
@@ -72,8 +70,8 @@
          id="pane-agents"
          role="tabpanel"
          hx-get="{% url 'user_settings:agents' %}?partial=1"
-         hx-trigger="load"
-         hx-target="#pane-agents"
+         hx-trigger="settings-pane:load once"
+         hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading agents…" %}</div>
     </div>
@@ -82,8 +80,8 @@
          id="pane-tools"
          role="tabpanel"
          hx-get="{% url 'user_settings:tools' %}?partial=1"
-         hx-trigger="load"
-         hx-target="#pane-tools"
+         hx-trigger="settings-pane:load once"
+         hx-target="this"
          hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading tools…" %}</div>
     </div>
@@ -92,23 +90,21 @@
         id="pane-general"
         role="tabpanel"
         hx-get="{% url 'user_settings:general' %}?partial=1"
-        hx-trigger="revealed"
+        hx-trigger="settings-pane:load once"
         hx-target="this"
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading…" %}</div>
     </div>
 
-    {% if has_memory_tool %}
     <div class="tab-pane fade htmx-pane"
         id="pane-memory"
         role="tabpanel"
         hx-get="{% url 'user_settings:memory' %}?partial=1"
-        hx-trigger="revealed once"
+        hx-trigger="settings-pane:load once"
         hx-target="this"
         hx-swap="innerHTML">
       <div class="text-muted">{% trans "Loading memory…" %}</div>
     </div>
-    {% endif %}
   </div>
 </div>
 {% endblock %}

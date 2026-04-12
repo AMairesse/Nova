@@ -45,11 +45,10 @@
           data-trace-subagent-calls="{{ trace_summary.subagent_calls|default_if_none:'' }}"
           data-trace-interaction-count="{{ trace_summary.interaction_count|default_if_none:'' }}"
           data-trace-error-count="{{ trace_summary.error_count|default_if_none:'' }}"
-          data-trace-artifact-count="{{ trace_summary.artifact_count|default_if_none:'' }}"
           data-trace-duration-ms="{{ trace_summary.duration_ms|default_if_none:'' }}"
           data-context-real-tokens="{{ message.internal_data.real_tokens|default_if_none:'' }}"
           data-context-approx-tokens="{{ message.internal_data.approx_tokens|default_if_none:'' }}"
-          data-context-legacy-tokens="{{ message.internal_data.context_tokens|default_if_none:'' }}"
+          data-context-fallback-tokens="{{ message.internal_data.context_tokens|default_if_none:'' }}"
           data-context-max-context="{{ message.internal_data.max_context|default_if_none:'' }}"
           data-is-last-agent-message="{% if message.is_last_agent_message %}true{% else %}false{% endif %}"
           data-can-compact="false"
@@ -104,9 +103,9 @@
             {% if message.text %}
             <div class="user-message-text text-primary">{{ message.text|linebreaksbr }}</div>
             {% endif %}
-            {% if message.message_artifacts %}
+            {% if message.message_attachments %}
               <div class="{% if message.text %}mt-3 {% endif %}artifact-inline-list">
-                {% for attachment in message.message_artifacts %}
+                {% for attachment in message.message_attachments %}
                   {% if attachment.content_url %}
                     {% if attachment.kind == 'image' %}
                       <div class="artifact-inline-card artifact-inline-card-image">
@@ -138,31 +137,15 @@
               </div>
               <div class="{% if message.text %}mt-2 {% endif %}small text-muted">
                 {% blocktrans count attachment_count=message.message_attachment_count %}
-                  {{ attachment_count }} artifact was attached to this message.
+                  {{ attachment_count }} attachment was added to this message.
                 {% plural %}
-                  {{ attachment_count }} artifacts were attached to this message.
+                  {{ attachment_count }} attachments were added to this message.
                 {% endblocktrans %}
               </div>
               <div class="composer-attachment-summary">
-                {% for attachment in message.message_artifacts %}
-                  <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
+                {% for attachment in message.message_attachments %}
+                  <div class="artifact-summary-item">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
-                    {% if attachment.id and not attachment.metadata.legacy %}
-                      {% if attachment.user_file_id or attachment.summary_text %}
-                        <button
-                          type="button"
-                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
-                          data-artifact-id="{{ attachment.id }}"
-                          aria-label="{% trans 'Add artifact to Files' %}"
-                        >
-                          {% if attachment.published_to_file %}
-                            {% trans "Added to Files" %}
-                          {% else %}
-                            {% trans "Add to Files" %}
-                          {% endif %}
-                        </button>
-                      {% endif %}
-                    {% endif %}
                   </div>
                 {% endfor %}
               </div>
@@ -190,9 +173,9 @@
           </button>
           <div class="card-body py-2">
             <div class="assistant-markdown">{{ message.rendered_html }}</div>
-            {% if message.message_artifacts %}
+            {% if message.message_attachments %}
               <div class="mt-3 artifact-inline-list">
-                {% for attachment in message.message_artifacts %}
+                {% for attachment in message.message_attachments %}
                   {% if attachment.content_url %}
                     {% if attachment.kind == 'image' %}
                       <div class="artifact-inline-card artifact-inline-card-image">
@@ -223,25 +206,9 @@
                 {% endfor %}
               </div>
               <div class="mt-3 composer-attachment-summary">
-                {% for attachment in message.message_artifacts %}
-                  <div class="artifact-summary-item" data-artifact-id="{{ attachment.id }}" data-published-to-file="{% if attachment.published_to_file %}true{% else %}false{% endif %}">
+                {% for attachment in message.message_attachments %}
+                  <div class="artifact-summary-item">
                     <span class="badge rounded-pill text-bg-light border me-1 mb-1">{{ attachment.label }}{% if attachment.kind %} · {{ attachment.kind }}{% endif %}</span>
-                    {% if attachment.id and not attachment.metadata.legacy %}
-                      {% if attachment.user_file_id or attachment.summary_text %}
-                        <button
-                          type="button"
-                          class="btn btn-link btn-sm p-0 artifact-publish-btn{% if attachment.published_to_file %} artifact-publish-btn-published text-success{% endif %}"
-                          data-artifact-id="{{ attachment.id }}"
-                          aria-label="{% trans 'Add artifact to Files' %}"
-                        >
-                          {% if attachment.published_to_file %}
-                            {% trans "Added to Files" %}
-                          {% else %}
-                            {% trans "Add to Files" %}
-                          {% endif %}
-                        </button>
-                      {% endif %}
-                    {% endif %}
                   </div>
                 {% endfor %}
               </div>
@@ -285,6 +252,16 @@
               {% endif %}
             </a>
             {% endif %}
+            <a
+              href="#"
+              class="agent-footer-chip agent-footer-chip-action delete-tail-link text-decoration-none d-none"
+              data-message-id="{{ message.id }}"
+              aria-label="{% trans 'Delete messages after this' %}"
+            >
+              <span class="agent-footer-chip-heading">
+                <i class="bi bi-trash3"></i>{% trans "Delete after" %}
+              </span>
+            </a>
             {% if message.internal_data.max_context %}
             {% if message.internal_data.real_tokens is not None or message.internal_data.approx_tokens or message.internal_data.context_tokens %}
             <div class="agent-footer-chip agent-footer-chip-info card-footer-consumption">
@@ -312,7 +289,11 @@
 
       <!-- Render pending interactions as interactive cards -->
       {% for interaction in pending_interactions %}
-      <div id="interaction-card-{{ interaction.id }}" class="message mb-3">
+      <div
+        id="interaction-card-{{ interaction.id }}"
+        class="message mb-3"
+        data-interaction-id="{{ interaction.id }}"
+      >
         <div class="card border-warning">
           <div class="card-body">
             <div class="d-flex align-items-center mb-2">
@@ -326,11 +307,52 @@
               </strong>
             </div>
             <div class="mb-2">{{ interaction.question }}</div>
+            <div class="interaction-choice-controls mb-2">
+              {% if interaction.schema.type == 'boolean' %}
+                <div class="small text-muted mb-2">{% trans 'Quick choices' %}</div>
+                <div class="d-flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary interaction-answer-btn"
+                    data-interaction-id="{{ interaction.id }}"
+                    data-answer-json="true"
+                  >
+                    {% trans 'Yes' %}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary interaction-answer-btn"
+                    data-interaction-id="{{ interaction.id }}"
+                    data-answer-json="false"
+                  >
+                    {% trans 'No' %}
+                  </button>
+                </div>
+              {% elif interaction.schema.type == 'string' and interaction.schema.enum and interaction.schema.enum|length <= 5 %}
+                <div class="small text-muted mb-2">{% trans 'Quick choices' %}</div>
+                <div class="d-flex flex-wrap gap-2">
+                  {% for choice in interaction.schema.enum %}
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-primary interaction-answer-btn"
+                      data-interaction-id="{{ interaction.id }}"
+                      data-answer-json="&quot;{{ choice|escapejs }}&quot;"
+                    >
+                      {{ choice }}
+                    </button>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
             <div class="mb-2">
               <textarea class="form-control" id="interaction-answer-input-{{ interaction.id }}" rows="2" placeholder="{% trans 'Type your answer...' %}"></textarea>
-              {% if interaction.schema %}
-                <div class="form-text text-muted mt-1">{% trans 'Answer format may be structured; plain text is also accepted.' %}</div>
-              {% endif %}
+              <div class="form-text text-muted mt-1 interaction-schema-hint {% if not interaction.schema %}d-none{% endif %}">
+                {% if interaction.schema.type == 'boolean' or interaction.schema.type == 'string' and interaction.schema.enum and interaction.schema.enum|length <= 5 %}
+                  {% trans 'Quick choices are available; plain text is also accepted.' %}
+                {% else %}
+                  {% trans 'Answer format may be structured; plain text is also accepted.' %}
+                {% endif %}
+              </div>
             </div>
             <div class="d-flex gap-2">
               <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="{{ interaction.id }}" aria-label="{% trans 'Answer the question' %}">
@@ -358,7 +380,15 @@
       <div class="flex-grow-1">
         <small id="progress-logs" class="text-muted"></small>
       </div>
-      <div id="task-status"></div>
+      <div id="task-status" class="d-flex align-items-center gap-2">
+        <button
+          type="button"
+          id="task-progress-trace-btn"
+          class="btn btn-sm btn-outline-secondary task-progress-trace-link d-none"
+        >
+          {% trans "Execution details" %}
+        </button>
+      </div>
     </div>
   </div>
 
@@ -377,7 +407,44 @@
           <div id="execution-trace-modal-empty" class="alert alert-light border d-none mb-0">
             {% trans "No execution details are available for this message." %}
           </div>
-          <div id="execution-trace-modal-tree"></div>
+          <div id="execution-trace-modal-content" class="d-none">
+            <div id="execution-trace-modal-overview"></div>
+            <div id="execution-trace-modal-problems"></div>
+            <div id="execution-trace-modal-tree"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="delete-message-tail-modal" tabindex="-1" aria-labelledby="delete-message-tail-modal-label" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h5 class="modal-title" id="delete-message-tail-modal-label">{% trans "Delete later messages" %}</h5>
+            <div id="delete-message-tail-modal-summary" class="small text-muted"></div>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% trans 'Close' %}"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-warning mb-3">
+            {% trans "This action is irreversible. The selected message stays, but every later message will be permanently deleted." %}
+          </div>
+          <p id="delete-message-tail-modal-message" class="mb-3"></p>
+          <div id="delete-message-tail-modal-untracked" class="alert alert-secondary py-2 px-3 small d-none"></div>
+          <div id="delete-message-tail-modal-files-wrapper" class="d-none">
+            <div class="fw-semibold mb-2">{% trans "Files that will also be deleted" %}</div>
+            <div class="list-group small" id="delete-message-tail-modal-files"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+            {% trans "Cancel" %}
+          </button>
+          <button type="button" class="btn btn-danger" id="delete-message-tail-confirm-btn">
+            {% trans "Delete messages" %}
+          </button>
         </div>
       </div>
     </div>

@@ -6,7 +6,6 @@ from django.utils import timezone
 from unittest.mock import patch, MagicMock
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Message, Actor, MessageType
 from nova.models.Task import Task, TaskStatus
@@ -26,7 +25,6 @@ class UserObjectsModelsTest(BaseTestCase):
         # UserParameters is created automatically via signal, so we get it for user created in base.py
         params = UserParameters.objects.get(user=self.user)
         self.assertEqual(params.user, self.user)
-        self.assertFalse(params.allow_langfuse)
         self.assertEqual(
             params.continuous_default_messages_limit,
             UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_DEFAULT,
@@ -480,40 +478,6 @@ class InteractionModelsTest(BaseTestCase):
             interaction.full_clean()
 
 
-class CheckpointLinkModelsTest(BaseTestCase):
-    def setUp(self):
-        super().setUp()
-        self.thread = Thread.objects.create(user=self.user, subject="Test Thread")
-        self.provider = create_provider(self.user)
-        self.agent = create_agent(self.user, self.provider)
-
-    def test_checkpoint_link_creation(self):
-        """
-        Test CheckpointLink model creation for LangGraph state persistence.
-        Ensures that checkpoint links are properly created with UUIDs.
-        """
-        link = CheckpointLink.objects.create(
-            thread=self.thread,
-            agent=self.agent,
-        )
-        self.assertEqual(link.thread, self.thread)
-        self.assertEqual(link.agent, self.agent)
-        self.assertIsNotNone(link.checkpoint_id)
-
-    def test_checkpoint_link_str(self):
-        """
-        Test CheckpointLink string representation.
-        Verifies that __str__ includes checkpoint and entity IDs.
-        """
-        link = CheckpointLink.objects.create(
-            thread=self.thread,
-            agent=self.agent,
-        )
-        self.assertIn("Checkpoint", str(link))
-        self.assertIn(str(self.thread.id), str(link))
-        self.assertIn(str(self.agent.id), str(link))
-
-
 class UserFileModelsTest(BaseTestCase):
     def setUp(self):
         super().setUp()
@@ -590,7 +554,7 @@ class UserFileModelsTest(BaseTestCase):
         self.assertEqual(user_file.key, expected_key)
 
     @patch('boto3.client')
-    def test_user_file_cascade_from_message_deletes_storage(self, mock_boto3_client):
+    def test_user_file_message_delete_preserves_file_and_clears_source_message(self, mock_boto3_client):
         message = self.thread.add_message("Attachment source", actor=Actor.USER)
         user_file = UserFile.objects.create(
             user=self.user,
@@ -608,11 +572,10 @@ class UserFileModelsTest(BaseTestCase):
 
         message.delete()
 
-        self.assertFalse(UserFile.objects.filter(pk=user_file.pk).exists())
-        mock_s3_client.delete_object.assert_called_once_with(
-            Bucket='test-bucket',
-            Key='message-attachment-key',
-        )
+        user_file.refresh_from_db()
+        self.assertTrue(UserFile.objects.filter(pk=user_file.pk).exists())
+        self.assertIsNone(user_file.source_message)
+        mock_s3_client.delete_object.assert_not_called()
 
     def test_user_file_get_download_url_expired(self):
         """

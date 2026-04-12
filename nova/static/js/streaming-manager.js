@@ -23,6 +23,15 @@
             });
         }
 
+        setExecutionTraceButton(taskId, visible = true) {
+            const button = document.getElementById('task-progress-trace-btn');
+            if (!button) {
+                return;
+            }
+            button.dataset.taskId = visible ? String(taskId || '') : '';
+            button.classList.toggle('d-none', !visible || !taskId);
+        }
+
         createMessageElement(task_id) {
             // Create agent message element with a streaming class
             const agentMessageEl = window.MessageRenderer.createMessageElement({
@@ -55,6 +64,7 @@
                     spinner.classList.remove('d-none');
                 }
             }
+            this.setExecutionTraceButton(taskId, true);
 
             // Disable input area while agent is working
             this.setInputAreaDisabled(true);
@@ -86,6 +96,11 @@
             // The server is already sending HTML chunks, so we don't need to process them as Markdown
             // Replace the entire content since server sends complete paragraph updates
             contentEl.innerHTML = chunk;
+            this.messageManager?.followBottomDuringLayout?.({
+                force: false,
+                behavior: 'auto',
+                observeRoot: stream.element,
+            });
 
             // Track last chunk to detect duplicates
             stream.lastChunk = chunk;
@@ -108,6 +123,7 @@
                 if (progressDiv) {
                     setTimeout(() => {
                         progressDiv.classList.add('d-none');
+                        this.setExecutionTraceButton('', false);
                     }, 3000); // Hide progress after 3 seconds
                 }
 
@@ -123,6 +139,20 @@
 
             const socket = new WebSocket(wsUrl);
             let heartbeatInterval, heartbeatTimeout;
+            let realtimeUnavailableNotified = false;
+
+            const notifyRealtimeUnavailable = (message) => {
+                if (realtimeUnavailableNotified) {
+                    return;
+                }
+                realtimeUnavailableNotified = true;
+                const progressLogs = document.getElementById('progress-logs');
+                if (progressLogs) {
+                    progressLogs.textContent = message;
+                }
+                this.messageManager?.scheduleExecutionTraceRefresh(taskId);
+                this.messageManager?.showToast?.(message, 'warning');
+            };
 
             const startHeartbeat = () => {
                 clearInterval(heartbeatInterval);
@@ -157,6 +187,7 @@
                     const progressLogs = document.getElementById('progress-logs');
                     const log = data.progress_log || "undefined";
                     if (progressLogs) progressLogs.textContent = log;
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                 },
                 'response_chunk': (data) => {
                     this.onStreamChunk(taskId, data.chunk);
@@ -215,6 +246,7 @@
                     if (data.thread_id && data.thread_subject) {
                         this.updateThreadSubject(data.thread_id, data.thread_subject);
                     }
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onStreamComplete(taskId);
                     requestSidebarRefresh({
                         files: true,
@@ -227,9 +259,11 @@
                     this.updateThreadSubject(data.thread_id, data.thread_subject);
                 },
                 'user_prompt': (data) => {
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onUserPrompt(taskId, data);
                 },
                 'interaction_update': (data) => {
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onInteractionUpdate(taskId, data);
                 },
 
@@ -246,6 +280,7 @@
                 },
 
                 'task_error': (data) => {
+                    this.messageManager?.scheduleExecutionTraceRefresh(taskId);
                     this.onTaskError(taskId, data);
                     requestSidebarRefresh({
                         files: true,
@@ -269,13 +304,17 @@
                 }
             };
 
-            socket.onclose = () => {
+            socket.onclose = (event) => {
                 clearInterval(heartbeatInterval);
                 clearTimeout(heartbeatTimeout);
+                if (event.code === 4403) {
+                    notifyRealtimeUnavailable('Realtime task updates are unavailable for this run. Refresh the page to check the latest state.');
+                }
             };
 
             socket.onerror = (err) => {
                 console.error('WebSocket error:', err);
+                notifyRealtimeUnavailable('Realtime task updates are temporarily unavailable.');
             };
         }
 
@@ -295,6 +334,7 @@
                     progressLogs.textContent = "Processing...";
                 }
             }
+            this.setExecutionTraceButton(taskId, true);
 
             // Start WebSocket connection for progress updates
             this.startWebSocket(taskId);
@@ -325,6 +365,7 @@
                     spinner.classList.remove('d-none');
                 }
             }
+            this.setExecutionTraceButton(taskId, true);
 
             // Set last known progress message
             const progressLogs = document.getElementById('progress-logs');
@@ -355,10 +396,18 @@
             if (taskId && this.activeStreams.has(taskId)) {
                 const stream = this.activeStreams.get(taskId);
                 if (stream?.element?.parentNode) {
+                    const shouldFollowBottom = this.messageManager?.isNearBottom?.() || false;
                     stream.element.replaceWith(messageElement);
                     stream.element = messageElement;
                     if (this.messageManager) {
                         this.messageManager.updateCompactLinkVisibility();
+                        if (shouldFollowBottom) {
+                            this.messageManager.followBottomDuringLayout({
+                                force: true,
+                                behavior: 'auto',
+                                observeRoot: messageElement,
+                            });
+                        }
                     }
                     return;
                 }
@@ -395,6 +444,98 @@
             }
         }
 
+        _getInteractionChoiceOptions(schema) {
+            if (!schema || typeof schema !== 'object') {
+                return [];
+            }
+            if (schema.type === 'boolean') {
+                return [
+                    { label: gettext('Yes'), value: true },
+                    { label: gettext('No'), value: false },
+                ];
+            }
+            const enumValues = Array.isArray(schema.enum) ? schema.enum : [];
+            if (!enumValues.length || enumValues.length > 5) {
+                return [];
+            }
+            const supportedValues = enumValues.filter((value) => (
+                value === null
+                || ['string', 'number', 'boolean'].includes(typeof value)
+            ));
+            if (!supportedValues.length || supportedValues.length !== enumValues.length) {
+                return [];
+            }
+            return supportedValues.map((value) => {
+                if (value === true) {
+                    return { label: gettext('Yes'), value };
+                }
+                if (value === false) {
+                    return { label: gettext('No'), value };
+                }
+                return { label: String(value), value };
+            });
+        }
+
+        _renderInteractionChoiceControls(interactionId, schema) {
+            const choices = this._getInteractionChoiceOptions(schema);
+            if (!choices.length) {
+                return '';
+            }
+            const buttons = choices.map((choice) => `
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-primary interaction-answer-btn"
+                data-interaction-id="${interactionId}"
+                data-answer-json="${window.DOMUtils.escapeHTML(JSON.stringify(choice.value))}"
+              >
+                ${window.DOMUtils.escapeHTML(choice.label)}
+              </button>
+            `).join('');
+            return `
+              <div class="small text-muted mb-2">${gettext('Quick choices')}</div>
+              <div class="d-flex flex-wrap gap-2">${buttons}</div>
+            `;
+        }
+
+        _buildInteractionSchemaHint(schema) {
+            if (!schema || Object.keys(schema).length === 0) {
+                return '';
+            }
+            const choices = this._getInteractionChoiceOptions(schema);
+            if (choices.length) {
+                return gettext('Quick choices are available; plain text is also accepted.');
+            }
+            return gettext('Answer format may be structured; plain text is also accepted.');
+        }
+
+        hydratePendingInteractionCards() {
+            const cards = document.querySelectorAll('[data-interaction-id][data-interaction-schema]');
+            cards.forEach((card) => {
+                let schema = {};
+                const rawSchema = card.dataset.interactionSchema || '';
+                if (rawSchema) {
+                    try {
+                        schema = JSON.parse(rawSchema);
+                    } catch (_error) {
+                        schema = {};
+                    }
+                }
+                const choiceContainer = card.querySelector('.interaction-choice-controls');
+                if (choiceContainer) {
+                    choiceContainer.innerHTML = this._renderInteractionChoiceControls(
+                        card.dataset.interactionId || '',
+                        schema,
+                    );
+                }
+                const schemaHint = card.querySelector('.interaction-schema-hint');
+                if (schemaHint) {
+                    const hint = this._buildInteractionSchemaHint(schema);
+                    schemaHint.textContent = hint;
+                    schemaHint.classList.toggle('d-none', !hint);
+                }
+            });
+        }
+
         // Render and handle a user prompt card
         onUserPrompt(taskId, data) {
             // Expected payload: { interaction_id, question, schema, origin_name, thread_id }
@@ -409,11 +550,12 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'message mb-3';
             wrapper.id = `interaction-card-${interaction_id}`;
+            wrapper.dataset.interactionId = String(interaction_id);
+            wrapper.dataset.interactionSchema = JSON.stringify(schema || {});
 
             const origin = origin_name ? `${window.DOMUtils.escapeHTML(origin_name)} ${gettext('asks')}:` : gettext('Question');
-            const schemaHint = (schema && Object.keys(schema).length > 0)
-                ? `<div class="form-text text-muted mt-1">${gettext('Answer format may be structured; plain text is also accepted.')}</div>`
-                : '';
+            const choiceControls = this._renderInteractionChoiceControls(interaction_id, schema);
+            const schemaHint = this._buildInteractionSchemaHint(schema);
 
             wrapper.innerHTML = `
         <div class="card border-warning">
@@ -423,9 +565,10 @@
               <strong>${origin}</strong>
             </div>
             <div class="mb-2">${window.DOMUtils.escapeHTML(question)}</div>
+            <div class="interaction-choice-controls mb-2">${choiceControls}</div>
             <div class="mb-2">
               <textarea class="form-control" id="interaction-answer-input-${interaction_id}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
-              ${schemaHint}
+              <div class="form-text text-muted mt-1 interaction-schema-hint ${schemaHint ? '' : 'd-none'}">${window.DOMUtils.escapeHTML(schemaHint)}</div>
             </div>
             <div class="d-flex gap-2">
               <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="${interaction_id}">
@@ -488,6 +631,7 @@
             if (progressLogs) {
                 progressLogs.textContent = error.message || gettext('An error occurred.');
             }
+            this.setExecutionTraceButton(taskId, true);
             // Re-enable input area on error
             this.setInputAreaDisabled(false);
         }

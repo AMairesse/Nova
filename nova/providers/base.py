@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 
 @dataclass(frozen=True)
@@ -46,11 +46,28 @@ class BaseProviderAdapter:
     def get_defaults(self) -> ProviderDefaults:
         return self._defaults
 
-    def create_llm(self, provider):
-        raise NotImplementedError
-
     def normalize_multimodal_content(self, content):
         return content
+
+    async def complete_chat(
+        self,
+        provider,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def stream_chat(
+        self,
+        provider,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
+        del provider, messages, tools, on_content_delta
+        raise NotImplementedError("Native streaming is not implemented for this provider.")
 
     async def prepare_turn_content(self, provider, intro_text, resolved_inputs, **kwargs):
         from nova.turn_inputs import prepare_turn_content
@@ -100,3 +117,6 @@ class BaseProviderAdapter:
 
     async def parse_native_response(self, provider, raw_response: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
+
+    def supports_native_response_mode(self, provider, response_mode: str) -> bool:
+        return False

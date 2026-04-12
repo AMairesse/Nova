@@ -44,7 +44,7 @@ class TaskDefinitionTaskRunnerTests(TestCase):
             description="Email tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
     def _create_agent_cron_task(self, name="agent-cron"):

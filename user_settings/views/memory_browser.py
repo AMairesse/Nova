@@ -1,15 +1,17 @@
+from asgiref.sync import async_to_sync
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
 
-from nova.models.Memory import MemoryItem, MemoryItemStatus
+from nova.memory.service import list_memory_documents_overview
+from nova.models.MemoryDocument import MemoryDocument
 
 
 class MemoryItemsListView(LoginRequiredMixin, ListView):
-    """Read-only browser for long-term memory items."""
+    """Read-only browser for long-term memory documents."""
 
-    model = MemoryItem
+    model = MemoryDocument
     template_name = "user_settings/fragments/memory_items_table.html"
-    context_object_name = "items"
+    context_object_name = "documents"
     paginate_by = 50
 
     def _include_archived(self) -> bool:
@@ -19,26 +21,14 @@ class MemoryItemsListView(LoginRequiredMixin, ListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["include_archived"] = self._include_archived()
+        context["items"] = context.get("documents", [])
         return context
 
     def get_queryset(self):
-        qs = (
-            MemoryItem.objects.filter(user=self.request.user)
-            .select_related("theme")
-            .select_related("embedding")
-            .order_by("-created_at")
-        )
-
-        # Default: show active items only. If `include_archived=1`, show all.
-        if not self._include_archived():
-            qs = qs.filter(status=MemoryItemStatus.ACTIVE)
-
-        theme = (self.request.GET.get("theme") or "").strip().lower()
-        if theme:
-            qs = qs.filter(theme__slug=theme)
-
+        include_archived = self._include_archived()
         q = (self.request.GET.get("q") or "").strip()
-        if q:
-            qs = qs.filter(content__icontains=q)
-
-        return qs
+        return async_to_sync(list_memory_documents_overview)(
+            user=self.request.user,
+            include_archived=include_archived,
+            q=q,
+        )

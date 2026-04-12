@@ -20,9 +20,8 @@ from nova.continuous.utils import ensure_continuous_nightly_summary_task_definit
 from nova.tasks.template_registry import (
     SPAM_FILTER_TEMPLATE_ID,
     THEMATIC_WATCH_TEMPLATE_ID,
-    THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
-    THEMATIC_WATCH_MEMORY_THEME_TOPICS,
-    THEMATIC_WATCH_MEMORY_TYPE,
+    THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
+    THEMATIC_WATCH_MEMORY_PATH_TOPICS,
     build_template_prefill_payload,
     default_agent_has_memory_tool,
     evaluate_spam_filter_template,
@@ -347,13 +346,11 @@ def task_template_setup(request, template_id: str):
         "[THEMATIC_WATCH_SETUP] Help me configure this specific recurring task. "
         "Please ask me short questions, preferably in my own language, to capture only: "
         "(1) my topics of interest and (2) my preferred summary language. "
-        "Then write exactly TWO memory items with memory_add and strict metadata: "
+        "Then write exactly TWO Markdown memory files using `tee` at these exact paths: "
     ) + (
-        f"item #1 => type='{THEMATIC_WATCH_MEMORY_TYPE}', theme='{THEMATIC_WATCH_MEMORY_THEME_TOPICS}', "
-        "content must contain only the user topics text. "
-        f"item #2 => type='{THEMATIC_WATCH_MEMORY_TYPE}', theme='{THEMATIC_WATCH_MEMORY_THEME_LANGUAGE}', "
-        "content must contain only the user preferred language text. "
-        "No key prefixes, no labels, no extra text, no other themes, no duplicates. Then stop."
+        f"file #1 => path='{THEMATIC_WATCH_MEMORY_PATH_TOPICS}', content must contain only the user topics text. "
+        f"file #2 => path='{THEMATIC_WATCH_MEMORY_PATH_LANGUAGE}', content must contain only the user preferred language text. "
+        "Use plain Markdown without extra labels, create no other files, avoid duplicates, then stop."
     )
     query = urlencode(
         {

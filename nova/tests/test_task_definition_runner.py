@@ -96,28 +96,23 @@ class TaskDefinitionRunnerExecutionTests(TestCase):
         with self.assertRaisesMessage(ValueError, "Rendered prompt is empty"):
             execute_agent_task_definition(task_def)
 
-    @patch("nova.tasks.tasks.AgentTaskExecutor")
-    def test_execute_agent_task_definition_success_marks_task_completed(self, mocked_executor_cls):
+    @patch("nova.tasks.tasks.execute_agent_task_with_executor")
+    def test_execute_agent_task_definition_success_marks_task_completed(self, mocked_execute):
         task_def = self._build_task_definition(prompt="Hello {{ name }}")
-
-        mocked_executor = mocked_executor_cls.return_value
-        mocked_executor.execute_or_resume = AsyncMock(return_value=None)
 
         result = execute_agent_task_definition(task_def, variables={"name": "Alice"})
 
         self.assertEqual(result["status"], "ok")
         self.assertIn("task_id", result)
         self.assertIn("thread_id", result)
-        mocked_executor.execute_or_resume.assert_called_once()
+        mocked_execute.assert_called_once()
 
-    @patch("nova.tasks.tasks.AgentTaskExecutor")
-    def test_execute_agent_task_definition_ephemeral_deletes_thread(self, mocked_executor_cls):
+    @patch("nova.tasks.tasks.execute_agent_task_with_executor")
+    def test_execute_agent_task_definition_ephemeral_deletes_thread(self, mocked_execute):
         task_def = self._build_task_definition(
             run_mode=TaskDefinition.RunMode.EPHEMERAL,
             prompt="Ephemeral run",
         )
-        mocked_executor = mocked_executor_cls.return_value
-        mocked_executor.execute_or_resume = AsyncMock(return_value=None)
 
         result = execute_agent_task_definition(task_def)
         thread_id = result["thread_id"]
@@ -142,12 +137,8 @@ class TaskDefinitionRunnerExecutionTests(TestCase):
             def __init__(
                 self,
                 task,
-                user,
-                thread,
-                agent_config,
-                prompt,
-                source_message_id=None,
-                push_notifications_enabled=True,
+                *_args,
+                **_kwargs,
             ):
                 self.task = task
 
@@ -156,7 +147,7 @@ class TaskDefinitionRunnerExecutionTests(TestCase):
                 self.task.result = "runner failed"
 
         with (
-            patch("nova.tasks.tasks.AgentTaskExecutor", FailingExecutor),
+            patch("nova.tasks.tasks.ReactTerminalTaskExecutor", FailingExecutor),
             patch.object(Task, "refresh_from_db", autospec=True, return_value=None),
         ):
             with self.assertRaisesMessage(RuntimeError, "runner failed"):

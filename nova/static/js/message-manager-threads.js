@@ -18,6 +18,7 @@
                 }
 
                 const html = await response.text();
+                this.stopBottomFollow?.({ cancelPrimeTimers: true });
                 document.getElementById('message-container').innerHTML = html;
                 this.syncComposerAttachmentConfig();
                 this.resetComposerAttachments();
@@ -49,7 +50,11 @@
                 this.updateVoiceButtonState();
                 this.syncResponseModeControl();
                 this.syncComposerCapabilityNotice();
-                this.scrollToBottom();
+                this.primeBottomFollow({
+                    force: true,
+                    behavior: 'auto',
+                    observeRoot: document.getElementById('conversation-container'),
+                });
                 this.checkPendingInteractions();
                 this.updateCompactLinkVisibility();
                 this.checkAndReconnectRunningTasks();
@@ -133,7 +138,7 @@
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ answer: answer || '' })
+                        body: JSON.stringify({ answer: answer === undefined ? '' : answer })
                     }
                 );
                 if (!response.ok) throw new Error('Server error');
@@ -223,6 +228,48 @@
             }
         },
 
+        async refreshThreadListsFromServer() {
+            const baseUrl = window.NovaApp?.urls?.loadMoreThreads;
+            if (!baseUrl) {
+                return;
+            }
+
+            const limit = window.ThreadManager?.config?.pagination?.limit || 10;
+            const response = await fetch(`${baseUrl}?offset=0&limit=${limit}`);
+            if (!response.ok) {
+                throw new Error(gettext('Failed to refresh thread list.'));
+            }
+
+            const data = await response.json();
+            const html = `${data.html || ''}`;
+            ['threads-list', 'mobile-threads-list'].forEach((containerId) => {
+                const container = document.getElementById(containerId);
+                if (container) {
+                    container.innerHTML = html;
+                }
+            });
+
+            [
+                { containerId: 'load-more-container', buttonId: 'load-more-threads' },
+                { containerId: 'mobile-load-more-container', buttonId: 'mobile-load-more-threads' }
+            ].forEach(({ containerId, buttonId }) => {
+                const container = document.getElementById(containerId);
+                const button = document.getElementById(buttonId);
+
+                if (!data.has_more) {
+                    container?.remove();
+                    return;
+                }
+
+                if (button) {
+                    button.dataset.offset = `${data.next_offset || limit}`;
+                    button.disabled = false;
+                    const icon = button.querySelector('i');
+                    if (icon) icon.className = 'bi bi-arrow-down-circle me-1';
+                }
+            });
+        },
+
         async deleteThread(threadId) {
             try {
                 const response = await window.DOMUtils.csrfFetch(
@@ -233,16 +280,28 @@
                 if (!response.ok || data.status !== 'OK') {
                     throw new Error(data.message || gettext('Failed to delete thread.'));
                 }
+                const escapedThreadId = window.CSS?.escape
+                    ? window.CSS.escape(`${threadId}`)
+                    : `${threadId}`.replace(/"/g, '\\"');
+
                 document.querySelectorAll(
-                    `[data-thread-item-id="${threadId}"]`
+                    `[data-thread-item-id="${escapedThreadId}"]`
                 ).forEach((threadElement) => {
                     threadElement.remove();
                 });
 
+                try {
+                    await this.refreshThreadListsFromServer();
+                } catch (refreshError) {
+                    console.warn('Failed to refresh thread lists after deletion:', refreshError);
+                    window.ResponsiveManager?.syncThreadLists?.();
+                }
+
                 const firstThread = document.querySelector(
-                    '#threads-list .thread-link, #mobile-threads-list .thread-link'
+                    '#threads-list .thread-link'
                 );
-                const firstThreadId = firstThread?.dataset.threadId;
+                const firstThreadId = firstThread?.dataset.threadId
+                    || document.querySelector('#mobile-threads-list .thread-link')?.dataset.threadId;
                 await this.loadMessages(firstThreadId || null);
                 document.dispatchEvent(
                     new CustomEvent('threadChanged', {
@@ -407,6 +466,153 @@
                 });
 
                 alert('Failed to start summarization: ' + error.message);
+            }
+        },
+
+        async openDeleteTailPreview(messageId) {
+            const normalizedMessageId = `${messageId || ''}`.trim();
+            const modalEl = document.getElementById('delete-message-tail-modal');
+            const previewUrlTemplate = window.NovaApp?.urls?.previewDeleteMessageTail;
+            if (!normalizedMessageId || !modalEl || !previewUrlTemplate || !window.bootstrap?.Modal) {
+                this.showToast(gettext('Delete preview is not available on this page.'), 'warning');
+                return;
+            }
+
+            try {
+                const response = await fetch(
+                    previewUrlTemplate.replace('0', normalizedMessageId),
+                    { headers: { 'X-AJAX': 'true' } }
+                );
+                const payload = await response.json();
+                if (!response.ok || payload.status !== 'OK') {
+                    throw new Error(payload.message || gettext('Failed to prepare the deletion preview.'));
+                }
+
+                if (!payload.message_count) {
+                    this.showToast(gettext('There are no later messages to delete.'), 'info');
+                    return;
+                }
+
+                modalEl.dataset.messageId = normalizedMessageId;
+
+                const summaryEl = document.getElementById('delete-message-tail-modal-summary');
+                if (summaryEl) {
+                    summaryEl.textContent = gettext('%s later messages').replace('%s', String(payload.message_count));
+                }
+
+                const messageEl = document.getElementById('delete-message-tail-modal-message');
+                if (messageEl) {
+                    const messageText = gettext(
+                        'This will permanently delete %s later messages and %s attributable files.'
+                    )
+                        .replace('%s', String(payload.message_count))
+                        .replace('%s', String(payload.file_count || 0));
+                    messageEl.textContent = messageText;
+                }
+
+                const untrackedEl = document.getElementById('delete-message-tail-modal-untracked');
+                if (untrackedEl) {
+                    untrackedEl.textContent = gettext(
+                        'Some historical files may remain because their provenance cannot be proven safely.'
+                    );
+                    untrackedEl.classList.toggle('d-none', !payload.has_untracked_files);
+                }
+
+                const filesWrapperEl = document.getElementById('delete-message-tail-modal-files-wrapper');
+                const filesListEl = document.getElementById('delete-message-tail-modal-files');
+                if (filesWrapperEl && filesListEl) {
+                    const files = Array.isArray(payload.files) ? payload.files : [];
+                    filesListEl.innerHTML = files
+                        .map((file) => {
+                            const label = window.DOMUtils.escapeHTML(file.label || file.path || gettext('File'));
+                            const path = file.path
+                                ? `<div class="small text-muted text-break">${window.DOMUtils.escapeHTML(file.path)}</div>`
+                                : '';
+                            const meta = [];
+                            if (file.mime_type) {
+                                meta.push(window.DOMUtils.escapeHTML(file.mime_type));
+                            }
+                            if (Number.isFinite(Number(file.size)) && Number(file.size) > 0) {
+                                meta.push(window.DOMUtils.escapeHTML(this.formatAttachmentSizeLabel(Number(file.size))));
+                            }
+                            const metaLine = meta.length
+                                ? `<div class="small text-muted">${meta.join(' • ')}</div>`
+                                : '';
+                            return `
+                                <div class="list-group-item">
+                                    <div class="fw-semibold text-break">${label}</div>
+                                    ${path}
+                                    ${metaLine}
+                                </div>
+                            `;
+                        })
+                        .join('');
+                    filesWrapperEl.classList.toggle('d-none', files.length === 0);
+                }
+
+                const confirmBtn = document.getElementById('delete-message-tail-confirm-btn');
+                if (confirmBtn) {
+                    confirmBtn.disabled = false;
+                    confirmBtn.innerHTML = gettext('Delete messages');
+                }
+
+                window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+            } catch (error) {
+                console.error('Error preparing delete tail preview:', error);
+                this.showToast(
+                    error.message || gettext('Failed to prepare the deletion preview.'),
+                    'warning'
+                );
+            }
+        },
+
+        async confirmDeleteTailAfter() {
+            const modalEl = document.getElementById('delete-message-tail-modal');
+            const confirmBtn = document.getElementById('delete-message-tail-confirm-btn');
+            const deleteUrlTemplate = window.NovaApp?.urls?.deleteMessageTail;
+            const messageId = `${modalEl?.dataset?.messageId || ''}`.trim();
+            if (!modalEl || !confirmBtn || !deleteUrlTemplate || !messageId) {
+                return;
+            }
+
+            const originalHtml = confirmBtn.innerHTML;
+            confirmBtn.disabled = true;
+            confirmBtn.innerHTML = gettext('Deleting…');
+
+            try {
+                const response = await window.DOMUtils.csrfFetch(
+                    deleteUrlTemplate.replace('0', messageId),
+                    { method: 'POST' }
+                );
+                const payload = await response.json();
+                if (!response.ok || payload.status !== 'OK') {
+                    throw new Error(payload.message || gettext('Failed to delete later messages.'));
+                }
+
+                const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+                modal.hide();
+
+                document.dispatchEvent(
+                    new CustomEvent('nova:sidebar-refresh-request', {
+                        detail: { files: true }
+                    })
+                );
+
+                if (window.NovaApp?.isContinuousPage) {
+                    window.location.href = payload.redirect_url || window.location.href;
+                    return;
+                }
+
+                await this.loadMessages(this.currentThreadId || null);
+                this.showToast(gettext('Later messages deleted.'), 'success');
+            } catch (error) {
+                console.error('Error deleting later messages:', error);
+                this.showToast(
+                    error.message || gettext('Failed to delete later messages.'),
+                    'warning'
+                );
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = originalHtml;
             }
         },
 

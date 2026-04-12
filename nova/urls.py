@@ -17,10 +17,14 @@ from nova.views.continuous_views import (
 from nova.views.task_views import execution_trace, running_tasks
 from nova.views.files_views import (
     sidebar_panel_view, file_list,
-    file_download_url, file_upload, FileDeleteView, artifact_publish, artifact_content
+    file_content, file_download_url, file_upload, FileDeleteView
 )
 from nova.views.interaction_views import (
     answer_interaction, cancel_interaction
+)
+from nova.views.message_tail_views import (
+    delete_message_tail,
+    preview_delete_message_tail,
 )
 from nova.views.pwa_views import service_worker
 from nova.views.push_views import push_config, push_subscriptions
@@ -69,17 +73,18 @@ urlpatterns = [
 urlpatterns += [
     path('files/sidebar-panel/', sidebar_panel_view, name='files_sidebar_panel'),
     path('files/list/<int:thread_id>/', file_list, name='file_list'),
+    path('files/content/<int:file_id>/', file_content, name='file_content'),
     path('files/download-url/<int:file_id>/', file_download_url, name='file_download_url'),
     path('files/upload/<int:thread_id>/', file_upload, name='file_upload'),
     path('files/delete/<int:file_id>/', FileDeleteView.as_view(), name='file_delete'),
-    path('files/publish-artifact/<int:artifact_id>/', artifact_publish, name='artifact_publish'),
-    path('files/artifact-content/<int:artifact_id>/', artifact_content, name='artifact_content'),
 ]
 
 # Users' interactions from agents
 urlpatterns += [
     path('interactions/<int:interaction_id>/answer/', answer_interaction, name='interaction_answer'),
     path('interactions/<int:interaction_id>/cancel/', cancel_interaction, name='interaction_cancel'),
+    path('messages/<int:message_id>/delete-tail-preview/', preview_delete_message_tail, name='preview_delete_message_tail'),
+    path('messages/<int:message_id>/delete-tail/', delete_message_tail, name='delete_message_tail'),
 ]
 
 # Web apps sidebar listing (server-rendered partial)

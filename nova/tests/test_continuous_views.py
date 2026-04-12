@@ -15,6 +15,7 @@ from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import Actor, Message
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
+from nova.models.UserFile import UserFile
 from nova.tests.factories import create_agent, create_provider
 
 
@@ -135,7 +136,7 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["artifacts"][0]["label"], "camera.jpg")
+        self.assertEqual(payload["message"]["attachments"][0]["label"], "camera.jpg")
 
     def test_continuous_add_message_rejects_empty_payload(self):
         response = self.client.post(
@@ -145,6 +146,44 @@ class ContinuousViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["status"], "ERROR")
+
+    def test_continuous_messages_only_render_true_message_attachments(self):
+        thread = ensure_continuous_thread(self.user)
+        message = thread.add_message("Use this image", actor=Actor.USER)
+        get_or_create_day_segment(
+            self.user,
+            thread,
+            get_day_label_for_user(self.user),
+            starts_at_message=message,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{thread.id}/photo.jpg",
+            original_filename="photo.jpg",
+            mime_type="image/jpeg",
+            size=2048,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{thread.id}/generated/output.png",
+            original_filename="/generated/output.png",
+            mime_type="image/png",
+            size=4096,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+
+        response = self.client.get(reverse("continuous_messages"))
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn("photo.jpg", html)
+        self.assertNotIn("/generated/output.png", html)
+        self.assertRegex(html, r"1 attachment (?:was added|added)")
 
     @patch("nova.views.continuous_views.enqueue_continuous_followups")
     @patch("nova.views.continuous_views.run_ai_task_celery.delay")
@@ -562,6 +601,7 @@ class ContinuousViewsTests(TestCase):
         self.assertNotContains(response, 'id="desktop-mode-badge"')
         self.assertContains(response, 'id="messageContextMenu"')
         self.assertContains(response, 'id="context-menu-execution-details"')
+        self.assertContains(response, 'id="context-menu-delete-after"')
 
     def test_continuous_home_exposes_mobile_mode_toggle_and_days_panel_button(self):
         response = self.client.get(reverse("continuous_home"))

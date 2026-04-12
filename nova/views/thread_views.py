@@ -7,7 +7,6 @@ from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
@@ -20,10 +19,7 @@ from nova.tasks.tasks import run_ai_task_celery, summarize_thread_task
 from nova.thread_titles import build_default_thread_subject
 import logging
 
-from asgiref.sync import async_to_sync
 from nova.file_utils import batch_upload_files
-from nova.llm.llm_agent import LLMAgent
-from nova.llm.checkpoints import get_checkpointer
 from nova.message_attachments import get_message_attachment_template_context
 from nova.message_composer import get_message_composer_template_context
 from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
@@ -32,6 +28,7 @@ from nova.message_submission import (
     SubmissionContext,
     submit_user_message,
 )
+from nova.runtime.compaction import get_compactable_message_count, get_compaction_error
 from nova.message_utils import upload_message_attachments
 from nova.tasks.runtime_state import reconcile_stale_running_tasks
 from nova.realtime.sidebar_updates import publish_file_update
@@ -284,57 +281,27 @@ def summarize_thread(request, thread_id):
             "status": "ERROR",
             "message": "No default agent configured"
         }, status=400)
-
-    # Check if there are enough messages for summarization
-    messages = thread.get_messages()
-    min_messages_for_summarization = agent_config.preserve_recent + 1
-    if len(messages) <= agent_config.preserve_recent:
+    compaction_error = get_compaction_error(thread)
+    if compaction_error:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": compaction_error,
+        }, status=400)
+    compactable_count = get_compactable_message_count(thread, agent_config)
+    if compactable_count <= 0:
+        min_messages_for_summarization = agent_config.preserve_recent + 1
+        total_messages = (
+            thread.get_messages()
+            .exclude(actor=Actor.SYSTEM)
+            .count()
+        )
         return JsonResponse({
             "status": "ERROR",
             "message": (
                 f"Not enough messages to summarize. Need at least "
-                f"{min_messages_for_summarization} messages, but only have {len(messages)}."
+                f"{min_messages_for_summarization} messages, but only have {total_messages}."
             )
         }, status=400)
-
-    # Check for sub-agents with sufficient context
-    sub_agent_links = CheckpointLink.objects.filter(
-        thread=thread
-    ).exclude(agent=agent_config).select_related('agent')
-
-    sub_agents_info = []
-    for link in sub_agent_links:
-        agent = async_to_sync(LLMAgent.create)(request.user, thread, link.agent)
-        try:
-            checkpointer = async_to_sync(get_checkpointer)()
-            checkpoint = async_to_sync(checkpointer.aget_tuple)(agent.config)
-            if checkpoint:
-                checkpoint_messages = checkpoint.checkpoint.get('channel_values', {}).get('messages', [])
-                message_count = len(checkpoint_messages)
-
-                # Check if sub-agent has enough messages for summarization
-                if message_count > link.agent.preserve_recent:
-                    token_count = async_to_sync(agent.count_tokens)(checkpoint_messages)
-                    sub_agents_info.append({
-                        'id': link.agent.id,
-                        'name': link.agent.name,
-                        'token_count': token_count
-                    })
-        finally:
-            async_to_sync(agent.cleanup)()
-            if 'checkpointer' in locals():
-                async_to_sync(checkpointer.conn.close)()
-
-    # If sub-agents have sufficient context, request confirmation
-    if sub_agents_info:
-        return JsonResponse({
-            "status": "CONFIRMATION_NEEDED",
-            "message": f"{len(sub_agents_info)} sub-agent(s) have accumulated context.",
-            "sub_agents": sub_agents_info,
-            "thread_id": thread_id
-        })
-
-    # Otherwise, proceed directly with main agent only
     return start_summarization(request, thread, agent_config, False)
 
 
@@ -379,5 +346,10 @@ def confirm_summarize_thread(request, thread_id):
             "status": "ERROR",
             "message": "No default agent configured"
         }, status=400)
-
-    return start_summarization(request, thread, agent_config, include_sub_agents, sub_agent_ids)
+    compaction_error = get_compaction_error(thread)
+    if compaction_error:
+        return JsonResponse({
+            "status": "ERROR",
+            "message": compaction_error,
+        }, status=400)
+    return start_summarization(request, thread, agent_config, False)

@@ -28,7 +28,7 @@ class EmailPollingTests(TestCase):
             self.user,
             name="Email tool",
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,

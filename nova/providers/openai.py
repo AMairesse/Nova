@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from nova.providers.base import BaseProviderAdapter, ProviderDefaults
 from nova.providers.openai_compatible import (
-    create_openai_compatible_llm,
+    complete_openai_compatible_chat,
     normalize_openai_compatible_multimodal_content,
+    stream_openai_compatible_chat,
 )
 
 
@@ -18,11 +19,25 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
             )
         )
 
-    def create_llm(self, provider):
-        return create_openai_compatible_llm(
+    async def complete_chat(self, provider, *, messages, tools=None):
+        return await complete_openai_compatible_chat(
             model=provider.model,
             api_key=provider.api_key,
             base_url=provider.base_url,
+            messages=messages,
+            tools=tools,
+            normalize_content=self.normalize_multimodal_content,
+        )
+
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        return await stream_openai_compatible_chat(
+            model=provider.model,
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            messages=messages,
+            tools=tools,
+            normalize_content=self.normalize_multimodal_content,
+            on_content_delta=on_content_delta,
         )
 
     def normalize_multimodal_content(self, content):

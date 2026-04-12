@@ -2,6 +2,7 @@ from django.test import TestCase
 
 from nova.bootstrap import bootstrap_default_setup
 from nova.models.AgentConfig import AgentConfig
+from nova.models.Provider import ProviderType
 from nova.tests.factories import (
     create_agent,
     create_provider,
@@ -21,13 +22,13 @@ class BootstrapSkillsTests(TestCase):
             self.user,
             name="SearXNG",
             tool_subtype="searxng",
-            python_path="nova.tools.builtins.searxng",
+            python_path="nova.plugins.search",
         )
         create_tool(
             self.user,
             name="Judge0",
             tool_subtype="code_execution",
-            python_path="nova.tools.builtins.code_execution",
+            python_path="nova.plugins.python",
         )
 
     def _apply_provider_capabilities(
@@ -74,7 +75,7 @@ class BootstrapSkillsTests(TestCase):
             self.user,
             name=name,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -93,7 +94,7 @@ class BootstrapSkillsTests(TestCase):
             self.user,
             name=name,
             tool_subtype="caldav",
-            python_path="nova.tools.builtins.caldav",
+            python_path="nova.plugins.calendar",
         )
         create_tool_credential(
             self.user,
@@ -163,15 +164,19 @@ class BootstrapSkillsTests(TestCase):
         self.assertSetEqual(email_tool_ids, {work_mail.id, personal_mail.id})
         self.assertSetEqual(caldav_tool_ids, {work_calendar.id, personal_calendar.id})
         self.assertTrue(nova.agent_tools.filter(name="Internet Agent").exists())
-        self.assertTrue(nova.agent_tools.filter(name="Code Agent").exists())
+        self.assertTrue(nova.agent_tools.filter(name="Python Agent").exists())
+        self.assertFalse(nova.agent_tools.filter(name="Code Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Calendar Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Email Agent").exists())
         self.assertTrue(
             any(
-                "Detached legacy sub-agents from Nova" in note
+                "Detached deprecated tool-agents from Nova" in note
                 for note in summary.get("notes", [])
             )
         )
+        renamed_python_agent = AgentConfig.objects.get(user=self.user, name="Python Agent")
+        self.assertIn("Judge0", renamed_python_agent.system_prompt)
+        self.assertIn("isolated workspace", renamed_python_agent.tool_description)
 
     def test_bootstrap_does_not_create_calendar_or_email_tool_agents(self):
         self._create_email_tool("Work Mail", "work@example.com")
@@ -186,9 +191,34 @@ class BootstrapSkillsTests(TestCase):
             ).exists()
         )
 
+    def test_bootstrap_nova_prompt_does_not_embed_current_datetime(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+
+        bootstrap_default_setup(self.user)
+
+        nova = AgentConfig.objects.get(user=self.user, name="Nova")
+        self.assertNotIn("Current date and time is", nova.system_prompt)
+        self.assertNotIn("{today}", nova.system_prompt)
+        self.assertIn("date/time capability", nova.system_prompt)
+        self.assertIn("Keep thread-scoped filesystem work", nova.system_prompt)
+        self.assertIn("Python Agent", nova.system_prompt)
+
+    def test_bootstrap_attaches_webapp_tool_to_nova(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+
+        bootstrap_default_setup(self.user)
+
+        nova = AgentConfig.objects.get(user=self.user, name="Nova")
+
+        self.assertTrue(nova.tools.filter(tool_subtype="webapp").exists())
+
     def test_bootstrap_creates_and_attaches_image_agent_with_best_image_provider(self):
         main_provider = self.provider
-        image_provider = create_provider(self.user, name="Image Provider")
+        image_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Image Provider",
+        )
 
         self._apply_provider_capabilities(main_provider, tools="pass")
         self._apply_provider_capabilities(
@@ -207,19 +237,21 @@ class BootstrapSkillsTests(TestCase):
         self.assertEqual(image_agent.llm_provider, image_provider)
         self.assertTrue(nova.agent_tools.filter(pk=image_agent.pk).exists())
         self.assertIn("Image Agent", summary.get("created_agents", []))
-        self.assertIn("Never invent a file_id or artifact_id.", nova.system_prompt)
-        self.assertIn("Use file_ls to discover thread file IDs.", nova.system_prompt)
-        self.assertIn("Use artifact_ls or artifact_search to discover conversation artifact IDs.", nova.system_prompt)
-        self.assertIn("Pass file_ids only for thread file IDs returned by file_ls.", image_agent.tool_description)
-        self.assertIn(
-            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search.",
-            image_agent.tool_description,
-        )
+        self.assertEqual(image_agent.default_response_mode, AgentConfig.DefaultResponseMode.IMAGE)
+        self.assertIn("read them from `/inbox`", image_agent.tool_description)
 
     def test_bootstrap_prefers_image_provider_with_editing_support(self):
         self._apply_provider_capabilities(self.provider, tools="pass")
-        generation_only_provider = create_provider(self.user, name="Generation-only Provider")
-        editing_provider = create_provider(self.user, name="Editing Provider")
+        generation_only_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Generation-only Provider",
+        )
+        editing_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Editing Provider",
+        )
 
         self._apply_provider_capabilities(
             generation_only_provider,
@@ -257,7 +289,11 @@ class BootstrapSkillsTests(TestCase):
         )
 
     def test_bootstrap_skips_default_agents_when_all_providers_lack_tool_support(self):
-        image_provider = create_provider(self.user, name="Image Provider")
+        image_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Image Provider",
+        )
         self._apply_provider_capabilities(self.provider, tools="unsupported")
         self._apply_provider_capabilities(
             image_provider,
@@ -270,18 +306,26 @@ class BootstrapSkillsTests(TestCase):
 
         self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Nova").exists())
         self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Internet Agent").exists())
-        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Code Agent").exists())
+        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Python Agent").exists())
         self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Image Agent").exists())
         skipped_names = {item.get("name") for item in summary.get("skipped_agents", [])}
         self.assertSetEqual(
             skipped_names,
-            {"Nova", "Internet Agent", "Code Agent", "Image Agent"},
+            {"Nova", "Internet Agent", "Python Agent", "Image Agent"},
         )
 
     def test_bootstrap_reuses_existing_image_agent_without_reassigning_provider(self):
         self._apply_provider_capabilities(self.provider, tools="pass")
-        original_image_provider = create_provider(self.user, name="Original Image Provider")
-        better_image_provider = create_provider(self.user, name="Better Image Provider")
+        original_image_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Original Image Provider",
+        )
+        better_image_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Better Image Provider",
+        )
         existing_image_agent = create_agent(
             self.user,
             original_image_provider,

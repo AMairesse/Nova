@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from unittest.mock import Mock
 
 from nova.message_submission import (
     MessageSubmissionError,
@@ -27,14 +28,19 @@ class MessageSubmissionTests(TestCase):
         self.thread = Thread.objects.create(user=self.user, subject="Submission thread")
         provider = create_provider(self.user, name="Submission provider", model="gpt-4o-mini")
         self.agent = create_agent(self.user, provider, name="Submission agent")
+        self.source_message = self.thread.add_message(
+            "Source message",
+            actor=Actor.USER,
+        )
 
     def test_upload_thread_files_passes_uploaded_file_content_type(self):
         captured = {}
 
-        async def fake_uploader(thread, user, file_data):
+        async def fake_uploader(thread, user, file_data, *, source_message=None):
             captured["thread"] = thread
             captured["user"] = user
             captured["file_data"] = file_data
+            captured["source_message"] = source_message
             return ([{"id": 11, "path": "/trace.log"}], [])
 
         async def fake_publish(_thread_id, _reason):
@@ -49,6 +55,7 @@ class MessageSubmissionTests(TestCase):
         file_ids = _upload_thread_files(
             thread=self.thread,
             user=self.user,
+            source_message=self.source_message,
             uploaded_files=[uploaded_file],
             thread_file_uploader=fake_uploader,
             file_update_publisher=fake_publish,
@@ -57,6 +64,7 @@ class MessageSubmissionTests(TestCase):
         self.assertEqual(file_ids, [11])
         self.assertEqual(captured["thread"], self.thread)
         self.assertEqual(captured["user"], self.user)
+        self.assertEqual(captured["source_message"], self.source_message)
         self.assertEqual(captured["file_data"][0]["mime_type"], "text/plain")
         self.assertEqual(captured["file_data"][0]["path"], "/trace.log")
 
@@ -106,3 +114,44 @@ class MessageSubmissionTests(TestCase):
         self.assertFalse(
             self.thread.message_set.filter(id=created_message_id).exists()
         )
+
+    def test_submit_user_message_thread_files_do_not_populate_message_attachments(self):
+        def prepare_context(message_text: str) -> SubmissionContext:
+            return SubmissionContext(
+                thread=self.thread,
+                create_message=lambda text: self.thread.add_message(text, actor=Actor.USER),
+            )
+
+        async def fake_thread_uploader(*_args, **_kwargs):
+            return ([{"id": 21, "path": "/trace.log"}], [])
+
+        async def noop_publish(*_args, **_kwargs):
+            return None
+
+        dispatcher_task = Mock()
+
+        result = submit_user_message(
+            user=self.user,
+            message_text="Please inspect this file",
+            selected_agent=str(self.agent.id),
+            response_mode="auto",
+            thread_mode=Thread.Mode.THREAD,
+            thread_files=[
+                SimpleUploadedFile(
+                    "trace.log",
+                    b"traceback",
+                    content_type="text/plain",
+                )
+            ],
+            message_attachments=[],
+            prepare_context=prepare_context,
+            dispatcher_task=dispatcher_task,
+            thread_file_uploader=fake_thread_uploader,
+            file_update_publisher=noop_publish,
+        )
+
+        payload = result.as_payload()
+
+        dispatcher_task.delay.assert_called_once()
+        self.assertEqual(payload["message"]["file_count"], 1)
+        self.assertEqual(payload["message"]["attachments"], [])

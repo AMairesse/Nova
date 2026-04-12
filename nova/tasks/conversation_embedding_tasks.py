@@ -128,7 +128,7 @@ def compute_transcript_chunk_embedding_task(self, embedding_id: int):
 
 @shared_task(bind=True, name="rebuild_user_conversation_embeddings")
 def rebuild_user_conversation_embeddings_task(self, user_id: int, batch_size: int = 500):
-    # Ensure rows exist for all current conversation artifacts.
+    # Ensure rows exist for all current conversation summaries and transcript chunks.
     from nova.models.DaySegment import DaySegment
     from nova.models.TranscriptChunk import TranscriptChunk
 

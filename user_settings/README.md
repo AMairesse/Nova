@@ -1,90 +1,156 @@
 # Nova - User Settings App
 
-This django app is dedicated to the user settings.
+`user_settings/` is the Django app that configures the current Nova runtime for each user.
 
-It now contains the provider-aware configuration flows for:
-- provider connection setup
-- model discovery/selection
-- capability metadata refresh
-- active verification
-- agent/provider compatibility warnings
+It owns the UI for:
 
-## Project layout
+- providers
+- agents
+- capabilities, connections, and credentials
+- memory settings
+- task definitions and templates
+- API tokens and general preferences
 
-```
-Nova
-├─ user_settings/                           # Dedicated Django app for the user settings
-|  ├─ migrations/                           # Django model migration scripts
-|  ├─ static/                               # Static files
-|  |  └─ user_settings/                     # Static files for the user settings
-|  |     └─ js/                             # JavaScript files
-|  |        ├─ agent.js                     # JavaScript for the agent form page
-|  │        ├─ dashboard_tabs.js            # JavaScript for the dashboard tabs
-|  │        ├─ provider.js                  # JavaScript for the provider page
-|  │        ├─ task_form.js                 # JavaScript for the task form
-|  │        ├─ tool_configure.js            # JavaScript for the tool configuration page
-|  │        └─ tool.js                      # JavaScript for the tool form page
-|  ├─ templates/                            # HTML templates
-|  |  ├─ includes/                          # HTML includes
-|  │  |  └─ pagination.html                 # HTML for pagination
-|  │  └─ user_settings/                     # HTML templates for the user settings
-|  |     ├─ fragments/                      # HTML fragments
-|  │     |  ├─ agent_table.html             # HTML for the agents table
-|  │     │  ├─ general_form.html            # HTML for the general settings form
-|  │     │  ├─ memory_form.html             # HTML for the memory form
-|  │     │  ├─ provider_table.html          # HTML for the providers table
-|  │     │  └─ tool_table.html              # HTML for the tools table
-|  │     ├─ agent_confirm_delete.html       # HTML for the agent deletion confirmation
-|  │     ├─ agent_form.html                 # HTML for the agent form
-|  │     ├─ agent_list.html                 # HTML for the agents page
-|  │     ├─ dashboard.html                  # HTML for the dashboard
-|  │     ├─ general_form.html               # HTML for the general settings form
-|  │     ├─ memory_form.html                # HTML for the memory settings form
-|  │     ├─ provider_confirm_delete.html    # HTML for the provider deletion confirmation
-|  │     ├─ provider_form.html              # HTML for the provider form
-|  │     ├─ provider_list.html              # HTML for the providers page
-|  │     ├─ tool_configure.html             # HTML for the tool configuration page
-|  │     ├─ tool_confirm_delete.html        # HTML for the tool deletion confirmation
-|  │     ├─ tool_form.html                  # HTML for the tool form
-|  │     └─ tool_list.html                  # HTML for the tools page
-|  ├─ views/                                # Python views
-|  │  ├─ agent.py                           # Python view for the agents page
-|  │  ├─ api_token.py                       # Python view for the API token
-|  │  ├─ dashboard.py                       # Python view for the dashboard
-|  │  ├─ general.py                         # Python view for the general settings
-|  │  ├─ memory.py                          # Python view for the memory settings
-|  │  ├─ provider.py                        # Python view for the providers page
-|  │  └─ tool.py                            # Python view for the tools page
-|  ├─ apps.py                               # Django apps
-|  ├─ forms.py                              # Python forms
-|  ├─ mixins.py                             # Django mixins
-|  ├─ README.md                             # This file
-|  └─ urls.py                               # Django URLs
+## Project Layout
+
+```text
+user_settings/
+├─ migrations/
+├─ static/user_settings/js/
+├─ templates/user_settings/
+├─ views/
+├─ forms.py
+├─ mixins.py
+├─ urls.py
+└─ README.md
 ```
 
-## Provider settings behavior
+## Provider Settings
 
-The provider form is now split conceptually into:
-- `Connection`
-- `Model`
-- `Capabilities`
+Provider configuration is split conceptually into:
+
+- connection
+- model
+- capabilities
 
 Key behaviors:
-- `LLMProvider` still stores both provider connection and selected model.
-- `model` may be empty, which means `connection only`.
-- `OpenRouter` and `LMStudio` support live model catalogs.
-- `max_context_tokens` is edited in the model section, even though it is still stored on `LLMProvider`.
-- `Refresh metadata` imports declared capabilities.
-- `Run active verification` probes runtime support for key operations.
 
-The capability state shown in the UI comes from `LLMProvider.capability_profile`.
+- `LLMProvider` stores both provider connection and selected model
+- model discovery is provider-aware when supported
+- metadata refresh imports declared capabilities
+- active verification confirms real runtime behavior
+- UI warnings consume `LLMProvider.capability_profile`
 
-## Agent settings behavior
+## Agent Settings
 
-- Agents now surface compatibility warnings when the selected provider/model is verified without tool support.
-- Simple thread runs may still work in tool-less mode.
-- Continuous mode and agents with tool dependencies require tool-capable providers.
-- Default agent bootstrap is role-aware:
-  - `Nova`, `Internet Agent`, and `Code Agent` use the best available provider with tool support or unknown tool capability
-  - `Image Agent` is bootstrapped separately when a provider has current known image output capability
-  - an existing `Image Agent` is reused rather than silently reassigned to a different provider
+Agent forms let users select:
+
+- one provider/model
+- standard capabilities
+- one backend choice for `Search` and `Python`
+- attached connections
+- delegated sub-agents
+- summarization behavior
+
+Important UX rules:
+
+- agents warn when the selected provider/model is verified without tool support
+- default bootstrap is role-aware
+- the runtime choice is no longer exposed in settings
+
+## Capabilities & Connections
+
+The settings UI is organized around product concepts rather than a flat list of raw tools.
+
+Built-in capabilities:
+
+- `Date / Time`
+- `Browser`
+- `Memory`
+- `WebApp`
+
+These exist by default and are not user-created connections.
+
+Capabilities with backends:
+
+- `Search`
+- `Python`
+
+These can use:
+
+- a deployment-default backend provided by Nova
+- one or more custom user backends
+
+Each agent selects at most one backend per family.
+
+Connections:
+
+- `Email`
+- `Calendar`
+- `WebDAV`
+- `MCP`
+- `API`
+
+These are user-created multi-instance connections.
+
+The add/edit flow is unified in one `Settings` screen.
+
+Connection/auth modes remain:
+
+- `none`
+- `basic`
+- `token` (`Access token` in the UI)
+- `api_key`
+- `oauth_managed` for MCP only
+
+`Tool.is_active` is no longer part of the model. UI readiness is calculated from the
+saved configuration and connection state instead.
+
+### MCP Managed OAuth
+
+For MCP connections that require OAuth:
+
+- select `Managed OAuth`
+- use `Connect with OAuth` / `Reconnect with OAuth`
+- use `Verify connection` once credentials exist
+
+This flow is explicit in the UI and distinct from the manual `Access token` mode.
+
+### API Services
+
+Custom API connections can define multiple `APIToolOperation` rows with:
+
+- method
+- path template
+- query parameters
+- optional body parameter
+- input/output schema
+
+The runtime then exposes them through `api ...` commands.
+
+## Memory Settings
+
+The memory settings page controls:
+
+- embeddings source (`system`, `custom`, `disabled`)
+- custom embeddings endpoint/model values
+- rebuild confirmation when the effective embeddings provider changes
+- document-centric inspection of user memory
+
+Memory is a user-scoped capability shared by agents that have `Memory` enabled. It is
+not configured as a connection.
+
+## Task Settings
+
+Task definitions support:
+
+- `cron`
+- `email_poll`
+
+Run modes:
+
+- `new_thread`
+- `continuous_message`
+- `ephemeral`
+
+Templates are prefilled from current runtime prerequisites, including mailbox selection and `/memory/...` documents used by thematic watch flows.

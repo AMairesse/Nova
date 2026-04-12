@@ -68,10 +68,10 @@ def answer_interaction(request, interaction_id: int):
     from nova.models.Message import MessageType, Actor
     import json as _json
 
-    if isinstance(answer, (dict, list)):
-        answer_text = _json.dumps(answer, ensure_ascii=False)
+    if isinstance(answer, str):
+        answer_text = answer
     else:
-        answer_text = str(answer)
+        answer_text = _json.dumps(answer, ensure_ascii=False)
 
     answer_message_text = f"**Answer:** {answer_text}"
     thread.add_message(answer_message_text, Actor.USER, MessageType.INTERACTION_ANSWER, interaction)

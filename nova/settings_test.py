@@ -45,6 +45,18 @@ CSRF_TRUSTED_ORIGINS = ['http://localhost', 'http://testserver']
 # Ensure DEBUG is False for testing (more realistic)
 DEBUG = False
 
+# Re-apply security settings after overriding DEBUG locally.
+# The base settings compute these values during import time, so a local DEBUG
+# override must also restate the derived flags to keep tests deterministic even
+# when the shell exports DEBUG=True.
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_CONTENT_TYPE_NOSNIFF = not DEBUG
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
 # Override ALLOWED_HOSTS for testing
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from urllib.parse import unquote
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -9,9 +10,8 @@ from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.models.UserObjects import UserProfile
 from nova.tasks.template_registry import (
-    THEMATIC_WATCH_MEMORY_THEME_LANGUAGE,
-    THEMATIC_WATCH_MEMORY_THEME_TOPICS,
-    THEMATIC_WATCH_MEMORY_TYPE,
+    THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
+    THEMATIC_WATCH_MEMORY_PATH_TOPICS,
 )
 from nova.tests.factories import (
     create_agent,
@@ -54,7 +54,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Email Builtin",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         task = TaskDefinition(
             user=self.user,
@@ -120,7 +120,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Other Email",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         form = TaskDefinitionForm(
@@ -148,7 +148,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Email Trigger Tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
 
         form = TaskDefinitionForm(
@@ -181,7 +181,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Email Trigger Tool",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         self.agent.tools.add(selected_email_tool)
 
@@ -333,7 +333,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -353,7 +353,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Delegated Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -381,7 +381,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Delegated Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -434,7 +434,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -468,6 +468,8 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertEqual(form.initial.get("agent"), self.agent.id)
         self.assertEqual(form.initial.get("email_tool"), email_tool.id)
         self.assertEqual(form.initial.get("name"), "Spam filtering - alice@example.com")
+        self.assertIn("mail move --to-special junk", form.initial.get("prompt", ""))
+        self.assertIn("Prefer the listed UIDs", form.initial.get("prompt", ""))
         self.assertTrue(form.fields["email_tool"].disabled)
 
     def test_task_template_select_mailbox_rejects_invalid_selection(self):
@@ -476,7 +478,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -501,7 +503,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Work Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -515,7 +517,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Backup Mail",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="email",
-            python_path="nova.tools.builtins.email",
+            python_path="nova.plugins.mail",
         )
         create_tool_credential(
             self.user,
@@ -563,7 +565,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Add browser and memory tools directly or via sub-agents.",
+            "Use an agent with browser and memory access.",
         )
 
     def test_task_templates_list_marks_thematic_watch_available_with_direct_browser_tool(self):
@@ -572,14 +574,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -589,7 +591,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertNotContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Add browser and memory tools directly or via sub-agents.",
+            "Use an agent with browser and memory access.",
         )
 
     def test_task_templates_list_marks_thematic_watch_available_with_subagent_browser_tool(self):
@@ -598,7 +600,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         sub_agent = create_agent(
             self.user,
@@ -613,7 +615,7 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(memory_tool)
         self.agent.agent_tools.add(sub_agent)
@@ -624,7 +626,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertNotContains(
             response,
             "No selectable agent can both browse the web and access memory. "
-            "Add browser and memory tools directly or via sub-agents.",
+            "Use an agent with browser and memory access.",
         )
 
     def test_task_template_apply_prefills_thematic_watch_weekly(self):
@@ -633,14 +635,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -665,14 +667,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -689,14 +691,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool)
         self.agent.tools.add(memory_tool)
@@ -709,10 +711,10 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertIn(reverse("continuous_home"), response["Location"])
         self.assertNotIn("agent_id=", response["Location"])
         self.assertIn("prefill_message=", response["Location"])
-        self.assertIn("THEMATIC_WATCH_SETUP", response["Location"])
-        self.assertIn(THEMATIC_WATCH_MEMORY_THEME_TOPICS, response["Location"])
-        self.assertIn(THEMATIC_WATCH_MEMORY_THEME_LANGUAGE, response["Location"])
-        self.assertIn(THEMATIC_WATCH_MEMORY_TYPE, response["Location"])
+        decoded_location = unquote(response["Location"])
+        self.assertIn("THEMATIC_WATCH_SETUP", decoded_location)
+        self.assertIn(THEMATIC_WATCH_MEMORY_PATH_TOPICS, decoded_location)
+        self.assertIn(THEMATIC_WATCH_MEMORY_PATH_LANGUAGE, decoded_location)
 
     def test_task_templates_list_disables_guided_setup_when_default_agent_has_no_memory_tool(self):
         browser_tool = create_tool(
@@ -720,14 +722,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 
@@ -752,14 +754,14 @@ class UserSettingsTasksViewsTests(TestCase):
             name="Browser",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="browser",
-            python_path="nova.tools.builtins.browser",
+            python_path="nova.plugins.browser",
         )
         memory_tool = create_tool(
             self.user,
             name="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         self.agent.tools.add(browser_tool, memory_tool)
 

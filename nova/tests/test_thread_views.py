@@ -8,15 +8,15 @@ from django.http import HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import ANY, patch, AsyncMock
 
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.Tool import Tool
+from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserProfile
 from nova.views import thread_views
 
@@ -80,6 +80,7 @@ class MainViewsTests(TestCase):
         self.assertContains(response, 'id="messageContextMenu"')
         self.assertContains(response, 'id="context-menu-execution-details"')
         self.assertContains(response, 'id="context-menu-compact"')
+        self.assertContains(response, 'id="context-menu-delete-after"')
 
     def test_index_exposes_mobile_mode_toggle_and_threads_panel_button(self):
         self.client.login(username="alice", password="pass")
@@ -212,12 +213,7 @@ class MainViewsTests(TestCase):
 
     # ------------ delete_thread -----------------------------------------
 
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_owner_only(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_owner_only(self):
         thread = Thread.objects.create(user=self.user, subject="Del")
 
         # Non-authenticated
@@ -239,12 +235,7 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.json().get("status"), "OK")
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_prevents_deletion_with_running_tasks(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_prevents_deletion_with_running_tasks(self):
         thread = Thread.objects.create(user=self.user, subject="Del")
         # Create a running task for the thread
         Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
@@ -258,12 +249,7 @@ class MainViewsTests(TestCase):
         # Thread should still exist
         self.assertTrue(Thread.objects.filter(id=thread.id).exists())
 
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_allows_deletion_while_awaiting_input(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_allows_deletion_while_awaiting_input(self):
         thread = Thread.objects.create(user=self.user, subject="Awaiting input")
         Task.objects.create(user=self.user, thread=thread, status=TaskStatus.AWAITING_INPUT)
 
@@ -275,12 +261,7 @@ class MainViewsTests(TestCase):
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
 
     @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
-    @patch("nova.signals.get_checkpointer", new_callable=AsyncMock)
-    def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self, mock_get_checkpointer):
-        mock_saver = MagicMock()
-        mock_saver.delete_thread = AsyncMock()
-        mock_get_checkpointer.return_value = mock_saver
-
+    def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self):
         thread = Thread.objects.create(user=self.user, subject="Stale running")
         task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
         Task.objects.filter(id=task.id).update(updated_at=timezone.now() - timedelta(minutes=5))
@@ -445,7 +426,7 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "OK")
-        self.assertEqual(payload["message"]["artifacts"][0]["label"], "photo.jpg")
+        self.assertEqual(payload["message"]["attachments"][0]["label"], "photo.jpg")
         self.assertEqual(payload["message"]["text"], "")
         mocked_publish_update.assert_not_awaited()
 
@@ -655,7 +636,7 @@ class MainViewsTests(TestCase):
             description="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         agent.tools.add(tool)
 
@@ -719,7 +700,7 @@ class MainViewsTests(TestCase):
             description="Memory",
             tool_type=Tool.ToolType.BUILTIN,
             tool_subtype="memory",
-            python_path="nova.tools.builtins.memory",
+            python_path="nova.plugins.memory",
         )
         agent.tools.add(tool)
         thread = Thread.objects.create(user=self.user, subject="Tool-less block")
@@ -871,6 +852,81 @@ class MainViewsTests(TestCase):
         response = self.client.get(reverse("task_execution_trace", args=[foreign_task.id]))
         self.assertEqual(response.status_code, 404)
 
+    def test_execution_trace_endpoint_enriches_files_and_status(self):
+        thread = Thread.objects.create(user=self.user, subject="Trace files")
+        source_message = thread.add_message("Use the attachment", actor=Actor.USER)
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            status=TaskStatus.RUNNING,
+            execution_trace={
+                "version": 2,
+                "summary": {
+                    "has_trace": True,
+                    "status": "running",
+                    "tool_calls": 1,
+                    "subagent_calls": 0,
+                    "interaction_count": 0,
+                    "error_count": 0,
+                    "duration_ms": 1200,
+                    "output_paths": ["/subagents/image-agent-123/flyer.png"],
+                },
+                "root": {
+                    "id": "agent_run_root",
+                    "type": "agent_run",
+                    "status": "running",
+                    "meta": {"source_message_id": source_message.id},
+                    "children": [
+                        {
+                            "id": "tool_1",
+                            "type": "tool",
+                            "label": "delegate_to_agent",
+                            "status": "completed",
+                            "children": [],
+                            "meta": {
+                                "input_paths": ["/inbox/IMG_6433.jpg"],
+                                "output_paths_copied_back": ["/subagents/image-agent-123/flyer.png"],
+                            },
+                        }
+                    ],
+                },
+            },
+        )
+        thread_file = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            key="users/1/threads/1/subagents/image-agent-123/flyer.png",
+            original_filename="/subagents/image-agent-123/flyer.png",
+            mime_type="image/png",
+            size=123,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+        attachment_file = UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=source_message,
+            key="users/1/threads/1/attachments/IMG_6433.jpg",
+            original_filename="/uploads/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=456,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        self.client.login(username="alice", password="pass")
+        response = self.client.get(reverse("task_execution_trace", args=[task.id]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["task_status"], TaskStatus.RUNNING)
+        summary_refs = payload["execution_trace"]["summary"]["resolved_output_files"]
+        self.assertEqual(summary_refs[0]["content_url"], reverse("file_content", args=[thread_file.id]))
+        node_refs = payload["execution_trace"]["root"]["children"][0]["resolved_files"]
+        resolved_paths = {item["path"] for item in node_refs}
+        self.assertIn("/subagents/image-agent-123/flyer.png", resolved_paths)
+        self.assertIn("/inbox/IMG_6433.jpg", resolved_paths)
+        attachment_ref = next(item for item in node_refs if item["path"] == "/inbox/IMG_6433.jpg")
+        self.assertEqual(attachment_ref["content_url"], reverse("file_content", args=[attachment_file.id]))
+
     def test_message_list_renders_execution_link_when_trace_summary_exists(self):
         thread = Thread.objects.create(user=self.user, subject="Execution footer")
         message = thread.add_message("Final answer", actor=Actor.AGENT)
@@ -900,6 +956,7 @@ class MainViewsTests(TestCase):
         self.assertContains(response, 'agent-footer-chip agent-footer-chip-info card-footer-consumption')
         self.assertContains(response, "3 tools")
         self.assertContains(response, "1 sub-agents")
+        self.assertContains(response, 'id="task-progress-trace-btn"')
 
     def test_message_list_renders_execution_link_when_trace_task_exists_even_if_legacy_summary_says_false(self):
         thread = Thread.objects.create(user=self.user, subject="Execution footer compat")
@@ -1015,12 +1072,110 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.json()["status"], "ERROR")
         self.assertIn("Not enough messages to summarize", response.json()["message"])
 
-    @patch("nova.views.thread_views.get_checkpointer")
-    @patch("nova.views.thread_views.LLMAgent.create")
-    def test_summarize_thread_returns_confirmation_when_sub_agents_have_context(
+    @patch("nova.views.thread_views.start_summarization")
+    def test_summarize_thread_starts_compaction_without_confirmation(self, mocked_start):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov Runtime",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Runtime Agent",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=1,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(user=self.user, subject="Compaction")
+        thread.add_message("m1", actor=Actor.USER)
+        thread.add_message("m2", actor=Actor.AGENT)
+        thread.add_message("m3", actor=Actor.USER)
+        mocked_start.return_value = HttpResponse("OK")
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+
+        self.assertEqual(response.status_code, 200)
+        mocked_start.assert_called_once()
+        called_request, called_thread, called_agent, called_include_sub_agents = mocked_start.call_args[0]
+        self.assertEqual(called_request.user, self.user)
+        self.assertEqual(called_thread, thread)
+        self.assertEqual(called_agent, agent)
+        self.assertFalse(called_include_sub_agents)
+
+    def test_summarize_thread_v2_rejects_when_not_enough_unsummarized_messages(self):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov V2 tiny",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="V2 Agent tiny",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=3,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(user=self.user, subject="Few messages V2")
+        thread.add_message("only one", actor=Actor.USER)
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("Not enough messages to summarize", response.json()["message"])
+
+    def test_summarize_thread_v2_rejects_continuous_mode(self):
+        self.client.login(username="alice", password="pass")
+        provider = LLMProvider.objects.create(
+            user=self.user,
+            name="Prov V2 continuous",
+            provider_type=ProviderType.OPENAI,
+            model="gpt-4o-mini",
+            api_key="dummy",
+        )
+        agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Runtime Agent continuous",
+            is_tool=False,
+            system_prompt="x",
+            llm_provider=provider,
+            preserve_recent=1,
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
+        profile.default_agent = agent
+        profile.save(update_fields=["default_agent"])
+        thread = Thread.objects.create(
+            user=self.user,
+            subject="Continuous thread",
+            mode=Thread.Mode.CONTINUOUS,
+        )
+        thread.add_message("m1", actor=Actor.USER)
+        thread.add_message("m2", actor=Actor.AGENT)
+
+        response = self.client.post(reverse("summarize_thread", args=[thread.id]))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertIn("not available in continuous mode", response.json()["message"])
+
+    @patch("nova.views.thread_views.start_summarization")
+    def test_summarize_thread_ignores_legacy_subagent_confirmation(
         self,
-        mocked_create_agent,
-        mocked_get_checkpointer,
+        mocked_start_summarization,
     ):
         self.client.login(username="alice", password="pass")
         provider = LLMProvider.objects.create(
@@ -1053,29 +1208,16 @@ class MainViewsTests(TestCase):
         thread.add_message("m1", actor=Actor.USER)
         thread.add_message("m2", actor=Actor.AGENT)
         thread.add_message("m3", actor=Actor.USER)
-
-        CheckpointLink.objects.create(thread=thread, agent=sub_agent)
-
-        fake_llm = MagicMock()
-        fake_llm.config = {"configurable": {"thread_id": "sub-agent-thread"}}
-        fake_llm.count_tokens = AsyncMock(return_value=123)
-        fake_llm.cleanup = AsyncMock()
-        mocked_create_agent.return_value = fake_llm
-
-        fake_checkpointer = AsyncMock()
-        fake_checkpoint = MagicMock()
-        fake_checkpoint.checkpoint = {"channel_values": {"messages": [1, 2, 3]}}
-        fake_checkpointer.aget_tuple = AsyncMock(return_value=fake_checkpoint)
-        fake_checkpointer.conn.close = AsyncMock()
-        mocked_get_checkpointer.return_value = fake_checkpointer
+        mocked_start_summarization.return_value = HttpResponse("OK")
 
         response = self.client.post(reverse("summarize_thread", args=[thread.id]))
         self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["status"], "CONFIRMATION_NEEDED")
-        self.assertEqual(payload["thread_id"], thread.id)
-        self.assertEqual(len(payload["sub_agents"]), 1)
-        self.assertEqual(payload["sub_agents"][0]["id"], sub_agent.id)
+        mocked_start_summarization.assert_called_once_with(
+            ANY,
+            thread,
+            default_agent,
+            False,
+        )
 
     def test_confirm_summarize_thread_requires_default_agent(self):
         self.client.login(username="alice", password="pass")

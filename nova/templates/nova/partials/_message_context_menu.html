@@ -1,5 +1,5 @@
 {% load i18n %}
-<div class="offcanvas offcanvas-bottom d-lg-none" tabindex="-1" id="messageContextMenu" aria-labelledby="messageContextMenuLabel">
+<div class="offcanvas offcanvas-bottom" tabindex="-1" id="messageContextMenu" aria-labelledby="messageContextMenuLabel">
   <div class="offcanvas-header py-2 border-bottom">
     <h6 class="offcanvas-title" id="messageContextMenuLabel">{% trans "Message Options" %}</h6>
     <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="{% trans 'Close' %}"></button>
@@ -23,6 +23,10 @@
       <button type="button" class="action-sheet-btn d-none" id="context-menu-compact">
         <i class="bi bi-compress"></i>
         {% trans "Compact" %}
+      </button>
+      <button type="button" class="action-sheet-btn text-danger d-none" id="context-menu-delete-after">
+        <i class="bi bi-trash3"></i>
+        {% trans "Delete messages after this" %}
       </button>
       <button type="button" class="action-sheet-btn" id="context-menu-copy">
         <i class="bi bi-clipboard"></i>

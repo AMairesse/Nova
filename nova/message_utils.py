@@ -6,19 +6,17 @@ from nova.file_utils import (
     batch_upload_files,
     build_message_attachment_path,
 )
-from nova.message_artifacts import (
-    build_message_artifact_manifest,
-    detect_artifact_kind,
-    normalize_message_artifacts,
-)
 from nova.message_attachments import (
+    build_message_attachment_manifest_from_user_file,
+    build_attachment_label,
+    detect_attachment_kind,
     format_message_attachment_size_label,
     get_message_attachment_max_audio_size_bytes,
     get_message_attachment_max_document_size_bytes,
     get_message_attachment_max_files,
     get_message_attachment_max_image_size_bytes,
+    normalize_message_attachments,
 )
-from nova.models.MessageArtifact import ArtifactDirection, MessageArtifact
 from nova.models.UserFile import UserFile
 
 
@@ -35,7 +33,7 @@ def upload_message_attachments(thread, user, message, uploaded_files) -> tuple[l
     file_data = []
     max_upload_size = 0
     for uploaded_file in uploaded_files:
-        guessed_kind = detect_artifact_kind(
+        guessed_kind = detect_attachment_kind(
             getattr(uploaded_file, "content_type", None),
             getattr(uploaded_file, "name", None),
         )
@@ -77,17 +75,17 @@ def upload_message_attachments(thread, user, message, uploaded_files) -> tuple[l
         allowed_mime_types=["application/pdf"],
         allowed_mime_prefixes=("image/", "audio/"),
     )
-    created_artifacts = _create_message_artifacts_for_uploaded_files(
+    created_attachments = _build_attachment_manifests_for_uploaded_files(
         message,
         created_files,
     )
     return [
-        build_message_artifact_manifest(artifact)
-        for artifact in created_artifacts
+        dict(attachment)
+        for attachment in created_attachments
     ], errors
 
 
-def _create_message_artifacts_for_uploaded_files(message, created_files: list[dict]) -> list[MessageArtifact]:
+def _build_attachment_manifests_for_uploaded_files(message, created_files: list[dict]) -> list[dict]:
     file_ids = []
     for item in created_files:
         try:
@@ -108,7 +106,7 @@ def _create_message_artifacts_for_uploaded_files(message, created_files: list[di
         )
     }
 
-    artifacts_to_create = []
+    attachments = []
     for index, item in enumerate(created_files):
         try:
             file_id = int(item.get("id"))
@@ -119,32 +117,18 @@ def _create_message_artifacts_for_uploaded_files(message, created_files: list[di
         if user_file is None:
             continue
 
-        artifacts_to_create.append(
-            MessageArtifact(
-                user=message.user,
-                thread=message.thread,
-                message=message,
-                user_file=user_file,
-                direction=ArtifactDirection.INPUT,
-                kind=detect_artifact_kind(user_file.mime_type, user_file.original_filename),
-                mime_type=user_file.mime_type or "",
-                label=user_file.original_filename.rsplit("/", 1)[-1],
-                search_text=user_file.original_filename.rsplit("/", 1)[-1],
-                order=index,
+        attachments.append(
+            build_message_attachment_manifest_from_user_file(
+                user_file,
+                kind=detect_attachment_kind(
+                    user_file.mime_type,
+                    user_file.original_filename,
+                ),
+                label=build_attachment_label(user_file, fallback=f"attachment-{index + 1}"),
                 metadata={"source": "message_attachment"},
             )
         )
-
-    MessageArtifact.objects.bulk_create(artifacts_to_create)
-    return list(
-        MessageArtifact.objects.select_related("user_file")
-        .filter(
-            message=message,
-            direction=ArtifactDirection.INPUT,
-            user_file_id__in=file_ids,
-        )
-        .order_by("order", "created_at", "id")
-    )
+    return attachments
 
 
 def annotate_user_message(message) -> None:
@@ -155,40 +139,36 @@ def annotate_user_message(message) -> None:
     else:
         message.file_count = 0
 
-    artifact_manifests: list[dict] = []
-    prefetched_artifacts = None
-    prefetched_cache = getattr(message, "_prefetched_objects_cache", None)
-    if isinstance(prefetched_cache, dict):
-        prefetched_artifacts = prefetched_cache.get("artifacts")
+    attachment_manifests: list[dict] = []
+    prefetched_files = getattr(message, "prefetched_message_attachments", None)
 
-    if prefetched_artifacts is not None:
+    if prefetched_files is not None:
         try:
-            ordered_artifacts = sorted(
-                prefetched_artifacts,
-                key=lambda artifact: (
-                    str(getattr(artifact, "direction", "") or ""),
-                    int(getattr(artifact, "order", 0) or 0),
-                    getattr(artifact, "created_at", None),
-                    int(getattr(artifact, "id", 0) or 0),
+            ordered_files = sorted(
+                prefetched_files,
+                key=lambda user_file: (
+                    getattr(user_file, "created_at", None),
+                    int(getattr(user_file, "id", 0) or 0),
                 ),
             )
-            artifact_manifests = [
-                build_message_artifact_manifest(artifact)
-                for artifact in ordered_artifacts
+            attachment_manifests = [
+                build_message_attachment_manifest_from_user_file(user_file)
+                for user_file in ordered_files
             ]
         except Exception:
-            artifact_manifests = []
+            attachment_manifests = []
     else:
-        related_artifacts = getattr(message, "artifacts", None)
-        if related_artifacts is not None:
+        related_files = getattr(message, "attached_files", None)
+        if related_files is not None:
             try:
-                artifact_manifests = [
-                    build_message_artifact_manifest(artifact)
-                    for artifact in related_artifacts.select_related("user_file").order_by("direction", "order",
-                                                                                           "created_at", "id")
+                attachment_manifests = [
+                    build_message_attachment_manifest_from_user_file(user_file)
+                    for user_file in related_files.filter(
+                        scope=UserFile.Scope.MESSAGE_ATTACHMENT
+                    ).order_by("created_at", "id")
                 ]
             except Exception:
-                artifact_manifests = []
+                attachment_manifests = []
 
-    message.message_artifacts = normalize_message_artifacts(artifact_manifests)
-    message.message_attachment_count = len(message.message_artifacts)
+    message.message_attachments = normalize_message_attachments(attachment_manifests)
+    message.message_attachment_count = len(message.message_attachments)

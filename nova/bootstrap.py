@@ -5,9 +5,15 @@ from typing import List, Dict, Optional, Tuple
 from django.db import transaction
 from django.db.models import Q
 
+from nova.plugins.catalog import (
+    ensure_capability_tooling,
+    get_preferred_backend_tool,
+    get_standard_capability_tools,
+)
+from nova.providers.registry import provider_supports_native_response_mode
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
-from nova.models.Tool import Tool, ToolCredential, check_and_create_searxng_tool, check_and_create_judge0_tool
+from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserProfile
 
 logger = logging.getLogger(__name__)
@@ -107,6 +113,8 @@ def select_bootstrap_image_provider(user) -> Optional[LLMProvider]:
         image_generation_status = provider.get_known_capability_status("image_generation") or ""
         if image_output_status != "pass" and image_generation_status != "pass":
             continue
+        if not provider_supports_native_response_mode(provider, AgentConfig.DefaultResponseMode.IMAGE):
+            continue
 
         image_input_status = provider.known_image_input_status
         candidates.append(
@@ -128,6 +136,65 @@ def select_bootstrap_image_provider(user) -> Optional[LLMProvider]:
 def _skip_agents(summary: BootstrapSummary, names: List[str], reason: str) -> None:
     for name in names:
         summary.skipped_agents.append({"name": name, "reason": reason})
+
+
+def _rename_legacy_agent(
+    user,
+    *,
+    old_name: str,
+    new_name: str,
+    summary: BootstrapSummary,
+) -> Optional[AgentConfig]:
+    legacy = AgentConfig.objects.filter(user=user, name=old_name).first()
+    if legacy is None:
+        return None
+    if AgentConfig.objects.filter(user=user, name=new_name).exists():
+        return None
+    legacy.name = new_name
+    legacy.save(update_fields=["name"])
+    summary.notes.append(f"Renamed '{old_name}' to '{new_name}'.")
+    if new_name not in summary.updated_agents:
+        summary.updated_agents.append(new_name)
+    return legacy
+
+
+def _sync_bootstrap_agent_copy(
+    agent: AgentConfig,
+    *,
+    name: str,
+    summary: BootstrapSummary,
+    system_prompt: str | None = None,
+    tool_description: str | None = None,
+    force: bool = False,
+    prompt_markers: tuple[str, ...] = (),
+    description_markers: tuple[str, ...] = (),
+) -> None:
+    changed = False
+
+    current_prompt = str(agent.system_prompt or "")
+    should_update_prompt = bool(system_prompt) and (
+        force
+        or not current_prompt.strip()
+        or any(marker in current_prompt for marker in prompt_markers)
+    )
+    if should_update_prompt and current_prompt != system_prompt:
+        agent.system_prompt = str(system_prompt or "")
+        changed = True
+
+    current_description = str(agent.tool_description or "")
+    should_update_description = bool(tool_description) and (
+        force
+        or not current_description.strip()
+        or any(marker in current_description for marker in description_markers)
+    )
+    if should_update_description and current_description != tool_description:
+        agent.tool_description = str(tool_description or "")
+        changed = True
+
+    if changed:
+        agent.save(update_fields=["system_prompt", "tool_description"])
+        if name not in summary.updated_agents:
+            summary.updated_agents.append(name)
 
 
 # --------------------------------------------------------------------------- #
@@ -210,12 +277,10 @@ def _get_or_create_builtin_tool(
     # 2) Create
     owner = None if system_only else user
 
-    # Resolve builtin metadata to set python_path and schemas when available
-    from nova.tools import get_tool_type  # Local import to avoid circulars at module import time
+    # Resolve builtin metadata to set python_path when available
+    from nova.plugins.builtins import get_tool_type  # Local import to avoid circulars at module import time
     metadata = get_tool_type(subtype) or {}
     python_path = metadata.get("python_path", "") or ""
-    input_schema = metadata.get("input_schema", {})
-    output_schema = metadata.get("output_schema", {})
 
     tool = Tool.objects.create(
         user=owner,
@@ -224,8 +289,6 @@ def _get_or_create_builtin_tool(
         tool_type=Tool.ToolType.BUILTIN,
         tool_subtype=subtype,
         python_path=python_path,
-        input_schema=input_schema,
-        output_schema=output_schema,
     )
     summary.created_tools.append(tool.name)
     return tool
@@ -234,68 +297,34 @@ def _get_or_create_builtin_tool(
 def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
     Ensure the baseline builtin tools exist:
-    - ask_user, date, memory, browser, webapp
+    - date, memory, browser
     - plus discover SearXNG and Judge0 when available
 
     Returns a dict mapping logical names to Tool instances.
     """
     tools: Dict[str, Tool] = {}
 
-    # Ask user
-    tools["ask_user"] = _get_or_create_builtin_tool(
-        user,
-        subtype="ask_user",
-        name="Ask user",
-        description="Ask the human user for additional input or confirmation.",
-        summary=summary,
-    )
+    ensure_capability_tooling()
 
-    # Date / Time
-    tools["date_time"] = _get_or_create_builtin_tool(
-        user,
-        subtype="date",
-        name="Date / Time",
-        description="Access current date and time utilities.",
-        summary=summary,
-    )
+    standard_tools = {
+        tool.tool_subtype: tool
+        for tool in get_standard_capability_tools()
+    }
+    tools["date_time"] = standard_tools.get("date")
+    tools["memory"] = standard_tools.get("memory")
+    tools["browser"] = standard_tools.get("browser")
+    tools["webapp"] = standard_tools.get("webapp")
 
-    # Memory
-    tools["memory"] = _get_or_create_builtin_tool(
-        user,
-        subtype="memory",
-        name="Memory",
-        description="Store and retrieve long-term memory for this workspace.",
-        summary=summary,
-    )
+    for key in ("date_time", "memory", "browser", "webapp"):
+        tool = tools.get(key)
+        if tool:
+            summary.reused_tools.append(tool.name)
 
-    # Browser
-    tools["browser"] = _get_or_create_builtin_tool(
-        user,
-        subtype="browser",
-        name="Browser",
-        description="Navigate and fetch content from the web.",
-        summary=summary,
-    )
-
-    # WebApp (builtin, if registered)
-    tools["webapp"] = _get_or_create_builtin_tool(
-        user,
-        subtype="webapp",
-        name="WebApp",
-        description="Create and serve per-thread web applications.",
-        summary=summary,
-    )
-
-    # SearXNG and Judge0 system tools handled via existing helpers
-    check_and_create_searxng_tool()
-    check_and_create_judge0_tool()
-
-    # Re-fetch system SearXNG and Judge0 (if available)
-    tools["searxng"] = _find_tool("searxng", user, require_user_cred=False)
+    tools["searxng"] = get_preferred_backend_tool(user, "searxng")
     if tools["searxng"]:
         summary.reused_tools.append(tools["searxng"].name)
 
-    tools["judge0"] = _find_tool("code_execution", user, require_user_cred=False)
+    tools["judge0"] = get_preferred_backend_tool(user, "code_execution")
     if tools["judge0"]:
         summary.reused_tools.append(tools["judge0"].name)
 
@@ -345,6 +374,7 @@ def _ensure_agent(
     special_tools: Optional[List[Tool]] = None,
     sub_agents: Optional[List[AgentConfig]] = None,
     set_as_default: bool = False,
+    default_response_mode: str = AgentConfig.DefaultResponseMode.TEXT,
 ) -> Optional[AgentConfig]:
     """
     Generic function to ensure an agent exists with proper configuration.
@@ -370,6 +400,7 @@ def _ensure_agent(
             "recursion_limit": recursion_limit,
             "is_tool": is_tool,
             "tool_description": tool_description,
+            "default_response_mode": default_response_mode,
         },
     )
     if created and name not in summary.created_agents:
@@ -393,6 +424,10 @@ def _ensure_agent(
 
     if agent.recursion_limit < recursion_limit:
         agent.recursion_limit = recursion_limit
+        changed = True
+
+    if agent.default_response_mode != default_response_mode:
+        agent.default_response_mode = default_response_mode
         changed = True
 
     if changed:
@@ -449,42 +484,73 @@ def ensure_internet_agent(user, provider, tools: Dict[str, Tool], summary: Boots
         recursion_limit=100,
         is_tool=True,
         tool_description="Use this agent to retrieve information from the internet.",
+        default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
 
 
-def ensure_code_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
-    return _ensure_agent(
+def ensure_python_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
+    renamed_agent = _rename_legacy_agent(
+        user,
+        old_name="Code Agent",
+        new_name="Python Agent",
+        summary=summary,
+    )
+    system_prompt = (
+        "You are an AI Agent specialized in sandboxed Python and self-contained coding tasks. "
+        "Your `python` capability runs through Judge0 in an isolated execution environment. "
+        "Use it for calculations, data processing, small programs, and code generation that do "
+        "not need to modify the parent Nova filesystem. Do not claim to have changed the parent "
+        "thread files or directories, and do not claim to have published or repaired a webapp. "
+        "If the parent needs reusable outputs, write them as normal files in your persistent `/` "
+        "workspace so they can be copied back; do not rely on `/tmp` for outputs that must return. "
+        "Use only the standard library available in the execution environment, print results clearly, "
+        "and if execution fails, fix the code iteratively with concise explanations."
+    )
+    tool_description = (
+        "Use this agent for sandboxed Python/code tasks only; isolated workspace; "
+        "no parent filesystem changes or webapp publishing."
+    )
+    agent = _ensure_agent(
         user=user,
         provider=provider,
         tools=tools,
         summary=summary,
-        name="Code Agent",
+        name="Python Agent",
         required_tools=["judge0"],
-        system_prompt=(
-            "You are an AI Agent specialized in coding. Use the code execution tools to write "
-            "and run the smallest correct program that solves the task. Follow these rules "
-            "strictly: DO NOT access local files or the filesystem directly; ALWAYS use "
-            "provided file-url tools when you need file content; use only the standard "
-            "library available in the execution environment; print results clearly so they "
-            "can be captured; if execution fails, fix the code iteratively and briefly "
-            "explain what changed; focus on working code and concise explanations."
-        ),
+        system_prompt=system_prompt,
         recursion_limit=25,
         is_tool=True,
-        tool_description=(
-            "Use this agent to create and execute code or process data using sandboxed runtimes."
-        ),
+        tool_description=tool_description,
+        default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
+    if agent is not None:
+        _sync_bootstrap_agent_copy(
+            agent,
+            name="Python Agent",
+            summary=summary,
+            system_prompt=system_prompt,
+            tool_description=tool_description,
+            force=renamed_agent is not None,
+            prompt_markers=(
+                "specialized in coding",
+                "provided file-url tools",
+            ),
+            description_markers=(
+                "sandboxed runtimes",
+            ),
+        )
+    return agent
 
 
 def _build_image_agent_prompt(provider: LLMProvider) -> str:
     if provider.known_image_input_status == "pass":
         return (
             "You are an AI Agent specialized in creating and modifying images. "
-            "Generate images from text instructions and transform optional image artifacts "
+            "Generate images from text instructions and transform optional attached images "
             "when they are provided. When editing, preserve the user's intent and explain "
             "briefly what changed. If a request is ambiguous, choose the smallest useful "
-            "change set that satisfies the instruction."
+            "change set that satisfies the instruction. Only claim to have used a reference "
+            "image when it is actually available in `/inbox`."
         )
 
     return (
@@ -492,7 +558,7 @@ def _build_image_agent_prompt(provider: LLMProvider) -> str:
         "When the user provides an existing image, use it only as descriptive context if direct "
         "image editing is not supported by your model. In that case, state the limitation briefly "
         "and generate a new image variant based on the user's description instead of pretending to "
-        "have modified the original."
+        "have modified the original. If a requested reference image is missing from `/inbox`, say so."
     )
 
 
@@ -504,10 +570,16 @@ def ensure_image_agent(
 ) -> Optional[AgentConfig]:
     existing = AgentConfig.objects.filter(user=user, name="Image Agent").first()
     selected_provider = existing.llm_provider if existing else provider
-    if selected_provider is None:
+    if (
+        selected_provider is None
+        or not provider_supports_native_response_mode(
+            selected_provider,
+            AgentConfig.DefaultResponseMode.IMAGE,
+        )
+    ):
         summary.skipped_agents.append({
             "name": "Image Agent",
-            "reason": "No image-capable provider with current capabilities is available.",
+            "reason": "No provider with native image output support is available.",
         })
         return None
 
@@ -523,9 +595,10 @@ def ensure_image_agent(
         is_tool=True,
         tool_description=(
             "Use this agent to generate or transform images from text instructions and optional media inputs. "
-            "Pass file_ids only for thread file IDs returned by file_ls. "
-            "Pass artifact_ids only for conversation artifact IDs returned by artifact_ls or artifact_search."
+            "When you pass files into the delegated task, read them from `/inbox`, and if a requested reference file "
+            "is missing there, say so instead of claiming it was used."
         ),
+        default_response_mode=AgentConfig.DefaultResponseMode.IMAGE,
     )
 
 
@@ -549,12 +622,13 @@ def ensure_nova_agent(
         "language and reply in Markdown. Only call tools or sub‑agents when clearly needed. If "
         "you can read/store user data, persist relevant information and consult it before replying; "
         "only retrieve themes relevant to the current query (e.g., check stored location when asked the time). "
-        "Never invent a file_id or artifact_id. Use file_ls to discover thread file IDs. "
-        "Use artifact_ls or artifact_search to discover conversation artifact IDs. "
-        "When a query clearly belongs to a specialized agent (internet, code), delegate "
-        "to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. "
+        "Never invent file identifiers. Inspect the filesystem or memory directly when you need concrete paths. "
+        "Keep thread-scoped filesystem work, cleanup, and live webapp publication in your own terminal session. "
+        "Delegate only focused self-contained tasks to specialized sub-agents: internet research to the Internet Agent, "
+        "and isolated Python/code computation to the Python Agent when the task does not need direct ownership of the "
+        "thread filesystem or webapp lifecycle. Use skills/tools directly for mail and calendar tasks. "
         f"{'Delegate image generation or image transformation requests to the Image Agent when appropriate. ' if has_image_agent else ''}"
-        "Current date and time is {today}"
+        "Use the date/time capability when the current date or time matters."
     )
 
     nova_agent = _ensure_agent(
@@ -563,27 +637,37 @@ def ensure_nova_agent(
         tools=tools,
         summary=summary,
         name="Nova",
-        required_tools=["ask_user", "memory", "date_time"],
+        required_tools=["memory", "date_time"],
+        extra_tools=["webapp"],
         system_prompt=nova_prompt,
         recursion_limit=25,
         is_tool=False,
-        extra_tools=["webapp"],
         special_tools=special_tools,
         sub_agents=sub_agents,
         set_as_default=True,
+        default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
     if not nova_agent:
         return None
+    _sync_bootstrap_agent_copy(
+        nova_agent,
+        name="Nova",
+        summary=summary,
+        system_prompt=nova_prompt,
+        prompt_markers=(
+            "query clearly belongs to a specialized agent (internet, code)",
+        ),
+    )
 
-    legacy_sub_agents = list(
+    detached_tool_agents = list(
         nova_agent.agent_tools.filter(
             name__in=["Calendar Agent", "Email Agent"],
         )
     )
-    if legacy_sub_agents:
-        nova_agent.agent_tools.remove(*legacy_sub_agents)
-        detached = ", ".join(sorted({agent.name for agent in legacy_sub_agents}))
-        summary.notes.append(f"Detached legacy sub-agents from Nova: {detached}.")
+    if detached_tool_agents:
+        nova_agent.agent_tools.remove(*detached_tool_agents)
+        detached = ", ".join(sorted({agent.name for agent in detached_tool_agents}))
+        summary.notes.append(f"Detached deprecated tool-agents from Nova: {detached}.")
         if (
             nova_agent.name not in summary.created_agents
             and nova_agent.name not in summary.updated_agents
@@ -622,7 +706,7 @@ def bootstrap_default_setup(user) -> Dict:
         reason = (
             "No provider with tool support (or unknown tool capability) is available for the default Nova agents."
         )
-        _skip_agents(summary, ["Internet Agent", "Code Agent", "Nova", "Image Agent"], reason)
+        _skip_agents(summary, ["Internet Agent", "Python Agent", "Nova", "Image Agent"], reason)
         logger.info(
             "[bootstrap_default_setup] Skipped default agents for user %s because no suitable main provider was found.",
             user.id,
@@ -630,7 +714,7 @@ def bootstrap_default_setup(user) -> Dict:
         return summary.as_dict()
 
     internet_agent = ensure_internet_agent(user, main_provider, tools, summary)
-    code_agent = ensure_code_agent(user, main_provider, tools, summary)
+    code_agent = ensure_python_agent(user, main_provider, tools, summary)
     image_provider = select_bootstrap_image_provider(user)
     image_agent = ensure_image_agent(user, image_provider, tools, summary)
     mail_tools = _find_tools("email", user, require_user_cred=True)

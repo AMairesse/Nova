@@ -60,7 +60,6 @@ class GeneralSettingsViewTest(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/general_form.html")
-        self.assertContains(response, "Langfuse Configuration")
         self.assertContains(response, "Continuous mode")
         self.assertContains(response, "Task notifications")
         self.assertContains(response, "API Token Management")
@@ -68,10 +67,6 @@ class GeneralSettingsViewTest(TestCase):
     @override_settings(WEBPUSH_ENABLED=False)
     def test_update_general_settings_form_htmx_refreshes_fragment(self):
         payload = {
-            "allow_langfuse": "on",
-            "langfuse_public_key": "pk_test",
-            "langfuse_secret_key": "sk_test",
-            "langfuse_host": "https://langfuse.example.com",
             "continuous_default_messages_limit": "75",
             "task_notifications_enabled": "on",
             "api_token_status": "",
@@ -83,12 +78,6 @@ class GeneralSettingsViewTest(TestCase):
         self.assertEqual(response.headers.get("HX-Refresh"), "true")
 
         self.user_parameters.refresh_from_db()
-        self.assertTrue(self.user_parameters.allow_langfuse)
-        self.assertEqual(self.user_parameters.langfuse_public_key, "pk_test")
-        self.assertEqual(self.user_parameters.langfuse_secret_key, "sk_test")
-        self.assertEqual(
-            self.user_parameters.langfuse_host, "https://langfuse.example.com"
-        )
         self.assertEqual(self.user_parameters.continuous_default_messages_limit, 75)
         # Server-side push is disabled by default in tests, so opt-in must stay false.
         self.assertFalse(self.user_parameters.task_notifications_enabled)
@@ -115,10 +104,6 @@ class GeneralSettingsViewTest(TestCase):
         self.user_parameters.save(update_fields=["task_notifications_enabled"])
 
         payload = {
-            "allow_langfuse": "",
-            "langfuse_public_key": "",
-            "langfuse_secret_key": "",
-            "langfuse_host": "",
             "continuous_default_messages_limit": "60",
             "task_notifications_enabled": "",
             "api_token_status": "",
@@ -130,6 +115,24 @@ class GeneralSettingsViewTest(TestCase):
 
         self.user_parameters.refresh_from_db()
         self.assertTrue(self.user_parameters.task_notifications_enabled)
+
+    def test_update_general_settings_form_invalid_messages_limit_returns_errors(self):
+        payload = {
+            "continuous_default_messages_limit": str(
+                UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN - 1
+            ),
+            "api_token_status": "",
+        }
+        response = self.client.post(
+            self.partial_url, payload, HTTP_HX_REQUEST="true"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            f"Choose at least {UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN} messages.",
+            status_code=200,
+        )
 
     @override_settings(
         WEBPUSH_ENABLED=True,
@@ -146,43 +149,6 @@ class GeneralSettingsViewTest(TestCase):
         self.assertNotRegex(
             response.content.decode(),
             r'id="task-notifications-enable-device-btn"[^>]*disabled',
-        )
-
-    def test_update_general_settings_form_invalid_host_returns_errors(self):
-        payload = {
-            "allow_langfuse": "",
-            "langfuse_public_key": "",
-            "langfuse_secret_key": "",
-            "langfuse_host": "not-a-valid-url",
-            "continuous_default_messages_limit": "40",
-            "api_token_status": "",
-        }
-        response = self.client.post(
-            self.partial_url, payload, HTTP_HX_REQUEST="true"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Enter a valid URL", status_code=200)
-
-    def test_update_general_settings_form_invalid_messages_limit_returns_errors(self):
-        payload = {
-            "allow_langfuse": "",
-            "langfuse_public_key": "",
-            "langfuse_secret_key": "",
-            "langfuse_host": "",
-            "continuous_default_messages_limit": str(
-                UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN - 1
-            ),
-            "api_token_status": "",
-        }
-        response = self.client.post(
-            self.partial_url, payload, HTTP_HX_REQUEST="true"
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(
-            response,
-            f"Choose at least {UserParameters.CONTINUOUS_DEFAULT_MESSAGES_LIMIT_MIN} messages.",
-            status_code=200,
         )
 
     def test_password_change_success_htmx(self):

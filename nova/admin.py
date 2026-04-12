@@ -2,24 +2,26 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
-from nova.models.CheckpointLink import CheckpointLink
 from nova.models.ConversationEmbedding import DaySegmentEmbedding, TranscriptChunkEmbedding
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction
-from nova.models.Memory import MemoryTheme, MemoryItem, MemoryItemEmbedding
-from nova.models.MessageArtifact import MessageArtifact
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.MemoryDirectory import MemoryDirectory
+from nova.models.MemoryDocument import MemoryDocument
 from nova.models.Message import Message
 from nova.models.Provider import LLMProvider
 from nova.models.Task import Task
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
+from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetric
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.TranscriptChunk import TranscriptChunk
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.WebApp import WebApp
-from nova.models.WebAppFile import WebAppFile
 
 
 admin.site.site_header = "Nova Admin"
@@ -28,12 +30,6 @@ admin.site.site_header = "Nova Admin"
 class FilesInline(admin.TabularInline):
     model = UserFile
     verbose_name_plural = "files"
-    extra = 0
-
-
-class ArtifactsInline(admin.TabularInline):
-    model = MessageArtifact
-    verbose_name_plural = "artifacts"
     extra = 0
 
 
@@ -53,12 +49,6 @@ class TranscriptChunksInline(admin.TabularInline):
     readonly_fields = ("updated_at",)
 
 
-class CheckpointLinksInline(admin.TabularInline):
-    model = CheckpointLink
-    verbose_name_plural = "Checkpoint Links"
-    extra = 0
-
-
 class DaySegmentEmbeddingInline(admin.StackedInline):
     model = DaySegmentEmbedding
     extra = 0
@@ -74,10 +64,17 @@ class TranscriptChunkEmbeddingInline(admin.StackedInline):
 
 
 class MemoryEmbeddingInline(admin.StackedInline):
-    model = MemoryItemEmbedding
+    model = MemoryChunkEmbedding
     extra = 0
     can_delete = False
     readonly_fields = ("provider_type", "model", "dimensions", "state", "error", "created_at", "updated_at")
+
+
+class MemoryChunkInline(admin.TabularInline):
+    model = MemoryChunk
+    extra = 0
+    fields = ("position", "heading", "anchor", "token_count", "status", "updated_at")
+    readonly_fields = ("updated_at",)
 
 
 @admin.register(Thread)
@@ -86,7 +83,7 @@ class ThreadAdmin(admin.ModelAdmin):
     list_filter = ("mode", "created_at")
     search_fields = ("subject", "user__username", "user__email")
     ordering = ("-created_at",)
-    inlines = [FilesInline, ArtifactsInline, CheckpointLinksInline, DaySegmentsInline, TranscriptChunksInline]
+    inlines = [FilesInline, DaySegmentsInline, TranscriptChunksInline]
 
 
 @admin.register(LLMProvider)
@@ -105,51 +102,6 @@ class LLMProviderAdmin(admin.ModelAdmin):
               'additional_config', 'max_context_tokens', 'validation_status',
               'probe_checked_at', 'metadata_checked_at', 'validated_fingerprint',
               'capability_profile', 'user')
-
-
-@admin.register(MessageArtifact)
-class MessageArtifactAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "thread",
-        "message",
-        "direction",
-        "kind",
-        "label",
-        "user_file",
-        "published_file",
-        "source_artifact",
-        "is_currently_published_to_file",
-        "created_at",
-    )
-    list_filter = ("direction", "kind", "created_at")
-    search_fields = ("label", "summary_text", "search_text", "message__text", "user_file__original_filename")
-    readonly_fields = ("created_at", "updated_at")
-    fields = (
-        "user",
-        "thread",
-        "message",
-        "direction",
-        "kind",
-        "label",
-        "mime_type",
-        "user_file",
-        "published_file",
-        "source_artifact",
-        "summary_text",
-        "search_text",
-        "provider_type",
-        "model",
-        "provider_fingerprint",
-        "order",
-        "metadata",
-        "created_at",
-        "updated_at",
-    )
-
-    @admin.display(boolean=True, description="Published")
-    def is_currently_published_to_file(self, obj):
-        return obj.is_currently_published_to_file
 
 
 @admin.register(AgentConfig)
@@ -223,27 +175,77 @@ class TranscriptChunkEmbeddingAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
-@admin.register(MemoryTheme)
-class MemoryThemeAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "slug", "display_name", "updated_at")
-    search_fields = ("user__username", "slug", "display_name")
-    ordering = ("user", "slug")
+@admin.register(MemoryDirectory)
+class MemoryDirectoryAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "virtual_path", "status", "updated_at")
+    list_filter = ("status", "updated_at")
+    search_fields = ("user__username", "virtual_path")
+    ordering = ("user", "virtual_path")
 
 
-@admin.register(MemoryItem)
-class MemoryItemAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "theme", "type", "status", "created_at", "updated_at")
-    list_filter = ("type", "status", "created_at")
-    search_fields = ("user__username", "content")
+@admin.register(MemoryDocument)
+class MemoryDocumentAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "virtual_path", "status", "created_at", "updated_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("user__username", "virtual_path", "title", "content_markdown")
     ordering = ("-updated_at",)
+    inlines = [MemoryChunkInline]
+
+
+@admin.register(MemoryChunk)
+class MemoryChunkAdmin(admin.ModelAdmin):
+    list_display = ("id", "document", "position", "heading", "status", "updated_at")
+    list_filter = ("status", "updated_at")
+    search_fields = ("document__virtual_path", "heading", "content_text")
+    ordering = ("document", "position")
     inlines = [MemoryEmbeddingInline]
 
 
-@admin.register(MemoryItemEmbedding)
-class MemoryItemEmbeddingAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "item", "state", "provider_type", "model", "dimensions", "updated_at")
+@admin.register(TerminalCommandFailureMetric)
+class TerminalCommandFailureMetricAdmin(admin.ModelAdmin):
+    list_display = (
+        "bucket_date",
+        "head_command",
+        "failure_kind",
+        "count",
+        "last_seen_at",
+    )
+    list_filter = ("bucket_date", "failure_kind", "last_seen_at")
+    search_fields = ("head_command", "last_error")
+    ordering = ("-bucket_date", "-last_seen_at", "head_command", "failure_kind")
+    readonly_fields = (
+        "bucket_date",
+        "head_command",
+        "failure_kind",
+        "count",
+        "last_seen_at",
+        "recent_examples_preview",
+        "last_error",
+        "created_at",
+        "updated_at",
+    )
+    fields = readonly_fields
+
+    @admin.display(description="Recent examples")
+    def recent_examples_preview(self, obj):
+        items = [str(item).strip() for item in list(obj.recent_examples or []) if str(item).strip()]
+        return "\n".join(items) or "-"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(MemoryChunkEmbedding)
+class MemoryChunkEmbeddingAdmin(admin.ModelAdmin):
+    list_display = ("id", "chunk", "state", "provider_type", "model", "dimensions", "updated_at")
     list_filter = ("state", "provider_type", "updated_at")
-    search_fields = ("user__username", "item__content", "model", "error")
+    search_fields = ("chunk__document__virtual_path", "chunk__content_text", "model", "error")
     ordering = ("-updated_at",)
 
 
@@ -268,8 +270,8 @@ class TaskDefinitionAdmin(admin.ModelAdmin):
 
 @admin.register(Tool)
 class ToolAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "tool_type", "tool_subtype", "user", "is_active", "updated_at")
-    list_filter = ("tool_type", "tool_subtype", "is_active", "updated_at")
+    list_display = ("id", "name", "tool_type", "tool_subtype", "user", "updated_at")
+    list_filter = ("tool_type", "tool_subtype", "updated_at")
     search_fields = ("name", "description", "python_path", "user__username")
 
 
@@ -278,6 +280,13 @@ class ToolCredentialAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "tool", "auth_type", "updated_at")
     list_filter = ("auth_type", "updated_at")
     search_fields = ("user__username", "tool__name")
+
+
+@admin.register(APIToolOperation)
+class APIToolOperationAdmin(admin.ModelAdmin):
+    list_display = ("id", "tool", "name", "slug", "http_method", "is_active", "updated_at")
+    list_filter = ("http_method", "is_active", "updated_at")
+    search_fields = ("tool__name", "name", "slug", "path_template", "description")
 
 
 @admin.register(Task)
@@ -310,7 +319,6 @@ class MessageAdmin(admin.ModelAdmin):
     list_filter = ("actor", "message_type", "created_at")
     search_fields = ("user__username", "thread__subject", "text")
     ordering = ("-created_at",)
-    inlines = [ArtifactsInline]
 
 
 admin.site.unregister(User)
@@ -324,18 +332,6 @@ class UserFileAdmin(admin.ModelAdmin):
     search_fields = ("user__username", "original_filename", "key")
 
 
-@admin.register(CheckpointLink)
-class CheckpointLinkAdmin(admin.ModelAdmin):
-    list_display = (
-        "checkpoint_id",
-        "thread",
-        "agent",
-        "continuous_context_built_at",
-    )
-    list_filter = ("continuous_context_built_at",)
-    search_fields = ("thread__subject", "agent__name")
-
-
 @admin.register(Interaction)
 class InteractionAdmin(admin.ModelAdmin):
     list_display = ("id", "task", "thread", "agent_config", "status", "updated_at")
@@ -343,14 +339,7 @@ class InteractionAdmin(admin.ModelAdmin):
     search_fields = ("question", "origin_name", "thread__subject")
 
 
-class WebAppFilesInline(admin.TabularInline):
-    model = WebAppFile
-    can_delete = False
-    verbose_name_plural = "files"
-
-
 @admin.register(WebApp)
 class WebAppAdmin(admin.ModelAdmin):
-    list_display = ('user', 'thread', 'name', 'slug', 'created_at', 'updated_at')
-    search_fields = ('user__username', 'thread__subject', 'name', 'slug')
-    inlines = [WebAppFilesInline]
+    list_display = ("user", "thread", "name", "slug", "source_root", "entry_path", "updated_at")
+    search_fields = ("user__username", "thread__subject", "name", "slug", "source_root", "entry_path")

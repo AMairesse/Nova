@@ -14,19 +14,6 @@
     {% csrf_token %}
     <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
 
-    <!-- Langfuse Configuration Section -->
-    <div class="card mb-4">
-      <div class="card-header">
-        <h5 class="mb-0">{% trans "Langfuse Configuration" %}</h5>
-      </div>
-      <div class="card-body">
-        {{ form.allow_langfuse|as_crispy_field }}
-        {{ form.langfuse_public_key|as_crispy_field }}
-        {{ form.langfuse_secret_key|as_crispy_field }}
-        {{ form.langfuse_host|as_crispy_field }}
-      </div>
-    </div>
-
     <!-- Continuous Mode Section -->
     <div class="card mb-4">
       <div class="card-header">

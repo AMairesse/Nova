@@ -47,6 +47,9 @@ class Interaction(models.Model):
     # Optional JSON schema describing expected answer shape
     schema = models.JSONField(default=dict, blank=True, null=True)
 
+    # Runtime-specific context needed to resume the interrupted execution.
+    resume_context = models.JSONField(default=dict, blank=True)
+
     status = models.CharField(
         max_length=10,
         choices=InteractionStatus.choices,

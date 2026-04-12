@@ -1,4 +1,4 @@
-# nova/tools/builtins/conversation.py
+# Continuous conversation recall tools
 
 """Nova builtin tool: Conversation recall (continuous discussion mode).
 
@@ -22,7 +22,6 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.models import F
 from django.utils import timezone
-from langchain_core.tools import StructuredTool
 
 from nova.llm.hybrid_search import (
     blend_semantic_fts,
@@ -32,7 +31,6 @@ from nova.llm.hybrid_search import (
     score_fts_saturated,
     semantic_similarity_from_distance,
 )
-from nova.llm.llm_agent import LLMAgent
 from nova.models.DaySegment import DaySegment
 from nova.models.Message import Message
 from nova.models.Thread import Thread
@@ -46,24 +44,6 @@ METADATA = {
     "test_function": None,
     "test_function_args": [],
 }
-
-
-def get_prompt_instructions() -> List[str]:
-    """Tool-owned prompt guidance for continuous conversation recall."""
-    return [
-        "In continuous mode, use conversation_search first when you need to locate prior discussion evidence.",
-        (
-            "Then use conversation_get to ground exact passages, day summaries, "
-            "or precise message ranges before answering."
-        ),
-        (
-            "If recent-day summaries are truncated by context budget, immediately "
-            "use conversation_search then conversation_get to recover missing details."
-        ),
-        "Do not use conversation tools for facts already present in the current turn context.",
-    ]
-
-
 def _validate_limit_offset(limit: int, offset: int) -> tuple[int, int]:
     try:
         limit = int(limit)
@@ -207,7 +187,7 @@ def _focused_snippet(text: str, query: str, headline: Optional[str] = None, max_
 
 
 async def conversation_get(
-    agent: LLMAgent,
+    agent: Any,
     message_id: Optional[int] = None,
     day_segment_id: Optional[int] = None,
     from_message_id: Optional[int] = None,
@@ -312,7 +292,7 @@ async def conversation_get(
 
 async def conversation_search(
     query: str,
-    agent: LLMAgent,
+    agent: Any,
     day: Optional[str] = None,
     recency_days: int = 14,
     limit: int = 6,
@@ -580,64 +560,3 @@ async def conversation_search(
         return {"results": page}
 
     return await sync_to_async(_impl, thread_sensitive=True)(query_vec)
-
-
-async def get_functions(tool, agent: LLMAgent):
-    return [
-        StructuredTool.from_function(
-            coroutine=lambda query, day=None, recency_days=14, limit=6, offset=0: conversation_search(
-                query=query,
-                day=day,
-                recency_days=recency_days,
-                limit=limit,
-                offset=offset,
-                agent=agent,
-            ),
-            name="conversation_search",
-            description="Search day summaries and transcript chunks from the continuous discussion.",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query (empty or * will select all)"},
-                    "day": {"type": "string", "description": "Optional YYYY-MM-DD"},
-                    "recency_days": {"type": "integer", "default": 14},
-                    "limit": {"type": "integer", "default": 6},
-                    "offset": {"type": "integer", "default": 0},
-                },
-                "required": ["query"],
-            },
-        ),
-        StructuredTool.from_function(
-            coroutine=lambda message_id=None,
-            day_segment_id=None,
-            from_message_id=None,
-            to_message_id=None,
-            limit=30,
-            before_message_id=None,
-            after_message_id=None: conversation_get(
-                agent=agent,
-                message_id=message_id,
-                day_segment_id=day_segment_id,
-                from_message_id=from_message_id,
-                to_message_id=to_message_id,
-                limit=limit,
-                before_message_id=before_message_id,
-                after_message_id=after_message_id,
-            ),
-            name="conversation_get",
-            description="Fetch a day summary or a window of messages for grounding.",
-            args_schema={
-                "type": "object",
-                "properties": {
-                    "message_id": {"type": "integer"},
-                    "day_segment_id": {"type": "integer"},
-                    "from_message_id": {"type": "integer"},
-                    "to_message_id": {"type": "integer"},
-                    "limit": {"type": "integer", "default": 30},
-                    "before_message_id": {"type": "integer"},
-                    "after_message_id": {"type": "integer"},
-                },
-                "required": [],
-            },
-        ),
-    ]

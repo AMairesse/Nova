@@ -37,7 +37,7 @@ class DaySegment(models.Model):
 
     # If a summary is generated, it should conceptually summarize messages from
     # `starts_at_message` up to this message (inclusive). When rebuilding the
-    # checkpoint in continuous mode, we include only messages AFTER this pointer.
+    # continuous context, we include only messages AFTER this pointer.
     summary_until_message = models.ForeignKey(
         "Message",
         on_delete=models.PROTECT,

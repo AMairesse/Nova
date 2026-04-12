@@ -59,8 +59,6 @@ Use one of these values in `docker/.env`:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-llamacpp-embeddings.yml`
 - Development:
   - `COMPOSE_FILE=docker-compose.dev.yml`
-- Development + Langfuse:
-  - `COMPOSE_FILE=docker-compose.dev.yml:docker-compose.add-langfuse.yml`
 - Build from source:
   - `COMPOSE_FILE=docker-compose.from-source.yml`
 
@@ -109,10 +107,12 @@ newer dynamic upstream configuration.
 ## Available optional modules
 
 - `docker-compose.add-searxng.yml`
-  - Enables SearXNG system search tool for all users.
+  - Enables the deployment-default `Search` backend in Nova.
+  - Users can still add their own custom remote search backends.
   - Requires `SEARXNG_SECRET` in `.env`.
 - `docker-compose.add-judge0.yml`
-  - Enables Judge0 code execution system tool for all users.
+  - Enables the deployment-default `Python` backend in Nova.
+  - Users can still add their own custom remote Python backends.
   - Requires host cgroups configuration (see Judge0 upstream docs for v1.13+).
 - `docker-compose.add-ollama.yml`
   - Starts Ollama and exposes a system provider in Nova.
@@ -122,8 +122,6 @@ newer dynamic upstream configuration.
   - Starts llama.cpp embeddings server for memory embeddings.
 - `docker-compose.add-pgadmin.yml`
   - Adds pgAdmin on port `5050`.
-- `docker-compose.add-langfuse.yml`
-  - Adds Langfuse stack (typically combined with dev stack).
 
 ## Development stack
 

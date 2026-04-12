@@ -321,3 +321,18 @@ class MCPClientTests(SimpleTestCase):
             cred3 = SimpleNamespace(auth_type="token", token=None)
             c3 = MCPClient(endpoint="http://srv", credential=cred3)
             self.assertIsNone(c3._auth_object())
+
+    def test_alist_tools_resolves_managed_oauth_token_before_transport(self):
+        fake_client = self._FakeAsyncClient(tools_queue=[[]])
+        credential = SimpleNamespace(auth_type="oauth_managed", access_token=None)
+        with patch("nova.mcp.client.FastMCPClient", lambda transport: fake_client), \
+             patch.object(MCPClient, "_transport", return_value=object()) as transport_mock, \
+             patch(
+                 "nova.mcp.client.get_valid_mcp_access_token",
+                 new=AsyncMock(return_value="managed-token"),
+             ) as token_mock:
+            client = MCPClient(endpoint="https://srv.example.com", credential=credential, user_id=5)
+            asyncio.run(client.alist_tools(force_refresh=True))
+
+        token_mock.assert_awaited_once()
+        transport_mock.assert_called_once_with(token="managed-token")

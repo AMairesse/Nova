@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import time
 
-from langchain_core.messages import HumanMessage
-from langchain_core.tools import StructuredTool
-
 from nova.models.Provider import LLMProvider, VALIDATION_CAPABILITY_ORDER
 from nova.providers.registry import (
-    create_provider_llm,
     get_provider_adapter,
     normalize_multimodal_content_for_provider,
 )
@@ -134,18 +130,6 @@ def _classify_capability_failure(capability: str, exc: Exception) -> str:
     return STATUS_FAIL
 
 
-def _collect_tool_calls(response) -> list:
-    tool_calls = list(getattr(response, "tool_calls", []) or [])
-    if tool_calls:
-        return tool_calls
-
-    additional_kwargs = getattr(response, "additional_kwargs", None) or {}
-    raw_tool_calls = additional_kwargs.get("tool_calls")
-    if isinstance(raw_tool_calls, list):
-        return raw_tool_calls
-    return []
-
-
 def _build_capability_summary(capabilities: dict) -> str:
     return _build_validation_summary(capabilities, {})
 
@@ -183,10 +167,14 @@ def _build_invalid_result(summary: str, error_message: str) -> dict:
     }
 
 
-async def _probe_chat(llm) -> dict:
+async def _probe_chat(adapter, provider) -> dict:
     started = time.perf_counter()
-    response = await llm.ainvoke([HumanMessage(content="Reply with OK.")])
-    content = getattr(response, "content", None)
+    response = await adapter.complete_chat(
+        provider,
+        messages=[{"role": "user", "content": "Reply with OK."}],
+        tools=None,
+    )
+    content = response.get("content")
     latency_ms = int((time.perf_counter() - started) * 1000)
     message = "Received a chat response."
     if content:
@@ -194,61 +182,73 @@ async def _probe_chat(llm) -> dict:
     return _capability_result(STATUS_PASS, message, latency_ms)
 
 
-async def _probe_streaming(llm) -> dict:
+async def _probe_streaming(adapter, provider) -> dict:
     started = time.perf_counter()
     chunk_count = 0
-    async for _chunk in llm.astream([HumanMessage(content="Reply with stream.")]):
+
+    async def _count_delta(_delta: str) -> None:
+        nonlocal chunk_count
         chunk_count += 1
-        if chunk_count >= 1:
-            break
+
+    response = await adapter.stream_chat(
+        provider,
+        messages=[{"role": "user", "content": "Reply with stream."}],
+        tools=None,
+        on_content_delta=_count_delta,
+    )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
+    if str(response.get("streaming_mode") or "").strip().lower() != "native":
+        return _capability_result(
+            STATUS_UNSUPPORTED,
+            "Provider fell back to a non-native streaming response.",
+            latency_ms,
+        )
     if chunk_count < 1:
         return _capability_result(STATUS_FAIL, "No streamed chunk was received.", latency_ms)
     return _capability_result(STATUS_PASS, "Streaming probe returned at least one chunk.", latency_ms)
 
 
-def _build_validation_tool() -> StructuredTool:
-    def provider_validation_echo(value: str) -> str:
-        """Echo the provided value."""
-        return value
+def _build_validation_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "provider_validation_echo",
+            "description": "Echo the provided value.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "string",
+                    }
+                },
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        },
+    }
 
-    return StructuredTool.from_function(
-        func=provider_validation_echo,
-        name="provider_validation_echo",
-        description="Echo the provided value.",
-    )
 
-
-async def _probe_tools(llm) -> dict:
+async def _probe_tools(adapter, provider) -> dict:
     started = time.perf_counter()
-    if not hasattr(llm, "bind_tools"):
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        return _capability_result(
-            STATUS_UNSUPPORTED,
-            "This provider client has no tool binding API.",
-            latency_ms,
-        )
-
-    tool_enabled_llm = llm.bind_tools([_build_validation_tool()])
-    response = await tool_enabled_llm.ainvoke(
-        [
-            HumanMessage(
-                content=(
-                    "Call the provider_validation_echo tool with value `ok`."
-                    " Do not answer directly."
-                )
-            )
-        ]
+    response = await adapter.complete_chat(
+        provider,
+        messages=[
+            {
+                "role": "user",
+                "content": "Call the provider_validation_echo tool with value `ok`. Do not answer directly.",
+            }
+        ],
+        tools=[_build_validation_tool()],
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    tool_calls = _collect_tool_calls(response)
+    tool_calls = list(response.get("tool_calls") or [])
     if not tool_calls:
         return _capability_result(STATUS_FAIL, "No tool call was returned by the model.", latency_ms)
     return _capability_result(STATUS_PASS, "Tool calling probe returned a tool call.", latency_ms)
 
 
-async def _probe_vision(llm) -> dict:
+async def _probe_vision(adapter, provider) -> dict:
     started = time.perf_counter()
     payload = [
         {
@@ -263,18 +263,18 @@ async def _probe_vision(llm) -> dict:
             "filename": "provider-validation.jpg",
         },
     ]
-    response = await llm.ainvoke(
-        [
-            HumanMessage(
-                content=normalize_multimodal_content_for_provider(
-                    getattr(llm, "_nova_provider", None),
-                    payload,
-                )
-            )
-        ]
+    response = await adapter.complete_chat(
+        provider,
+        messages=[
+            {
+                "role": "user",
+                "content": normalize_multimodal_content_for_provider(provider, payload),
+            }
+        ],
+        tools=None,
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    content = getattr(response, "content", None)
+    content = response.get("content")
     message = "Vision payload accepted."
     if content:
         message = f"Vision payload accepted: {str(content)[:80]}"
@@ -294,9 +294,8 @@ def _default_verified_inputs() -> dict:
     }
 
 
-async def _probe_pdf(provider, llm) -> dict:
+async def _probe_pdf(provider, adapter) -> dict:
     started = time.perf_counter()
-    adapter = get_provider_adapter(provider)
     if not adapter.supports_active_pdf_input_probe(provider):
         latency_ms = int((time.perf_counter() - started) * 1000)
         return _capability_result(
@@ -312,18 +311,18 @@ async def _probe_pdf(provider, llm) -> dict:
         provider,
         pdf_base64=_VALIDATION_PDF_BASE64,
     )
-    response = await llm.ainvoke(
-        [
-            HumanMessage(
-                content=normalize_multimodal_content_for_provider(
-                    provider,
-                    payload,
-                )
-            )
-        ]
+    response = await adapter.complete_chat(
+        provider,
+        messages=[
+            {
+                "role": "user",
+                "content": normalize_multimodal_content_for_provider(provider, payload),
+            }
+        ],
+        tools=None,
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
-    content = getattr(response, "content", None)
+    content = response.get("content")
     message = "PDF input payload accepted."
     if content:
         message = f"PDF input payload accepted: {str(content)[:80]}"
@@ -342,8 +341,7 @@ async def validate_provider_configuration(provider) -> dict:
     verified_inputs = _default_verified_inputs()
 
     try:
-        llm = create_provider_llm(provider)
-        setattr(llm, "_nova_provider", provider)
+        adapter = get_provider_adapter(provider)
     except Exception as exc:
         error_message = _format_exception_message(exc)
         return _build_invalid_result(
@@ -352,7 +350,11 @@ async def validate_provider_configuration(provider) -> dict:
         )
 
     try:
-        await llm.ainvoke([HumanMessage(content="Reply with OK.")])
+        await adapter.complete_chat(
+            provider,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            tools=None,
+        )
     except Exception as exc:
         error_message = _format_exception_message(exc)
         return _build_invalid_result(
@@ -361,7 +363,7 @@ async def validate_provider_configuration(provider) -> dict:
         )
 
     try:
-        capabilities["chat"] = await _probe_chat(llm)
+        capabilities["chat"] = await _probe_chat(adapter, provider)
     except Exception as exc:
         error_message = _format_exception_message(exc)
         capabilities["chat"] = _capability_result(
@@ -394,7 +396,7 @@ async def validate_provider_configuration(provider) -> dict:
         ("vision", _probe_vision),
     ):
         try:
-            capabilities[capability] = await probe(llm)
+            capabilities[capability] = await probe(adapter, provider)
         except Exception as exc:
             status = _classify_capability_failure(capability, exc)
             capabilities[capability] = _capability_result(
@@ -407,7 +409,7 @@ async def validate_provider_configuration(provider) -> dict:
             )
 
     try:
-        verified_inputs["pdf"] = await _probe_pdf(provider, llm)
+        verified_inputs["pdf"] = await _probe_pdf(provider, adapter)
     except Exception as exc:
         status = _classify_capability_failure("pdf", exc)
         verified_inputs["pdf"] = _capability_result(

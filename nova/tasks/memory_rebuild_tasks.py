@@ -3,55 +3,60 @@ import logging
 from celery import shared_task
 from django.db import transaction
 
-from nova.models.Memory import MemoryEmbeddingState, MemoryItem, MemoryItemEmbedding
-from nova.tasks.memory_tasks import compute_memory_item_embedding_task
+from nova.models.MemoryChunk import MemoryChunk
+from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
+from nova.models.memory_common import MemoryChunkEmbeddingState, MemoryRecordStatus
+from nova.tasks.memory_tasks import compute_memory_chunk_embedding_task
 
 logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, name="rebuild_user_memory_embeddings")
 def rebuild_user_memory_embeddings_task(self, user_id: int, batch_size: int = 500):
-    """Mark all of a user's embeddings as pending and enqueue recomputation.
+    """Mark all of a user's memory chunk embeddings as pending and enqueue recomputation."""
 
-    This is used when the embeddings provider/model changes.
-    Also creates missing embeddings for memory items that don't have them.
-    """
+    active_chunks = MemoryChunk.objects.filter(
+        document__user_id=user_id,
+        document__status=MemoryRecordStatus.ACTIVE,
+        status=MemoryRecordStatus.ACTIVE,
+    )
 
-    # First, create missing embeddings for memory items without them
-    memory_items_without_embeddings = MemoryItem.objects.filter(
-        user_id=user_id
-    ).exclude(
-        id__in=MemoryItemEmbedding.objects.filter(user_id=user_id).values_list('item_id', flat=True)
+    chunks_without_embeddings = active_chunks.exclude(
+        id__in=MemoryChunkEmbedding.objects.values_list("chunk_id", flat=True)
     )
 
     with transaction.atomic():
-        for item in memory_items_without_embeddings:
-            MemoryItemEmbedding.objects.create(
-                user_id=user_id,
-                item=item,
-                state=MemoryEmbeddingState.PENDING
+        for chunk in chunks_without_embeddings:
+            MemoryChunkEmbedding.objects.create(
+                chunk=chunk,
+                state=MemoryChunkEmbeddingState.PENDING,
             )
 
-    qs = MemoryItemEmbedding.objects.filter(user_id=user_id)
+    qs = MemoryChunkEmbedding.objects.filter(
+        chunk__document__user_id=user_id,
+        chunk__document__status=MemoryRecordStatus.ACTIVE,
+        chunk__status=MemoryRecordStatus.ACTIVE,
+    )
 
-    # Mark as pending (best-effort). We purposely do not delete rows.
     with transaction.atomic():
-        qs.update(state=MemoryEmbeddingState.PENDING, error=None, vector=None)
+        qs.update(
+            state=MemoryChunkEmbeddingState.PENDING,
+            error=None,
+            vector=None,
+        )
 
-    # Enqueue recomputation in batches.
-    ids = list(qs.values_list("id", flat=True)[:batch_size])
-    for emb_id in ids:
-        compute_memory_item_embedding_task.delay(emb_id)
+    chunk_ids = list(qs.values_list("chunk_id", flat=True)[:batch_size])
+    for chunk_id in chunk_ids:
+        compute_memory_chunk_embedding_task.delay(chunk_id)
 
-    remaining = qs.count() - len(ids)
+    remaining = qs.count() - len(chunk_ids)
     if remaining > 0:
-        # Re-enqueue self to continue; avoids a single huge task.
         rebuild_user_memory_embeddings_task.delay(user_id, batch_size=batch_size)
 
     logger.info(
         "[rebuild_user_memory_embeddings] user=%s created=%s queued=%s remaining=%s",
         user_id,
-        memory_items_without_embeddings.count(),
-        len(ids),
+        chunks_without_embeddings.count(),
+        len(chunk_ids),
         max(remaining, 0),
     )

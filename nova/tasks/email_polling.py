@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import ToolCredential
-from nova.tools.builtins.email import build_imap_client, decode_str, safe_get, safe_imap_logout
+from nova.plugins.mail.service import build_imap_client, decode_str, safe_get, safe_imap_logout
 
 logger = logging.getLogger(__name__)
 

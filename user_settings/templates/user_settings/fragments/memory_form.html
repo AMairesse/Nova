@@ -8,15 +8,22 @@
   {% csrf_token %}
   <input type="hidden" name="from" value="{{ request.GET.from|default:view.dashboard_tab }}">
 
+  <div class="alert alert-light border mb-4">
+    <div class="fw-semibold mb-1">{% trans "Memory is shared at the user level" %}</div>
+    <div class="small text-muted">{{ help_text }}</div>
+  </div>
+
+  {% if show_memory_usage_info %}
+    <div class="alert alert-info">
+      {% trans "No agent currently has the Memory capability enabled. You can configure memory here now, then enable Memory on an agent when you want it to use this knowledge." %}
+    </div>
+  {% endif %}
+
   <div class="card mb-4">
     <div class="card-header">
-      <h5 class="mb-0">{% trans "Memory: embeddings settings" %}</h5>
+      <h5 class="mb-0">{% trans "Semantic retrieval settings" %}</h5>
     </div>
     <div class="card-body">
-      <div class="mb-3">
-        <div class="form-text">{{ help_text }}</div>
-      </div>
-
       <div class="alert alert-info">
         <strong>{% trans "Effective provider" %}:</strong>
         {% if embeddings_provider %}
@@ -100,7 +107,7 @@
 
   <div class="card">
     <div class="card-header">
-      <h5 class="mb-0">{% trans "Memory browser" %}</h5>
+      <h5 class="mb-0">{% trans "Memory records" %}</h5>
     </div>
     <div class="card-body"
          id="memory-items-container"

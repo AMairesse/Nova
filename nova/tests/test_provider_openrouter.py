@@ -324,17 +324,24 @@ class OpenRouterProviderTests(SimpleTestCase):
                     async_to_sync(fetch_openrouter_model_catalog)("secret", None)
                 mocked_client_class.reset_mock()
 
-    @patch("nova.providers.openrouter.create_openai_compatible_llm")
-    def test_adapter_create_llm_uses_normalized_base_url(self, mocked_create_llm):
+    @patch("nova.providers.openrouter.complete_openai_compatible_chat", new_callable=AsyncMock)
+    def test_adapter_complete_chat_uses_normalized_base_url(self, mocked_complete_chat):
         adapter = OpenRouterProviderAdapter()
         provider = self._provider(base_url="https://openrouter.ai/api")
 
-        adapter.create_llm(provider)
+        async_to_sync(adapter.complete_chat)(
+            provider,
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None,
+        )
 
-        mocked_create_llm.assert_called_once_with(
+        mocked_complete_chat.assert_awaited_once_with(
             model="openai/gpt-4.1-mini",
             api_key="dummy-secret",
             base_url="https://openrouter.ai/api/v1",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None,
+            normalize_content=adapter.normalize_multimodal_content,
         )
 
     @patch("nova.providers.openrouter.fetch_openrouter_model_catalog", new_callable=AsyncMock)

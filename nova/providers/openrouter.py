@@ -15,8 +15,9 @@ from nova.providers.base import (
     ProviderModelNotFoundError,
 )
 from nova.providers.openai_compatible import (
-    create_openai_compatible_llm,
+    complete_openai_compatible_chat,
     normalize_openai_compatible_multimodal_content,
+    stream_openai_compatible_chat,
 )
 
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -399,11 +400,25 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             )
         )
 
-    def create_llm(self, provider):
-        return create_openai_compatible_llm(
+    async def complete_chat(self, provider, *, messages, tools=None):
+        return await complete_openai_compatible_chat(
             model=provider.model,
             api_key=provider.api_key,
             base_url=get_openrouter_base_url(provider.base_url),
+            messages=messages,
+            tools=tools,
+            normalize_content=self.normalize_multimodal_content,
+        )
+
+    async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        return await stream_openai_compatible_chat(
+            model=provider.model,
+            api_key=provider.api_key,
+            base_url=get_openrouter_base_url(provider.base_url),
+            messages=messages,
+            tools=tools,
+            normalize_content=self.normalize_multimodal_content,
+            on_content_delta=on_content_delta,
         )
 
     def normalize_multimodal_content(self, content):
@@ -512,6 +527,10 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             if isinstance(audio_options, dict) and audio_options:
                 payload["audio"] = audio_options
         return payload
+
+    def supports_native_response_mode(self, provider, response_mode: str) -> bool:
+        normalized = str(response_mode or "").strip().lower()
+        return normalized in {"image", "audio"}
 
     async def invoke_native(self, provider, invocation_request: dict[str, object]) -> dict[str, object]:
         payload = await self.build_native_request(provider, invocation_request)

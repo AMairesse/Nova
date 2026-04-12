@@ -7,7 +7,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField
 
-from nova.tools import get_tool_type
+from nova.plugins.builtins import get_tool_type
 from nova.utils import validate_relaxed_url
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 def get_default_schema():
     return {}
+
+
+def _get_builtin_python_path(subtype: str) -> str:
+    metadata = get_tool_type(subtype) or {}
+    return str(metadata.get("python_path") or "").strip()
 
 
 class Tool(models.Model):
@@ -63,20 +68,6 @@ class Tool(models.Model):
         help_text=_("Transport method for MCP servers")
     )
 
-    # I/O JSON-Schema contract
-    input_schema = models.JSONField(default=get_default_schema,
-                                    blank=True, null=True)
-    output_schema = models.JSONField(default=get_default_schema,
-                                     blank=True, null=True)
-
-    available_functions = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text=_("Available functions for this tool, if any.")
-    )
-
-    is_active = models.BooleanField(default=True)
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -91,9 +82,7 @@ class Tool(models.Model):
             if not metadata:
                 raise ValidationError(_("Invalid builtin subtype: %s") % self.tool_subtype)
 
-            self.python_path = metadata.get("python_path", "")
-            self.input_schema = metadata.get("input_schema", {})
-            self.output_schema = metadata.get("output_schema", {})
+            self.python_path = _get_builtin_python_path(self.tool_subtype)
 
         if self.tool_type in {self.ToolType.API, self.ToolType.MCP} and not self.endpoint:
             raise ValidationError(_("Endpoint is mandatory for API or MCP tools."))
@@ -123,10 +112,9 @@ class ToolCredential(models.Model):
         choices=[
             ('none', _('No Authentication')),
             ('basic', _('Basic Auth')),
-            ('token', _('Token Auth')),
-            ('oauth', _('OAuth')),
+            ('token', _('Access Token')),
+            ('oauth_managed', _('Managed OAuth (MCP)')),
             ('api_key', _('API Key')),
-            ('custom', _('Custom')),
         ],
         default='basic'
     )
@@ -162,91 +150,24 @@ class ToolCredential(models.Model):
 
 
 def check_and_create_searxng_tool():
-    SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
-    SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
+    from nova.plugins.catalog import sync_search_system_backend
 
-    # Get the searxng's system tool if it exists
-    tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='searxng').first()
-
-    if SEARNGX_SERVER_URL and SEARNGX_NUM_RESULTS:
-        # Create a "system tool" if it doesn't already exist
-        if not tool:
-            tool = Tool.objects.create(user=None,
-                                       name='System - SearXNG',
-                                       tool_type=Tool.ToolType.BUILTIN,
-                                       tool_subtype='searxng',
-                                       python_path='nova.tools.builtins.searxng')
-            ToolCredential.objects.create(user=None,
-                                          tool=tool,
-                                          config={'searxng_url': SEARNGX_SERVER_URL,
-                                                  'num_results': SEARNGX_NUM_RESULTS})
-        else:
-            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
-            if not cred:
-                ToolCredential.objects.create(user=None,
-                                              tool=tool,
-                                              config={'searxng_url': SEARNGX_SERVER_URL,
-                                                      'num_results': SEARNGX_NUM_RESULTS})
-            else:
-                # Update it if needed
-                if cred.config.get('searxng_url') != SEARNGX_SERVER_URL or \
-                   cred.config.get('num_results') != SEARNGX_NUM_RESULTS:
-                    cred.config['searxng_url'] = SEARNGX_SERVER_URL
-                    cred.config['num_results'] = SEARNGX_NUM_RESULTS
-                    cred.save()
-    else:
-        if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='searxng').exists():
-            # If the system tool is not used then delete it
-            if not tool.agents.exists():
-                tool.delete()
-            else:
-                logger.warning(
-                    """WARNING: SEARXNG_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent.""")
+    tool = sync_search_system_backend()
+    if not settings.SEARNGX_SERVER_URL or not settings.SEARNGX_NUM_RESULTS:
+        if tool is not None and tool.agents.exists():
+            logger.warning(
+                """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent."""
+            )
 
 
 def check_and_create_judge0_tool():
-    JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
+    from nova.plugins.catalog import sync_python_system_backend
 
-    # Get the judge0's system tool if it exists
-    tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='code_execution').first()
-
-    if JUDGE0_SERVER_URL:
-        # Create a "system tool" if it doesn't already exist
-        if not tool:
-            tool = Tool.objects.create(user=None,
-                                       name='System - Code Execution',
-                                       tool_type=Tool.ToolType.BUILTIN,
-                                       tool_subtype='code_execution',
-                                       python_path='nova.tools.builtins.code_execution')
-            ToolCredential.objects.create(user=None,
-                                          tool=tool,
-                                          config={'judge0_url': JUDGE0_SERVER_URL})
-        else:
-            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
-            if not cred:
-                ToolCredential.objects.create(user=None,
-                                              tool=tool,
-                                              config={'judge0_url': JUDGE0_SERVER_URL})
-            else:
-                # Update it if needed
-                if cred.config.get('judge0_url') != JUDGE0_SERVER_URL:
-                    cred.config['judge0_url'] = JUDGE0_SERVER_URL
-                    cred.save()
-    else:
-        if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='code_execution').exists():
-            # If the system tool is not used then delete it
-            if not tool.agents.exists():
-                tool.delete()
-            else:
-                logger.warning(
-                    """WARNING: JUDGE0_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent.""")
+    tool = sync_python_system_backend()
+    if not settings.JUDGE0_SERVER_URL:
+        if tool is not None and tool.agents.exists():
+            logger.warning(
+                """WARNING: JUDGE0_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent."""
+            )

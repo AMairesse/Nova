@@ -9,7 +9,6 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from langchain_core.messages import BaseMessage
 
 
 # Chat-oriented markdown profile: robust list/code/table rendering without TOC noise.
@@ -84,19 +83,19 @@ def normalize_url(urlish) -> str:
 
 def validate_relaxed_url(value):
     """
-    Simple validator for relaxed URLs:
-    This allows single-label hosts like 'langfuse:3000'.
-    Checks for scheme (http/https), host, optional port/path.
+    Simple validator for relaxed URLs.
+
+    This allows single-label hosts like ``nova:3000`` while still requiring
+    an explicit http/https scheme.
     """
     if not value:
-        return  # Allow empty if blank=True
+        return
 
-    # Relaxed regex: scheme://host[:port][/path]
     regex = re.compile(
-        r'^(https?://)'  # Scheme (http or https)
-        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'  # Host
-        r'(?::\d{1,5})?'  # Optional port
-        r'(?:/[^\s]*)?$'  # Optional path
+        r'^(https?://)'
+        r'([a-z0-9-]+(?:\.[a-z0-9-]+)*|localhost)'
+        r'(?::\d{1,5})?'
+        r'(?:/[^\s]*)?$'
     )
     if not regex.match(value):
         raise ValidationError(_("Enter a valid URL."))
@@ -106,8 +105,12 @@ def extract_final_answer(output):
     if isinstance(output, str):
         return output
     if isinstance(output, list):
-        last = next((m for m in reversed(output) if isinstance(m, BaseMessage)), None)
-        return last.content if last else str(output)
+        for item in reversed(output):
+            if isinstance(item, dict) and "content" in item:
+                return str(item.get("content") or "")
+            if hasattr(item, "content"):
+                return str(getattr(item, "content", "") or "")
+        return str(output)
     if isinstance(output, dict) and "messages" in output:
         return extract_final_answer(output["messages"])
     return str(output)

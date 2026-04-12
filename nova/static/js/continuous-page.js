@@ -26,9 +26,10 @@
         fileList: root.dataset.urlFileList,
         fileUpload: root.dataset.urlFileUpload,
         fileDelete: root.dataset.urlFileDelete,
-        artifactPublish: root.dataset.urlArtifactPublish,
         interactionAnswer: root.dataset.urlInteractionAnswer,
         interactionCancel: root.dataset.urlInteractionCancel,
+        previewDeleteMessageTail: root.dataset.urlPreviewDeleteMessageTail,
+        deleteMessageTail: root.dataset.urlDeleteMessageTail,
     };
 
     const t = (window.gettext && typeof window.gettext === 'function') ? window.gettext : (s) => s;
@@ -242,6 +243,27 @@
             return '';
         }
         return daySummaryUrlTemplate.replace('__DAY__', encodeURIComponent(day));
+    }
+
+    async function waitForMessageManager(timeoutMs = 5000) {
+        if (window.NovaApp.messageManager) {
+            return window.NovaApp.messageManager;
+        }
+        const startedAt = Date.now();
+        return await new Promise((resolve) => {
+            const poll = () => {
+                if (window.NovaApp.messageManager) {
+                    resolve(window.NovaApp.messageManager);
+                    return;
+                }
+                if (Date.now() - startedAt >= timeoutMs) {
+                    resolve(null);
+                    return;
+                }
+                window.requestAnimationFrame(poll);
+            };
+            poll();
+        });
     }
 
     function setSelectedDay(day) {
@@ -506,37 +528,39 @@
         }
         const html = await resp.text();
         const mc = document.getElementById('message-container');
+        window.NovaApp.messageManager?.stopBottomFollow?.({ cancelPrimeTimers: true });
         if (mc) mc.innerHTML = html;
+        const messageManager = await waitForMessageManager();
 
-        if (window.NovaApp.messageManager) {
-            if (typeof window.NovaApp.messageManager.syncComposerAttachmentConfig === 'function') {
-                window.NovaApp.messageManager.syncComposerAttachmentConfig();
+        if (messageManager) {
+            if (typeof messageManager.syncComposerAttachmentConfig === 'function') {
+                messageManager.syncComposerAttachmentConfig();
             }
-            if (typeof window.NovaApp.messageManager.resetComposerAttachments === 'function') {
-                window.NovaApp.messageManager.resetComposerAttachments();
+            if (typeof messageManager.resetComposerAttachments === 'function') {
+                messageManager.resetComposerAttachments();
             }
-            if (typeof window.NovaApp.messageManager.resetComposerThreadFiles === 'function') {
-                window.NovaApp.messageManager.resetComposerThreadFiles();
+            if (typeof messageManager.resetComposerThreadFiles === 'function') {
+                messageManager.resetComposerThreadFiles();
             }
-            if (typeof window.NovaApp.messageManager.syncComposerTextStatus === 'function') {
-                window.NovaApp.messageManager.syncComposerTextStatus();
+            if (typeof messageManager.syncComposerTextStatus === 'function') {
+                messageManager.syncComposerTextStatus();
             }
-            if (typeof window.NovaApp.messageManager.syncResponseModeControl === 'function') {
-                window.NovaApp.messageManager.syncResponseModeControl();
+            if (typeof messageManager.syncResponseModeControl === 'function') {
+                messageManager.syncResponseModeControl();
             }
-            if (typeof window.NovaApp.messageManager.syncComposerCapabilityNotice === 'function') {
-                window.NovaApp.messageManager.syncComposerCapabilityNotice();
+            if (typeof messageManager.syncComposerCapabilityNotice === 'function') {
+                messageManager.syncComposerCapabilityNotice();
             }
-            if (typeof window.NovaApp.messageManager.initTextareaFocus === 'function') {
-                window.NovaApp.messageManager.initTextareaFocus();
+            if (typeof messageManager.initTextareaFocus === 'function') {
+                messageManager.initTextareaFocus();
             }
         }
 
         if (
-            window.NovaApp.messageManager
-            && typeof window.NovaApp.messageManager.applyTemplateSetupPrefillFromUrl === 'function'
+            messageManager
+            && typeof messageManager.applyTemplateSetupPrefillFromUrl === 'function'
         ) {
-            window.NovaApp.messageManager.applyTemplateSetupPrefillFromUrl();
+            messageManager.applyTemplateSetupPrefillFromUrl();
         }
 
         applyPostingVisibility(day);
@@ -550,17 +574,29 @@
         ensureSummaryInsideScroll();
 
         const tid = document.querySelector('#message-container input[name="thread_id"]')?.value;
-        if (window.NovaApp.messageManager) {
-            window.NovaApp.messageManager.currentThreadId = tid || null;
-            if (!state.reconnectChecked && typeof window.NovaApp.messageManager.checkAndReconnectRunningTasks === 'function') {
+        if (messageManager) {
+            messageManager.currentThreadId = tid || null;
+            if (typeof messageManager.updateCompactLinkVisibility === 'function') {
+                messageManager.updateCompactLinkVisibility();
+            }
+            if (!state.reconnectChecked && typeof messageManager.checkAndReconnectRunningTasks === 'function') {
                 state.reconnectChecked = true;
-                window.NovaApp.messageManager.checkAndReconnectRunningTasks();
+                messageManager.checkAndReconnectRunningTasks();
             }
         }
 
+        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: tid || null } }));
+
         if (!day) {
-            if (window.NovaApp.messageManager && typeof window.NovaApp.messageManager.scrollToBottom === 'function') {
-                window.NovaApp.messageManager.scrollToBottom();
+            if (
+                messageManager
+                && typeof messageManager.primeBottomFollow === 'function'
+            ) {
+                messageManager.primeBottomFollow({
+                    force: true,
+                    behavior: 'auto',
+                    observeRoot: document.getElementById('conversation-container'),
+                });
             } else {
                 const container = document.getElementById('conversation-container');
                 if (container) {
@@ -568,8 +604,6 @@
                 }
             }
         }
-
-        document.dispatchEvent(new CustomEvent('threadChanged', { detail: { threadId: tid || null } }));
     }
 
     async function loadSummary(day) {
@@ -698,10 +732,13 @@
             setSummaryEvent(t('Realtime status unavailable.'), 'danger');
         };
 
-        socket.onclose = () => {
+        socket.onclose = (event) => {
             if (state.summarySocket === socket) {
                 state.summarySocket = null;
                 setRegenerateBusy(false);
+            }
+            if (event.code === 4403) {
+                setSummaryEvent(t('Realtime status is unavailable for this task.'), 'danger');
             }
         };
     }

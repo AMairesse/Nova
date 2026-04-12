@@ -1,79 +1,73 @@
-# Continuous Discussion Mode (Implemented)
+# Continuous Discussion Mode
 
-Last reviewed: 2026-02-28
+Last reviewed: 2026-04-06  
 Status: implemented
 
 ## Scope
 
 Continuous mode is a user-scoped discussion mode that coexists with classic thread mode.
 
-Implemented components:
-- One continuous thread per user (`Thread.Mode.CONTINUOUS`).
-- Day segmentation (`DaySegment`) with optional day summaries.
-- Conversation recall tools (`conversation_search`, `conversation_get`).
-- Continuous checkpoint rebuild policy before agent execution.
+Current building blocks:
 
-## Runtime behavior
+- one continuous thread per user (`Thread.Mode.CONTINUOUS`)
+- `DaySegment` rows for day boundaries
+- stored day summaries
+- `TranscriptChunk` and embeddings for recall
+- runtime-native commands:
+  - `history search`
+  - `history get`
 
-### 1. Thread and day lifecycle
+## Runtime Behavior
 
-- `ensure_continuous_thread(user)` guarantees exactly one continuous thread per user.
-- A day segment opens on the first message of the user day (`append_continuous_user_message`).
-- On message append, Nova enqueues transcript indexing for that day segment.
-- If the message opens a new day, Nova also enqueues summarization for the previous day.
+### Thread and day lifecycle
 
-### 2. Context loaded into the agent
+- `ensure_continuous_thread(user)` guarantees exactly one continuous thread
+- a new `DaySegment` opens on the first user message of the day
+- when a new day starts, Nova can enqueue summary refresh for the previous day
+- transcript indexing is refreshed after new messages
 
-Before invocation in continuous mode, `TaskExecutor` calls `ensure_continuous_checkpoint_state(...)`.
+### Context loaded into the runtime
 
-`load_continuous_context(...)` rebuilds context with this policy:
-- Previous two available day summaries (most recent first), with a strict shared token budget.
-- Truncation notice if previous summaries exceed budget.
-- Today summary (if it exists and has `summary_until_message`).
-- Today raw messages after `summary_until_message` (or all today messages if no summary boundary exists).
+`load_continuous_context(...)` builds runtime context from persisted data only:
 
-A fingerprint is persisted on `CheckpointLink` to avoid unnecessary rebuilds.
+- the previous available day summaries, under a strict token budget
+- today’s partial summary when present
+- the current-day raw message window after the summary boundary
 
-### 3. Conversation recall tools
+This logic relies only on persisted messages, summaries, and transcript chunks.
 
-Tools:
-- `conversation_search`
-- `conversation_get`
+### Recall commands
 
-Current behavior:
-- Search runs on `DaySegment.summary_markdown` and `TranscriptChunk.content_text`.
-- PostgreSQL path uses hybrid scoring (FTS + semantic) when query embeddings are available.
-- Fallback path (e.g. SQLite tests) uses lexical `icontains`.
-- `conversation_get` supports:
-  - summary fetch by `day_segment_id`
-  - centered windows around `message_id`
-  - range fetch (`from_message_id` / `to_message_id`)
-  - directional pagination (`before_message_id` / `after_message_id`).
+`history search`:
 
-### 4. Tool exposure policy
+- searches day summaries and transcript chunks
+- uses hybrid lexical + semantic retrieval when embeddings are available
+- degrades to lexical-only search otherwise
 
-- `conversation_*` tools are only exposed for the main agent on a continuous thread.
-- They are hidden for sub-agents (`agent_config.is_tool=True`) and non-continuous runs.
-- If missing, they are auto-attached for the continuous main agent during tool loading.
+`history get`:
 
-### 5. Sub-agent checkpoint policy
+- fetches a day summary
+- or fetches a centered/ranged message window
 
-After a successful continuous run, Nova purges LangGraph checkpoints for sub-agents in that thread and keeps the main agent checkpoint only.
+### Continuous summaries
 
-## Background tasks and scheduling
+Day summaries are persisted Markdown, used for:
 
-Implemented tasks:
-- `index_transcript_append_task`
-- `summarize_day_segment_task`
-- `nightly_summarize_continuous_daysegments_task`
-- `nightly_summarize_continuous_daysegments_for_user_task`
+- context loading
+- user-visible day summaries in the continuous UI
+- search relevance when historical context is needed
 
-Per-user maintenance task definition is auto-ensured:
-- name: `Continuous: nightly day summaries`
-- maintenance task key: `continuous_nightly_daysegment_summaries_for_user`
-- default cron: `0 2 * * *` (UTC)
+## Background Tasks
 
-## User-facing endpoints (continuous UI)
+Implemented tasks include:
+
+- transcript indexing / append indexing
+- day summary generation
+- nightly continuous summary maintenance
+
+The per-user maintenance task remains auto-managed and visible in Tasks.
+
+## User-Facing Endpoints
 
 - `continuous_home`
 - `continuous_days`
@@ -82,6 +76,9 @@ Per-user maintenance task definition is auto-ensured:
 - `continuous_add_message`
 - `continuous_regenerate_summary`
 
-## Out of scope in this document
+## Key Current Guarantees
 
-This file intentionally excludes speculative UX mockups and future-phase architecture proposals.
+- continuous mode and classic threads coexist
+- continuous context is rebuilt directly from persisted DB state
+- recall commands are only exposed when they make sense for the current continuous run
+- summary refreshes publish realtime updates to the continuous page

@@ -6,15 +6,13 @@ import datetime as dt
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from django.utils import timezone
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-
 from nova.continuous.utils import get_day_label_for_user
 from nova.models.DaySegment import DaySegment
-from nova.models.Message import Actor, Message
+from nova.models.Message import Actor, Message, MessageType
 
 
 @dataclass(frozen=True)
@@ -36,7 +34,7 @@ class ContinuousContextSnapshot:
 
 
 def compute_continuous_context_fingerprint(snapshot: ContinuousContextSnapshot) -> str:
-    """Stable fingerprint for deciding whether the checkpoint must be rebuilt.
+    """Stable fingerprint for deciding whether the continuous context must be rebuilt.
 
     V1: keep it deterministic and cheap to compute.
     """
@@ -118,22 +116,23 @@ def _trim_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool, int
     return trimmed, truncated, used
 
 
-def _make_summary_system_message(label: str, summary_md: str) -> List[BaseMessage]:
-    """Inject summary as a SystemMessage (continuous policy)."""
+def _make_summary_system_message(label: str, summary_md: str) -> List[dict[str, Any]]:
+    """Inject summary as a system message (continuous policy)."""
 
     summary_md = (summary_md or "").strip()
     if not summary_md:
         return []
 
-    msg = SystemMessage(
-        content=f"[{label}]\n{summary_md}",
-        additional_kwargs={"summary": True, "label": label, "source": "day_segment"},
-    )
+    msg = {
+        "role": "system",
+        "content": f"[{label}]\n{summary_md}",
+        "meta": {"summary": True, "label": label, "source": "day_segment"},
+    }
     return [msg]
 
 
-def _message_to_langchain(m: Message) -> Optional[BaseMessage]:
-    """Convert a DB Message to a LangChain message.
+def _message_to_runtime_message(m: Message) -> Optional[dict[str, str]]:
+    """Convert a DB Message to a runtime message dict.
 
     V1 trimming:
     - ignore SYSTEM
@@ -149,10 +148,61 @@ def _message_to_langchain(m: Message) -> Optional[BaseMessage]:
         return None
 
     if m.actor == Actor.USER:
-        return HumanMessage(content=content)
+        return {"role": "user", "content": content}
     if m.actor == Actor.AGENT:
-        return AIMessage(content=content)
+        return {"role": "assistant", "content": content}
     return None
+
+
+def get_live_continuous_message_ids(
+    user,
+    thread,
+    *,
+    exclude_message_id: Optional[int] = None,
+    exclude_interaction_ids: Optional[set[int]] = None,
+) -> list[int]:
+    today = get_day_label_for_user(user)
+    t_seg = (
+        DaySegment.objects.filter(user=user, thread=thread, day_label=today)
+        .select_related("starts_at_message", "summary_until_message")
+        .first()
+    )
+
+    if not t_seg or not t_seg.starts_at_message_id:
+        return []
+
+    today_start_dt = t_seg.starts_at_message.created_at
+    today_end_dt = None
+    next_seg = (
+        DaySegment.objects.filter(user=user, thread=thread, day_label__gt=today)
+        .order_by("day_label")
+        .first()
+    )
+    if next_seg and next_seg.starts_at_message_id:
+        today_end_dt = next_seg.starts_at_message.created_at
+
+    today_summary_until_message_id: Optional[int] = None
+    today_summary_raw = (t_seg.summary_markdown or "").strip()
+    if today_summary_raw and t_seg.summary_until_message_id:
+        today_summary_until_message_id = t_seg.summary_until_message_id
+
+    qs = Message.objects.filter(user=user, thread=thread, created_at__gte=today_start_dt)
+    if today_end_dt:
+        qs = qs.filter(created_at__lt=today_end_dt)
+    if today_summary_until_message_id:
+        qs = qs.filter(id__gt=today_summary_until_message_id)
+    if exclude_message_id:
+        qs = qs.exclude(id=exclude_message_id)
+    if exclude_interaction_ids:
+        qs = qs.exclude(
+            message_type=MessageType.INTERACTION_ANSWER,
+            interaction_id__in=list(exclude_interaction_ids),
+        )
+    return list(
+        qs.exclude(actor=Actor.SYSTEM)
+        .order_by("created_at", "id")
+        .values_list("id", flat=True)
+    )
 
 
 def load_continuous_context(
@@ -160,8 +210,9 @@ def load_continuous_context(
     thread,
     *,
     exclude_message_id: Optional[int] = None,
-) -> Tuple[ContinuousContextSnapshot, List[BaseMessage]]:
-    """Build the messages to inject for the continuous checkpoint.
+    exclude_interaction_ids: Optional[set[int]] = None,
+) -> Tuple[ContinuousContextSnapshot, List[dict[str, Any]]]:
+    """Build the messages to inject for the continuous context window.
 
     Policy:
     - Previous two *available* summarized days (before today) as System messages.
@@ -223,22 +274,23 @@ def load_continuous_context(
 
     previous_summaries_truncated = p1_truncated or p2_truncated
 
-    out: List[BaseMessage] = []
+    out: List[dict[str, Any]] = []
     if p1_summary:
         out.extend(_make_summary_system_message(p1_label, p1_summary))
     if p2_summary:
         out.extend(_make_summary_system_message(p2_label, p2_summary))
     if previous_summaries_truncated:
         out.append(
-            SystemMessage(
-                content=(
+            {
+                "role": "system",
+                "content": (
                     "[Continuous context notice]\n"
                     "Some previous-day summaries were truncated due to strict token budget. "
                     "If more historical detail is needed, use conversation_search first, "
                     "then conversation_get to ground exact passages."
                 ),
-                additional_kwargs={"summary_notice": True, "truncated": True},
-            )
+                "meta": {"summary_notice": True, "truncated": True},
+            }
         )
 
     today_last_message_id: Optional[int] = None
@@ -260,15 +312,14 @@ def load_continuous_context(
             )
 
     if today_start_dt:
-        qs = Message.objects.filter(user=user, thread=thread, created_at__gte=today_start_dt)
-        if today_end_dt:
-            qs = qs.filter(created_at__lt=today_end_dt)
-        if today_summary_until_message_id:
-            qs = qs.filter(id__gt=today_summary_until_message_id)
-        if exclude_message_id:
-            qs = qs.exclude(id=exclude_message_id)
-        for m in qs.order_by("created_at", "id"):
-            msg = _message_to_langchain(m)
+        live_message_ids = get_live_continuous_message_ids(
+            user,
+            thread,
+            exclude_message_id=exclude_message_id,
+            exclude_interaction_ids=exclude_interaction_ids,
+        )
+        for m in Message.objects.filter(id__in=live_message_ids).order_by("created_at", "id"):
+            msg = _message_to_runtime_message(m)
             if msg is not None:
                 out.append(msg)
             today_last_message_id = m.id

@@ -303,7 +303,7 @@
             return window.MessageRenderer.buildContextSummary({
                 real_tokens: messageEl.dataset.contextRealTokens,
                 approx_tokens: messageEl.dataset.contextApproxTokens,
-                context_tokens: messageEl.dataset.contextLegacyTokens,
+                context_tokens: messageEl.dataset.contextFallbackTokens,
                 max_context: messageEl.dataset.contextMaxContext,
             });
         },
@@ -318,7 +318,6 @@
             const subagentCalls = Number(messageEl?.dataset?.traceSubagentCalls || 0);
             const interactionCount = Number(messageEl?.dataset?.traceInteractionCount || 0);
             const errorCount = Number(messageEl?.dataset?.traceErrorCount || 0);
-            const artifactCount = Number(messageEl?.dataset?.traceArtifactCount || 0);
             const durationMs = Number(messageEl?.dataset?.traceDurationMs || 0);
             const parts = [];
 
@@ -332,10 +331,6 @@
                 if (primary) {
                     parts.push(primary);
                 }
-            }
-
-            if (artifactCount > 0) {
-                parts.push(`${artifactCount} ${gettext(artifactCount === 1 ? 'artifact' : 'artifacts')}`);
             }
 
             const durationLabel = this.formatExecutionDuration(durationMs);
@@ -372,6 +367,7 @@
             const metaDivider = document.getElementById('context-menu-meta-divider');
             const executionDetailsBtn = document.getElementById('context-menu-execution-details');
             const compactBtn = document.getElementById('context-menu-compact');
+            const deleteAfterBtn = document.getElementById('context-menu-delete-after');
 
             const contextSummary = this.getMessageContextSummary(messageEl);
             toggleContextMenuSection(contextSection, contextValue, contextSummary);
@@ -392,8 +388,19 @@
                 compactBtn.classList.toggle('d-none', !canCompact);
             }
 
+            const visibleMessages = Array.from(
+                messageEl.parentElement?.querySelectorAll('.message[data-message-id]') || []
+            );
+            const currentIndex = visibleMessages.indexOf(messageEl);
+            const hasLaterMessage = currentIndex >= 0 && currentIndex < visibleMessages.length - 1;
+            if (deleteAfterBtn) {
+                const messageId = `${messageEl.dataset.messageId || ''}`.trim();
+                deleteAfterBtn.dataset.messageId = messageId;
+                deleteAfterBtn.classList.toggle('d-none', !messageId || !hasLaterMessage);
+            }
+
             if (metaDivider) {
-                metaDivider.classList.toggle('d-none', !contextSummary && !traceTaskId);
+                metaDivider.classList.toggle('d-none', !contextSummary && !traceTaskId && !hasLaterMessage);
             }
 
             this.contextMenuOffcanvas.show();
@@ -424,6 +431,20 @@
                 compactBtn.addEventListener('click', () => {
                     this.contextMenuOffcanvas.hide();
                     this.summarizeCurrentThread();
+                });
+            }
+
+            const deleteAfterBtn = document.getElementById('context-menu-delete-after');
+            if (deleteAfterBtn) {
+                deleteAfterBtn.addEventListener('click', () => {
+                    const messageId = `${deleteAfterBtn.dataset.messageId || ''}`.trim();
+                    if (!messageId) {
+                        return;
+                    }
+                    this.contextMenuOffcanvas.hide();
+                    window.setTimeout(() => {
+                        void this.openDeleteTailPreview(messageId);
+                    }, 150);
                 });
             }
 

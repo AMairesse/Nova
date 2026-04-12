@@ -8,7 +8,7 @@ Operational guidance for contributors and coding agents working in this reposito
 - Backend: Django + Django REST Framework + Django Channels.
 - Async runtime: Celery + Redis.
 - Storage: PostgreSQL + MinIO.
-- Agent runtime: LangChain + LangGraph, with builtin tools, MCP tools, API tools, and agent-as-tool composition.
+- Agent runtime: Nova runtime centered on `terminal(...)`, `delegate_to_agent(...)`, and `ask_user(...)`, with plugin-backed capabilities and explicit sub-agent delegation.
 
 Primary code areas:
 - Core app: `nova/`
@@ -23,15 +23,16 @@ Primary code areas:
 - Secrets: API keys are encrypted at rest.
 - Files: stored in MinIO under user/thread-scoped paths.
 - Provider runtime is provider-aware:
-  - generic orchestration stays in `nova/llm/`
+  - main orchestration stays in `nova/runtime/`
   - provider-specific behavior lives in `nova/providers/`
+  - shared embeddings / hybrid-search helpers live in `nova/llm/`
   - `LLMProvider.capability_profile` is the single persisted source of model capabilities and verification state
-- Multimodal conversation state is split:
-  - `UserFile` stores binaries
-  - `MessageArtifact` stores message-scoped inputs/outputs/derived artifacts
-  - thread `Files` and conversation `Artifacts` are intentionally distinct
+- Files and message-scoped outputs are represented through `UserFile`:
+  - `UserFile(scope=THREAD_SHARED)` stores durable thread files
+  - `UserFile(scope=MESSAGE_ATTACHMENT)` stores current-message attachments and message-scoped outputs/scratch files
+  - message-scoped non-file metadata lives in `Message.internal_data`
+- Built-in/system capabilities are resolved through `nova/plugins/`.
 - Tool-less execution is a first-class runtime mode for providers/models that do not support tools.
-- Langfuse shutdown is process-scoped; per-task cleanup should only release Nova runtime resources.
 
 ## 3) Current Feature Baselines to Preserve
 
@@ -45,7 +46,7 @@ Primary code areas:
 
 - Continuous mode and thread mode coexist.
 - Continuous conversation recall tools are system capabilities from `nova/continuous/tools/conversation_tools.py` (not user-addable builtins).
-- Continuous mode uses day segments, summaries, and checkpoint rebuild semantics; avoid regressions in context reconstruction behavior.
+- Continuous mode uses persisted messages, day segments, summaries, transcript chunks, and runtime compaction state; avoid regressions in context reconstruction behavior.
 
 ### Provider-aware multimodal behavior
 
@@ -54,16 +55,17 @@ Primary code areas:
   - active verification
   - effective capability gating from `capability_profile`
 - OpenRouter and LM Studio have provider-aware model discovery; do not regress the “connection first, model second” flow.
-- Message media should appear as `MessageArtifact` outputs in the thread and remain publishable to `Files`.
-- Main agents may delegate artifacts to sub-agents; sub-agent outputs must remain recoverable by the parent agent.
+- Message media should appear as `UserFile` attachments or message-scoped outputs in the thread and remain usable from `Files` and Markdown VFS references.
+- Main agents may delegate files to sub-agents; child outputs must remain recoverable by the parent agent under `/subagents/...`.
 - Models verified as `tools=unsupported` must not receive default Nova tools unless the run is explicitly tool-less.
 
 ## 4) Repository Conventions
 
 - Models: one model per file under `nova/models/`.
-- Builtin tools: modules under `nova/tools/builtins/` exposing `get_functions()`.
+- Internal plugins: under `nova/plugins/`.
+- Runtime orchestration: under `nova/runtime/`.
 - Provider-specific logic: under `nova/providers/`.
-- Telemetry/process-scoped cleanup helpers: under `nova/telemetry/`.
+- Shared embeddings / hybrid search helpers: under `nova/llm/`.
 - Celery tasks: in `nova/tasks/`.
 - Views: feature-grouped under `nova/views/` and `user_settings/views/`.
 - Avoid editing vendored or minified artifacts.

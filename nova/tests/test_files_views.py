@@ -6,10 +6,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from nova.models.Message import Actor
-from nova.models.MessageArtifact import ArtifactDirection, ArtifactKind, MessageArtifact
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
+from nova.runtime.constants import RUNTIME_STORAGE_ROOT
 from nova.tests.factories import create_user
 
 
@@ -31,32 +30,6 @@ class FilesViewsTests(TestCase):
             original_filename=name,
             mime_type="text/plain",
             size=12,
-        )
-
-    def _create_artifact(self, *, user=None, thread: Thread | None = None, published: bool = False) -> MessageArtifact:
-        owner = user or self.user
-        thread = thread or self.thread
-        message = thread.add_message("artifact source", actor=Actor.USER)
-        published_file = None
-        if published:
-            published_file = UserFile.objects.create(
-                user=owner,
-                thread=thread,
-                key=f"users/{owner.id}/threads/{thread.id}/generated/notes.txt",
-                original_filename="/generated/notes.txt",
-                mime_type="text/plain",
-                size=15,
-                scope=UserFile.Scope.THREAD_SHARED,
-            )
-        return MessageArtifact.objects.create(
-            user=owner,
-            thread=thread,
-            message=message,
-            direction=ArtifactDirection.OUTPUT,
-            kind=ArtifactKind.TEXT,
-            label="notes.txt",
-            summary_text="Generated notes",
-            published_file=published_file,
         )
 
     def test_file_list_returns_403_for_missing_or_unauthorized_thread(self):
@@ -90,6 +63,25 @@ class FilesViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         files_arg = mocked_tree.call_args.args[0]
         self.assertEqual(list(files_arg.values_list("scope", flat=True)), [UserFile.Scope.THREAD_SHARED])
+
+    @patch("nova.views.files_views.build_virtual_tree", return_value=[])
+    def test_file_list_hides_runtime_tmp_files(self, mocked_tree):
+        self._create_user_file(name="/visible.txt")
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/runtime-tmp.txt",
+            original_filename=f"{RUNTIME_STORAGE_ROOT}/42/tmp/runtime-tmp.txt",
+            mime_type="text/plain",
+            size=8,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        response = self.client.get(reverse("file_list", args=[self.thread.id]))
+
+        self.assertEqual(response.status_code, 200)
+        files_arg = mocked_tree.call_args.args[0]
+        self.assertEqual(list(files_arg.values_list("original_filename", flat=True)), ["/visible.txt"])
 
     @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/file")
     def test_file_download_url_success(self, mocked_get_url):
@@ -192,108 +184,12 @@ class FilesViewsTests(TestCase):
         mocked_s3.delete_object.assert_called_once()
         mocked_runner.assert_called_once_with(self.thread.id, "file_delete")
 
-    def test_artifact_publish_returns_403_when_not_found(self):
-        response = self.client.post(reverse("artifact_publish", args=[999999]))
-        self.assertEqual(response.status_code, 403)
-        self.assertIn("error", response.json())
-
-    @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
-    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
-    def test_artifact_publish_success(self, mocked_publish_artifact, mocked_publish_update):
-        artifact = self._create_artifact()
-        mocked_publish_artifact.return_value = (44, [])
-
-        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertTrue(payload["success"])
-        self.assertEqual(payload["file_id"], 44)
-        mocked_publish_artifact.assert_awaited_once()
-        mocked_publish_update.assert_awaited_once_with(self.thread.id, "artifact_publish")
-
-    def test_artifact_publish_short_circuits_when_already_published(self):
-        artifact = self._create_artifact(published=True)
-
-        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertTrue(payload["success"])
-        self.assertTrue(payload["already_published"])
-
-    @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
-    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
-    def test_artifact_publish_allows_republish_after_published_file_was_deleted(
-        self,
-        mocked_publish_artifact,
-        mocked_publish_update,
-    ):
-        artifact = self._create_artifact(published=True)
-        with patch.object(UserFile, "delete_storage_object", autospec=True):
-            artifact.published_file.delete()
-        artifact.refresh_from_db()
-        mocked_publish_artifact.return_value = (45, [])
-
-        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertTrue(payload["success"])
-        self.assertEqual(payload["file_id"], 45)
-        mocked_publish_artifact.assert_awaited_once()
-        mocked_publish_update.assert_awaited_once_with(self.thread.id, "artifact_publish")
-
-    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
-    def test_artifact_publish_returns_400_on_publish_error(self, mocked_publish_artifact):
-        artifact = self._create_artifact()
-        mocked_publish_artifact.return_value = (None, ["cannot publish"])
-
-        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
-
-        self.assertEqual(response.status_code, 400)
-        payload = response.json()
-        self.assertFalse(payload["success"])
-        self.assertIn("cannot publish", payload["error"])
-
-    @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
-    @patch("nova.views.files_views.publish_artifact_to_files", new_callable=AsyncMock)
-    def test_artifact_publish_succeeds_when_sidebar_refresh_fails(self, mocked_publish_artifact, mocked_publish_update):
-        artifact = self._create_artifact()
-        mocked_publish_artifact.return_value = (44, [])
-        mocked_publish_update.side_effect = RuntimeError("channel layer unavailable")
-
-        response = self.client.post(reverse("artifact_publish", args=[artifact.id]))
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertTrue(payload["success"])
-        self.assertEqual(payload["file_id"], 44)
-
-    @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/artifact")
-    def test_artifact_content_redirects_for_binary_artifact(self, mocked_get_url):
+    @patch("nova.models.UserFile.UserFile.get_download_url", return_value="https://download.test/file-content")
+    def test_file_content_redirects_to_signed_url(self, mocked_get_url):
         user_file = self._create_user_file(name="clip.mp3")
-        artifact = MessageArtifact.objects.create(
-            user=self.user,
-            thread=self.thread,
-            message=self.thread.add_message("audio", actor=Actor.AGENT),
-            user_file=user_file,
-            direction=ArtifactDirection.OUTPUT,
-            kind=ArtifactKind.AUDIO,
-            label="clip.mp3",
-            mime_type="audio/mpeg",
-        )
 
-        response = self.client.get(reverse("artifact_content", args=[artifact.id]))
+        response = self.client.get(reverse("file_content", args=[user_file.id]))
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], "https://download.test/artifact")
+        self.assertEqual(response["Location"], "https://download.test/file-content")
         mocked_get_url.assert_called_once_with(expires_in=3600)
-
-    def test_artifact_content_returns_summary_text_when_no_binary_exists(self):
-        artifact = self._create_artifact()
-
-        response = self.client.get(reverse("artifact_content", args=[artifact.id]))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content.decode("utf-8"), "Generated notes")

@@ -12,6 +12,7 @@ import os
 
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
 from django.core.asgi import get_asgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'nova.settings')
@@ -25,9 +26,11 @@ routing = importlib.import_module("nova.routing")
 
 application = ProtocolTypeRouter({
     "http": django_asgi_app,
-    "websocket": AuthMiddlewareStack(  # Auth for WS
-        URLRouter(
-            routing.websocket_urlpatterns
+    "websocket": AllowedHostsOriginValidator(
+        AuthMiddlewareStack(  # Auth for WS
+            URLRouter(
+                routing.websocket_urlpatterns
+            )
         )
     ),
 })

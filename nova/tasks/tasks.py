@@ -10,41 +10,32 @@ from channels.layers import get_channel_layer
 
 from django.contrib.auth.models import User
 from django.utils import timezone
-from langchain_core.messages import BaseMessage, HumanMessage
-from langchain_core.messages import AIMessage
 
-from nova.llm.checkpoints import get_checkpointer
-from nova.llm.llm_agent import LLMAgent, create_provider_llm
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
 from nova.models.Message import Message
 from nova.models.Message import Actor
-from nova.models.MessageArtifact import ArtifactDirection, MessageArtifact
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
 from nova.file_utils import download_file_content
-from nova.message_utils import annotate_user_message
 from nova.multimodal_prompts import (
     build_multimodal_intro_text,
     build_multimodal_prompt_content,
 )
-from nova.native_provider_runtime import (
-    attach_tool_output_artifacts_to_message,
-    invoke_native_provider_for_message,
-    persist_native_result_artifacts,
-    summarize_native_result,
-)
 from nova.turn_inputs import load_message_turn_inputs
 from nova.tasks.email_polling import poll_new_unseen_email_headers
-from nova.tasks.TaskExecutor import TaskExecutor
 from nova.tasks.task_definition_runner import (
     build_email_prompt_variables,
     execute_agent_task_definition,
 )
-from nova.telemetry.langfuse import create_langfuse_callback_handler
 from nova.thread_titles import is_default_thread_subject, normalize_generated_thread_title
 from nova.utils import strip_thinking_blocks, markdown_to_html
+from nova.runtime.provider_client import ProviderClient
+from nova.runtime.task_executor import (
+    ReactTerminalSummarizationTaskExecutor,
+    ReactTerminalTaskExecutor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,446 +109,6 @@ def schedule_trigger_task_retry(task, error: Exception, *, task_definition_id: i
     raise task.retry(exc=error, countdown=countdown, max_retries=TRIGGER_TASK_MAX_RETRIES)
 
 
-class AgentTaskExecutor (TaskExecutor):
-    """
-    Encapsulates the execution of AI tasks with proper error handling,
-    progress tracking, and state management.
-    """
-
-    @staticmethod
-    def _normalize_text_for_compare(value: str) -> str:
-        return " ".join((value or "").split())
-
-    def _get_display_markdown(self, final_answer: str) -> str:
-        streamed_markdown = ""
-        if self.handler and hasattr(self.handler, "get_streamed_markdown"):
-            streamed_markdown = self.handler.get_streamed_markdown() or ""
-        if not streamed_markdown:
-            streamed_markdown = getattr(self.task, "streamed_markdown", "") or ""
-        if not streamed_markdown.strip():
-            return ""
-        if self._normalize_text_for_compare(streamed_markdown) == self._normalize_text_for_compare(final_answer):
-            return ""
-        return streamed_markdown
-
-    async def _create_prompt(self):
-        if not self.source_message_id:
-            return self.prompt
-
-        provider = await self._get_llm_provider()
-        try:
-            source_message = await sync_to_async(
-                Message.objects.select_related("thread", "user").get,
-                thread_sensitive=True,
-            )(pk=self.source_message_id, thread=self.thread, user=self.user)
-        except Message.DoesNotExist:
-            return self.prompt
-
-        self._source_message = source_message
-        return await build_source_message_prompt(
-            source_message,
-            provider=provider,
-            fallback_prompt=self.prompt or "",
-        )
-
-    async def _run_agent(self):
-        native_result = await self._run_native_provider_if_supported()
-        if native_result is not None:
-            self._native_provider_result = native_result
-            return summarize_native_result(native_result)
-        return await super()._run_agent()
-
-    async def _run_native_provider_if_supported(self):
-        provider = await self._get_llm_provider()
-        source_message = getattr(self, "_source_message", None)
-        if provider is None or source_message is None:
-            return None
-        return await invoke_native_provider_for_message(
-            provider,
-            thread=self.thread,
-            user=self.user,
-            source_message=source_message,
-            fallback_prompt=self.prompt or "",
-        )
-
-    async def _process_result(self, result):
-        await super()._process_result(result)
-
-        final_answer = "" if result is None else str(result)
-
-        # Add message to thread
-        message = await sync_to_async(
-            self.thread.add_message, thread_sensitive=False
-        )(final_answer, actor=Actor.AGENT)
-
-        native_result = getattr(self, "_native_provider_result", None)
-        if native_result:
-            provider = await self._get_llm_provider()
-            await persist_native_result_artifacts(
-                message=message,
-                native_result=native_result,
-                provider=provider,
-            )
-            await self._sync_native_provider_checkpoint(native_result, final_answer)
-        generated_tool_artifact_ids = [
-            int(artifact_ref["artifact_id"])
-            for artifact_ref in list(getattr(self.llm, "last_generated_tool_artifact_refs", []) or [])
-            if artifact_ref.get("artifact_id")
-        ]
-        hidden_subagent_artifact_ids = await self._collect_hidden_subagent_output_artifact_ids()
-        if hidden_subagent_artifact_ids:
-            seen_artifact_ids = set(generated_tool_artifact_ids)
-            generated_tool_artifact_ids.extend(
-                artifact_id
-                for artifact_id in hidden_subagent_artifact_ids
-                if artifact_id not in seen_artifact_ids
-            )
-        if generated_tool_artifact_ids:
-            await sync_to_async(
-                attach_tool_output_artifacts_to_message,
-                thread_sensitive=True,
-            )(
-                message=message,
-                artifact_ids=generated_tool_artifact_ids,
-            )
-
-        # Calculate and store context consumption
-        real_tokens, approx_tokens, max_context = await ContextConsumptionTracker.calculate(
-            self.agent_config, self.llm
-        )
-
-        # Publish context consumption
-        await self.handler.on_context_consumption(real_tokens, approx_tokens, max_context)
-
-        trace_summary = {
-            "has_trace": False,
-            "tool_calls": 0,
-            "subagent_calls": 0,
-            "interaction_count": 0,
-            "error_count": 0,
-            "artifact_count": 0,
-            "duration_ms": None,
-        }
-        if self.trace_handler:
-            await self.trace_handler.set_context_consumption(
-                real_tokens=real_tokens,
-                approx_tokens=approx_tokens,
-                max_context=max_context,
-            )
-            await self.trace_handler.complete_root_run(final_answer)
-            trace_summary = await self.trace_handler.get_message_trace_summary()
-
-        display_markdown = self._get_display_markdown(final_answer)
-        await self._persist_agent_message_state(
-            message.id,
-            real_tokens=real_tokens,
-            approx_tokens=approx_tokens,
-            max_context=max_context,
-            display_markdown=display_markdown,
-            trace_task_id=getattr(self.task, "id", None),
-            trace_summary=trace_summary,
-        )
-
-        if self.handler and hasattr(self.handler, "on_new_message"):
-            realtime_payload = await self._build_realtime_message_payload(message.id)
-            await self.handler.on_new_message(
-                realtime_payload,
-                task_id=self.task.id,
-            )
-
-        # Clear transient stream state now that durable message persistence is complete.
-        self.task.current_response = None
-        self.task.streamed_markdown = ""
-
-        # Trigger title generation asynchronously when the thread still has its default title.
-        await self._enqueue_thread_title_generation()
-
-    async def _persist_agent_message_state(
-        self,
-        message_id: int,
-        *,
-        real_tokens: int | None,
-        approx_tokens: int | None,
-        max_context: int | None,
-        display_markdown: str,
-        trace_task_id: int | None,
-        trace_summary: dict | None,
-    ) -> None:
-        def _persist_message_state() -> None:
-            fresh_message = (
-                Message.objects.select_related("thread", "user")
-                .prefetch_related(
-                    "artifacts__user_file",
-                    "artifacts__published_file",
-                )
-                .get(
-                    id=message_id,
-                    thread=self.thread,
-                    user=self.user,
-                )
-            )
-            annotate_user_message(fresh_message)
-            internal_data = (
-                fresh_message.internal_data
-                if isinstance(fresh_message.internal_data, dict)
-                else {}
-            )
-            internal_data.update({
-                "real_tokens": real_tokens,
-                "approx_tokens": approx_tokens,
-                "max_context": max_context,
-            })
-            if trace_task_id is not None:
-                internal_data["trace_task_id"] = trace_task_id
-            if isinstance(trace_summary, dict):
-                internal_data["trace_summary"] = trace_summary
-            if display_markdown:
-                internal_data["display_markdown"] = display_markdown
-            else:
-                internal_data.pop("display_markdown", None)
-            fresh_message.internal_data = internal_data
-            fresh_message.save(update_fields=["internal_data"])
-
-        await sync_to_async(_persist_message_state, thread_sensitive=True)()
-
-    async def _build_realtime_message_payload(self, message_id: int) -> dict:
-        def _load_message():
-            fresh_message = (
-                Message.objects.select_related("thread", "user")
-                .prefetch_related(
-                    "artifacts__user_file",
-                    "artifacts__published_file",
-                )
-                .get(
-                    id=message_id,
-                    thread=self.thread,
-                    user=self.user,
-                )
-            )
-            annotate_user_message(fresh_message)
-            display_text = ""
-            if isinstance(fresh_message.internal_data, dict):
-                display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
-            if not display_text:
-                display_text = fresh_message.text or ""
-            return {
-                "id": fresh_message.id,
-                "text": fresh_message.text,
-                "actor": fresh_message.actor,
-                "internal_data": fresh_message.internal_data,
-                "created_at": str(fresh_message.created_at),
-                "rendered_html": markdown_to_html(display_text),
-                "artifacts": getattr(fresh_message, "message_artifacts", []),
-            }
-
-        return await sync_to_async(_load_message, thread_sensitive=True)()
-
-    async def _collect_hidden_subagent_output_artifact_ids(self) -> list[int]:
-        source_message = getattr(self, "_source_message", None)
-        if source_message is None or not getattr(source_message, "id", None):
-            return []
-
-        def _load_artifact_ids():
-            hidden_message_ids = list(
-                Message.objects.filter(
-                    thread=self.thread,
-                    user=self.user,
-                    actor=Actor.SYSTEM,
-                    id__gt=source_message.id,
-                    internal_data__hidden_subagent_trace=True,
-                ).values_list("id", flat=True)
-            )
-            if not hidden_message_ids:
-                return []
-            return list(
-                MessageArtifact.objects.filter(
-                    thread=self.thread,
-                    user=self.user,
-                    message_id__in=hidden_message_ids,
-                    direction=ArtifactDirection.OUTPUT,
-                )
-                .order_by("created_at", "id")
-                .values_list("id", flat=True)
-            )
-
-        return await sync_to_async(_load_artifact_ids, thread_sensitive=True)()
-
-    async def _sync_native_provider_checkpoint(self, native_result: dict, final_answer: str) -> None:
-        if not self.llm or not getattr(self.llm, "langchain_agent", None):
-            return
-
-        source_message_id = native_result.get("source_message_id")
-        artifact_refs = list(native_result.get("source_artifact_ids") or [])
-        prompt_surrogate = str(native_result.get("prompt_surrogate") or "").strip()
-        if not prompt_surrogate:
-            prompt_surrogate = "User provided multimodal artifacts."
-
-        user_message = HumanMessage(
-            content=prompt_surrogate,
-            additional_kwargs={
-                "native_run": True,
-                "source_message_id": source_message_id,
-                "artifact_refs": artifact_refs,
-            },
-        )
-        agent_message = AIMessage(content=final_answer or "")
-        await self.llm.langchain_agent.aupdate_state(
-            self.llm.config.copy(),
-            {"messages": [user_message, agent_message]},
-        )
-
-    async def _enqueue_thread_title_generation(self):
-        """Schedule thread title generation asynchronously for default subjects."""
-        if not self.thread or not self.agent_config:
-            return
-        if not is_default_thread_subject(self.thread.subject):
-            return
-        enqueue_start = time.perf_counter()
-        try:
-            await sync_to_async(generate_thread_title_task.delay, thread_sensitive=False)(
-                thread_id=self.thread.id,
-                user_id=self.user.id,
-                agent_config_id=self.agent_config.id,
-                source_task_id=self.task.id,
-            )
-            duration_ms = int((time.perf_counter() - enqueue_start) * 1000)
-            logger.debug(
-                "Enqueued thread title generation (thread_id=%s, task_id=%s) in %sms.",
-                getattr(self.thread, "id", None),
-                getattr(self.task, "id", None),
-                duration_ms,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Could not enqueue thread title generation (thread_id=%s, task_id=%s): %s",
-                getattr(self.thread, "id", None),
-                getattr(self.task, "id", None),
-                exc,
-            )
-
-
-class ContextConsumptionTracker:
-    """Utility class for tracking and calculating context consumption."""
-
-    @staticmethod
-    async def calculate(agent_config, agent):
-        """
-        Calculate context consumption from agent checkpoint.
-        Returns (real_tokens, approx_tokens, max_context)
-        """
-        config = agent.config
-        checkpointer = await get_checkpointer()
-        try:
-            checkpoint_tuple = await checkpointer.aget_tuple(config)
-
-            real_tokens = None
-            approx_tokens = None
-
-            if checkpoint_tuple:
-                state = checkpoint_tuple.checkpoint
-                memory = state.get('channel_values', {}).get('messages', [])
-
-                # Try to get real token count from last response
-                if memory:
-                    last_response = memory[-1]
-                    usage_metadata = getattr(last_response, 'usage_metadata', None)
-                    if usage_metadata:
-                        real_tokens = usage_metadata.get('total_tokens')
-
-                # Fallback to approximation
-                if real_tokens is None:
-                    approx_tokens = ContextConsumptionTracker._approximate_tokens(memory)
-
-            # Get max context from provider
-            max_context = await sync_to_async(
-                lambda: agent_config.llm_provider.max_context_tokens,
-                thread_sensitive=False
-            )()
-
-            return real_tokens, approx_tokens, max_context
-        finally:
-            await checkpointer.conn.close()
-
-    @staticmethod
-    def _approximate_tokens(memory):
-        """Approximate token count from message content."""
-        total_bytes = 0
-
-        for msg in memory:
-            if not isinstance(msg, BaseMessage):
-                continue
-
-            content = msg.content
-            if isinstance(content, str):
-                # Handle string content
-                total_bytes += len(content.encode("utf-8", "ignore"))
-            elif isinstance(content, list):
-                # Handle list content - iterate through each item
-                for item in content:
-                    if isinstance(item, str):
-                        total_bytes += len(item.encode("utf-8", "ignore"))
-                    else:
-                        # Convert non-string items to string representation
-                        total_bytes += len(str(item).encode("utf-8", "ignore"))
-            else:
-                # Handle other content types by converting to string
-                total_bytes += len(str(content).encode("utf-8", "ignore"))
-
-        return total_bytes // 4 + 1
-
-
-async def delete_checkpoints(ckp_id):
-    checkpointer = await get_checkpointer()
-    try:
-        await checkpointer.adelete_thread(ckp_id)
-    finally:
-        await checkpointer.conn.close()
-
-
-def _build_langfuse_invoke_config(user, *, session_id: str):
-    """Build Langfuse callbacks/config for direct LLM invocations outside LangGraph."""
-    try:
-        allow_langfuse, langfuse_public_key, langfuse_secret_key, langfuse_host = LLMAgent.fetch_user_params_sync(user)
-    except Exception:
-        logger.warning(
-            "Could not load Langfuse user parameters for user %s. Continuing without tracing.",
-            getattr(user, "id", "unknown"),
-        )
-        return {}
-    if not (allow_langfuse and langfuse_public_key and langfuse_secret_key):
-        return {}
-
-    try:
-        from langfuse import Langfuse
-
-        client = Langfuse(
-            public_key=langfuse_public_key,
-            secret_key=langfuse_secret_key,
-            host=langfuse_host,
-        )
-        if not client.auth_check():
-            logger.warning(
-                "Langfuse auth check failed for user %s during direct LLM call. Tracing will still be attempted.",
-                getattr(user, "id", "unknown"),
-            )
-
-        invoke_config = {
-            "callbacks": [
-                create_langfuse_callback_handler(public_key=langfuse_public_key)
-            ],
-            "metadata": {
-                "langfuse_session_id": session_id,
-            },
-        }
-        return invoke_config
-    except Exception:
-        logger.exception(
-            "Failed to initialize Langfuse callback for direct LLM call (user_id=%s).",
-            getattr(user, "id", "unknown"),
-        )
-        return {}
-
-
 def _build_thread_title_prompt(messages: list[Message]) -> str:
     """Build a short prompt from the first thread messages."""
     lines = []
@@ -602,8 +153,8 @@ def execute_agent_task_with_executor(
     source_message_id: int | None = None,
     push_notifications_enabled: bool = True,
 ) -> None:
-    """Run a task execution with `AgentTaskExecutor` in a synchronous context."""
-    executor = AgentTaskExecutor(
+    """Run a task execution with the Nova executor in a synchronous context."""
+    executor = ReactTerminalTaskExecutor(
         task,
         user,
         thread,
@@ -657,7 +208,7 @@ def generate_thread_title_task(
     agent_config_id: int,
     source_task_id: int | None = None,
 ):
-    """Generate a short thread title asynchronously without touching agent checkpoints."""
+    """Generate a short thread title asynchronously without touching runtime session state."""
     title_task_start = time.perf_counter()
     try:
         thread = Thread.objects.select_related("user").get(id=thread_id, user_id=user_id)
@@ -672,20 +223,21 @@ def generate_thread_title_task(
             return {"status": "skipped", "reason": "not_enough_messages"}
 
         agent_config = AgentConfig.objects.select_related("llm_provider").get(id=agent_config_id, user_id=user_id)
-        llm = create_provider_llm(agent_config.llm_provider)
+        provider_client = ProviderClient(agent_config.llm_provider)
 
-        invoke_config = _build_langfuse_invoke_config(
-            thread.user,
-            session_id=f"thread_title_{thread_id}",
-        )
         response = asyncio.run(
-            llm.ainvoke(
-                [HumanMessage(content=_build_thread_title_prompt(messages))],
-                config=invoke_config or None,
+            provider_client.create_chat_completion(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _build_thread_title_prompt(messages),
+                    }
+                ],
+                tools=None,
             )
         )
 
-        raw_title = strip_thinking_blocks(getattr(response, "content", None) or str(response))
+        raw_title = strip_thinking_blocks(str(response.get("content") or ""))
         normalized_title = normalize_generated_thread_title(raw_title)
         if not normalized_title:
             return {"status": "skipped", "reason": "empty_generated_title"}
@@ -716,7 +268,7 @@ def generate_thread_title_task(
 @shared_task(bind=True, name="run_ai_task")
 def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
     """
-    Optimized Celery task with batched database queries and AgentTaskExecutor.
+    Optimized Celery task with batched database queries and the Nova executor.
     """
     try:
         # Optimized database queries with select_related
@@ -763,10 +315,16 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
 def resume_ai_task_celery(self, interaction_pk: int):
     """
     Resume an agent execution after user input.
-    Uses the same thread/checkpoint and streams via the same WS group (task_id).
+    Uses the same thread and streams via the same WS group (task_id).
     """
     try:
-        interaction = Interaction.objects.select_related('task', 'thread', 'agent_config').get(pk=interaction_pk)
+        interaction = Interaction.objects.select_related(
+            'task',
+            'task__user',
+            'thread',
+            'agent_config',
+            'agent_config__llm_provider',
+        ).get(pk=interaction_pk)
         task = interaction.task
         thread = interaction.thread
         user = task.user
@@ -778,10 +336,10 @@ def resume_ai_task_celery(self, interaction_pk: int):
             'user_response': interaction.answer,
             'interaction_id': interaction.id,
             'interaction_status': interaction.status,
+            'resume_context': dict(getattr(interaction, "resume_context", {}) or {}),
         }
 
-        # Run the resume executor
-        executor = AgentTaskExecutor(task, user, thread, agent_config, interaction)
+        executor = ReactTerminalTaskExecutor(task, user, thread, agent_config, interaction)
         asyncio.run(executor.execute_or_resume(interruption_response))
 
     except Interaction.DoesNotExist:
@@ -799,8 +357,7 @@ def resume_ai_task_celery(self, interaction_pk: int):
 def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id,
                           include_sub_agents=False, sub_agent_ids=None):
     """
-    Celery task to manually summarize a thread.
-    Uses SummarizationTaskExecutor following the same pattern as AgentTaskExecutor.
+    Celery task to manually summarize a thread with conversation compaction.
     """
     try:
         # Get objects (sync database access)
@@ -809,93 +366,18 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id,
         agent_config = AgentConfig.objects.get(id=agent_config_id, user=user)
         task = Task.objects.get(id=task_id)
 
-        # Use the executor pattern (same as AgentTaskExecutor)
-        executor = SummarizationTaskExecutor(task, user, thread, agent_config, include_sub_agents, sub_agent_ids or [])
+        executor = ReactTerminalSummarizationTaskExecutor(
+            task,
+            user,
+            thread,
+            agent_config,
+        )
         asyncio.run(executor.execute())
 
     except Exception as e:
         logger.error(f"Summarization task failed for thread {thread_id}: {e}")
         # Let Celery handle retry logic
         raise self.retry(countdown=60, exc=e)
-
-
-class SummarizationTaskExecutor(TaskExecutor):
-    """
-    Executor for manual thread summarization.
-    Follows the same pattern as AgentTaskExecutor for consistent behavior.
-    """
-
-    def __init__(self, task, user, thread, agent_config, include_sub_agents=False, sub_agent_ids=None):
-        # Initialize with empty prompt - summarization doesn't need user input
-        super().__init__(task, user, thread, agent_config, "", source_message_id=None)
-        self.include_sub_agents = include_sub_agents
-        self.sub_agent_ids = sub_agent_ids or []
-
-    async def execute(self):
-        """Main execution method for summarization."""
-        try:
-            await self._initialize_task()
-            await self._create_llm_agent()
-            await self._perform_summarization()
-            await self._finalize_task()
-        except Exception as e:
-            await self._handle_execution_error(e)
-        finally:
-            await self._cleanup()
-
-    async def _perform_summarization(self):
-        """Perform the summarization using the middleware."""
-        if self.include_sub_agents:
-            sub_agent_ids = self.sub_agent_ids
-
-            # Summarize main agent first
-            await self._summarize_single_agent(self.agent_config)
-
-            # Then summarize each selected sub-agent
-            for agent_id in sub_agent_ids:
-                sub_agent_config = await sync_to_async(AgentConfig.objects.get, thread_sensitive=False)(
-                    id=agent_id, user=self.user
-                )
-                await self._summarize_single_agent(sub_agent_config)
-        else:
-            await self._summarize_single_agent(self.agent_config)
-
-        logger.info(f"Thread {self.thread.id} summarization completed successfully")
-
-    async def _summarize_single_agent(self, agent_config):
-        """Summarize a single agent."""
-        from nova.llm.llm_agent import LLMAgent
-        from nova.llm.agent_middleware import AgentContext
-
-        # Create agent-specific LLMAgent instance
-        agent = await LLMAgent.create(self.user, self.thread, agent_config)
-        try:
-            # Create context for middleware
-            context = AgentContext(
-                agent_config=agent_config,
-                user=self.user,
-                thread=self.thread,
-                progress_handler=self.handler
-            )
-
-            # Find the summarization middleware
-            middleware = None
-            for mw in agent.middleware:
-                if hasattr(mw, 'manual_summarize'):
-                    middleware = mw
-                    break
-
-            if not middleware:
-                raise ValueError(f"SummarizationMiddleware not found for agent {agent_config.name}")
-
-            # Perform manual summarization
-            result = await middleware.manual_summarize(context)
-
-            if result["status"] != "success":
-                raise ValueError(f"Summarization failed for {agent_config.name}: {result['message']}")
-
-        finally:
-            await agent.cleanup_runtime()
 
 
 def _mark_task_definition_success(task_definition: TaskDefinition):

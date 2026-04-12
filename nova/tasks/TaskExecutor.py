@@ -7,16 +7,12 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from enum import Enum
 from typing import Dict, Any
-from langgraph.types import Command
 
-from nova.agent_execution import provider_tools_explicitly_unavailable, requires_tools_for_run
-from nova.llm.llm_agent import LLMAgent
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
 from nova.models.Task import TaskStatus
 from nova.tasks.execution_trace import (
     TaskExecutionTraceHandler,
-    collect_delegated_agent_tool_names,
 )
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
@@ -106,78 +102,46 @@ class TaskExecutor:
         try:
             await self._initialize_task(interruption_response=interruption_response)
             await self._ensure_trace_handler(resumed=bool(interruption_response))
+            if interruption_response and self.trace_handler:
+                await self.trace_handler.resolve_latest_interaction(
+                    interaction_status=str(interruption_response.get("interaction_status") or ""),
+                    answer_preview=interruption_response.get("user_response"),
+                )
             await self._create_llm_agent()
 
             if interruption_response:
                 # Emit an update
                 await self.handler.on_resume_task(interruption_response)
-                result = await self.llm.aresume(Command(resume=interruption_response))
+                result = await self._resume_agent(interruption_response)
             else:
                 self.prompt = await self._create_prompt()
                 result = await self._run_agent()
 
-            if isinstance(result, dict) and result.get('__interrupt__'):
-                await self._process_interuption(result)
+            interruption = self._extract_interruption_payload(result)
+            if interruption is not None:
+                await self._process_interruption_payload(interruption)
             else:
                 await self._process_result(result)
                 await self._finalize_task()
-
-                # Continuous mode: sub-agents must be stateless.
-                # After a successful run, purge all sub-agent checkpoints for this thread,
-                # keeping only the main agent checkpoint.
-                try:
-                    from nova.models.Thread import Thread as ThreadModel
-                    if self.thread and self.thread.mode == ThreadModel.Mode.CONTINUOUS:
-                        await self._purge_continuous_subagent_checkpoints()
-                except Exception:
-                    # Best-effort cleanup; never fail the task because of this.
-                    pass
         except Exception as e:
             await self._handle_execution_error(e)
         finally:
             await self._cleanup()
 
-    async def _purge_continuous_subagent_checkpoints(self) -> None:
-        """Delete LangGraph checkpoint state for all sub-agents in a continuous thread.
+    async def _resume_agent(self, interruption_response):
+        raise NotImplementedError
 
-        Policy: delete all checkpoints for this thread except the main agent's checkpoint.
-        We keep CheckpointLink rows; only LangGraph state is deleted.
-        """
-
-        if not self.thread or not self.agent_config:
-            return
-
-        from nova.models.CheckpointLink import CheckpointLink
-        from nova.llm.checkpoints import get_checkpointer
-
-        # Compute which checkpoint_id to keep (main agent)
-        def _load_checkpoint_ids():
-            keep = (
-                CheckpointLink.objects.filter(thread=self.thread, agent=self.agent_config)
-                .values_list("checkpoint_id", flat=True)
-                .first()
-            )
-            all_ids = list(
-                CheckpointLink.objects.filter(thread=self.thread)
-                .exclude(checkpoint_id=keep)
-                .values_list("checkpoint_id", flat=True)
-            )
-            return keep, all_ids
-
-        keep_id, purge_ids = await sync_to_async(_load_checkpoint_ids, thread_sensitive=True)()
-        if not purge_ids:
-            return
-
-        saver = await get_checkpointer()
-        try:
-            for ckp_id in purge_ids:
-                try:
-                    await saver.adelete_thread(ckp_id)
-                except Exception:
-                    # Best-effort; ignore per-checkpoint failure
-                    continue
-        finally:
-            await saver.conn.close()
+    def _extract_interruption_payload(self, result):
+        if not (isinstance(result, dict) and result.get('__interrupt__')):
+            return None
+        interruption = result['__interrupt__'][0].value
+        return {
+            "action": interruption.get("action"),
+            "question": interruption.get("question"),
+            "schema": interruption.get("schema") or {},
+            "agent_name": interruption.get("agent_name") or "",
+            "resume_context": interruption.get("resume_context") or {},
+        }
 
     async def _initialize_task(self, interruption_response=None):
         """Initialize task state and logging."""
@@ -191,53 +155,25 @@ class TaskExecutor:
         await sync_to_async(self.task.save, thread_sensitive=False)()
 
     async def _create_llm_agent(self):
-        """Create and configure the LLM agent."""
-        self.task.progress_logs.append({"step": "Creating LLM agent",
-                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
-        await sync_to_async(self.task.save, thread_sensitive=False)()
-        trace_handler = await self._ensure_trace_handler()
-
-        tools_enabled = True
-        provider = await self._get_llm_provider()
-        thread_mode = getattr(self.thread, "mode", None)
-        if provider_tools_explicitly_unavailable(provider):
-            if await sync_to_async(requires_tools_for_run, thread_sensitive=True)(
-                self.agent_config,
-                thread_mode,
-            ):
-                raise ValueError(
-                    "The selected provider does not support tool use, but this agent depends on tools or sub-agents."
-                )
-            tools_enabled = False
-
-        self.llm = await LLMAgent.create(
-            self.user, self.thread, self.agent_config,
-            callbacks=[callback for callback in [self.handler, trace_handler] if callback],
-            tools_enabled=tools_enabled,
-        )
-        if trace_handler:
-            trace_handler.add_ignored_tool_names(
-                collect_delegated_agent_tool_names(getattr(self.llm, "tools", []))
-            )
-
-        # Expose runtime resources to tools via agent._resources
-        # Allows built-in tools to emit progress/events over existing WS channels
-        try:
-            self.llm._resources['channel_layer'] = self.channel_layer
-            self.llm._resources['task_id'] = self.task.id
-        except Exception:
-            # Tools can still fallback to get_channel_layer() if needed
-            pass
+        raise NotImplementedError
 
     async def _create_prompt(self):
         return self.prompt
 
-    async def _create_interaction(self, question: str, schema: Dict[str, Any], agent_name: str):
+    async def _create_interaction(
+        self,
+        question: str,
+        schema: Dict[str, Any],
+        agent_name: str,
+        *,
+        resume_context: Dict[str, Any] | None = None,
+    ):
         """Create the pending Interaction for this task."""
         # Create an Interaction object
         interaction = Interaction(task=self.task, thread=self.thread, agent_config=self.agent_config,
                                   origin_name=agent_name, question=question, schema=schema,
-                                  status=InteractionStatus.PENDING)
+                                  status=InteractionStatus.PENDING,
+                                  resume_context=resume_context or {})
         await sync_to_async(interaction.full_clean, thread_sensitive=False)()
         await sync_to_async(interaction.save, thread_sensitive=False)()
 
@@ -253,23 +189,24 @@ class TaskExecutor:
 
         return interaction
 
-    async def _process_interuption(self, result):
-        '''
-        This will:
-            - upsert an Interaction(PENDING),
-            - mark the Task AWAITING_INPUT,
-            - emit an update for the frontend
-        '''
-        # Get interruption's data
-        interruption = result['__interrupt__'][0].value
+    async def _process_interruption_payload(self, interruption):
+        """
+        Handle a runtime-agnostic interruption payload and suspend the task.
+        """
         if not interruption['action'] == 'ask_user':
             raise Exception(f"Unsupported interruption action: {interruption['action']}")
         question = interruption['question']
         schema = interruption['schema']
         agent_name = interruption['agent_name']
+        resume_context = interruption.get("resume_context") or {}
 
         # Create/Update Interaction
-        interaction = await self._create_interaction(question, schema, agent_name)
+        interaction = await self._create_interaction(
+            question,
+            schema,
+            agent_name,
+            resume_context=resume_context,
+        )
 
         if self.trace_handler:
             await self.trace_handler.record_interaction(
@@ -288,35 +225,17 @@ class TaskExecutor:
         # Emit an update
         await self.handler.on_interrupt(interaction.id, question, schema, agent_name)
 
+    async def _process_interuption(self, result):
+        '''
+        Backward-compatible wrapper around the runtime-agnostic interruption payload flow.
+        '''
+        interruption = self._extract_interruption_payload(result)
+        if interruption is None:
+            raise Exception("Unsupported interruption payload.")
+        await self._process_interruption_payload(interruption)
+
     async def _run_agent(self):
-        """Execute the LLM agent and return result."""
-        self.task.progress_logs.append({"step": "Running AI agent",
-                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
-        await sync_to_async(self.task.save, thread_sensitive=False)()
-
-        # Continuous mode: ensure checkpoint state is rebuilt (yesterday/today summaries + today window)
-        # before invoking the agent.
-        try:
-            from nova.models.Thread import Thread as ThreadModel
-            if self.thread and self.thread.mode == ThreadModel.Mode.CONTINUOUS:
-                from nova.continuous.checkpoint_state import ensure_continuous_checkpoint_state
-
-                rebuilt = await ensure_continuous_checkpoint_state(
-                    self.llm,
-                    exclude_message_id=self.source_message_id,
-                )
-                if rebuilt:
-                    self.task.progress_logs.append({
-                        "step": "Continuous context: checkpoint rebuilt",
-                        "timestamp": str(dt.datetime.now(dt.timezone.utc)),
-                        "severity": "info",
-                    })
-                    await sync_to_async(self.task.save, thread_sensitive=False)()
-        except Exception:
-            # Best-effort: never block agent execution if rebuild fails.
-            pass
-
-        return await self.llm.ainvoke(self.prompt)
+        raise NotImplementedError
 
     async def _finalize_task(self):
         """Finalize the task as completed."""
@@ -381,7 +300,7 @@ class TaskExecutor:
 
     async def _cleanup(self):
         """Ensure proper cleanup of resources."""
-        if self.llm:
+        if self.llm and hasattr(self.llm, "cleanup_runtime"):
             cleanup_start = time.perf_counter()
             try:
                 await asyncio.wait_for(

@@ -30,20 +30,18 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         child_handler = handler.clone_for_parent(parent_node_id=subagent_node_id)
         await child_handler.on_tool_start({"name": "web_fetch"}, '{"url": "https://example.com"}', run_id=UUID(int=3))
         await child_handler.on_tool_end(
-            ("done", {"artifact_ids": [9], "tool_output": True}),
+            {"result": "done"},
             run_id=UUID(int=3),
         )
         await handler.complete_subagent(
             subagent_node_id,
             output_preview="Finished delegated research",
-            artifact_refs=[{"artifact_id": 9, "tool_output": True}],
         )
         await handler.complete_root_run("Done")
 
         trace = task.execution_trace
         self.assertEqual(trace["summary"]["tool_calls"], 2)
         self.assertEqual(trace["summary"]["subagent_calls"], 1)
-        self.assertEqual(trace["summary"]["artifact_count"], 1)
         self.assertTrue(trace["summary"]["has_trace"])
         self.assertEqual(trace["root"]["status"], "completed")
         self.assertEqual(trace["root"]["meta"]["source_message_id"], 55)
@@ -52,7 +50,6 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         self.assertEqual(root_children[0]["type"], "tool")
         self.assertEqual(root_children[1]["type"], "subagent")
         self.assertEqual(root_children[1]["children"][0]["type"], "tool")
-        self.assertEqual(root_children[1]["children"][0]["artifact_refs"][0]["artifact_id"], 9)
 
     async def test_records_interactions_and_errors(self):
         task = SimpleNamespace(id=902, execution_trace={})
@@ -76,6 +73,79 @@ class TaskExecutionTraceHandlerTests(IsolatedAsyncioTestCase):
         self.assertEqual(trace["summary"]["error_count"], 1)
         self.assertEqual(trace["root"]["status"], "failed")
         self.assertEqual(trace["root"]["meta"]["category"], "tool_failure")
+
+    async def test_records_model_call_metadata_and_summary_output_paths(self):
+        task = SimpleNamespace(id=904, execution_trace={})
+        handler = TaskExecutionTraceHandler(task)
+
+        await handler.ensure_root_run(label="Planner")
+        await handler.update_root_meta(
+            {
+                "provider": "OpenRouter",
+                "model": "gpt-4o-mini",
+                "response_mode": "text",
+            }
+        )
+        model_node_id = await handler.start_model_call(
+            label="Model call 1",
+            input_preview="Do the thing",
+            meta={"messages_count": 4, "tools_enabled": True},
+        )
+        await handler.complete_model_call(
+            model_node_id,
+            output_preview="Tool call: terminal",
+            meta={
+                "tool_call_names": ["terminal"],
+                "output_paths": ["/generated/result.txt"],
+                "token_usage": {"total_tokens": 42},
+            },
+        )
+        await handler.complete_root_run("Done")
+
+        trace = task.execution_trace
+        self.assertEqual(trace["version"], 2)
+        self.assertEqual(trace["summary"]["status"], "completed")
+        self.assertEqual(trace["summary"]["provider"], "OpenRouter")
+        self.assertEqual(trace["summary"]["model"], "gpt-4o-mini")
+        self.assertEqual(trace["summary"]["files_created_count"], 1)
+        self.assertEqual(trace["summary"]["output_paths"], ["/generated/result.txt"])
+        self.assertEqual(trace["root"]["children"][0]["type"], "model_call")
+
+    async def test_resolves_latest_interaction_answer_and_cancel(self):
+        task = SimpleNamespace(id=905, execution_trace={})
+        handler = TaskExecutionTraceHandler(task)
+
+        await handler.ensure_root_run(label="Planner")
+        await handler.record_interaction(
+            question="Continue?",
+            schema={"type": "boolean"},
+            agent_name="Planner",
+        )
+        await handler.mark_root_awaiting_input()
+        await handler.resolve_latest_interaction(
+            interaction_status="ANSWERED",
+            answer_preview=True,
+        )
+
+        trace = task.execution_trace
+        interaction_node = trace["root"]["children"][0]
+        self.assertEqual(interaction_node["status"], "completed")
+        self.assertEqual(interaction_node["meta"]["interaction_status"], "ANSWERED")
+
+        await handler.record_interaction(
+            question="Continue again?",
+            schema={"type": "boolean"},
+            agent_name="Planner",
+        )
+        await handler.resolve_latest_interaction(
+            interaction_status="CANCELED",
+            answer_preview="Canceled by user.",
+        )
+
+        trace = task.execution_trace
+        canceled_node = trace["root"]["children"][-1]
+        self.assertEqual(canceled_node["status"], "canceled")
+        self.assertEqual(canceled_node["meta"]["interaction_status"], "CANCELED")
 
 
 class TaskExecutionTraceHandlerCrossLoopTests(TestCase):

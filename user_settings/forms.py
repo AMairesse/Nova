@@ -1,9 +1,9 @@
 # user_settings/forms.py
 """
-Canonical forms for both *user_settings* and legacy Nova views.
+Canonical forms for both *user_settings* and Nova views.
 
 Every form accepts an optional ``user=…`` kwarg so that any
-OwnerFormKwargsMixin (or legacy view) can safely inject it.
+OwnerFormKwargsMixin (or another Nova view) can safely inject it.
 All comments are in English.
 """
 from __future__ import annotations
@@ -14,10 +14,17 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Div, Field
+from crispy_forms.layout import Layout, Div, Field, Fieldset
 
+from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
+from nova.plugins import get_plugin_for_builtin_subtype
+from nova.plugins.catalog import (
+    build_agent_tool_selection_catalog,
+    get_user_creatable_connection_choices,
+    resolve_connection_kind,
+)
 from nova.providers import get_provider_defaults
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
@@ -123,6 +130,26 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
 class AgentForm(forms.ModelForm):
     """Full-featured agent form with Crispy layout."""
 
+    standard_capabilities = forms.MultipleChoiceField(
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label=_("Standard capabilities"),
+    )
+    search_backend = forms.ChoiceField(
+        required=False,
+        label=_("Search backend"),
+    )
+    python_backend = forms.ChoiceField(
+        required=False,
+        label=_("Python backend"),
+    )
+    connection_tools = forms.ModelMultipleChoiceField(
+        queryset=Tool.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label=_("Connections"),
+    )
+
     # Agents that can be used as tools
     agent_tools = forms.ModelMultipleChoiceField(
         queryset=AgentConfig.objects.none(),
@@ -156,17 +183,42 @@ class AgentForm(forms.ModelForm):
     def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
         self.user = user
         super().__init__(*args, **kwargs)
+        self.fields["tools"].required = False
+        self.fields["tools"].widget = forms.MultipleHiddenInput()
+        current_tool_ids = (
+            set(self.instance.tools.values_list("pk", flat=True))
+            if self.instance.pk
+            else set()
+        )
 
         # Restrict querysets to the current user (or public objects)
         if user:
             self.fields["llm_provider"].queryset = LLMProvider.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             ).exclude(model="")
+            tool_catalog = build_agent_tool_selection_catalog(
+                user,
+                include_selected_ids=current_tool_ids,
+            )
             self.fields["tools"].queryset = Tool.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             )
             self.fields["tools"].label_from_instance = (
-                lambda tool: f"{tool.name} (#{tool.id}, {tool.get_tool_type_display()})"
+                lambda tool: self._tool_label(tool)
+            )
+            self.fields["standard_capabilities"].choices = [
+                (str(tool.pk), self._tool_label(tool, kind="capability"))
+                for tool in tool_catalog["standard_tools"]
+            ]
+            self.fields["search_backend"].choices = self._build_backend_choices(
+                tool_catalog["search_backends"],
+            )
+            self.fields["python_backend"].choices = self._build_backend_choices(
+                tool_catalog["python_backends"],
+            )
+            self.fields["connection_tools"].queryset = tool_catalog["connection_tools"]
+            self.fields["connection_tools"].label_from_instance = (
+                lambda tool: self._tool_label(tool)
             )
             self.fields["agent_tools"].queryset = AgentConfig.objects.filter(
                 user=user, is_tool=True
@@ -175,6 +227,45 @@ class AgentForm(forms.ModelForm):
         # Pre-select sub-agents when editing
         if self.instance.pk:
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
+            selected_tools = list(self.instance.tools.all())
+            self.initial["standard_capabilities"] = [
+                str(tool.pk)
+                for tool in selected_tools
+                if tool.tool_subtype in {"date", "memory", "browser", "webapp"}
+            ]
+            self.initial["search_backend"] = next(
+                (
+                    str(tool.pk)
+                    for tool in selected_tools
+                    if tool.tool_subtype == "searxng"
+                ),
+                "",
+            )
+            self.initial["python_backend"] = next(
+                (
+                    str(tool.pk)
+                    for tool in selected_tools
+                    if tool.tool_subtype == "code_execution"
+                ),
+                "",
+            )
+            self.initial["connection_tools"] = [
+                tool.pk
+                for tool in selected_tools
+                if (
+                    tool.tool_type in {Tool.ToolType.API, Tool.ToolType.MCP}
+                    or tool.tool_subtype in {"email", "caldav", "webdav"}
+                )
+            ]
+        elif user and not self.is_bound and not bool(self._bound_or_initial_value("is_tool")):
+            self.initial["standard_capabilities"] = [
+                choice_value
+                for choice_value, _label in self.fields["standard_capabilities"].choices
+            ]
+            if len(self.fields["search_backend"].choices) == 2:
+                self.initial["search_backend"] = self.fields["search_backend"].choices[1][0]
+            if len(self.fields["python_backend"].choices) == 2:
+                self.initial["python_backend"] = self.fields["python_backend"].choices[1][0]
 
         # Make summarization fields not required (they have model defaults)
         self.fields["auto_summarize"].required = False
@@ -183,6 +274,10 @@ class AgentForm(forms.ModelForm):
         self.fields["strategy"].required = False
         self.fields["max_summary_length"].required = False
         self.fields["summary_model"].required = False
+        self.fields["system_prompt"].help_text = _(
+            "Literal prompt text. The current date/time is not injected automatically; "
+            "agents should use the date capability when they need it."
+        )
 
         # Crispy-forms helper
         #
@@ -205,9 +300,18 @@ class AgentForm(forms.ModelForm):
                 css_id="tool-description-wrapper",
                 css_class="ms-3",
             ),
-            Field(
-                "tools",
-                css_class="dual-list-tools-source",
+            Fieldset(
+                _("Standard capabilities"),
+                "standard_capabilities",
+            ),
+            Fieldset(
+                _("Backend-backed capabilities"),
+                "search_backend",
+                "python_backend",
+            ),
+            Fieldset(
+                _("Connections"),
+                "connection_tools",
             ),
             "agent_tools",
             Div(
@@ -241,6 +345,44 @@ class AgentForm(forms.ModelForm):
                 "tool_description",
                 _("Required when using an agent as a tool."),
             )
+        selected_tool_ids: set[int] = set()
+
+        if self.is_bound and hasattr(self.data, "getlist"):
+            for raw_value in self.data.getlist("tools"):
+                try:
+                    selected_tool_ids.add(int(raw_value))
+                except (TypeError, ValueError):
+                    self.add_error("tools", _("Invalid tool selection."))
+
+        for raw_value in data.get("standard_capabilities") or []:
+            try:
+                selected_tool_ids.add(int(raw_value))
+            except (TypeError, ValueError):
+                self.add_error("standard_capabilities", _("Invalid capability selection."))
+
+        for field_name, subtype in (
+            ("search_backend", "searxng"),
+            ("python_backend", "code_execution"),
+        ):
+            raw_value = str(data.get(field_name) or "").strip()
+            if not raw_value:
+                continue
+            try:
+                tool_id = int(raw_value)
+            except (TypeError, ValueError):
+                self.add_error(field_name, _("Invalid backend selection."))
+                continue
+            tool = self.fields["tools"].queryset.filter(pk=tool_id).first()
+            if tool is None or tool.tool_subtype != subtype:
+                self.add_error(field_name, _("Invalid backend selection."))
+                continue
+            selected_tool_ids.add(tool_id)
+
+        connection_tools = data.get("connection_tools")
+        if connection_tools is not None:
+            selected_tool_ids.update(connection_tools.values_list("pk", flat=True))
+
+        data["tools"] = self.fields["tools"].queryset.filter(pk__in=selected_tool_ids)
         return data
 
     def _compute_provider_tool_warning(self) -> str:
@@ -274,13 +416,27 @@ class AgentForm(forms.ModelForm):
             return self.data.get(field_name)
         if field_name == "tools" and self.instance.pk:
             return list(self.instance.tools.values_list("pk", flat=True))
+        if field_name == "standard_capabilities":
+            return self.initial.get(field_name) or []
+        if field_name in {"search_backend", "python_backend"}:
+            return self.initial.get(field_name) or ""
+        if field_name == "connection_tools":
+            return self.initial.get(field_name) or []
         if field_name == "agent_tools" and self.instance.pk:
             return list(self.instance.agent_tools.values_list("pk", flat=True))
         return self.initial.get(field_name) or getattr(self.instance, field_name, None)
 
     def _has_selected_tool_dependencies(self) -> bool:
         if self.is_bound and hasattr(self.data, "getlist"):
-            selected_tools = [value for value in self.data.getlist("tools") if str(value).strip()]
+            selected_tools = (
+                [value for value in self.data.getlist("tools") if str(value).strip()]
+                + [value for value in self.data.getlist("standard_capabilities") if str(value).strip()]
+                + [value for value in self.data.getlist("connection_tools") if str(value).strip()]
+            )
+            if str(self.data.get("search_backend") or "").strip():
+                selected_tools.append(self.data.get("search_backend"))
+            if str(self.data.get("python_backend") or "").strip():
+                selected_tools.append(self.data.get("python_backend"))
             selected_agents = [value for value in self.data.getlist("agent_tools") if str(value).strip()]
             return bool(selected_tools or selected_agents)
         if self.instance.pk:
@@ -299,34 +455,42 @@ class AgentForm(forms.ModelForm):
     class Media:
         js = ["user_settings/js/agent.js"]
 
+    def _tool_label(self, tool: Tool, *, kind: str = "connection") -> str:
+        plugin = get_plugin_for_builtin_subtype(tool.tool_subtype or "")
+        if kind == "capability":
+            return plugin.label if plugin is not None else tool.name
+        type_label = plugin.label if plugin is not None else tool.get_tool_type_display()
+        return f"{tool.name} (#{tool.id}, {type_label})"
+
+    def _build_backend_choices(self, backends) -> list[tuple[str, str]]:
+        choices = [("", _("Off"))]
+        for tool in backends:
+            if tool.user_id is None:
+                label = _("Default backend: Local Nova service")
+            else:
+                label = self._tool_label(tool)
+            choices.append((str(tool.pk), label))
+        return choices
+
 
 # ────────────────────────────────────────────────────────────────────────────
 #  Tools
 # ────────────────────────────────────────────────────────────────────────────
 class ToolForm(forms.ModelForm):
     """
-    Enhanced tool form — keeps legacy dynamic behaviour and adds
+    Enhanced tool form with dynamic builtin handling and a
     Crispy helper to avoid nested <form> tags in HTMX fragments.
     """
 
+    connection_kind = forms.ChoiceField(
+        required=False,
+        label=_("Connection type"),
+        help_text=_("Choose the kind of connection to add."),
+    )
     tool_subtype = forms.ChoiceField(
         required=False,
         label=_("Builtin tool subtype"),
         help_text=_("Select a builtin tool subtype"),
-    )
-
-    input_schema = forms.JSONField(
-        widget=forms.Textarea(attrs={"rows": 5, "class": "json-editor"}),
-        required=False,
-        initial={},
-        help_text=_("JSON schema describing the tool inputs"),
-    )
-
-    output_schema = forms.JSONField(
-        widget=forms.Textarea(attrs={"rows": 5, "class": "json-editor"}),
-        required=False,
-        initial={},
-        help_text=_("JSON schema describing the tool outputs"),
     )
 
     class Meta:
@@ -338,16 +502,20 @@ class ToolForm(forms.ModelForm):
             "tool_subtype",
             "endpoint",
             "transport_type",
-            "input_schema",
-            "output_schema",
-            "is_active",
         ]
 
     # ------------------------------------------------------------------ #
     #  Constructor                                                        #
     # ------------------------------------------------------------------ #
-    def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        user=None,
+        fixed_connection_kind: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.user = user
+        self.fixed_connection_kind = str(fixed_connection_kind or "").strip()
         super().__init__(*args, **kwargs)
 
         # Crispy helper
@@ -358,59 +526,71 @@ class ToolForm(forms.ModelForm):
         # Built-in tools: name / description optional
         self.fields["name"].required = False
         self.fields["description"].required = False
+        self.fields["tool_type"].required = False
+        self.fields["tool_type"].widget = forms.HiddenInput()
+        self.fields["tool_subtype"].widget = forms.HiddenInput()
+
+        # User-facing connection choices
+        self.fields["connection_kind"].choices = [("", "---------")] + get_user_creatable_connection_choices()
+        if self.instance.pk:
+            self.fields["connection_kind"].initial = self._connection_kind_from_instance()
+            self.fields["connection_kind"].widget = forms.HiddenInput()
+        elif self.fixed_connection_kind:
+            self.fields["connection_kind"].initial = self.fixed_connection_kind
+            self.fields["connection_kind"].widget = forms.HiddenInput()
+        else:
+            self.fields["connection_kind"].initial = (
+                self.data.get("connection_kind")
+                or self.initial.get("connection_kind")
+            )
 
         # Populate subtype choices
-        from nova.tools import get_available_tool_types
+        from nova.plugins.builtins import get_available_tool_types
 
         self.fields["tool_subtype"].choices = [("", "---------")] + [
             (k, v["name"]) for k, v in get_available_tool_types().items()
         ]
-
-        # Dynamic field requirements
-        ttype = (
-            self.initial.get("tool_type")
-            or getattr(self.instance, "tool_type", None)
-            or self.data.get("tool_type")
+        self.helper.layout = Layout(
+            *(
+                ("connection_kind",)
+                if not self.instance.pk
+                else ()
+            ),
+            "name",
+            "description",
+            "endpoint",
+            "transport_type",
         )
-        if ttype in {"python", "filesystem"} and "auth" in self.fields:
-            self.fields["auth"].required = False
-
-        # Pre-fill JSON editors when editing a non-builtin tool
-        if self.instance.pk and self.instance.tool_type != Tool.ToolType.BUILTIN:
-            if self.instance.input_schema:
-                self.fields["input_schema"].initial = self.instance.input_schema
-            if self.instance.output_schema:
-                self.fields["output_schema"].initial = self.instance.output_schema
 
     # ------------------------------------------------------------------ #
     #  Validation                                                         #
     # ------------------------------------------------------------------ #
     def clean(self):
         cleaned = super().clean()
-        ttype = cleaned.get("tool_type")
-        tool_subtype = cleaned.get("tool_subtype")
+        mapping = self._resolve_connection_mapping(cleaned)
+        if mapping is None:
+            self.add_error("connection_kind", _("Choose a valid connection type."))
+            return cleaned
+        ttype = mapping["tool_type"]
+        tool_subtype = mapping["tool_subtype"]
+        cleaned["tool_type"] = ttype
+        cleaned["tool_subtype"] = tool_subtype
 
         if ttype == Tool.ToolType.BUILTIN:
             if not tool_subtype:
                 raise forms.ValidationError(
                     _("A BUILTIN tool must have a subtype defined.")
                 )
-            from nova.tools import get_tool_type
+            from nova.plugins.builtins import get_tool_type
 
             meta = get_tool_type(tool_subtype)
             if meta:
                 # Keep builtin names editable by users. Use metadata as defaults only.
                 if not (cleaned.get("name") or "").strip():
-                    cleaned["name"] = meta["name"]
+                    cleaned["name"] = meta.get("add_label") or meta["name"]
                 if not (cleaned.get("description") or "").strip():
                     cleaned["description"] = meta["description"]
                 cleaned["python_path"] = meta["python_path"]
-                cleaned["input_schema"] = (
-                    cleaned.get("input_schema") or meta.get("input_schema", {})
-                )
-                cleaned["output_schema"] = (
-                    cleaned.get("output_schema") or meta.get("output_schema", {})
-                )
 
             if (
                 self.user
@@ -435,6 +615,8 @@ class ToolForm(forms.ModelForm):
             for f in ["name", "description", "endpoint"]:
                 if not cleaned.get(f):
                     self.add_error(f, _("This field is required."))
+            if ttype != Tool.ToolType.MCP:
+                cleaned["transport_type"] = Tool.TransportType.STREAMABLE_HTTP
 
         return cleaned
 
@@ -451,8 +633,29 @@ class ToolForm(forms.ModelForm):
             instance.save()
         return instance
 
-    class Media:
-        js = ["user_settings/js/tool.js"]
+    def _connection_kind_from_instance(self) -> str:
+        if self.instance.tool_type == Tool.ToolType.BUILTIN:
+            plugin = get_plugin_for_builtin_subtype(self.instance.tool_subtype or "")
+            return plugin.plugin_id if plugin is not None else ""
+        return str(self.instance.tool_type or "")
+
+    def _resolve_connection_mapping(self, cleaned: dict[str, Any]) -> dict[str, str] | None:
+        if self.instance.pk:
+            return {
+                "tool_type": self.instance.tool_type,
+                "tool_subtype": self.instance.tool_subtype or "",
+            }
+        mapping = resolve_connection_kind(cleaned.get("connection_kind") or "")
+        if mapping is not None:
+            return mapping
+        tool_type = str(cleaned.get("tool_type") or "").strip()
+        tool_subtype = str(cleaned.get("tool_subtype") or "").strip()
+        if tool_type:
+            return {
+                "tool_type": tool_type,
+                "tool_subtype": tool_subtype,
+            }
+        return None
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -464,6 +667,12 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
     secret_fields = ("password", "token", "client_secret",
                      "refresh_token", "access_token")
 
+    connection_mode = forms.ChoiceField(
+        required=True,
+        label=_("Connection mode"),
+        help_text=_("Choose how Nova should authenticate to this tool."),
+    )
+
     # Example of a tool-specific config field
     caldav_url = forms.URLField(
         required=False,
@@ -471,21 +680,69 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         empty_value=None,
         assume_scheme='https',
     )
+    api_key_name = forms.CharField(
+        required=False,
+        help_text=_("Header or query parameter name for API key auth"),
+    )
+    api_key_in = forms.ChoiceField(
+        required=False,
+        choices=[
+            ("header", _("Header")),
+            ("query", _("Query parameter")),
+        ],
+        help_text=_("Where to send the API key when auth type is API Key."),
+    )
+
+    _CONNECTION_MODE_REGISTRY = (
+        {
+            "key": "none",
+            "label": _("No Authentication"),
+            "description": _("Use this when the remote service accepts anonymous requests."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "basic",
+            "label": _("Basic Auth"),
+            "description": _("Send a username and password with each request."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "token",
+            "label": _("Access token"),
+            "description": _(
+                "Send a bearer token manually. Use this too when a service gives you an OAuth access token to paste."
+            ),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "api_key",
+            "label": _("API Key"),
+            "description": _("Send a static API key in a header or query parameter."),
+            "tool_types": {Tool.ToolType.API, Tool.ToolType.MCP},
+        },
+        {
+            "key": "oauth_managed",
+            "label": _("Managed OAuth"),
+            "description": _("Complete a browser-based OAuth flow and let Nova refresh tokens automatically."),
+            "tool_types": {Tool.ToolType.MCP},
+        },
+    )
 
     class Meta:
         model = ToolCredential
         fields = [
-            "auth_type",
             "username",
             "password",
             "token",
-            "token_type",
             "client_id",
             "client_secret",
+            "api_key_name",
+            "api_key_in",
         ]
         widgets = {
-            "password": forms.PasswordInput(render_value=True),
-            "client_secret": forms.PasswordInput(render_value=True),
+            "password": forms.PasswordInput(render_value=False),
+            "token": forms.PasswordInput(render_value=False),
+            "client_secret": forms.PasswordInput(render_value=False),
         }
 
     # ------------------------------------------------------------------ #
@@ -494,21 +751,72 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
     def __init__(self, *args: Any, user=None, tool: Tool | None = None, **kw):
         self.user = user
         self.tool = kw.pop("tool", tool)
+        if args:
+            bound_data = args[0]
+        else:
+            bound_data = kw.get("data")
+        if bound_data is not None and "connection_mode" not in bound_data:
+            fallback_mode = "none"
+            instance = kw.get("instance")
+            auth_type = str(getattr(instance, "auth_type", "") or "").strip().lower()
+            if auth_type == "oauth":
+                fallback_mode = "token"
+            elif auth_type:
+                fallback_mode = auth_type
+            if hasattr(bound_data, "copy"):
+                updated_data = bound_data.copy()
+                updated_data["connection_mode"] = fallback_mode
+                if args:
+                    args = (updated_data, *args[1:])
+                else:
+                    kw["data"] = updated_data
         super().__init__(*args, **kw)
+        self._previous_auth_type = str(getattr(self.instance, "auth_type", "") or "").strip().lower()
+        self.connection_mode_definitions = self._get_connection_mode_definitions()
 
         # Crispy helper
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.disable_csrf = True
 
+        self.fields["connection_mode"].choices = [
+            (mode["key"], mode["label"]) for mode in self.connection_mode_definitions
+        ]
+        self.fields["token"].label = _("Credential value")
+        self.fields["token"].help_text = _(
+            "Enter the bearer token, OAuth access token, or API key value for the selected mode."
+        )
+        self.fields["client_id"].label = _("Client ID")
+        self.fields["client_secret"].label = _("Client secret")
+        self.fields["client_id"].help_text = _(
+            "Optional. Only use this if the remote OAuth provider gave you a pre-registered client ID."
+        )
+        self.fields["client_secret"].help_text = _(
+            "Optional. Only use this if the remote OAuth provider gave you a pre-registered client secret."
+        )
+        self.initial["connection_mode"] = self._initial_connection_mode()
+
         # Pre-fill config
         if self.instance.pk and self.instance.config:
             self.fields["caldav_url"].initial = self.instance.config.get(
                 "caldav_url"
             )
+            self.fields["api_key_name"].initial = self.instance.config.get("api_key_name", "X-API-Key")
+            self.fields["api_key_in"].initial = self.instance.config.get("api_key_in", "header")
+        else:
+            self.fields["api_key_name"].initial = "X-API-Key"
+            self.fields["api_key_in"].initial = "header"
 
         # Add data-auth-field attributes for JS visibility control
-        auth_fields = ["username", "password", "token", "token_type", "client_id", "client_secret"]
+        auth_fields = [
+            "username",
+            "password",
+            "token",
+            "client_id",
+            "client_secret",
+            "api_key_name",
+            "api_key_in",
+        ]
         for field_name in auth_fields:
             if field_name in self.fields:
                 self.fields[field_name].widget.attrs.setdefault('data-auth-field', field_name)
@@ -521,18 +829,175 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
         else:
             self.fields["caldav_url"].widget = forms.HiddenInput()
 
+        self.helper.layout = Layout(
+            Div(Field("connection_mode"), css_class="mb-3"),
+            Div(Field("username"), css_class="mb-3"),
+            Div(Field("password"), css_class="mb-3"),
+            Div(Field("token"), css_class="mb-3"),
+            Div(Field("api_key_name"), css_class="mb-3"),
+            Div(Field("api_key_in"), css_class="mb-3"),
+            Div(
+                Div(Field("client_id"), css_class="mb-3"),
+                Div(Field("client_secret"), css_class="mb-3"),
+                css_id="oauthAdvancedFieldsGroup",
+                css_class="d-none",
+            ),
+            Div(Field("caldav_url"), css_class="mb-3"),
+        )
+
+    def _get_connection_mode_definitions(self) -> list[dict[str, Any]]:
+        if not self.tool:
+            return [dict(mode) for mode in self._CONNECTION_MODE_REGISTRY]
+        return [
+            dict(mode)
+            for mode in self._CONNECTION_MODE_REGISTRY
+            if self.tool.tool_type in mode["tool_types"]
+        ]
+
+    def _initial_connection_mode(self) -> str:
+        auth_type = self._previous_auth_type
+        if auth_type == "oauth":
+            return "token"
+        available_modes = {mode["key"] for mode in self.connection_mode_definitions}
+        if auth_type in available_modes:
+            return auth_type
+        return "none"
+
+    def _clear_managed_oauth_state(
+        self,
+        instance: ToolCredential,
+        *,
+        clear_client_registration: bool = False,
+    ) -> None:
+        config = dict(instance.config or {})
+        oauth_config = config.get("mcp_oauth")
+        if isinstance(oauth_config, dict):
+            updated_oauth_config = dict(oauth_config)
+            updated_oauth_config["status"] = "disabled"
+            updated_oauth_config["last_error"] = ""
+            config["mcp_oauth"] = updated_oauth_config
+            instance.config = config
+        instance.access_token = None
+        instance.refresh_token = None
+        instance.expires_at = None
+        instance.token_type = None
+        if clear_client_registration:
+            instance.client_id = None
+            instance.client_secret = None
+
     # ------------------------------------------------------------------ #
     #  Save                                                               #
     # ------------------------------------------------------------------ #
     def save(self, commit: bool = True):
         instance: ToolCredential = super().save(commit=False)
+        connection_mode = str(self.cleaned_data.get("connection_mode") or "").strip().lower()
+
+        if connection_mode == "oauth_managed":
+            instance.auth_type = "oauth_managed"
+            instance.username = None
+            instance.password = None
+            instance.token = None
+        else:
+            instance.auth_type = connection_mode or "none"
+            self._clear_managed_oauth_state(instance, clear_client_registration=True)
+            if connection_mode != "basic":
+                instance.username = None
+                instance.password = None
+            if connection_mode not in {"token", "api_key"}:
+                instance.token = None
 
         # Persist tool-specific config
         config = instance.config or {}
         if self.cleaned_data.get("caldav_url"):
             config["caldav_url"] = self.cleaned_data["caldav_url"]
+        api_key_name = str(self.cleaned_data.get("api_key_name") or "").strip()
+        api_key_in = str(self.cleaned_data.get("api_key_in") or "").strip().lower()
+        if connection_mode == "api_key" and api_key_name:
+            config["api_key_name"] = api_key_name
+        else:
+            config.pop("api_key_name", None)
+        if connection_mode == "api_key" and api_key_in in {"header", "query"}:
+            config["api_key_in"] = api_key_in
+        else:
+            config.pop("api_key_in", None)
         instance.config = config
 
+        if commit:
+            instance.save()
+        return instance
+
+    def clean(self):
+        cleaned = super().clean()
+        connection_mode = str(cleaned.get("connection_mode") or "").strip().lower()
+        allowed_modes = {mode["key"] for mode in self.connection_mode_definitions}
+        if connection_mode not in allowed_modes:
+            self.add_error("connection_mode", _("Choose a valid connection mode."))
+            return cleaned
+
+        if connection_mode == "api_key":
+            if not str(cleaned.get("token") or "").strip() and not getattr(self.instance, "token", None):
+                self.add_error("token", _("This field is required for API key authentication."))
+            if not str(cleaned.get("api_key_name") or "").strip():
+                self.add_error("api_key_name", _("This field is required for API key authentication."))
+            api_key_in = str(cleaned.get("api_key_in") or "").strip().lower()
+            if api_key_in not in {"header", "query"}:
+                self.add_error("api_key_in", _("Choose where to send the API key."))
+        elif connection_mode == "oauth_managed" and (
+            not self.tool or self.tool.tool_type != Tool.ToolType.MCP
+        ):
+            self.add_error("connection_mode", _("Managed OAuth is only available for MCP servers."))
+        return cleaned
+
+
+class APIToolOperationForm(forms.ModelForm):
+    query_parameters_csv = forms.CharField(
+        required=False,
+        help_text=_("Comma-separated list of input field names to send as query parameters."),
+    )
+
+    class Meta:
+        model = APIToolOperation
+        fields = [
+            "name",
+            "slug",
+            "description",
+            "http_method",
+            "path_template",
+            "query_parameters_csv",
+            "body_parameter",
+            "input_schema",
+            "output_schema",
+            "is_active",
+        ]
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": 3}),
+            "input_schema": forms.Textarea(attrs={"rows": 6, "class": "json-editor"}),
+            "output_schema": forms.Textarea(attrs={"rows": 6, "class": "json-editor"}),
+        }
+
+    def __init__(self, *args: Any, user=None, tool: Tool | None = None, **kwargs: Any) -> None:
+        self.user = user
+        self.tool = tool
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        if self.instance.pk:
+            self.fields["query_parameters_csv"].initial = ", ".join(self.instance.query_parameters or [])
+
+    def clean_query_parameters_csv(self) -> list[str]:
+        raw = str(self.cleaned_data.get("query_parameters_csv") or "")
+        values: list[str] = []
+        for chunk in raw.replace("\n", ",").split(","):
+            item = chunk.strip()
+            if item and item not in values:
+                values.append(item)
+        return values
+
+    def save(self, commit: bool = True):
+        instance: APIToolOperation = super().save(commit=False)
+        instance.tool = self.tool or instance.tool
+        instance.query_parameters = list(self.cleaned_data.get("query_parameters_csv") or [])
         if commit:
             instance.save()
         return instance
@@ -541,10 +1006,8 @@ class ToolCredentialForm(SecretPreserveMixin, forms.ModelForm):
 # ────────────────────────────────────────────────────────────────────────────
 #  User-level parameters
 # ────────────────────────────────────────────────────────────────────────────
-class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
-    """Per-user extra parameters (Langfuse, etc.)."""
-    secret_fields = ('langfuse_secret_key',)
-
+class UserParametersForm(forms.ModelForm):
+    """Per-user general preferences."""
     # Read-only field to display API token status
     api_token_status = forms.CharField(
         required=False,
@@ -555,18 +1018,10 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
     class Meta:
         model = UserParameters
         fields = [
-            "allow_langfuse",
-            "langfuse_public_key",
-            "langfuse_secret_key",
-            "langfuse_host",
             "continuous_default_messages_limit",
             "task_notifications_enabled",
             "api_token_status",
         ]
-        widgets = {
-            "langfuse_public_key": forms.TextInput(),
-            "langfuse_secret_key": forms.PasswordInput(render_value=False),
-        }
 
     # Swallow the extra ``user`` kwarg injected by OwnerFormKwargsMixin
     def __init__(self, *args: Any, user=None, server_state: str = "disabled", **kwargs: Any) -> None:
@@ -624,13 +1079,6 @@ class UserParametersForm(SecretPreserveMixin, forms.ModelForm):
         self.helper.form_tag = False
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
-            Div(
-                Field("allow_langfuse"),
-                Field("langfuse_public_key"),
-                Field("langfuse_secret_key"),
-                Field("langfuse_host"),
-                css_class="mb-4"
-            ),
             Div(
                 Field("continuous_default_messages_limit"),
                 css_class="mb-4",
