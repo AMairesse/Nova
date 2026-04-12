@@ -112,7 +112,7 @@ Default setup usually works well with:
 
 - one main agent: `Nova`
 - one internet-oriented sub-agent: `Internet Agent`
-- one coding-oriented sub-agent: `Code Agent`
+- one coding-oriented sub-agent: `Python Agent`
 - optionally one media/image sub-agent if you use a dedicated image-capable provider
 
 ### Main Agent
@@ -131,7 +131,7 @@ Suggested attached capabilities:
 Suggested delegated sub-agents:
 
 - `Internet Agent`
-- `Code Agent`
+- `Python Agent`
 
 ### Internet Agent
 
@@ -147,7 +147,7 @@ Use it for:
 - browsing
 - source gathering
 
-### Code Agent
+### Python Agent
 
 Suggested attached capabilities:
 

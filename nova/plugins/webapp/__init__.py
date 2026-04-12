@@ -21,6 +21,8 @@ Useful commands:
 `webapp expose` creates a live publication tied to the source directory.
 After that, keep editing the files in the source directory normally with `tee`, `touch`, `mv`, `rm`, and `mkdir`.
 The published app reflects those file changes automatically.
+After exposing, run `webapp show <slug>` to confirm the app is `ready`.
+Write raw HTML into the entry file; do not paste an escaped version like `&lt;html&gt;...`.
 """,
     }
 

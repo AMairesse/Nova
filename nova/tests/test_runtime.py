@@ -286,14 +286,17 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.upload_patcher = patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio)
         self.vfs_upload_patcher = patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio)
         self.download_patcher = patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content)
+        self.webapp_download_patcher = patch("nova.webapp.service.download_file_content", new=fake_download_file_content)
         self.delete_storage_patcher = patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock())
         self.upload_patcher.start()
         self.vfs_upload_patcher.start()
         self.download_patcher.start()
+        self.webapp_download_patcher.start()
         self.delete_storage_patcher.start()
         self.addCleanup(self.upload_patcher.stop)
         self.addCleanup(self.vfs_upload_patcher.stop)
         self.addCleanup(self.download_patcher.stop)
+        self.addCleanup(self.webapp_download_patcher.stop)
         self.addCleanup(self.delete_storage_patcher.stop)
 
     def _build_executor(self, capabilities: TerminalCapabilities | None = None):
@@ -895,6 +898,18 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             async_to_sync(executor.execute)("rm -f /out")
         self.assertIn("Directory not empty: /out", str(non_empty_error.exception))
 
+    def test_rm_supports_recursive_directory_deletion(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /out")
+        async_to_sync(executor.execute)("mkdir /out/nested")
+        async_to_sync(executor.execute)('echo "hello" > /out/nested/index.html')
+
+        removed = async_to_sync(executor.execute)("rm -rf /out")
+
+        self.assertEqual(removed, "Removed /out")
+        self.assertEqual(async_to_sync(executor.execute)("find / out"), "")
+
     def test_terminal_reports_clean_usage_errors_for_unix_like_flags(self):
         executor = self._build_executor()
         async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta"')
@@ -914,7 +929,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(str(wc_flag.exception), "Unsupported wc flag: -x")
         self.assertEqual(str(cat_flag.exception), "Unsupported cat flag: -x")
         self.assertEqual(str(head_flag.exception), "Unsupported head flag: -x")
-        self.assertEqual(str(rm_usage.exception), "Usage: rm [-f] <path> [<path> ...]")
+        self.assertEqual(str(rm_usage.exception), "Usage: rm [-f] [-r|-R] <path> [<path> ...]")
 
     def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
         executor = self._build_executor()
@@ -1799,6 +1814,46 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(webapp.source_root, "/sites/demo")
         self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
 
+    def test_webapp_expose_rejects_escaped_html_entry(self):
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webapp_tool=webapp_tool)
+        )
+
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "&lt;!DOCTYPE html&gt;&lt;html&gt;"')
+
+        with self.assertRaises(TerminalCommandError) as escaped_error:
+            async_to_sync(executor.execute)("webapp expose /webapps/demo")
+
+        self.assertIn("Entry HTML appears escaped", str(escaped_error.exception))
+
+    def test_recursive_webapp_root_deletion_auto_dereferences_publication(self):
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(webapp_tool=webapp_tool)
+        )
+        channel_layer = _FakeChannelLayer()
+        executor.realtime_task_id = "task-789"
+        executor.realtime_channel_layer = channel_layer
+
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "<!doctype html><html></html>"')
+        async_to_sync(executor.execute)("webapp expose /webapps/demo")
+        webapp = WebApp.objects.get(thread=self.thread)
+
+        channel_layer.messages.clear()
+        removed = async_to_sync(executor.execute)("rm -rf /webapps/demo")
+
+        self.assertEqual(removed, "Removed /webapps/demo")
+        self.assertFalse(WebApp.objects.filter(id=webapp.id).exists())
+        self.assertTrue(
+            any(item["message"]["type"] == "webapps_update" and item["message"]["reason"] == "webapp_delete"
+                for item in channel_layer.messages)
+        )
+
     def test_webdav_mount_is_visible_only_when_capability_is_enabled(self):
         plain_executor = self._build_executor()
         webdav_tool = self._create_webdav_tool()
@@ -2456,6 +2511,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("mail accounts", skills["mail.md"])
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
+        self.assertIn("Judge0 sandbox", skills["python.md"])
+        self.assertIn("Do not use it to mutate Nova files", skills["python.md"])
         self.assertIn("date +%F %T", skills["date.md"])
         self.assertIn("server locale", skills["date.md"])
         self.assertIn("pwd", skills["terminal.md"])
@@ -3745,6 +3802,32 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("live", prompt)
         self.assertIn("source files", prompt)
 
+    def test_system_prompt_lists_subagent_descriptions_and_response_modes(self):
+        child = AgentConfig.objects.create(
+            user=self.user,
+            name="Python Agent",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="sandboxed Python/code tasks only; isolated workspace",
+            default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
+        )
+        self.agent.agent_tools.add(child)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("Python Agent", prompt)
+        self.assertIn("isolated workspace", prompt)
+        self.assertIn("text output", prompt)
+
     def test_system_prompt_mentions_mcp_and_api_command_families(self):
         mcp_tool = Tool.objects.create(
             user=self.user,
@@ -4244,6 +4327,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         self.assertIn("Child done.", result)
         self.assertIn("/inbox/input.txt", seen["prompt"])
+        self.assertIn("child `/tmp` files are not returned", result)
         self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
         self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
         self.assertEqual(copied_answer, "answer")

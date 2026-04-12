@@ -45,6 +45,14 @@ TEXT_MIME_TYPES = {
     "application/json",
     "application/manifest+json",
 }
+ESCAPED_HTML_PREFIXES = (
+    "&lt;!doctype",
+    "&lt;html",
+)
+LITERAL_HTML_PREFIXES = (
+    "<!doctype",
+    "<html",
+)
 
 
 class WebAppServiceError(ValueError):
@@ -161,22 +169,38 @@ def _get_live_user_file_sync(webapp: WebApp, relative_path: str) -> UserFile | N
     ).first()
 
 
+def _looks_like_escaped_html(content: bytes) -> bool:
+    try:
+        text = content.decode("utf-8", errors="ignore").lstrip().lower()
+    except Exception:
+        return False
+    has_escaped_prefix = any(text.startswith(prefix) for prefix in ESCAPED_HTML_PREFIXES)
+    has_literal_prefix = any(text.startswith(prefix) for prefix in LITERAL_HTML_PREFIXES)
+    return has_escaped_prefix and not has_literal_prefix
+
+
+def _entry_file_status_sync(webapp: WebApp) -> tuple[str, str]:
+    entry = str(webapp.entry_path or "").strip()
+    source_root = str(webapp.source_root or "").strip()
+    if not source_root or not entry:
+        return "broken", "Missing source_root or entry_path."
+
+    live_file = _get_live_user_file_sync(webapp, entry)
+    if live_file is None:
+        return "broken", "Entry file is missing."
+    if not _is_allowed_public_extension(entry):
+        return "broken", "Entry file extension is not allowed."
+    if entry.lower().endswith(".html"):
+        content = async_to_sync(download_file_content)(live_file)
+        if _looks_like_escaped_html(content):
+            return "broken", "Entry HTML appears escaped. Write raw HTML into the file."
+    return "ready", ""
+
+
 def _build_webapp_payload_sync(webapp: WebApp) -> dict[str, Any]:
     entry = str(webapp.entry_path or "").strip()
     source_root = str(webapp.source_root or "").strip()
-    status = "ready"
-    status_detail = ""
-    if not source_root or not entry:
-        status = "broken"
-        status_detail = "Missing source_root or entry_path."
-    else:
-        live_file = _get_live_user_file_sync(webapp, entry)
-        if live_file is None:
-            status = "broken"
-            status_detail = "Entry file is missing."
-        elif not _is_allowed_public_extension(entry):
-            status = "broken"
-            status_detail = "Entry file extension is not allowed."
+    status, status_detail = _entry_file_status_sync(webapp)
 
     return {
         "slug": webapp.slug,
@@ -259,14 +283,23 @@ async def expose_webapp(
     if not await vfs.path_exists(normalized_root) or not await vfs.is_dir(normalized_root):
         raise WebAppServiceError(f"Source directory not found: {normalized_root}")
 
-    if entry_path:
-        resolved_entry = normalize_entry_path(entry_path)
-        entry_full_path = _join_source_path(normalized_root, resolved_entry)
+    async def _ensure_exposable_entry(relative_entry: str) -> None:
+        entry_full_path = _join_source_path(normalized_root, relative_entry)
         entry_item = await vfs.get_real_file(entry_full_path)
         if entry_item is None or entry_item.user_file is None:
             raise WebAppServiceError(f"Entry file not found: {entry_full_path}")
         if str(entry_item.user_file.scope or "") != UserFile.Scope.THREAD_SHARED:
             raise WebAppServiceError("Webapps can only be exposed from persistent thread files.")
+        if relative_entry.lower().endswith(".html"):
+            content, _mime_type = await vfs.read_bytes(entry_full_path)
+            if _looks_like_escaped_html(content):
+                raise WebAppServiceError(
+                    "Entry HTML appears escaped. Write raw HTML into the file before exposing the webapp."
+                )
+
+    if entry_path:
+        resolved_entry = normalize_entry_path(entry_path)
+        await _ensure_exposable_entry(resolved_entry)
     else:
         default_entry = _join_source_path(normalized_root, "index.html")
         default_item = await vfs.get_real_file(default_entry)
@@ -290,6 +323,7 @@ async def expose_webapp(
             if str(candidate_item.user_file.scope or "") != UserFile.Scope.THREAD_SHARED:
                 raise WebAppServiceError("Webapps can only be exposed from persistent thread files.")
             resolved_entry = candidate_name
+        await _ensure_exposable_entry(resolved_entry)
 
     def _save() -> tuple[WebApp, bool]:
         existing = _get_webapp_sync(user, slug, thread=thread) if slug else None
@@ -391,6 +425,10 @@ def get_live_file_for_webapp(*, user, slug: str, requested_path: str | None = No
     user_file = _get_live_user_file_sync(webapp, relative_path)
     if user_file is None:
         return None
+    if relative_path == str(webapp.entry_path or "").strip() and relative_path.lower().endswith(".html"):
+        content = async_to_sync(download_file_content)(user_file)
+        if _looks_like_escaped_html(content):
+            return None
     return LiveWebAppFile(
         webapp=webapp,
         user_file=user_file,
@@ -405,9 +443,10 @@ async def maybe_touch_impacted_webapps(
     paths: list[str],
     moved_from: str | None = None,
     moved_to: str | None = None,
+    deleted_roots: list[str] | None = None,
     task_id: int | str | None = None,
     channel_layer=None,
-) -> list[str]:
+) -> list[dict[str, str]]:
     normalized_paths = [
         posixpath.normpath(str(path or "").strip() or "/")
         for path in paths
@@ -415,9 +454,15 @@ async def maybe_touch_impacted_webapps(
     ]
     moved_from_norm = posixpath.normpath(str(moved_from or "").strip()) if str(moved_from or "").strip() else None
     moved_to_norm = posixpath.normpath(str(moved_to or "").strip()) if str(moved_to or "").strip() else None
+    deleted_root_paths = [
+        posixpath.normpath(str(path or "").strip() or "/")
+        for path in list(deleted_roots or [])
+        if str(path or "").strip()
+    ]
 
-    def _touch() -> list[str]:
+    def _touch() -> list[dict[str, str]]:
         impacted: list[WebApp] = []
+        events: list[dict[str, str]] = []
         for webapp in WebApp.objects.filter(thread=thread).order_by("id"):
             if any(_path_impacts_webapp(webapp, path) for path in normalized_paths):
                 impacted.append(webapp)
@@ -438,26 +483,41 @@ async def maybe_touch_impacted_webapps(
                     if webapp not in impacted:
                         impacted.append(webapp)
 
+        if deleted_root_paths:
+            retained: list[WebApp] = []
+            for webapp in impacted:
+                source_root = posixpath.normpath(str(webapp.source_root or "").strip() or "/")
+                should_delete = any(
+                    source_root == deleted_root
+                    or source_root.startswith(f"{deleted_root.rstrip('/')}/")
+                    for deleted_root in deleted_root_paths
+                )
+                if should_delete:
+                    events.append({"slug": webapp.slug, "reason": "webapp_delete"})
+                    webapp.delete()
+                else:
+                    retained.append(webapp)
+            impacted = retained
+
         if not impacted:
-            return []
+            return events
 
         timestamp = timezone.now()
-        slugs: list[str] = []
         for webapp in impacted:
             WebApp.objects.filter(id=webapp.id).update(updated_at=timestamp)
-            slugs.append(webapp.slug)
-        return slugs
+            events.append({"slug": webapp.slug, "reason": "webapp_update"})
+        return events
 
-    slugs = await sync_to_async(_touch, thread_sensitive=True)()
-    for slug in slugs:
+    events = await sync_to_async(_touch, thread_sensitive=True)()
+    for event in events:
         await publish_webapp_update(
             thread_id=getattr(thread, "id", None),
-            slug=slug,
+            slug=event["slug"],
             task_id=task_id,
             channel_layer=channel_layer,
-            reason="webapp_update",
+            reason=event["reason"],
         )
-    return slugs
+    return events
 
 
 def load_live_webapp_content(live_file: LiveWebAppFile) -> bytes:

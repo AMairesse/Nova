@@ -244,7 +244,7 @@ class ReactTerminalRuntime:
         if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
             families.append("history")
         subagents = ", ".join(
-            f"{subagent.id}:{subagent.name}"
+            self._format_subagent_prompt_entry(subagent)
             for subagent in self.capabilities.subagents
         ) or "none"
         extra_guidance: list[str] = [
@@ -381,6 +381,20 @@ class ReactTerminalRuntime:
         if custom_prompt:
             base_prompt += f"\nAgent-specific instructions:\n{custom_prompt}\n"
         return base_prompt
+
+    @staticmethod
+    def _format_subagent_prompt_entry(subagent) -> str:
+        label = f"{subagent.id}:{subagent.name}"
+        details: list[str] = []
+        description = str(getattr(subagent, "tool_description", "") or "").strip().rstrip(".")
+        if description:
+            details.append(description)
+        response_mode = str(getattr(subagent, "default_response_mode", "") or "").strip().lower()
+        if response_mode:
+            details.append(f"{response_mode} output")
+        if not details:
+            return label
+        return f"{label} [{'; '.join(details)}]"
 
     def _build_history_summary_message(self, session_state: dict[str, Any]) -> dict[str, str] | None:
         summary_markdown = str(session_state.get(SESSION_KEY_HISTORY_SUMMARY) or "").strip()
@@ -974,10 +988,14 @@ class ReactTerminalRuntime:
         status_line = (
             f"Sub-agent {subagent_label} finished with {len(copied_outputs)} output file(s)."
         )
-        output_suffix = ""
+        output_suffix = (
+            "\nOnly files written in the child persistent `/` workspace are copied back automatically; "
+            "child `/tmp` files are not returned."
+        )
         if copied_outputs:
             output_suffix = (
-                "\nOutput files copied back to the parent runtime:\n"
+                output_suffix
+                + "\nOutput files copied back to the parent runtime:\n"
                 + "\n".join(copied_outputs)
                 + "\nReference them in your final reply with Markdown links or images, "
                 + "for example `[file](/path/file.ext)` or `![preview](/path/image.png)`."

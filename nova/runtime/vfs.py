@@ -835,7 +835,7 @@ class VirtualFileSystem:
         self._source_message_cache = await sync_to_async(_load_source_message, thread_sensitive=True)()
         return self._source_message_cache
 
-    async def remove(self, path: str) -> None:
+    async def remove(self, path: str, *, recursive: bool = False) -> None:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
         if normalized in {"/", "/skills", "/tmp"}:
             raise VFSError(f"Cannot remove protected path: {normalized}")
@@ -870,8 +870,20 @@ class VirtualFileSystem:
 
         if await self.is_dir(normalized):
             children = await self.list_dir(normalized)
-            if children:
+            if children and not recursive:
                 raise VFSError(f"Directory not empty: {normalized}")
+            if recursive:
+                prefix = f"{normalized.rstrip('/')}/"
+                for child_item in await self._load_real_files():
+                    if child_item.path.startswith(prefix) and child_item.user_file is not None:
+                        await sync_to_async(child_item.user_file.delete, thread_sensitive=True)()
+                remaining_dirs = {
+                    directory
+                    for directory in self._get_session_dirs()
+                    if directory != normalized and not directory.startswith(prefix)
+                }
+                self._set_session_dirs(remaining_dirs)
+                return
             dirs = self._get_session_dirs()
             if normalized in dirs:
                 dirs.remove(normalized)

@@ -1225,11 +1225,11 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
 
     async def _cmd_rm(self, args: list[str]) -> str:
-        usage = "rm [-f] <path> [<path> ...]"
+        usage = "rm [-f] [-r|-R] <path> [<path> ...]"
         flags, positionals, _numeric_count = self._parse_short_flags(
             args,
             command_name=usage,
-            supported_flags={"f"},
+            supported_flags={"f", "r", "R"},
         )
         if not positionals:
             raise TerminalCommandError(
@@ -1239,9 +1239,10 @@ class TerminalExecutor:
 
         removed_messages: list[str] = []
         force = "f" in flags
+        recursive = "r" in flags or "R" in flags
         for path in positionals:
             try:
-                removed = await self._remove_and_notify(path)
+                removed = await self._remove_and_notify(path, recursive=recursive)
             except VFSError as exc:
                 message = str(exc)
                 if force and message.startswith("Path not found:"):
@@ -2410,6 +2411,7 @@ class TerminalExecutor:
         *,
         moved_from: str | None = None,
         moved_to: str | None = None,
+        deleted_roots: list[str] | None = None,
     ) -> None:
         if not self.capabilities.has_webapp:
             return
@@ -2426,6 +2428,11 @@ class TerminalExecutor:
                 paths=normalized_paths,
                 moved_from=normalize_vfs_path(moved_from, cwd=self.vfs.cwd) if moved_from else None,
                 moved_to=normalize_vfs_path(moved_to, cwd=self.vfs.cwd) if moved_to else None,
+                deleted_roots=[
+                    normalize_vfs_path(path, cwd=self.vfs.cwd)
+                    for path in list(deleted_roots or [])
+                    if str(path or "").strip()
+                ],
                 task_id=self.realtime_task_id,
                 channel_layer=self.realtime_channel_layer,
             )
@@ -2472,10 +2479,13 @@ class TerminalExecutor:
         await self._notify_webapp_paths([normalized_source, moved], moved_from=normalized_source, moved_to=moved)
         return moved
 
-    async def _remove_and_notify(self, path: str) -> str:
+    async def _remove_and_notify(self, path: str, *, recursive: bool = False) -> str:
         normalized = normalize_vfs_path(path, cwd=self.vfs.cwd)
-        await self.vfs.remove(path)
-        await self._notify_webapp_paths([normalized])
+        await self.vfs.remove(path, recursive=recursive)
+        await self._notify_webapp_paths(
+            [normalized],
+            deleted_roots=[normalized] if recursive else None,
+        )
         return normalized
 
     async def _cmd_search(self, args: list[str], *, capture_output: bool = False) -> str:

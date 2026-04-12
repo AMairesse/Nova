@@ -26,8 +26,12 @@ through terminal commands.
 Use sub-agents when a specialized configured agent can handle a focused task.
 Pass terminal file paths in `input_paths` when the child agent needs local files.
 The child agent receives copied inputs under `/inbox`.
-Files created or modified by the child are copied back automatically under
-`/subagents/<subagent-slug>-<run-id>/`.
+The child runs in its own isolated workspace.
+Only files written in the child persistent `/` workspace are copied back automatically under
+`/subagents/<subagent-slug>-<run-id>/`; files left in the child `/tmp` do not come back.
+If you want to build or repair a webapp from child output, copy the returned files into the
+main thread workspace yourself, then run `webapp expose` or other webapp commands in the
+main agent.
 """
 
     return skills

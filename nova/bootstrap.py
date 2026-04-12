@@ -138,6 +138,65 @@ def _skip_agents(summary: BootstrapSummary, names: List[str], reason: str) -> No
         summary.skipped_agents.append({"name": name, "reason": reason})
 
 
+def _rename_legacy_agent(
+    user,
+    *,
+    old_name: str,
+    new_name: str,
+    summary: BootstrapSummary,
+) -> Optional[AgentConfig]:
+    legacy = AgentConfig.objects.filter(user=user, name=old_name).first()
+    if legacy is None:
+        return None
+    if AgentConfig.objects.filter(user=user, name=new_name).exists():
+        return None
+    legacy.name = new_name
+    legacy.save(update_fields=["name"])
+    summary.notes.append(f"Renamed '{old_name}' to '{new_name}'.")
+    if new_name not in summary.updated_agents:
+        summary.updated_agents.append(new_name)
+    return legacy
+
+
+def _sync_bootstrap_agent_copy(
+    agent: AgentConfig,
+    *,
+    name: str,
+    summary: BootstrapSummary,
+    system_prompt: str | None = None,
+    tool_description: str | None = None,
+    force: bool = False,
+    prompt_markers: tuple[str, ...] = (),
+    description_markers: tuple[str, ...] = (),
+) -> None:
+    changed = False
+
+    current_prompt = str(agent.system_prompt or "")
+    should_update_prompt = bool(system_prompt) and (
+        force
+        or not current_prompt.strip()
+        or any(marker in current_prompt for marker in prompt_markers)
+    )
+    if should_update_prompt and current_prompt != system_prompt:
+        agent.system_prompt = str(system_prompt or "")
+        changed = True
+
+    current_description = str(agent.tool_description or "")
+    should_update_description = bool(tool_description) and (
+        force
+        or not current_description.strip()
+        or any(marker in current_description for marker in description_markers)
+    )
+    if should_update_description and current_description != tool_description:
+        agent.tool_description = str(tool_description or "")
+        changed = True
+
+    if changed:
+        agent.save(update_fields=["system_prompt", "tool_description"])
+        if name not in summary.updated_agents:
+            summary.updated_agents.append(name)
+
+
 # --------------------------------------------------------------------------- #
 # Tool helpers
 # --------------------------------------------------------------------------- #
@@ -429,30 +488,58 @@ def ensure_internet_agent(user, provider, tools: Dict[str, Tool], summary: Boots
     )
 
 
-def ensure_code_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
-    return _ensure_agent(
+def ensure_python_agent(user, provider, tools: Dict[str, Tool], summary: BootstrapSummary) -> Optional[AgentConfig]:
+    renamed_agent = _rename_legacy_agent(
+        user,
+        old_name="Code Agent",
+        new_name="Python Agent",
+        summary=summary,
+    )
+    system_prompt = (
+        "You are an AI Agent specialized in sandboxed Python and self-contained coding tasks. "
+        "Your `python` capability runs through Judge0 in an isolated execution environment. "
+        "Use it for calculations, data processing, small programs, and code generation that do "
+        "not need to modify the parent Nova filesystem. Do not claim to have changed the parent "
+        "thread files or directories, and do not claim to have published or repaired a webapp. "
+        "If the parent needs reusable outputs, write them as normal files in your persistent `/` "
+        "workspace so they can be copied back; do not rely on `/tmp` for outputs that must return. "
+        "Use only the standard library available in the execution environment, print results clearly, "
+        "and if execution fails, fix the code iteratively with concise explanations."
+    )
+    tool_description = (
+        "Use this agent for sandboxed Python/code tasks only; isolated workspace; "
+        "no parent filesystem changes or webapp publishing."
+    )
+    agent = _ensure_agent(
         user=user,
         provider=provider,
         tools=tools,
         summary=summary,
-        name="Code Agent",
+        name="Python Agent",
         required_tools=["judge0"],
-        system_prompt=(
-            "You are an AI Agent specialized in coding. Use the code execution tools to write "
-            "and run the smallest correct program that solves the task. Follow these rules "
-            "strictly: DO NOT access local files or the filesystem directly; ALWAYS use "
-            "provided file-url tools when you need file content; use only the standard "
-            "library available in the execution environment; print results clearly so they "
-            "can be captured; if execution fails, fix the code iteratively and briefly "
-            "explain what changed; focus on working code and concise explanations."
-        ),
+        system_prompt=system_prompt,
         recursion_limit=25,
         is_tool=True,
-        tool_description=(
-            "Use this agent to create and execute code or process data using sandboxed runtimes."
-        ),
+        tool_description=tool_description,
         default_response_mode=AgentConfig.DefaultResponseMode.TEXT,
     )
+    if agent is not None:
+        _sync_bootstrap_agent_copy(
+            agent,
+            name="Python Agent",
+            summary=summary,
+            system_prompt=system_prompt,
+            tool_description=tool_description,
+            force=renamed_agent is not None,
+            prompt_markers=(
+                "specialized in coding",
+                "provided file-url tools",
+            ),
+            description_markers=(
+                "sandboxed runtimes",
+            ),
+        )
+    return agent
 
 
 def _build_image_agent_prompt(provider: LLMProvider) -> str:
@@ -536,8 +623,10 @@ def ensure_nova_agent(
         "you can read/store user data, persist relevant information and consult it before replying; "
         "only retrieve themes relevant to the current query (e.g., check stored location when asked the time). "
         "Never invent file identifiers. Inspect the filesystem or memory directly when you need concrete paths. "
-        "When a query clearly belongs to a specialized agent (internet, code), delegate "
-        "to that agent instead of solving it yourself. Use skills/tools directly for mail and calendar tasks. "
+        "Keep thread-scoped filesystem work, cleanup, and live webapp publication in your own terminal session. "
+        "Delegate only focused self-contained tasks to specialized sub-agents: internet research to the Internet Agent, "
+        "and isolated Python/code computation to the Python Agent when the task does not need direct ownership of the "
+        "thread filesystem or webapp lifecycle. Use skills/tools directly for mail and calendar tasks. "
         f"{'Delegate image generation or image transformation requests to the Image Agent when appropriate. ' if has_image_agent else ''}"
         "Use the date/time capability when the current date or time matters."
     )
@@ -559,6 +648,15 @@ def ensure_nova_agent(
     )
     if not nova_agent:
         return None
+    _sync_bootstrap_agent_copy(
+        nova_agent,
+        name="Nova",
+        summary=summary,
+        system_prompt=nova_prompt,
+        prompt_markers=(
+            "query clearly belongs to a specialized agent (internet, code)",
+        ),
+    )
 
     detached_tool_agents = list(
         nova_agent.agent_tools.filter(
@@ -607,7 +705,7 @@ def bootstrap_default_setup(user) -> Dict:
         reason = (
             "No provider with tool support (or unknown tool capability) is available for the default Nova agents."
         )
-        _skip_agents(summary, ["Internet Agent", "Code Agent", "Nova", "Image Agent"], reason)
+        _skip_agents(summary, ["Internet Agent", "Python Agent", "Nova", "Image Agent"], reason)
         logger.info(
             "[bootstrap_default_setup] Skipped default agents for user %s because no suitable main provider was found.",
             user.id,
@@ -615,7 +713,7 @@ def bootstrap_default_setup(user) -> Dict:
         return summary.as_dict()
 
     internet_agent = ensure_internet_agent(user, main_provider, tools, summary)
-    code_agent = ensure_code_agent(user, main_provider, tools, summary)
+    code_agent = ensure_python_agent(user, main_provider, tools, summary)
     image_provider = select_bootstrap_image_provider(user)
     image_agent = ensure_image_agent(user, image_provider, tools, summary)
     mail_tools = _find_tools("email", user, require_user_cred=True)

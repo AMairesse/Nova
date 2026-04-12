@@ -7,9 +7,10 @@ from asgiref.sync import async_to_sync
 
 from nova.models.WebApp import WebApp
 from nova.models.Thread import Thread
-from nova.utils import compute_webapp_public_url
 from nova.webapp.service import delete_webapp as delete_live_webapp
+from nova.webapp.service import describe_webapp as describe_live_webapp
 from nova.webapp.service import get_live_file_for_webapp, load_live_webapp_content
+from nova.webapp.service import list_thread_webapps
 
 
 @login_required
@@ -52,25 +53,7 @@ def webapps_list(request, thread_id: int):
     Intended for sidebar rendering (Files | Webapps toggle).
     """
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-    apps = (
-        WebApp.objects.filter(user=request.user, thread=thread)
-        .order_by("-updated_at")
-        .only("slug", "name", "updated_at")
-    )
-
-    # Build public URLs using shared helper to avoid drift with tool behavior
-    items = []
-    for app in apps:
-        slug = app.slug
-        public_url = compute_webapp_public_url(slug)
-        items.append(
-            {
-                "slug": slug,
-                "name": (app.name or "").strip(),
-                "updated_at": app.updated_at,
-                "public_url": public_url,
-            }
-        )
+    items = async_to_sync(list_thread_webapps)(user=request.user, thread=thread)
 
     return render(
         request,
@@ -88,16 +71,17 @@ def preview_webapp(request, thread_id: int, slug: str):
     Includes a close button to return to the regular display.
     """
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-    webapp = get_object_or_404(WebApp, user=request.user, thread=thread, slug=slug)
-
-    public_url = compute_webapp_public_url(slug)
+    get_object_or_404(WebApp, user=request.user, thread=thread, slug=slug)
+    payload = async_to_sync(describe_live_webapp)(user=request.user, thread=thread, slug=slug)
 
     context = {
         "thread": thread,
         "webapp": {
-            "slug": slug,
-            "public_url": public_url,
-            "name": (webapp.name or "").strip(),
+            "slug": payload["slug"],
+            "public_url": payload["public_url"],
+            "name": payload["name"],
+            "status": payload["status"],
+            "status_detail": payload["status_detail"],
         },
     }
     return render(request, "nova/preview.html", context)

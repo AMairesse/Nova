@@ -8,7 +8,14 @@ def _skill_docs(_capabilities, _thread_mode):
     return {
         "python.md": """# Python
 
-Python execution is available through:
+Python execution is available through a Judge0 sandbox, not a local interpreter
+attached to the Nova filesystem.
+
+Use it for computation, data processing, and self-contained scripts.
+Do not use it to mutate Nova files or directories. To change the Nova VFS, use
+terminal file commands such as `tee`, `cp`, `mv`, `rm`, and `mkdir`.
+
+Available forms:
 
 - `python /script.py`
 - `python -c "print('hello')"`

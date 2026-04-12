@@ -164,7 +164,8 @@ class BootstrapSkillsTests(TestCase):
         self.assertSetEqual(email_tool_ids, {work_mail.id, personal_mail.id})
         self.assertSetEqual(caldav_tool_ids, {work_calendar.id, personal_calendar.id})
         self.assertTrue(nova.agent_tools.filter(name="Internet Agent").exists())
-        self.assertTrue(nova.agent_tools.filter(name="Code Agent").exists())
+        self.assertTrue(nova.agent_tools.filter(name="Python Agent").exists())
+        self.assertFalse(nova.agent_tools.filter(name="Code Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Calendar Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Email Agent").exists())
         self.assertTrue(
@@ -173,6 +174,9 @@ class BootstrapSkillsTests(TestCase):
                 for note in summary.get("notes", [])
             )
         )
+        renamed_python_agent = AgentConfig.objects.get(user=self.user, name="Python Agent")
+        self.assertIn("Judge0", renamed_python_agent.system_prompt)
+        self.assertIn("isolated workspace", renamed_python_agent.tool_description)
 
     def test_bootstrap_does_not_create_calendar_or_email_tool_agents(self):
         self._create_email_tool("Work Mail", "work@example.com")
@@ -196,6 +200,8 @@ class BootstrapSkillsTests(TestCase):
         self.assertNotIn("Current date and time is", nova.system_prompt)
         self.assertNotIn("{today}", nova.system_prompt)
         self.assertIn("date/time capability", nova.system_prompt)
+        self.assertIn("Keep thread-scoped filesystem work", nova.system_prompt)
+        self.assertIn("Python Agent", nova.system_prompt)
 
     def test_bootstrap_creates_and_attaches_image_agent_with_best_image_provider(self):
         main_provider = self.provider
@@ -291,12 +297,12 @@ class BootstrapSkillsTests(TestCase):
 
         self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Nova").exists())
         self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Internet Agent").exists())
-        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Code Agent").exists())
+        self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Python Agent").exists())
         self.assertFalse(AgentConfig.objects.filter(user=self.user, name="Image Agent").exists())
         skipped_names = {item.get("name") for item in summary.get("skipped_agents", [])}
         self.assertSetEqual(
             skipped_names,
-            {"Nova", "Internet Agent", "Code Agent", "Image Agent"},
+            {"Nova", "Internet Agent", "Python Agent", "Image Agent"},
         )
 
     def test_bootstrap_reuses_existing_image_agent_without_reassigning_provider(self):

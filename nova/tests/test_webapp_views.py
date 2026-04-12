@@ -9,6 +9,7 @@ from django.urls import reverse
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.models.WebApp import WebApp
+from nova.utils import compute_webapp_public_url
 
 User = get_user_model()
 
@@ -84,6 +85,23 @@ class WebAppViewsTests(TestCase):
         self.assertIn("Invoices Dashboard", html)
         self.assertIn(named.slug, html)
         self.assertIn(legacy.slug, html)
+        self.assertIn("Ready", html)
+
+    def test_webapps_list_marks_broken_webapps_and_disables_preview_actions(self):
+        app = self._create_live_webapp(
+            name="Broken app",
+            source_root="/webapps/broken",
+            files={"index.html": b"&lt;!DOCTYPE html&gt;&lt;html&gt;"},
+        )
+
+        response = self.client.get(reverse("webapps_list", args=[self.thread.id]))
+        html = response.content.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(app.slug, html)
+        self.assertIn("Broken", html)
+        self.assertIn("Entry HTML appears escaped", html)
+        self.assertNotIn(f'data-url="{compute_webapp_public_url(app.slug)}"', html)
 
     def test_delete_webapp_success_and_realtime_publish(self):
         app = self._create_live_webapp(name="Delete me")
@@ -126,6 +144,19 @@ class WebAppViewsTests(TestCase):
         self.assertContains(response, 'id="context-menu-execution-details"')
         self.assertContains(response, 'id="context-menu-compact"')
         self.assertContains(response, 'id="context-menu-delete-after"')
+
+    def test_preview_webapp_shows_broken_state(self):
+        app = self._create_live_webapp(
+            name="Broken preview",
+            source_root="/webapps/broken-preview",
+            files={"index.html": b"&lt;!DOCTYPE html&gt;&lt;html&gt;"},
+        )
+
+        response = self.client.get(reverse("preview_webapp", args=[self.thread.id, app.slug]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This webapp is currently broken.")
+        self.assertContains(response, "Entry HTML appears escaped")
 
     def test_deleted_webapp_is_not_served_anymore(self):
         app = self._create_live_webapp(name="Temporary app", source_root="/webapps/temp")
@@ -173,6 +204,16 @@ class WebAppViewsTests(TestCase):
             thread=self.thread,
             original_filename="/webapps/broken/index.html",
         ).delete()
+
+        response = self.client.get(reverse("serve_webapp_root", args=[app.slug]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_serve_webapp_returns_404_when_entry_html_is_escaped(self):
+        app = self._create_live_webapp(
+            name="Escaped app",
+            source_root="/webapps/escaped",
+            files={"index.html": b"&lt;!DOCTYPE html&gt;&lt;html&gt;"},
+        )
 
         response = self.client.get(reverse("serve_webapp_root", args=[app.slug]))
         self.assertEqual(response.status_code, 404)
