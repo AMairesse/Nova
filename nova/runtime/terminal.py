@@ -2531,12 +2531,14 @@ class TerminalExecutor:
             raise TerminalCommandError("Browse commands are not enabled for this agent.")
         if not args:
             raise TerminalCommandError(
-                "Usage: browse <open|current|back|text|read|links|elements|click> ..."
+                "Usage: browse <open|ls|current|back|text|read|links|elements|click> ..."
             )
         action = args[0]
         remainder = args[1:]
         if action == "open":
             return await self._cmd_browse_open(remainder)
+        if action == "ls":
+            return await self._cmd_browse_ls(remainder)
         if action == "current":
             return await self._cmd_browse_current(remainder)
         if action == "back":
@@ -2550,7 +2552,7 @@ class TerminalExecutor:
         if action == "click":
             return await self._cmd_browse_click(remainder)
         raise TerminalCommandError(
-            "Usage: browse <open|current|back|text|read|links|elements|click> ..."
+            "Usage: browse <open|ls|current|back|text|read|links|elements|click> ..."
         )
 
     async def _cmd_browse_open(self, args: list[str]) -> str:
@@ -2603,6 +2605,17 @@ class TerminalExecutor:
             return await session.current()
         except BrowserSessionError as exc:
             raise TerminalCommandError(str(exc)) from exc
+
+    async def _cmd_browse_ls(self, args: list[str]) -> str:
+        _pane_index, remaining = self._parse_browser_pane(args)
+        if remaining:
+            raise TerminalCommandError("Usage: browse ls [--pane 0]")
+        session = await self._get_browser_session()
+        try:
+            current_url = await session.current()
+        except BrowserSessionError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        return f"0  current  {current_url}"
 
     async def _cmd_browse_back(self, args: list[str]) -> str:
         _pane_index, remaining = self._parse_browser_pane(args)

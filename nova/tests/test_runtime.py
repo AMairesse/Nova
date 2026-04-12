@@ -1616,6 +1616,36 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(current, "https://example.com/result")
         self.assertIn("Clicked element", clicked)
 
+    def test_browse_ls_lists_current_page_and_supports_pane_zero(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
+            async_to_sync(executor.execute)("browse open https://example.com/current")
+            listed = async_to_sync(executor.execute)("browse ls")
+            listed_with_pane = async_to_sync(executor.execute)("browse ls --pane 0")
+
+        self.assertEqual(listed, "0  current  https://example.com/result")
+        self.assertEqual(listed_with_pane, "0  current  https://example.com/result")
+
+    def test_browse_ls_supports_shell_redirection(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fake_session = _FakeBrowserSession()
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
+            async_to_sync(executor.execute)("browse open https://example.com/current")
+            written = async_to_sync(executor.execute)("browse ls > /page.txt")
+
+        stored = async_to_sync(executor.execute)("cat /page.txt")
+        self.assertIn("/page.txt", written)
+        self.assertEqual(stored, "0  current  https://example.com/result")
+
     def test_browse_pane_one_or_more_is_rejected_with_clear_error(self):
         browser_tool = self._create_builtin_tool("browser", name="Browser")
         executor = self._build_executor(
@@ -1626,6 +1656,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             async_to_sync(executor.execute)("browse read --pane 1")
         with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
             async_to_sync(executor.execute)('browse elements "img" --pane 2')
+        with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
+            async_to_sync(executor.execute)("browse ls --pane 1")
 
     def test_browse_elements_inline_url_uses_default_useful_attributes(self):
         browser_tool = self._create_builtin_tool("browser", name="Browser")
@@ -1668,6 +1700,22 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 async_to_sync(executor.execute)("browse text")
             with self.assertRaisesRegex(TerminalCommandError, r"browse text <url>"):
                 async_to_sync(executor.execute)("browse text")
+
+    def test_browse_ls_without_active_page_matches_browse_current_error(self):
+        browser_tool = self._create_builtin_tool("browser", name="Browser")
+        executor = self._build_executor(
+            TerminalCapabilities(browser_tool=browser_tool)
+        )
+        fresh_session = _FakeBrowserSession()
+        fresh_session.current = AsyncMock(
+            side_effect=BrowserSessionError(
+                "No active page in the current browser session. Use `browse open` first."
+            )
+        )
+
+        with patch("nova.runtime.terminal.BrowserSession", return_value=fresh_session):
+            with self.assertRaisesRegex(TerminalCommandError, r"No active page in the current browser session"):
+                async_to_sync(executor.execute)("browse ls")
 
     def test_browse_text_supports_shell_redirection(self):
         browser_tool = self._create_builtin_tool("browser", name="Browser")
@@ -2451,6 +2499,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("search.md", skills)
         self.assertIn("browse.md", skills)
         self.assertIn("browse open --result 0", skills["search.md"])
+        self.assertIn("browse ls", skills["browse.md"])
         self.assertIn("browse click", skills["browse.md"])
         self.assertIn("browse read", skills["browse.md"])
         self.assertIn("browse text https://example.com", skills["browse.md"])
