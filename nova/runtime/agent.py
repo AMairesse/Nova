@@ -267,7 +267,9 @@ class ReactTerminalRuntime:
         extra_guidance: list[str] = [
             "Create text files with `touch`, `tee`, or text shell redirection. "
             "Text pipelines, `<`, `>`, `>>`, `;`, `&&`, and `||` are supported, "
-            "but this is not a full shell: do not rely on heredocs, stderr redirections, or command substitution.",
+            "but this is not a full shell: do not rely on heredocs, stderr redirections, or command substitution. "
+            "Use `find` with explicit paths plus Unix-like `-name` and `-type` filters for recursive file search, "
+            "`sort` for line sorting, and `ls -R` for recursive listings.",
         ]
         if not self.tools_enabled:
             extra_guidance.append(

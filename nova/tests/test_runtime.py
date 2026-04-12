@@ -908,9 +908,67 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         async_to_sync(executor.execute)('echo "hello" > /out/nested/index.html')
 
         removed = async_to_sync(executor.execute)("rm -rf /out")
+        remaining = async_to_sync(executor.execute)('find / -name "*out*"')
 
         self.assertEqual(removed, "Removed /out")
-        self.assertEqual(async_to_sync(executor.execute)("find / out"), "")
+        self.assertEqual(remaining, "")
+
+    def test_find_supports_unix_like_name_and_type_filters(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /gallery")
+        async_to_sync(executor.execute)("mkdir /gallery/nested")
+        async_to_sync(executor.execute)('printf "a" > /gallery/a.jpg')
+        async_to_sync(executor.execute)('printf "b" > /gallery/b.png')
+        async_to_sync(executor.execute)('printf "c" > /gallery/nested/c.jpeg')
+        async_to_sync(executor.execute)('printf "note" > /gallery/nested/readme.txt')
+
+        image_files = async_to_sync(executor.execute)(
+            'find /gallery -type f -name "*.jpg" -o -name "*.png" -o -name "*.jpeg"'
+        )
+        directories = async_to_sync(executor.execute)("find /gallery -type d")
+
+        self.assertIn("/gallery/a.jpg", image_files)
+        self.assertIn("/gallery/b.png", image_files)
+        self.assertIn("/gallery/nested/c.jpeg", image_files)
+        self.assertNotIn("readme.txt", image_files)
+        self.assertIn("/gallery", directories)
+        self.assertIn("/gallery/nested", directories)
+        self.assertNotIn(".jpg", directories)
+
+    def test_find_supports_multiple_roots_and_lists_all_visible_paths(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /gallery")
+        async_to_sync(executor.execute)("mkdir /gallery/nested")
+        async_to_sync(executor.execute)('printf "a" > /gallery/a.jpg')
+        async_to_sync(executor.execute)('printf "tmp" > /tmp/alpha.txt')
+
+        listed = async_to_sync(executor.execute)("find /gallery /tmp")
+        jpg_only = async_to_sync(executor.execute)('find /gallery /tmp -type f -name "*.jpg"')
+
+        self.assertIn("/gallery", listed)
+        self.assertIn("/gallery/nested", listed)
+        self.assertIn("/gallery/a.jpg", listed)
+        self.assertIn("/tmp/alpha.txt", listed)
+        self.assertEqual(jpg_only, "/gallery/a.jpg")
+
+    def test_find_rejects_legacy_and_unsupported_expressions_cleanly(self):
+        executor = self._build_executor()
+
+        with self.assertRaises(TerminalCommandError) as legacy_shape:
+            async_to_sync(executor.execute)("find / out")
+        with self.assertRaises(TerminalCommandError) as iname_error:
+            async_to_sync(executor.execute)('find / -iname "*.jpg"')
+        with self.assertRaises(TerminalCommandError) as missing_name:
+            async_to_sync(executor.execute)("find / -name")
+        with self.assertRaises(TerminalCommandError) as unsupported_type:
+            async_to_sync(executor.execute)("find / -type x")
+
+        self.assertEqual(str(legacy_shape.exception), "Path not found: /out")
+        self.assertIn("Unsupported find expression.", str(iname_error.exception))
+        self.assertEqual(str(missing_name.exception), "Missing value for -name")
+        self.assertEqual(str(unsupported_type.exception), "Unsupported find type: x")
 
     def test_terminal_reports_clean_usage_errors_for_unix_like_flags(self):
         executor = self._build_executor()
@@ -1074,6 +1132,42 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             str(intermediate_glob.exception),
             "ls wildcard expansion is supported only in the final path segment.",
         )
+
+    def test_ls_supports_recursive_directory_listing(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /subagents")
+        async_to_sync(executor.execute)("mkdir /subagents/demo")
+        async_to_sync(executor.execute)('printf "child" > /subagents/demo/result.txt')
+
+        listing = async_to_sync(executor.execute)("ls -laR /subagents")
+
+        self.assertIn("/subagents:", listing)
+        self.assertIn("/subagents/demo:", listing)
+        self.assertIn("result.txt", listing)
+
+    def test_sort_supports_stdin_and_file_inputs(self):
+        executor = self._build_executor()
+
+        piped = async_to_sync(executor.execute)('printf "b\\na\\nc\\n" | sort')
+        async_to_sync(executor.execute)('tee /tmp/list.txt --text "beta\\nalpha\\ngamma\\n"')
+        from_file = async_to_sync(executor.execute)("sort /tmp/list.txt")
+
+        self.assertEqual(piped, "a\nb\nc\n")
+        self.assertEqual(from_file, "alpha\nbeta\ngamma\n")
+
+    def test_sort_rejects_binary_input_and_unsupported_flags(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.vfs.write_file)("/tmp/image.bin", b"\x00\xff", mime_type="application/octet-stream")
+
+        with self.assertRaises(TerminalCommandError) as binary_error:
+            async_to_sync(executor.execute)("sort /tmp/image.bin")
+        with self.assertRaises(TerminalCommandError) as flag_error:
+            async_to_sync(executor.execute)("sort -r /tmp/image.bin")
+
+        self.assertIn("Binary file cannot be displayed as text", str(binary_error.exception))
+        self.assertEqual(str(flag_error.exception), "Unsupported sort flag: -r")
 
     def test_terminal_supports_semicolon_sequences(self):
         executor = self._build_executor()
@@ -2690,6 +2784,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("pwd", skills["terminal.md"])
         self.assertIn("mkdir -p /memory/preferences", skills["terminal.md"])
         self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
+        self.assertIn("find /inbox /history -name", skills["terminal.md"])
+        self.assertIn("sort", skills["terminal.md"])
+        self.assertIn("ls -laR /subagents", skills["terminal.md"])
         self.assertIn("printf", skills["terminal.md"])
         self.assertIn("file", skills["terminal.md"])
 
@@ -4005,6 +4102,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("tee", prompt)
         self.assertIn("Text pipelines", prompt)
         self.assertIn("not a full shell", prompt)
+        self.assertIn("`find`", prompt)
+        self.assertIn("`sort`", prompt)
+        self.assertIn("`ls -R`", prompt)
         self.assertIn("Use `date` for current date/time queries.", prompt)
         self.assertIn("--mailbox <email>", prompt)
         self.assertIn("- /: persistent files for this thread", prompt)

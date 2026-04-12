@@ -15,10 +15,13 @@ Examples:
 - `mkdir -p /memory/preferences`
 - `mkdir -p /tmp/demo; ls -l /tmp/demo`
 - `echo "hello" > /note.txt`
+- `find /inbox /history -name "*.png" -o -name "*.jpg"`
+- `printf "b\na\nc\n" | sort`
+- `ls -laR /subagents`
 
 Use relative paths only if you are confident about the current working directory.
 If you are unsure, run `pwd` first.
-Common Unix-like helpers such as `printf`, `wc`, `file`, `rmdir`, `true`, `false`, and simple `ls` wildcards are supported.
+Common Unix-like helpers such as `printf`, `sort`, `wc`, `file`, `rmdir`, `true`, `false`, recursive `ls -R`, and simple `ls` wildcards are supported.
 Text pipes plus `<`, `>`, `>>`, `;`, `&&`, and `||` are supported, but this is not a full shell.
 """,
     }

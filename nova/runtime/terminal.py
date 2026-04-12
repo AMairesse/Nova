@@ -738,6 +738,8 @@ class TerminalExecutor:
             return await self._cmd_rm(args)
         if name == "find":
             return await self._cmd_find(args)
+        if name == "sort":
+            return await self._cmd_sort(args, stdin_text=stdin_text)
         if name == "file":
             return await self._cmd_file(args)
         if name == "grep":
@@ -895,6 +897,7 @@ class TerminalExecutor:
             "long_format": False,
             "one_per_line": False,
             "human_readable": False,
+            "recursive": False,
         }
         paths: list[str] = []
         for token in args:
@@ -908,6 +911,8 @@ class TerminalExecutor:
                         options["one_per_line"] = True
                     elif flag == "h":
                         options["human_readable"] = True
+                    elif flag == "R":
+                        options["recursive"] = True
                     else:
                         raise TerminalCommandError(
                             f"Unsupported ls flag: -{flag}",
@@ -1043,6 +1048,34 @@ class TerminalExecutor:
             for entry in rendered_entries
         ]
 
+    async def _render_ls_recursive_sections(
+        self,
+        normalized: str,
+        *,
+        show_all: bool,
+        long_format: bool,
+        human_readable: bool,
+    ) -> list[str]:
+        sections: list[str] = []
+
+        async def _walk(path: str) -> None:
+            lines = await self._render_ls_directory(
+                path,
+                show_all=show_all,
+                long_format=long_format,
+                human_readable=human_readable,
+            )
+            sections.append(path if not lines else f"{path}:\n" + "\n".join(lines))
+            entries = await self.vfs.list_dir(path)
+            for entry in entries:
+                if str(entry.get("type") or "") != "dir":
+                    continue
+                child_path = normalize_vfs_path(str(entry.get("path") or ""), cwd=path)
+                await _walk(child_path)
+
+        await _walk(normalized)
+        return sections
+
     async def _cmd_ls(self, args: list[str]) -> str:
         options, raw_paths = self._parse_ls_flags(args)
         requested_paths = raw_paths or [self.vfs.cwd]
@@ -1062,6 +1095,14 @@ class TerminalExecutor:
                     long_format=options["long_format"],
                     human_readable=options["human_readable"],
                 )
+            if options["recursive"]:
+                sections = await self._render_ls_recursive_sections(
+                    normalized,
+                    show_all=options["show_all"],
+                    long_format=options["long_format"],
+                    human_readable=options["human_readable"],
+                )
+                return "\n\n".join(section for section in sections if section)
             lines = await self._render_ls_directory(
                 normalized,
                 show_all=options["show_all"],
@@ -1073,13 +1114,22 @@ class TerminalExecutor:
         rendered_sections: list[str] = []
         for normalized in targets:
             if await self.vfs.is_dir(normalized):
-                lines = await self._render_ls_directory(
-                    normalized,
-                    show_all=options["show_all"],
-                    long_format=options["long_format"],
-                    human_readable=options["human_readable"],
-                )
-                section = normalized if not lines else f"{normalized}:\n" + "\n".join(lines)
+                if options["recursive"]:
+                    sections = await self._render_ls_recursive_sections(
+                        normalized,
+                        show_all=options["show_all"],
+                        long_format=options["long_format"],
+                        human_readable=options["human_readable"],
+                    )
+                    section = "\n\n".join(item for item in sections if item)
+                else:
+                    lines = await self._render_ls_directory(
+                        normalized,
+                        show_all=options["show_all"],
+                        long_format=options["long_format"],
+                        human_readable=options["human_readable"],
+                    )
+                    section = normalized if not lines else f"{normalized}:\n" + "\n".join(lines)
             else:
                 entry = await self._lookup_ls_entry(normalized)
                 section = self._format_ls_entry(
@@ -1476,13 +1526,154 @@ class TerminalExecutor:
         return "\n".join(removed_messages)
 
     async def _cmd_find(self, args: list[str]) -> str:
-        start = args[0] if args else self.vfs.cwd
-        term = args[1] if len(args) > 1 else ""
+        usage = "find <path> [<path> ...] [-type f|d] [-name <glob> [-o -name <glob> ...]]"
+        if not args:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        roots: list[str] = []
+        index = 0
+        while index < len(args):
+            token = str(args[index] or "").strip()
+            if not token:
+                index += 1
+                continue
+            if token.startswith("-") or token in {"(", ")", "!"}:
+                break
+            roots.append(token)
+            index += 1
+
+        if not roots:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        desired_type: str | None = None
+        name_patterns: list[str] = []
+        remaining = list(args[index:])
+        expect_name_after_or = False
+        clause_active = False
+        cursor = 0
+
+        def _unsupported_find_expression() -> TerminalCommandError:
+            return TerminalCommandError(
+                f"Unsupported find expression. Supported form: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        while cursor < len(remaining):
+            token = str(remaining[cursor] or "").strip()
+            if token == "-o":
+                if not clause_active:
+                    raise _unsupported_find_expression()
+                expect_name_after_or = True
+                clause_active = False
+                cursor += 1
+                continue
+            if token == "-type":
+                if cursor + 1 >= len(remaining):
+                    raise TerminalCommandError(
+                        f"Usage: {usage}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                type_value = str(remaining[cursor + 1] or "").strip()
+                if type_value not in {"f", "d"}:
+                    raise TerminalCommandError(
+                        f"Unsupported find type: {type_value}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                if desired_type is not None:
+                    raise _unsupported_find_expression()
+                desired_type = type_value
+                cursor += 2
+                continue
+            if token == "-name":
+                if cursor + 1 >= len(remaining):
+                    raise TerminalCommandError(
+                        "Missing value for -name",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                if name_patterns and not expect_name_after_or:
+                    raise _unsupported_find_expression()
+                name_patterns.append(str(remaining[cursor + 1] or ""))
+                clause_active = True
+                expect_name_after_or = False
+                cursor += 2
+                continue
+            raise _unsupported_find_expression()
+
+        if expect_name_after_or:
+            raise _unsupported_find_expression()
+
+        collected: set[str] = set()
+        for raw_root in roots:
+            normalized_root = normalize_vfs_path(raw_root, cwd=self.vfs.cwd)
+            if not await self.vfs.path_exists(normalized_root):
+                raise TerminalCommandError(f"Path not found: {normalized_root}")
+            try:
+                collected.update(await self.vfs.find(normalized_root, ""))
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+
+        filtered: list[str] = []
+        for path in sorted(collected):
+            if name_patterns:
+                basename = posixpath.basename(path.rstrip("/")) or path
+                if not any(fnmatch(basename, pattern) for pattern in name_patterns):
+                    continue
+            if desired_type is not None:
+                is_dir = await self.vfs.is_dir(path)
+                if desired_type == "f" and is_dir:
+                    continue
+                if desired_type == "d" and not is_dir:
+                    continue
+            filtered.append(path)
+        return "\n".join(filtered)
+
+    @staticmethod
+    def _sort_text_lines(content: str) -> str:
+        text = str(content or "")
+        lines = text.splitlines()
+        if not lines:
+            return ""
+        rendered = "\n".join(sorted(lines))
+        if text.endswith("\n"):
+            rendered += "\n"
+        return rendered
+
+    async def _cmd_sort(self, args: list[str], *, stdin_text: str | None = None) -> str:
+        usage = "sort [<path>]"
+        positionals: list[str] = []
+        for token in args:
+            if token.startswith("-") and token != "-":
+                raise TerminalCommandError(
+                    f"Unsupported sort flag: {token}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            positionals.append(token)
+
+        if len(positionals) > 1:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        if not positionals:
+            if stdin_text is None:
+                raise TerminalCommandError(
+                    f"Usage: {usage}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            return self._sort_text_lines(stdin_text)
+
         try:
-            results = await self.vfs.find(start, term)
+            content = await self.vfs.read_text(positionals[0])
         except VFSError as exc:
             raise TerminalCommandError(str(exc)) from exc
-        return "\n".join(results)
+        return self._sort_text_lines(content)
 
     async def _cmd_file(self, args: list[str]) -> str:
         if not args:
