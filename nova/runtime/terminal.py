@@ -5,6 +5,7 @@ import logging
 import posixpath
 import re
 import shlex
+from fnmatch import fnmatch
 from dataclasses import dataclass, field
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
@@ -666,10 +667,14 @@ class TerminalExecutor:
                 stderr="Empty pipeline stage.",
                 status=1,
                 failure_kind=FAILURE_KIND_PARSE_ERROR,
-            )
+        )
         name = str(tokens[0] or "").strip()
         args = tokens[1:]
         try:
+            if name == "true":
+                return ShellStageResult(stdout="", status=0)
+            if name == "false":
+                return ShellStageResult(stdout="", status=1)
             if name == "python":
                 return await self._cmd_python_result(args)
             return ShellStageResult(
@@ -700,6 +705,8 @@ class TerminalExecutor:
             return self.vfs.cwd
         if name == "echo":
             return await self._cmd_echo(args)
+        if name == "printf":
+            return await self._cmd_printf(args)
         if name in {"ls", "la", "ll"}:
             effective_args = list(args)
             if name == "la":
@@ -717,6 +724,8 @@ class TerminalExecutor:
             return await self._cmd_head_tail(args, tail=True, stdin_text=stdin_text)
         if name == "mkdir":
             return await self._cmd_mkdir(args)
+        if name == "rmdir":
+            return await self._cmd_rmdir(args)
         if name == "touch":
             return await self._cmd_touch(args)
         if name == "tee":
@@ -729,6 +738,8 @@ class TerminalExecutor:
             return await self._cmd_rm(args)
         if name == "find":
             return await self._cmd_find(args)
+        if name == "file":
+            return await self._cmd_file(args)
         if name == "grep":
             return await self._cmd_grep(args, stdin_text=stdin_text)
         if name == "wc":
@@ -878,14 +889,14 @@ class TerminalExecutor:
         return "\n".join(f"{index}\t{line}" for index, line in enumerate(lines, start=1))
 
     @staticmethod
-    def _parse_ls_flags(args: list[str]) -> tuple[dict[str, bool], str]:
+    def _parse_ls_flags(args: list[str]) -> tuple[dict[str, bool], list[str]]:
         options = {
             "show_all": False,
             "long_format": False,
             "one_per_line": False,
             "human_readable": False,
         }
-        path = None
+        paths: list[str] = []
         for token in args:
             if token.startswith("-") and token != "-":
                 for flag in token[1:]:
@@ -903,13 +914,8 @@ class TerminalExecutor:
                             failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                         )
                 continue
-            if path is not None:
-                raise TerminalCommandError(
-                    "Usage: ls [-a] [-l] [-1] [-h] [path]",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            path = token
-        return options, (path or "")
+            paths.append(token)
+        return options, paths
 
     @staticmethod
     def _format_human_size(size: int | None) -> str:
@@ -942,6 +948,50 @@ class TerminalExecutor:
                 return entry
         return {"name": basename, "path": normalized_path, "type": "file"}
 
+    async def _resolve_vfs_entry(self, raw_path: str) -> dict[str, str | int | None]:
+        normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+        if not await self.vfs.path_exists(normalized):
+            raise TerminalCommandError(f"Path not found: {normalized}")
+        if await self.vfs.is_dir(normalized):
+            basename = posixpath.basename(normalized.rstrip("/")) or normalized
+            return {"name": basename, "path": normalized, "type": "dir"}
+        return await self._lookup_ls_entry(normalized)
+
+    async def _expand_ls_target(self, raw_path: str) -> list[str]:
+        raw = str(raw_path or "").strip()
+        if "*" not in raw and "?" not in raw:
+            normalized = normalize_vfs_path(raw, cwd=self.vfs.cwd)
+            if not await self.vfs.path_exists(normalized):
+                raise TerminalCommandError(f"Path not found: {normalized}")
+            return [normalized]
+
+        normalized = normalize_vfs_path(raw, cwd=self.vfs.cwd)
+        parent = posixpath.dirname(normalized.rstrip("/")) or "/"
+        pattern = posixpath.basename(normalized.rstrip("/"))
+        if "*" in parent or "?" in parent:
+            raise TerminalCommandError(
+                "ls wildcard expansion is supported only in the final path segment.",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        if not await self.vfs.path_exists(parent) or not await self.vfs.is_dir(parent):
+            raise TerminalCommandError(f"Directory not found: {parent}")
+
+        try:
+            entries = await self.vfs.list_dir(parent)
+        except VFSError as exc:
+            raise TerminalCommandError(str(exc)) from exc
+        matches = [
+            normalize_vfs_path(str(entry.get("path") or ""), cwd=parent)
+            for entry in entries
+            if fnmatch(str(entry.get("name") or ""), pattern)
+        ]
+        if not matches:
+            raise TerminalCommandError(
+                f"No matches for pattern: {normalized}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        return matches
+
     def _format_ls_entry(
         self,
         entry: dict[str, str | int],
@@ -962,22 +1012,17 @@ class TerminalExecutor:
             mime_type = str(entry.get("mime_type") or "application/octet-stream")
         return f"{self._format_ls_mode(str(entry.get('type') or 'file'))} {size} {mime_type} {name}"
 
-    async def _cmd_ls(self, args: list[str]) -> str:
-        options, raw_path = self._parse_ls_flags(args)
-        path = raw_path or self.vfs.cwd
-        normalized = normalize_vfs_path(path, cwd=self.vfs.cwd)
-        if not await self.vfs.path_exists(normalized):
-            raise TerminalCommandError(f"Path not found: {normalized}")
-        if not await self.vfs.is_dir(normalized):
-            entry = await self._lookup_ls_entry(normalized)
-            return self._format_ls_entry(
-                entry,
-                long_format=options["long_format"],
-                human_readable=options["human_readable"],
-            )
+    async def _render_ls_directory(
+        self,
+        normalized: str,
+        *,
+        show_all: bool,
+        long_format: bool,
+        human_readable: bool,
+    ) -> list[str]:
         entries = await self.vfs.list_dir(normalized)
         rendered_entries = list(entries)
-        if options["show_all"]:
+        if show_all:
             rendered_entries = [
                 {"name": ".", "path": normalized, "type": "dir"},
                 {
@@ -988,16 +1033,62 @@ class TerminalExecutor:
                 *rendered_entries,
             ]
         if not rendered_entries:
-            return ""
-        lines = [
+            return []
+        return [
             self._format_ls_entry(
                 entry,
-                long_format=options["long_format"],
-                human_readable=options["human_readable"],
+                long_format=long_format,
+                human_readable=human_readable,
             )
             for entry in rendered_entries
         ]
-        return "\n".join(lines)
+
+    async def _cmd_ls(self, args: list[str]) -> str:
+        options, raw_paths = self._parse_ls_flags(args)
+        requested_paths = raw_paths or [self.vfs.cwd]
+        targets: list[str] = []
+        for raw_path in requested_paths:
+            expanded = await self._expand_ls_target(raw_path)
+            for normalized in expanded:
+                if normalized not in targets:
+                    targets.append(normalized)
+
+        if len(targets) == 1:
+            normalized = targets[0]
+            if not await self.vfs.is_dir(normalized):
+                entry = await self._lookup_ls_entry(normalized)
+                return self._format_ls_entry(
+                    entry,
+                    long_format=options["long_format"],
+                    human_readable=options["human_readable"],
+                )
+            lines = await self._render_ls_directory(
+                normalized,
+                show_all=options["show_all"],
+                long_format=options["long_format"],
+                human_readable=options["human_readable"],
+            )
+            return "\n".join(lines)
+
+        rendered_sections: list[str] = []
+        for normalized in targets:
+            if await self.vfs.is_dir(normalized):
+                lines = await self._render_ls_directory(
+                    normalized,
+                    show_all=options["show_all"],
+                    long_format=options["long_format"],
+                    human_readable=options["human_readable"],
+                )
+                section = normalized if not lines else f"{normalized}:\n" + "\n".join(lines)
+            else:
+                entry = await self._lookup_ls_entry(normalized)
+                section = self._format_ls_entry(
+                    entry,
+                    long_format=options["long_format"],
+                    human_readable=options["human_readable"],
+                )
+            rendered_sections.append(section)
+        return "\n\n".join(section for section in rendered_sections if section)
 
     async def _cmd_cd(self, args: list[str]) -> str:
         target = args[0] if args else "/"
@@ -1035,14 +1126,20 @@ class TerminalExecutor:
 
     async def _cmd_head_tail(self, args: list[str], *, tail: bool, stdin_text: str | None = None) -> str:
         command = "tail" if tail else "head"
-        usage = f"{command} [-n N|-N] [<path>]"
+        usage = f"{command} [-n N|-N|-c N] [<path>]"
         flags, positionals, numeric_count = self._parse_short_flags(
             args,
             command_name=usage,
-            supported_flags={"n"},
+            supported_flags={"n", "c"},
             allow_numeric_count=True,
         )
+        if "n" in flags and "c" in flags:
+            raise TerminalCommandError(
+                f"Usage: {usage}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
         line_count = 10
+        byte_count: int | None = None
         if "n" in flags:
             if not positionals:
                 raise TerminalCommandError(
@@ -1051,7 +1148,20 @@ class TerminalExecutor:
                 )
             line_count = max(0, self._parse_int_flag("-n", positionals[0]))
             positionals = positionals[1:]
+        elif "c" in flags:
+            if not positionals:
+                raise TerminalCommandError(
+                    "Missing value after -c",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            byte_count = max(0, self._parse_int_flag("-c", positionals[0]))
+            positionals = positionals[1:]
         if numeric_count is not None:
+            if byte_count is not None:
+                raise TerminalCommandError(
+                    f"Usage: {usage}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
             line_count = max(0, numeric_count)
         if len(positionals) > 1:
             raise TerminalCommandError(
@@ -1067,6 +1177,10 @@ class TerminalExecutor:
             content = str(stdin_text)
         else:
             content = await self._cmd_cat([positionals[0]])
+        if byte_count is not None:
+            payload = content.encode("utf-8")
+            selected_bytes = payload[-byte_count:] if tail else payload[:byte_count]
+            return selected_bytes.decode("utf-8", errors="ignore")
         lines = content.splitlines()
         selected = lines[-line_count:] if tail else lines[:line_count]
         return "\n".join(selected)
@@ -1093,6 +1207,27 @@ class TerminalExecutor:
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
         return "\n".join(results)
+
+    async def _cmd_rmdir(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError(
+                "Usage: rmdir <path> [<path> ...]",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        removed_messages: list[str] = []
+        for raw_path in args:
+            normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+            if not await self.vfs.path_exists(normalized):
+                raise TerminalCommandError(f"Path not found: {normalized}")
+            if not await self.vfs.is_dir(normalized):
+                raise TerminalCommandError(f"Not a directory: {normalized}")
+            try:
+                removed = await self._remove_and_notify(raw_path, recursive=False)
+            except VFSError as exc:
+                raise TerminalCommandError(str(exc)) from exc
+            removed_messages.append(f"Removed {removed}")
+        return "\n".join(removed_messages)
 
     def _validate_text_write_path(self, raw_path: str) -> str:
         normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
@@ -1141,6 +1276,95 @@ class TerminalExecutor:
             parts.append(char)
             index += 1
         return "".join(parts)
+
+    @staticmethod
+    def _parse_printf_parts(format_text: str) -> list[tuple[str, str]]:
+        parts: list[tuple[str, str]] = []
+        literal: list[str] = []
+        index = 0
+        while index < len(format_text):
+            char = format_text[index]
+            if char != "%":
+                literal.append(char)
+                index += 1
+                continue
+            if index == len(format_text) - 1:
+                raise TerminalCommandError(
+                    "Invalid printf format: trailing %",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            specifier = format_text[index + 1]
+            if specifier == "%":
+                literal.append("%")
+                index += 2
+                continue
+            if specifier not in {"s", "d", "i", "f"}:
+                raise TerminalCommandError(
+                    f"Unsupported printf placeholder: %{specifier}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            if literal:
+                parts.append(("literal", "".join(literal)))
+                literal = []
+            parts.append(("spec", specifier))
+            index += 2
+        if literal:
+            parts.append(("literal", "".join(literal)))
+        return parts
+
+    @staticmethod
+    def _format_printf_value(specifier: str, value: str | None) -> str:
+        if specifier == "s":
+            return str(value or "")
+        candidate = str(value or "0").strip() or "0"
+        if specifier in {"d", "i"}:
+            try:
+                return str(int(candidate))
+            except ValueError:
+                try:
+                    return str(int(float(candidate)))
+                except (TypeError, ValueError) as exc:
+                    raise TerminalCommandError(
+                        f"printf: invalid %{specifier} value: {candidate}",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    ) from exc
+        if specifier == "f":
+            try:
+                return f"{float(candidate):f}"
+            except (TypeError, ValueError) as exc:
+                raise TerminalCommandError(
+                    f"printf: invalid %f value: {candidate}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                ) from exc
+        return str(value or "")
+
+    async def _cmd_printf(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError(
+                "Usage: printf <format> [arg ...]",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        format_text = self._decode_escaped_text(args[0])
+        values = [str(item) for item in args[1:]]
+        parts = self._parse_printf_parts(format_text)
+        specifiers = [value for kind, value in parts if kind == "spec"]
+        if not specifiers:
+            return format_text
+
+        chunk_size = len(specifiers)
+        iterations = max(1, (len(values) + chunk_size - 1) // chunk_size)
+        output_parts: list[str] = []
+        for iteration_index in range(iterations):
+            chunk = values[iteration_index * chunk_size:(iteration_index + 1) * chunk_size]
+            spec_index = 0
+            for kind, value in parts:
+                if kind == "literal":
+                    output_parts.append(value)
+                    continue
+                arg_value = chunk[spec_index] if spec_index < len(chunk) else None
+                output_parts.append(self._format_printf_value(value, arg_value))
+                spec_index += 1
+        return "".join(output_parts)
 
     async def _write_shell_output(self, raw_path: str, content: str, *, append: bool):
         normalized = self._validate_text_write_path(raw_path)
@@ -1260,6 +1484,28 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
         return "\n".join(results)
 
+    async def _cmd_file(self, args: list[str]) -> str:
+        if not args:
+            raise TerminalCommandError(
+                "Usage: file <path> [<path> ...]",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+
+        lines: list[str] = []
+        for raw_path in args:
+            entry = await self._resolve_vfs_entry(raw_path)
+            normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+            if entry.get("type") == "dir":
+                lines.append(f"{normalized}: directory")
+                continue
+            mime_type = str(entry.get("mime_type") or "").strip()
+            size = int(entry.get("size") if entry.get("size") is not None else 0)
+            if mime_type:
+                lines.append(f"{normalized}: {mime_type}, {size} bytes")
+            else:
+                lines.append(f"{normalized}: file, {size} bytes")
+        return "\n".join(lines)
+
     async def _cmd_grep(self, args: list[str], *, stdin_text: str | None = None) -> str:
         if not args:
             raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
@@ -1333,13 +1579,13 @@ class TerminalExecutor:
         return "\n".join(results)
 
     async def _cmd_wc(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        usage = "wc -l [<path>]"
+        usage = "wc [-l] [-w] [-c] [<path>]"
         flags, positionals, _numeric_count = self._parse_short_flags(
             args,
             command_name=usage,
-            supported_flags={"l"},
+            supported_flags={"l", "w", "c"},
         )
-        if "l" not in flags or len(positionals) > 1:
+        if len(positionals) > 1:
             raise TerminalCommandError(
                 f"Usage: {usage}",
                 failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
@@ -1352,11 +1598,23 @@ class TerminalExecutor:
                     failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                 )
             content = str(stdin_text)
-            return str(self._count_text_lines(content))
+            path_label = ""
+        else:
+            path_label = normalize_vfs_path(positionals[0], cwd=self.vfs.cwd)
+            content = await self._cmd_cat([positionals[0]])
 
-        path = normalize_vfs_path(positionals[0], cwd=self.vfs.cwd)
-        content = await self._cmd_cat([positionals[0]])
-        return f"{self._count_text_lines(content)} {path}"
+        counts = {
+            "l": self._count_text_lines(content),
+            "w": len(str(content or "").split()),
+            "c": len(str(content or "").encode("utf-8")),
+        }
+        selected_flags = [flag for flag in ("l", "w", "c") if flag in flags]
+        if not selected_flags:
+            selected_flags = ["l", "w", "c"]
+        values = [str(counts[flag]) for flag in selected_flags]
+        if path_label:
+            values.append(path_label)
+        return " ".join(values)
 
     def _ensure_continuous_mode(self) -> None:
         if getattr(self.vfs.thread, "mode", None) != Thread.Mode.CONTINUOUS:

@@ -18,6 +18,7 @@ Examples:
 
 Use relative paths only if you are confident about the current working directory.
 If you are unsure, run `pwd` first.
+Common Unix-like helpers such as `printf`, `wc`, `file`, `rmdir`, `true`, `false`, and simple `ls` wildcards are supported.
 Text pipes plus `<`, `>`, `>>`, `;`, `&&`, and `||` are supported, but this is not a full shell.
 """,
     }

@@ -914,8 +914,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         executor = self._build_executor()
         async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta"')
 
-        with self.assertRaises(TerminalCommandError) as wc_usage:
-            async_to_sync(executor.execute)("wc /tmp/data.csv")
         with self.assertRaises(TerminalCommandError) as wc_flag:
             async_to_sync(executor.execute)("wc -x /tmp/data.csv")
         with self.assertRaises(TerminalCommandError) as cat_flag:
@@ -925,11 +923,94 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with self.assertRaises(TerminalCommandError) as rm_usage:
             async_to_sync(executor.execute)("rm")
 
-        self.assertEqual(str(wc_usage.exception), "Usage: wc -l [<path>]")
         self.assertEqual(str(wc_flag.exception), "Unsupported wc flag: -x")
         self.assertEqual(str(cat_flag.exception), "Unsupported cat flag: -x")
         self.assertEqual(str(head_flag.exception), "Unsupported head flag: -x")
         self.assertEqual(str(rm_usage.exception), "Usage: rm [-f] [-r|-R] <path> [<path> ...]")
+
+    def test_terminal_supports_wc_printf_file_and_truthy_helpers(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('printf "alpha beta\\n" > /tmp/data.txt')
+        async_to_sync(executor.execute)("mkdir /empty-dir")
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/blob.bin",
+            b"\x00\x01",
+            mime_type="application/octet-stream",
+        )
+
+        wc_default = async_to_sync(executor.execute)("wc /tmp/data.txt")
+        wc_chars = async_to_sync(executor.execute)("wc -c /tmp/data.txt")
+        wc_words = async_to_sync(executor.execute)("printf \"one two three\" | wc -w")
+        file_output = async_to_sync(executor.execute)("file /tmp/data.txt /tmp/blob.bin /empty-dir")
+        printf_output = async_to_sync(executor.execute)('printf "plain output"')
+
+        self.assertEqual(wc_default, "1 2 11 /tmp/data.txt")
+        self.assertEqual(wc_chars, "11 /tmp/data.txt")
+        self.assertEqual(wc_words, "3")
+        self.assertIn("/tmp/data.txt: text/plain, 11 bytes", file_output)
+        self.assertIn("/tmp/blob.bin: application/octet-stream, 2 bytes", file_output)
+        self.assertIn("/empty-dir: directory", file_output)
+        self.assertEqual(printf_output, "plain output")
+
+        true_result = async_to_sync(executor.execute_result)("unknowncmd || true")
+        false_result = async_to_sync(executor.execute_result)("false && pwd")
+
+        self.assertEqual(true_result.status, 0)
+        self.assertEqual(true_result.failed_segment_indexes, [1])
+        self.assertEqual(false_result.status, 1)
+        self.assertEqual(false_result.skipped_segment_indexes, [2])
+
+    def test_terminal_printf_supports_placeholders_and_escapes(self):
+        executor = self._build_executor()
+
+        placeholder_output = async_to_sync(executor.execute)('printf "%s %d %f" test 42 3.5')
+        repeated_output = async_to_sync(executor.execute)('printf "[%s]" a b c')
+
+        self.assertEqual(placeholder_output, "test 42 3.500000")
+        self.assertEqual(repeated_output, "[a][b][c]")
+
+        with self.assertRaises(TerminalCommandError) as invalid_placeholder:
+            async_to_sync(executor.execute)('printf "%q" test')
+
+        self.assertEqual(str(invalid_placeholder.exception), "Unsupported printf placeholder: %q")
+
+    def test_head_and_tail_support_byte_counts(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('printf "abcdef" > /tmp/letters.txt')
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/raw.bin",
+            b"\xff\xfe\xfd",
+            mime_type="application/octet-stream",
+        )
+
+        self.assertEqual(async_to_sync(executor.execute)("head -c 3 /tmp/letters.txt"), "abc")
+        self.assertEqual(async_to_sync(executor.execute)("tail -c 3 /tmp/letters.txt"), "def")
+        self.assertEqual(async_to_sync(executor.execute)('printf "abcdef" | head -c 2'), "ab")
+
+        with self.assertRaises(TerminalCommandError) as binary_error:
+            async_to_sync(executor.execute)("head -c 2 /tmp/raw.bin")
+
+        self.assertIn("Binary file cannot be displayed as text", str(binary_error.exception))
+
+    def test_rmdir_only_removes_empty_directories(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /empty-dir")
+        async_to_sync(executor.execute)("mkdir /non-empty")
+        async_to_sync(executor.execute)('printf "x" > /non-empty/item.txt')
+
+        removed = async_to_sync(executor.execute)("rmdir /empty-dir")
+        self.assertEqual(removed, "Removed /empty-dir")
+
+        with self.assertRaises(TerminalCommandError) as non_empty_error:
+            async_to_sync(executor.execute)("rmdir /non-empty")
+        with self.assertRaises(TerminalCommandError) as file_error:
+            async_to_sync(executor.execute)("rmdir /non-empty/item.txt")
+
+        self.assertIn("Directory not empty: /non-empty", str(non_empty_error.exception))
+        self.assertIn("Not a directory: /non-empty/item.txt", str(file_error.exception))
 
     def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
         executor = self._build_executor()
@@ -961,6 +1042,36 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("note.txt", human_listing)
         self.assertIn("-rw-r--r-- 6B text/plain note.txt", human_file_listing)
         self.assertIn("note.txt", alias_listing)
+
+    def test_ls_supports_simple_wildcards_only_in_final_segment(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('printf "sun" > /solar-system.txt')
+        async_to_sync(executor.execute)('printf "sys" > /system-notes.txt')
+        async_to_sync(executor.execute)('printf "fr" > /solaire.txt')
+        async_to_sync(executor.execute)("mkdir /tmp/images")
+        async_to_sync(executor.execute)("touch /tmp/a.png")
+        async_to_sync(executor.execute)("touch /tmp/b.png")
+
+        root_matches = async_to_sync(executor.execute)("ls /solar* /syst* /solaire*")
+        png_matches = async_to_sync(executor.execute)("ls -lh /tmp/*.png")
+
+        self.assertIn("solar-system.txt", root_matches)
+        self.assertIn("system-notes.txt", root_matches)
+        self.assertIn("solaire.txt", root_matches)
+        self.assertIn("a.png", png_matches)
+        self.assertIn("b.png", png_matches)
+
+        with self.assertRaises(TerminalCommandError) as no_match:
+            async_to_sync(executor.execute)("ls /missing*")
+        with self.assertRaises(TerminalCommandError) as intermediate_glob:
+            async_to_sync(executor.execute)("ls /*/note.txt")
+
+        self.assertEqual(str(no_match.exception), "No matches for pattern: /missing*")
+        self.assertEqual(
+            str(intermediate_glob.exception),
+            "ls wildcard expansion is supported only in the final path segment.",
+        )
 
     def test_terminal_supports_semicolon_sequences(self):
         executor = self._build_executor()
@@ -2577,6 +2688,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("pwd", skills["terminal.md"])
         self.assertIn("mkdir -p /memory/preferences", skills["terminal.md"])
         self.assertIn('echo "hello" > /note.txt', skills["terminal.md"])
+        self.assertIn("printf", skills["terminal.md"])
+        self.assertIn("file", skills["terminal.md"])
 
     def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
         skills = build_skill_registry(
