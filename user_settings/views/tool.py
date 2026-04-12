@@ -30,9 +30,17 @@ from user_settings.mixins import (
 )
 from user_settings.forms import APIToolOperationForm, ToolForm, ToolCredentialForm
 from nova.models.APIToolOperation import APIToolOperation
-from nova.models.Tool import Tool, ToolCredential
+from nova.models.Tool import (
+    Tool,
+    ToolCredential,
+    check_and_create_judge0_tool,
+    check_and_create_searxng_tool,
+)
+from nova.plugins.catalog import (
+    build_tools_page_catalog,
+    ensure_standard_capability_tools,
+)
 from nova.plugins.builtins import get_metadata, get_tool_type
-from nova.models.Tool import check_and_create_searxng_tool, check_and_create_judge0_tool
 from nova.mcp.client import MCPClient
 from nova.mcp import oauth_service as mcp_oauth_service
 
@@ -107,7 +115,7 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         return super().get_template_names()
 
     def get_queryset(self):
-        # Ensure the system tools exist
+        ensure_standard_capability_tools()
         check_and_create_searxng_tool()
         check_and_create_judge0_tool()
 
@@ -126,7 +134,15 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
                 filter=Q(agents__user=self.request.user),
                 distinct=True,
             )
-        ).order_by("user", "name")
+        ).order_by("user", "name", "id")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["tool_catalog"] = build_tools_page_catalog(
+            self.request.user,
+            tools=list(context["tools"]),
+        )
+        return context
 
 
 # ---------------------------------------------------------------------------#
@@ -184,6 +200,12 @@ class _ToolBaseMixin(DashboardRedirectMixin,
 class ToolCreateView(_ToolBaseMixin, OwnerCreateView):
     success_message = "Tool created successfully"
 
+    def get_initial(self):
+        initial = super().get_initial()
+        if self.request.GET.get("kind"):
+            initial["connection_kind"] = self.request.GET["kind"]
+        return initial
+
 
 class ToolUpdateView(_ToolBaseMixin, SystemReadonlyMixin, OwnerUpdateView):
     success_message = "Tool updated successfully"
@@ -218,7 +240,8 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
 
     def __init__(self, *args, meta: dict, initial=None, **kw):
         # Store existing secrets
-        kw.pop("user", None)
+        self.user = kw.pop("user", None)
+        self.tool = kw.pop("tool", None)
         self._existing_secrets = {k: v for k, v in (initial or {}).items()
                                   if k in self.secret_fields}
 
@@ -327,6 +350,41 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
         self.helper.layout = Layout(*fieldsets)
 
     def clean(self):
+        cleaned = super().clean()
+        if not self.tool or not self.user:
+            return cleaned
+
+        if self.tool.tool_subtype == "searxng":
+            duplicate_qs = ToolCredential.objects.filter(
+                user=self.user,
+                tool__user=self.user,
+                tool__tool_type=Tool.ToolType.BUILTIN,
+                tool__tool_subtype="searxng",
+                config__searxng_url=cleaned.get("searxng_url"),
+                config__num_results=cleaned.get("num_results"),
+            ).exclude(tool=self.tool)
+            if cleaned.get("searxng_url") and duplicate_qs.exists():
+                raise forms.ValidationError(
+                    _("A search backend with the same server URL and result limit already exists.")
+                )
+
+        if self.tool.tool_subtype == "code_execution":
+            duplicate_qs = ToolCredential.objects.filter(
+                user=self.user,
+                tool__user=self.user,
+                tool__tool_type=Tool.ToolType.BUILTIN,
+                tool__tool_subtype="code_execution",
+                config__judge0_url=cleaned.get("judge0_url"),
+                config__timeout=cleaned.get("timeout"),
+            ).exclude(tool=self.tool)
+            if cleaned.get("judge0_url") and duplicate_qs.exists():
+                raise forms.ValidationError(
+                    _("A Python backend with the same Judge0 server settings already exists.")
+                )
+
+        return cleaned
+
+    def clean(self):
         data = super().clean()
         # Preserve existing secrets if the field is left blank
         for f in self.secret_fields:
@@ -353,7 +411,7 @@ class ToolConfigureView(DashboardRedirectMixin, LoginRequiredMixin, FormView):
     def get_form_class(self):
         if self.tool.tool_type == Tool.ToolType.BUILTIN:
             meta = _get_builtin_metadata_for_tool(self.tool)
-            return lambda *a, **kw: _BuiltInConfigForm(*a, meta=meta, **kw)
+            return lambda *a, **kw: _BuiltInConfigForm(*a, meta=meta, tool=self.tool, **kw)
         return ToolCredentialForm
 
     def get_form_kwargs(self):

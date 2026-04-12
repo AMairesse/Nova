@@ -32,4 +32,9 @@ PLUGIN = InternalPluginDescriptor(
     command_families=("mcp",),
     runtime_capability_resolver=resolve_external_tool_type("mcp"),
     skill_docs_provider=_skill_docs,
+    catalog_section="connections",
+    selection_mode="multi_instance",
+    provisioning_sources=("user_connection",),
+    show_in_add_flow=True,
+    add_label="MCP server",
 )

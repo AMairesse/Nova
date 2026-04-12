@@ -14,11 +14,17 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Div, Field
+from crispy_forms.layout import Layout, Div, Field, Fieldset
 
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
+from nova.plugins import get_plugin_for_builtin_subtype
+from nova.plugins.catalog import (
+    build_agent_tool_selection_catalog,
+    get_user_creatable_connection_choices,
+    resolve_connection_kind,
+)
 from nova.providers import get_provider_defaults
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
@@ -124,6 +130,26 @@ class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
 class AgentForm(forms.ModelForm):
     """Full-featured agent form with Crispy layout."""
 
+    standard_capabilities = forms.MultipleChoiceField(
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label=_("Standard capabilities"),
+    )
+    search_backend = forms.ChoiceField(
+        required=False,
+        label=_("Search backend"),
+    )
+    python_backend = forms.ChoiceField(
+        required=False,
+        label=_("Python backend"),
+    )
+    connection_tools = forms.ModelMultipleChoiceField(
+        queryset=Tool.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        label=_("Connections"),
+    )
+
     # Agents that can be used as tools
     agent_tools = forms.ModelMultipleChoiceField(
         queryset=AgentConfig.objects.none(),
@@ -157,17 +183,42 @@ class AgentForm(forms.ModelForm):
     def __init__(self, *args: Any, user=None, **kwargs: Any) -> None:
         self.user = user
         super().__init__(*args, **kwargs)
+        self.fields["tools"].required = False
+        self.fields["tools"].widget = forms.MultipleHiddenInput()
+        current_tool_ids = (
+            set(self.instance.tools.values_list("pk", flat=True))
+            if self.instance.pk
+            else set()
+        )
 
         # Restrict querysets to the current user (or public objects)
         if user:
             self.fields["llm_provider"].queryset = LLMProvider.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             ).exclude(model="")
+            tool_catalog = build_agent_tool_selection_catalog(
+                user,
+                include_selected_ids=current_tool_ids,
+            )
             self.fields["tools"].queryset = Tool.objects.filter(
                 Q(user=user) | Q(user__isnull=True)
             )
             self.fields["tools"].label_from_instance = (
-                lambda tool: f"{tool.name} (#{tool.id}, {tool.get_tool_type_display()})"
+                lambda tool: self._tool_label(tool)
+            )
+            self.fields["standard_capabilities"].choices = [
+                (str(tool.pk), self._tool_label(tool, kind="capability"))
+                for tool in tool_catalog["standard_tools"]
+            ]
+            self.fields["search_backend"].choices = self._build_backend_choices(
+                tool_catalog["search_backends"],
+            )
+            self.fields["python_backend"].choices = self._build_backend_choices(
+                tool_catalog["python_backends"],
+            )
+            self.fields["connection_tools"].queryset = tool_catalog["connection_tools"]
+            self.fields["connection_tools"].label_from_instance = (
+                lambda tool: self._tool_label(tool)
             )
             self.fields["agent_tools"].queryset = AgentConfig.objects.filter(
                 user=user, is_tool=True
@@ -176,6 +227,45 @@ class AgentForm(forms.ModelForm):
         # Pre-select sub-agents when editing
         if self.instance.pk:
             self.fields["agent_tools"].initial = self.instance.agent_tools.all()
+            selected_tools = list(self.instance.tools.all())
+            self.initial["standard_capabilities"] = [
+                str(tool.pk)
+                for tool in selected_tools
+                if tool.tool_subtype in {"date", "memory", "browser", "webapp"}
+            ]
+            self.initial["search_backend"] = next(
+                (
+                    str(tool.pk)
+                    for tool in selected_tools
+                    if tool.tool_subtype == "searxng"
+                ),
+                "",
+            )
+            self.initial["python_backend"] = next(
+                (
+                    str(tool.pk)
+                    for tool in selected_tools
+                    if tool.tool_subtype == "code_execution"
+                ),
+                "",
+            )
+            self.initial["connection_tools"] = [
+                tool.pk
+                for tool in selected_tools
+                if (
+                    tool.tool_type in {Tool.ToolType.API, Tool.ToolType.MCP}
+                    or tool.tool_subtype in {"email", "caldav", "webdav"}
+                )
+            ]
+        elif user and not self.is_bound and not bool(self._bound_or_initial_value("is_tool")):
+            self.initial["standard_capabilities"] = [
+                choice_value
+                for choice_value, _label in self.fields["standard_capabilities"].choices
+            ]
+            if len(self.fields["search_backend"].choices) == 2:
+                self.initial["search_backend"] = self.fields["search_backend"].choices[1][0]
+            if len(self.fields["python_backend"].choices) == 2:
+                self.initial["python_backend"] = self.fields["python_backend"].choices[1][0]
 
         # Make summarization fields not required (they have model defaults)
         self.fields["auto_summarize"].required = False
@@ -210,9 +300,18 @@ class AgentForm(forms.ModelForm):
                 css_id="tool-description-wrapper",
                 css_class="ms-3",
             ),
-            Field(
-                "tools",
-                css_class="dual-list-tools-source",
+            Fieldset(
+                _("Standard capabilities"),
+                "standard_capabilities",
+            ),
+            Fieldset(
+                _("Backend-backed capabilities"),
+                "search_backend",
+                "python_backend",
+            ),
+            Fieldset(
+                _("Connections"),
+                "connection_tools",
             ),
             "agent_tools",
             Div(
@@ -246,6 +345,44 @@ class AgentForm(forms.ModelForm):
                 "tool_description",
                 _("Required when using an agent as a tool."),
             )
+        selected_tool_ids: set[int] = set()
+
+        if self.is_bound and hasattr(self.data, "getlist"):
+            for raw_value in self.data.getlist("tools"):
+                try:
+                    selected_tool_ids.add(int(raw_value))
+                except (TypeError, ValueError):
+                    self.add_error("tools", _("Invalid tool selection."))
+
+        for raw_value in data.get("standard_capabilities") or []:
+            try:
+                selected_tool_ids.add(int(raw_value))
+            except (TypeError, ValueError):
+                self.add_error("standard_capabilities", _("Invalid capability selection."))
+
+        for field_name, subtype in (
+            ("search_backend", "searxng"),
+            ("python_backend", "code_execution"),
+        ):
+            raw_value = str(data.get(field_name) or "").strip()
+            if not raw_value:
+                continue
+            try:
+                tool_id = int(raw_value)
+            except (TypeError, ValueError):
+                self.add_error(field_name, _("Invalid backend selection."))
+                continue
+            tool = self.fields["tools"].queryset.filter(pk=tool_id).first()
+            if tool is None or tool.tool_subtype != subtype:
+                self.add_error(field_name, _("Invalid backend selection."))
+                continue
+            selected_tool_ids.add(tool_id)
+
+        connection_tools = data.get("connection_tools")
+        if connection_tools is not None:
+            selected_tool_ids.update(connection_tools.values_list("pk", flat=True))
+
+        data["tools"] = self.fields["tools"].queryset.filter(pk__in=selected_tool_ids)
         return data
 
     def _compute_provider_tool_warning(self) -> str:
@@ -279,13 +416,27 @@ class AgentForm(forms.ModelForm):
             return self.data.get(field_name)
         if field_name == "tools" and self.instance.pk:
             return list(self.instance.tools.values_list("pk", flat=True))
+        if field_name == "standard_capabilities":
+            return self.initial.get(field_name) or []
+        if field_name in {"search_backend", "python_backend"}:
+            return self.initial.get(field_name) or ""
+        if field_name == "connection_tools":
+            return self.initial.get(field_name) or []
         if field_name == "agent_tools" and self.instance.pk:
             return list(self.instance.agent_tools.values_list("pk", flat=True))
         return self.initial.get(field_name) or getattr(self.instance, field_name, None)
 
     def _has_selected_tool_dependencies(self) -> bool:
         if self.is_bound and hasattr(self.data, "getlist"):
-            selected_tools = [value for value in self.data.getlist("tools") if str(value).strip()]
+            selected_tools = (
+                [value for value in self.data.getlist("tools") if str(value).strip()]
+                + [value for value in self.data.getlist("standard_capabilities") if str(value).strip()]
+                + [value for value in self.data.getlist("connection_tools") if str(value).strip()]
+            )
+            if str(self.data.get("search_backend") or "").strip():
+                selected_tools.append(self.data.get("search_backend"))
+            if str(self.data.get("python_backend") or "").strip():
+                selected_tools.append(self.data.get("python_backend"))
             selected_agents = [value for value in self.data.getlist("agent_tools") if str(value).strip()]
             return bool(selected_tools or selected_agents)
         if self.instance.pk:
@@ -304,6 +455,23 @@ class AgentForm(forms.ModelForm):
     class Media:
         js = ["user_settings/js/agent.js"]
 
+    def _tool_label(self, tool: Tool, *, kind: str = "connection") -> str:
+        plugin = get_plugin_for_builtin_subtype(tool.tool_subtype or "")
+        if kind == "capability":
+            return plugin.label if plugin is not None else tool.name
+        type_label = plugin.label if plugin is not None else tool.get_tool_type_display()
+        return f"{tool.name} (#{tool.id}, {type_label})"
+
+    def _build_backend_choices(self, backends) -> list[tuple[str, str]]:
+        choices = [("", _("Off"))]
+        for tool in backends:
+            if tool.user_id is None:
+                label = _("Default backend: Local Nova service")
+            else:
+                label = self._tool_label(tool)
+            choices.append((str(tool.pk), label))
+        return choices
+
 
 # ────────────────────────────────────────────────────────────────────────────
 #  Tools
@@ -314,6 +482,11 @@ class ToolForm(forms.ModelForm):
     Crispy helper to avoid nested <form> tags in HTMX fragments.
     """
 
+    connection_kind = forms.ChoiceField(
+        required=False,
+        label=_("Connection type"),
+        help_text=_("Choose the kind of connection to add."),
+    )
     tool_subtype = forms.ChoiceField(
         required=False,
         label=_("Builtin tool subtype"),
@@ -347,6 +520,20 @@ class ToolForm(forms.ModelForm):
         # Built-in tools: name / description optional
         self.fields["name"].required = False
         self.fields["description"].required = False
+        self.fields["tool_type"].required = False
+        self.fields["tool_type"].widget = forms.HiddenInput()
+        self.fields["tool_subtype"].widget = forms.HiddenInput()
+
+        # User-facing connection choices
+        self.fields["connection_kind"].choices = [("", "---------")] + get_user_creatable_connection_choices()
+        if self.instance.pk:
+            self.fields["connection_kind"].initial = self._connection_kind_from_instance()
+            self.fields["connection_kind"].widget = forms.HiddenInput()
+        else:
+            self.fields["connection_kind"].initial = (
+                self.data.get("connection_kind")
+                or self.initial.get("connection_kind")
+            )
 
         # Populate subtype choices
         from nova.plugins.builtins import get_available_tool_types
@@ -354,23 +541,32 @@ class ToolForm(forms.ModelForm):
         self.fields["tool_subtype"].choices = [("", "---------")] + [
             (k, v["name"]) for k, v in get_available_tool_types().items()
         ]
-
-        # Dynamic field requirements
-        ttype = (
-            self.initial.get("tool_type")
-            or getattr(self.instance, "tool_type", None)
-            or self.data.get("tool_type")
+        self.helper.layout = Layout(
+            *(
+                ("connection_kind",)
+                if not self.instance.pk
+                else ()
+            ),
+            "name",
+            "description",
+            "endpoint",
+            "transport_type",
+            "is_active",
         )
-        if ttype in {"python", "filesystem"} and "auth" in self.fields:
-            self.fields["auth"].required = False
 
     # ------------------------------------------------------------------ #
     #  Validation                                                         #
     # ------------------------------------------------------------------ #
     def clean(self):
         cleaned = super().clean()
-        ttype = cleaned.get("tool_type")
-        tool_subtype = cleaned.get("tool_subtype")
+        mapping = self._resolve_connection_mapping(cleaned)
+        if mapping is None:
+            self.add_error("connection_kind", _("Choose a valid connection type."))
+            return cleaned
+        ttype = mapping["tool_type"]
+        tool_subtype = mapping["tool_subtype"]
+        cleaned["tool_type"] = ttype
+        cleaned["tool_subtype"] = tool_subtype
 
         if ttype == Tool.ToolType.BUILTIN:
             if not tool_subtype:
@@ -383,7 +579,7 @@ class ToolForm(forms.ModelForm):
             if meta:
                 # Keep builtin names editable by users. Use metadata as defaults only.
                 if not (cleaned.get("name") or "").strip():
-                    cleaned["name"] = meta["name"]
+                    cleaned["name"] = meta.get("add_label") or meta["name"]
                 if not (cleaned.get("description") or "").strip():
                     cleaned["description"] = meta["description"]
                 cleaned["python_path"] = meta["python_path"]
@@ -411,6 +607,8 @@ class ToolForm(forms.ModelForm):
             for f in ["name", "description", "endpoint"]:
                 if not cleaned.get(f):
                     self.add_error(f, _("This field is required."))
+            if ttype != Tool.ToolType.MCP:
+                cleaned["transport_type"] = Tool.TransportType.STREAMABLE_HTTP
 
         return cleaned
 
@@ -429,6 +627,30 @@ class ToolForm(forms.ModelForm):
 
     class Media:
         js = ["user_settings/js/tool.js"]
+
+    def _connection_kind_from_instance(self) -> str:
+        if self.instance.tool_type == Tool.ToolType.BUILTIN:
+            plugin = get_plugin_for_builtin_subtype(self.instance.tool_subtype or "")
+            return plugin.plugin_id if plugin is not None else ""
+        return str(self.instance.tool_type or "")
+
+    def _resolve_connection_mapping(self, cleaned: dict[str, Any]) -> dict[str, str] | None:
+        if self.instance.pk:
+            return {
+                "tool_type": self.instance.tool_type,
+                "tool_subtype": self.instance.tool_subtype or "",
+            }
+        mapping = resolve_connection_kind(cleaned.get("connection_kind") or "")
+        if mapping is not None:
+            return mapping
+        tool_type = str(cleaned.get("tool_type") or "").strip()
+        tool_subtype = str(cleaned.get("tool_subtype") or "").strip()
+        if tool_type:
+            return {
+                "tool_type": tool_type,
+                "tool_subtype": tool_subtype,
+            }
+        return None
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 /* user_settings/static/user_settings/js/tool.js */
 document.addEventListener("DOMContentLoaded", () => {
-  const typeSelect = document.querySelector('[name="tool_type"]');
-  if (!typeSelect) return;
+  const kindSelect = document.querySelector('[name="connection_kind"]');
+  if (!kindSelect) return;
 
   const hideRow = (id) => {
     DOMUtils.toggleFieldVisibility(`#div_id_${id}`, false);
@@ -10,28 +10,36 @@ document.addEventListener("DOMContentLoaded", () => {
     DOMUtils.toggleFieldVisibility(`#div_id_${id}`, true, required);
   };
 
+  const builtinKinds = new Set(["mail", "calendar", "webdav", "search", "python"]);
+
   const toggle = () => {
-    ["name", "description", "tool_subtype", "endpoint", "transport_type"].forEach(hideRow);
-    switch (typeSelect.value) {
-      case "builtin":
-        showRow("name", true);
-        showRow("tool_subtype", true);
-        break;
-      case "api":
-        showRow("name", true);
-        showRow("description", true);
-        showRow("endpoint", true);
-        break;
-      case "mcp":
-        showRow("name", true);
-        showRow("description", true);
-        showRow("endpoint", true);
-        showRow("transport_type");
-        break;
-      default:
-        break;
+    ["name", "description", "endpoint", "transport_type"].forEach(hideRow);
+
+    const value = `${kindSelect.value || ""}`.trim();
+    if (!value) {
+      return;
+    }
+
+    if (builtinKinds.has(value)) {
+      showRow("name", true);
+      return;
+    }
+
+    if (value === "api") {
+      showRow("name", true);
+      showRow("description", true);
+      showRow("endpoint", true);
+      return;
+    }
+
+    if (value === "mcp") {
+      showRow("name", true);
+      showRow("description", true);
+      showRow("endpoint", true);
+      showRow("transport_type");
     }
   };
+
   toggle();
-  typeSelect.addEventListener("change", toggle);
+  kindSelect.addEventListener("change", toggle);
 });

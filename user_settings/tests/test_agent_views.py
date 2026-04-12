@@ -208,6 +208,73 @@ class AgentViewsTest(BaseTestCase):
             {helper_agent.pk},
         )
 
+    def test_create_form_groups_capabilities_backends_and_connections(self):
+        self._create_provider()
+        email_tool = create_tool(
+            self.user,
+            name="Work Mailbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.plugins.mail",
+        )
+        search_backend = create_tool(
+            self.user,
+            name="Remote Search",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.plugins.search",
+        )
+
+        response = self.client.get(reverse("user_settings:agent-add"))
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        standard_values = {value for value, _label in form.fields["standard_capabilities"].choices}
+        self.assertTrue(standard_values)
+        search_choices = {value for value, _label in form.fields["search_backend"].choices if value}
+        self.assertIn(str(search_backend.pk), search_choices)
+        connection_ids = {str(value) for value, _label in form.fields["connection_tools"].choices if value}
+        self.assertIn(str(email_tool.pk), connection_ids)
+
+    def test_create_agent_persists_selected_backend_and_connection_tools(self):
+        provider = self._create_provider()
+        search_backend = create_tool(
+            self.user,
+            name="Remote Search",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="searxng",
+            python_path="nova.plugins.search",
+        )
+        email_tool = create_tool(
+            self.user,
+            name="Work Mailbox",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="email",
+            python_path="nova.plugins.mail",
+        )
+        payload = {
+            "from": "agents",
+            "name": "Agent With Backend",
+            "llm_provider": str(provider.pk),
+            "system_prompt": "Use the configured backend and mailbox.",
+            "recursion_limit": "35",
+            "standard_capabilities": [],
+            "search_backend": str(search_backend.pk),
+            "python_backend": "",
+            "connection_tools": [str(email_tool.pk)],
+            "agent_tools": [],
+            "tool_description": "",
+        }
+
+        response = self.client.post(reverse("user_settings:agent-add"), payload)
+
+        self.assertEqual(response.status_code, 302)
+        created_agent = AgentConfig.objects.get(user=self.user, name="Agent With Backend")
+        self.assertSetEqual(
+            set(created_agent.tools.values_list("pk", flat=True)),
+            {search_backend.pk, email_tool.pk},
+        )
+
     def test_create_form_tool_labels_include_tool_ids_for_disambiguation(self):
         self._create_provider()
         tool_a = create_tool(

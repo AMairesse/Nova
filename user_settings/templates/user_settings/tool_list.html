@@ -8,10 +8,6 @@
     <h2>{% trans "Tools" %}</h2>
   </div>
 
-  {% if tools %}
-    {% include "user_settings/fragments/tool_table.html" %}
-  {% else %}
-    <p class="text-muted">{% trans "No tools found." %}</p>
-  {% endif %}
+  {% include "user_settings/fragments/tool_table.html" %}
 </div>
 {% endblock %}

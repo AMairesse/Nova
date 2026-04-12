@@ -152,91 +152,24 @@ class ToolCredential(models.Model):
 
 
 def check_and_create_searxng_tool():
-    SEARNGX_SERVER_URL = settings.SEARNGX_SERVER_URL
-    SEARNGX_NUM_RESULTS = settings.SEARNGX_NUM_RESULTS
+    from nova.plugins.catalog import sync_search_system_backend
 
-    # Get the searxng's system tool if it exists
-    tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='searxng').first()
-
-    if SEARNGX_SERVER_URL and SEARNGX_NUM_RESULTS:
-        # Create a "system tool" if it doesn't already exist
-        if not tool:
-            tool = Tool.objects.create(user=None,
-                                       name='System - SearXNG',
-                                       tool_type=Tool.ToolType.BUILTIN,
-                                       tool_subtype='searxng',
-                                       python_path=_get_builtin_python_path('searxng'))
-            ToolCredential.objects.create(user=None,
-                                          tool=tool,
-                                          config={'searxng_url': SEARNGX_SERVER_URL,
-                                                  'num_results': SEARNGX_NUM_RESULTS})
-        else:
-            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
-            if not cred:
-                ToolCredential.objects.create(user=None,
-                                              tool=tool,
-                                              config={'searxng_url': SEARNGX_SERVER_URL,
-                                                      'num_results': SEARNGX_NUM_RESULTS})
-            else:
-                # Update it if needed
-                if cred.config.get('searxng_url') != SEARNGX_SERVER_URL or \
-                   cred.config.get('num_results') != SEARNGX_NUM_RESULTS:
-                    cred.config['searxng_url'] = SEARNGX_SERVER_URL
-                    cred.config['num_results'] = SEARNGX_NUM_RESULTS
-                    cred.save()
-    else:
-        if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='searxng').exists():
-            # If the system tool is not used then delete it
-            if not tool.agents.exists():
-                tool.delete()
-            else:
-                logger.warning(
-                    """WARNING: SEARXNG_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent.""")
+    tool = sync_search_system_backend()
+    if not settings.SEARNGX_SERVER_URL or not settings.SEARNGX_NUM_RESULTS:
+        if tool is not None and tool.agents.exists():
+            logger.warning(
+                """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent."""
+            )
 
 
 def check_and_create_judge0_tool():
-    JUDGE0_SERVER_URL = settings.JUDGE0_SERVER_URL
+    from nova.plugins.catalog import sync_python_system_backend
 
-    # Get the judge0's system tool if it exists
-    tool = Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='code_execution').first()
-
-    if JUDGE0_SERVER_URL:
-        # Create a "system tool" if it doesn't already exist
-        if not tool:
-            tool = Tool.objects.create(user=None,
-                                       name='System - Code Execution',
-                                       tool_type=Tool.ToolType.BUILTIN,
-                                       tool_subtype='code_execution',
-                                       python_path=_get_builtin_python_path('code_execution'))
-            ToolCredential.objects.create(user=None,
-                                          tool=tool,
-                                          config={'judge0_url': JUDGE0_SERVER_URL})
-        else:
-            cred = ToolCredential.objects.filter(user=None, tool=tool).first()
-            if not cred:
-                ToolCredential.objects.create(user=None,
-                                              tool=tool,
-                                              config={'judge0_url': JUDGE0_SERVER_URL})
-            else:
-                # Update it if needed
-                if cred.config.get('judge0_url') != JUDGE0_SERVER_URL:
-                    cred.config['judge0_url'] = JUDGE0_SERVER_URL
-                    cred.save()
-    else:
-        if Tool.objects.filter(user=None,
-                               tool_type=Tool.ToolType.BUILTIN,
-                               tool_subtype='code_execution').exists():
-            # If the system tool is not used then delete it
-            if not tool.agents.exists():
-                tool.delete()
-            else:
-                logger.warning(
-                    """WARNING: JUDGE0_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent.""")
+    tool = sync_python_system_backend()
+    if not settings.JUDGE0_SERVER_URL:
+        if tool is not None and tool.agents.exists():
+            logger.warning(
+                """WARNING: JUDGE0_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent."""
+            )

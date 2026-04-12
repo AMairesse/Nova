@@ -54,9 +54,9 @@ class ToolsViewsTests(TestCase):
         response = self.client.get(reverse("user_settings:tools"), {"partial": "1"})
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/fragments/tool_table.html")
-        self.assertTrue(
-            Tool.objects.filter(user=None, tool_subtype__in={"searxng", "code_execution"}).exists()
-        )
+        self.assertContains(response, "Built-in capabilities")
+        self.assertContains(response, "Capabilities with backends")
+        self.assertContains(response, "Add connection")
         mock_searxng.assert_called_once()
         mock_judge0.assert_called_once()
 
@@ -92,33 +92,32 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
-    @patch("nova.plugins.builtins.get_available_tool_types", return_value={"date": {"name": "Date Tool"}})
+    @patch("nova.plugins.builtins.get_available_tool_types", return_value={"searxng": {"name": "Search"}})
     @patch(
         "nova.plugins.builtins.get_tool_type",
         return_value={
-            "name": "Date Tool",
-            "description": "Dates",
-            "python_path": "nova.plugins.datetime",
+            "name": "Search",
+            "description": "Search backend",
+            "python_path": "nova.plugins.search",
             "input_schema": {},
             "output_schema": {},
         },
     )
-    def test_create_builtin_tool_redirects_to_configure(self, mock_get_tool_type, mock_get_available):
+    def test_create_search_backend_redirects_to_configure(self, mock_get_tool_type, mock_get_available):
         response = self.client.post(
             reverse("user_settings:tool-add"),
-            data={"tool_type": Tool.ToolType.BUILTIN, "tool_subtype": "date", "is_active": True},
+            data={"connection_kind": "search", "name": "My Search", "is_active": True},
         )
         self.assertEqual(response.status_code, 302)
-        tool = Tool.objects.get(user=self.user, tool_subtype="date")
+        tool = Tool.objects.get(user=self.user, tool_subtype="searxng")
         self.assertEqual(response["Location"], reverse("user_settings:tool-configure", args=[tool.pk]))
-        self.assertEqual(tool.python_path, "nova.plugins.datetime")
+        self.assertEqual(tool.python_path, "nova.plugins.search")
 
     def test_create_builtin_email_tool_keeps_custom_alias_name(self):
         response = self.client.post(
             reverse("user_settings:tool-add"),
             data={
-                "tool_type": Tool.ToolType.BUILTIN,
-                "tool_subtype": "email",
+                "connection_kind": "mail",
                 "name": "Work Mailbox",
                 "is_active": True,
             },
@@ -140,8 +139,7 @@ class ToolsViewsTests(TestCase):
         response = self.client.post(
             reverse("user_settings:tool-add"),
             data={
-                "tool_type": Tool.ToolType.BUILTIN,
-                "tool_subtype": "email",
+                "connection_kind": "mail",
                 "name": "shared inbox",
                 "is_active": True,
             },
@@ -158,13 +156,31 @@ class ToolsViewsTests(TestCase):
         response = self.client.post(
             reverse("user_settings:tool-add"),
             data={
-                "tool_type": Tool.ToolType.API,
+                "connection_kind": "api",
                 "description": "Missing fields",
             },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("name", response.context["form"].errors)
         self.assertIn("endpoint", response.context["form"].errors)
+
+    def test_create_form_only_lists_user_creatable_connection_types(self):
+        response = self.client.get(reverse("user_settings:tool-add"))
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        choices = {value: label for value, label in form.fields["connection_kind"].choices if value}
+        self.assertIn("mail", choices)
+        self.assertIn("calendar", choices)
+        self.assertIn("webdav", choices)
+        self.assertIn("search", choices)
+        self.assertIn("python", choices)
+        self.assertIn("mcp", choices)
+        self.assertIn("api", choices)
+        self.assertNotIn("datetime", choices)
+        self.assertNotIn("memory", choices)
+        self.assertNotIn("browser", choices)
+        self.assertNotIn("webapp", choices)
 
     def test_edit_tool_requires_owner(self):
         tool = create_tool(self.user, name="Owned Tool")

@@ -10,7 +10,7 @@
 {% block content %}
 <div class="container py-4" style="max-width: 640px;">
   <h2 class="mb-3">
-    {% if object.pk %}{% trans "Edit tool" %}{% else %}{% trans "Add tool" %}{% endif %}
+    {% if object.pk %}{% trans "Edit connection" %}{% else %}{% trans "Add connection" %}{% endif %}
   </h2>
 
   <form method="post" class="mb-3">
@@ -36,4 +36,3 @@
   </form>
 </div>
 {% endblock %}
-

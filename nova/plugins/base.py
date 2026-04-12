@@ -25,6 +25,12 @@ class InternalPluginDescriptor:
     test_connection_handler: ConnectionTestHandler | None = None
     python_path: str = ""
     legacy_python_paths: tuple[str, ...] = ()
+    catalog_section: str = "connections"
+    selection_mode: str = "multi_instance"
+    provisioning_sources: tuple[str, ...] = ()
+    show_in_add_flow: bool = False
+    add_label: str = ""
+    default_enabled_for_primary_agents: bool = False
 
     def build_builtin_metadata(self) -> dict[str, Any]:
         metadata = deepcopy(self.settings_metadata or {})
@@ -32,6 +38,14 @@ class InternalPluginDescriptor:
         metadata.setdefault("description", self.label)
         metadata["plugin_id"] = self.plugin_id
         metadata["python_path"] = self.python_path
+        metadata["catalog_section"] = self.catalog_section
+        metadata["selection_mode"] = self.selection_mode
+        metadata["provisioning_sources"] = list(self.provisioning_sources)
+        metadata["show_in_add_flow"] = self.show_in_add_flow
+        metadata["add_label"] = self.add_label or self.label
+        metadata["default_enabled_for_primary_agents"] = (
+            self.default_enabled_for_primary_agents
+        )
         if self.test_connection_handler is not None:
             metadata["test_connection_handler"] = _resolve_connection_test_handler(
                 self.test_connection_handler

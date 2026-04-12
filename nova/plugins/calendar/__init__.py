@@ -77,4 +77,9 @@ PLUGIN = InternalPluginDescriptor(
     test_connection_handler="nova.plugins.calendar.test_calendar_access",
     python_path="nova.plugins.calendar",
     legacy_python_paths=("nova.plugins.calendar",),
+    catalog_section="connections",
+    selection_mode="multi_instance",
+    provisioning_sources=("user_connection",),
+    show_in_add_flow=True,
+    add_label="Calendar",
 )

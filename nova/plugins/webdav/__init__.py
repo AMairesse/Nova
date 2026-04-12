@@ -69,4 +69,9 @@ PLUGIN = InternalPluginDescriptor(
     test_connection_handler="nova.plugins.webdav.test_webdav_access",
     python_path="nova.plugins.webdav",
     legacy_python_paths=("nova.plugins.webdav",),
+    catalog_section="connections",
+    selection_mode="multi_instance",
+    provisioning_sources=("user_connection",),
+    show_in_add_flow=True,
+    add_label="WebDAV",
 )

@@ -5,10 +5,15 @@ from typing import List, Dict, Optional, Tuple
 from django.db import transaction
 from django.db.models import Q
 
+from nova.plugins.catalog import (
+    ensure_capability_tooling,
+    get_preferred_backend_tool,
+    get_standard_capability_tools,
+)
 from nova.providers.registry import provider_supports_native_response_mode
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Provider import LLMProvider
-from nova.models.Tool import Tool, ToolCredential, check_and_create_searxng_tool, check_and_create_judge0_tool
+from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserProfile
 
 logger = logging.getLogger(__name__)
@@ -240,43 +245,27 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
     tools: Dict[str, Tool] = {}
 
-    # Date / Time
-    tools["date_time"] = _get_or_create_builtin_tool(
-        user,
-        subtype="date",
-        name="Date / Time",
-        description="Access current date and time utilities.",
-        summary=summary,
-    )
+    ensure_capability_tooling()
 
-    # Memory
-    tools["memory"] = _get_or_create_builtin_tool(
-        user,
-        subtype="memory",
-        name="Memory",
-        description="Store and retrieve long-term memory for this workspace.",
-        summary=summary,
-    )
+    standard_tools = {
+        tool.tool_subtype: tool
+        for tool in get_standard_capability_tools()
+    }
+    tools["date_time"] = standard_tools.get("date")
+    tools["memory"] = standard_tools.get("memory")
+    tools["browser"] = standard_tools.get("browser")
+    tools["webapp"] = standard_tools.get("webapp")
 
-    # Browser
-    tools["browser"] = _get_or_create_builtin_tool(
-        user,
-        subtype="browser",
-        name="Browser",
-        description="Navigate and fetch content from the web.",
-        summary=summary,
-    )
+    for key in ("date_time", "memory", "browser", "webapp"):
+        tool = tools.get(key)
+        if tool:
+            summary.reused_tools.append(tool.name)
 
-    # SearXNG and Judge0 system tools handled via existing helpers
-    check_and_create_searxng_tool()
-    check_and_create_judge0_tool()
-
-    # Re-fetch system SearXNG and Judge0 (if available)
-    tools["searxng"] = _find_tool("searxng", user, require_user_cred=False)
+    tools["searxng"] = get_preferred_backend_tool(user, "searxng")
     if tools["searxng"]:
         summary.reused_tools.append(tools["searxng"].name)
 
-    tools["judge0"] = _find_tool("code_execution", user, require_user_cred=False)
+    tools["judge0"] = get_preferred_backend_tool(user, "code_execution")
     if tools["judge0"]:
         summary.reused_tools.append(tools["judge0"].name)
 

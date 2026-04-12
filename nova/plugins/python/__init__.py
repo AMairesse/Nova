@@ -45,4 +45,9 @@ PLUGIN = InternalPluginDescriptor(
     test_connection_handler="nova.plugins.python.service.test_judge0_access",
     python_path="nova.plugins.python",
     legacy_python_paths=("nova.plugins.python",),
+    catalog_section="backend_capabilities",
+    selection_mode="single_backend",
+    provisioning_sources=("deployment_default", "user_connection"),
+    show_in_add_flow=True,
+    add_label="Python backend",
 )

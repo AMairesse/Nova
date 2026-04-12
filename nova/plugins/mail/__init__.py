@@ -109,4 +109,9 @@ PLUGIN = InternalPluginDescriptor(
     test_connection_handler="nova.plugins.mail.service.test_email_access",
     python_path="nova.plugins.mail",
     legacy_python_paths=("nova.plugins.mail",),
+    catalog_section="connections",
+    selection_mode="multi_instance",
+    provisioning_sources=("user_connection",),
+    show_in_add_flow=True,
+    add_label="Mailbox",
 )

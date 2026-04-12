@@ -46,4 +46,9 @@ PLUGIN = InternalPluginDescriptor(
     skill_docs_provider=_skill_docs,
     python_path="nova.plugins.webapp",
     legacy_python_paths=("nova.plugins.webapp",),
+    catalog_section="built_in_capabilities",
+    selection_mode="toggle",
+    provisioning_sources=("system_default",),
+    show_in_add_flow=False,
+    default_enabled_for_primary_agents=True,
 )

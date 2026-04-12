@@ -46,4 +46,9 @@ PLUGIN = InternalPluginDescriptor(
     skill_docs_provider=_skill_docs,
     python_path="nova.plugins.search",
     legacy_python_paths=("nova.plugins.search",),
+    catalog_section="backend_capabilities",
+    selection_mode="single_backend",
+    provisioning_sources=("deployment_default", "user_connection"),
+    show_in_add_flow=True,
+    add_label="Search backend",
 )
