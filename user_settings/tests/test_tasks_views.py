@@ -6,9 +6,11 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.urls import reverse
 
+from nova.models.MemoryDocument import MemoryDocument
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool
 from nova.models.UserObjects import UserProfile
+from nova.models.memory_common import MemoryRecordStatus
 from nova.tasks.template_registry import (
     THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
     THEMATIC_WATCH_MEMORY_PATH_TOPICS,
@@ -627,6 +629,98 @@ class UserSettingsTasksViewsTests(TestCase):
             response,
             "No selectable agent can both browse the web and access memory. "
             "Use an agent with browser and memory access.",
+        )
+
+    def test_task_templates_list_marks_thematic_watch_memory_prerequisites_when_documents_exist(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.plugins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+        MemoryDocument.objects.create(
+            user=self.user,
+            virtual_path=THEMATIC_WATCH_MEMORY_PATH_TOPICS,
+            title="Topics",
+            content_markdown="AI, privacy, local tools",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        MemoryDocument.objects.create(
+            user=self.user,
+            virtual_path=THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
+            title="Language",
+            content_markdown="French",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+
+        self.assertEqual(response.status_code, 200)
+        templates = response.context["templates"]
+        thematic_watch = next(
+            item for item in templates if item["id"] == "thematic_watch_weekly"
+        )
+        prerequisites = {item["label"]: item["met"] for item in thematic_watch["prerequisites"]}
+        self.assertTrue(
+            prerequisites[f"Memory document present at '{THEMATIC_WATCH_MEMORY_PATH_TOPICS}'"]
+        )
+        self.assertTrue(
+            prerequisites[f"Memory document present at '{THEMATIC_WATCH_MEMORY_PATH_LANGUAGE}'"]
+        )
+
+    def test_task_templates_list_keeps_thematic_watch_memory_prerequisite_unchecked_for_blank_document(self):
+        browser_tool = create_tool(
+            self.user,
+            name="Browser",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="browser",
+            python_path="nova.plugins.browser",
+        )
+        memory_tool = create_tool(
+            self.user,
+            name="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        self.agent.tools.add(browser_tool, memory_tool)
+        MemoryDocument.objects.create(
+            user=self.user,
+            virtual_path=THEMATIC_WATCH_MEMORY_PATH_TOPICS,
+            title="Topics",
+            content_markdown=" \n\t",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+        MemoryDocument.objects.create(
+            user=self.user,
+            virtual_path=THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
+            title="Language",
+            content_markdown="French",
+            status=MemoryRecordStatus.ACTIVE,
+        )
+
+        response = self.client.get(reverse("user_settings:task_templates"))
+
+        self.assertEqual(response.status_code, 200)
+        templates = response.context["templates"]
+        thematic_watch = next(
+            item for item in templates if item["id"] == "thematic_watch_weekly"
+        )
+        prerequisites = {item["label"]: item["met"] for item in thematic_watch["prerequisites"]}
+        self.assertFalse(
+            prerequisites[f"Memory document present at '{THEMATIC_WATCH_MEMORY_PATH_TOPICS}'"]
+        )
+        self.assertTrue(
+            prerequisites[f"Memory document present at '{THEMATIC_WATCH_MEMORY_PATH_LANGUAGE}'"]
         )
 
     def test_task_template_apply_prefills_thematic_watch_weekly(self):

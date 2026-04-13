@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from asgiref.sync import async_to_sync
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
+from nova.memory.service import memory_document_has_content
 from nova.models.AgentConfig import AgentConfig
-from nova.models.MemoryDocument import MemoryDocument
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import UserProfile
@@ -19,13 +20,7 @@ THEMATIC_WATCH_MEMORY_PATH_LANGUAGE = "/memory/thematic-watch-language.md"
 
 
 def _memory_has_thematic_document(user, path: str) -> bool:
-    return MemoryDocument.objects.filter(
-        user=user,
-        status="active",
-        virtual_path=path,
-    ).exclude(
-        content_markdown__exact="",
-    ).exists()
+    return async_to_sync(memory_document_has_content)(user=user, path=path)
 
 
 @dataclass(frozen=True)
