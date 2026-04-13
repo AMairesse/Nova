@@ -173,6 +173,8 @@ Core settings:
 - `FIELD_ENCRYPTION_KEY`, `DJANGO_SECRET_KEY`
 - `HOST_PORT`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`
 
+For production deployments behind a real domain, `ALLOWED_HOSTS` must include the public hostname and `CSRF_TRUSTED_ORIGINS` must include the matching `https://` origin. If those stay on `localhost`, managed OAuth callback URLs and WebSocket streaming will not work correctly.
+
 Optional module settings:
 
 - SearXNG: `SEARXNG_SECRET`

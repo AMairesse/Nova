@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from django import forms
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.contrib.messages import get_messages
 
@@ -594,6 +594,40 @@ class ToolsViewsTests(TestCase):
         credential = ToolCredential.objects.get(user=self.user, tool=tool)
         self.assertEqual(credential.auth_type, "oauth_managed")
         self.assertEqual(credential.client_id, "preset-client")
+
+    @patch("user_settings.views.tool.mcp_oauth_service.start_mcp_oauth_flow", new_callable=AsyncMock)
+    @override_settings(ALLOWED_HOSTS=["testserver", "nova.example.com"])
+    def test_tool_test_connection_mcp_oauth_uses_forwarded_public_host_for_callback(
+        self,
+        mock_start_flow,
+    ):
+        mock_start_flow.return_value = SimpleNamespace(
+            authorization_url="https://auth.example.com/authorize?state=abc",
+            state="abc",
+        )
+        tool = create_tool(
+            self.user,
+            tool_type=Tool.ToolType.MCP,
+            endpoint="https://mcp.example.com",
+            transport_type="http",
+        )
+
+        response = self.client.post(
+            reverse("user_settings:tool-test", args=[tool.id]),
+            data={
+                "connection_mode": "oauth_managed",
+                "client_id": "preset-client",
+                "connection_action": "connect_oauth",
+            },
+            HTTP_X_FORWARDED_PROTO="https",
+            HTTP_X_FORWARDED_HOST="nova.example.com",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            mock_start_flow.await_args.kwargs["redirect_uri"],
+            "https://nova.example.com/settings/tools/mcp/oauth/callback/",
+        )
 
     @patch("user_settings.views.tool.mcp_oauth_service.get_valid_mcp_access_token", new_callable=AsyncMock)
     def test_tool_test_connection_for_managed_oauth_tells_user_to_use_dedicated_button(
