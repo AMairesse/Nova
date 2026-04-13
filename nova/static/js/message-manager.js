@@ -62,6 +62,7 @@
         'answerInteraction',
         'cancelInteraction',
         'createThread',
+        'refreshThreadListsFromServer',
         'deleteThread',
         'summarizeCurrentThread',
         'showSubAgentConfirmationDialog',
