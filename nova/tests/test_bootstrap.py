@@ -198,8 +198,9 @@ class BootstrapSkillsTests(TestCase):
         self.assertNotIn("Current date and time is", nova.system_prompt)
         self.assertNotIn("{today}", nova.system_prompt)
         self.assertIn("date/time capability", nova.system_prompt)
-        self.assertIn("Keep thread-scoped filesystem work", nova.system_prompt)
+        self.assertIn("Keep thread-scoped filesystem organization", nova.system_prompt)
         self.assertIn("Use `python` directly", nova.system_prompt)
+        self.assertIn("Do not delegate thread-scoped filesystem cleanup", nova.system_prompt)
         self.assertNotIn("Python Agent", nova.system_prompt)
 
     def test_bootstrap_attaches_webapp_tool_to_nova(self):

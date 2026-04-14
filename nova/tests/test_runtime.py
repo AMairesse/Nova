@@ -2806,6 +2806,156 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(output_file, "done")
         self.assertIn("Workspace changes synced", result)
 
+    def test_python_workspace_flow_can_publish_webapp_from_same_thread_directory(self):
+        code_tool = self._create_code_execution_tool()
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool, webapp_tool=webapp_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)(
+            'tee /webapps/demo/build.py --text "print(\'build site\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="build site",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="index.html",
+                            content=b"<!doctype html><html><body>Solar</body></html>",
+                            mime_type="text/html",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            python_result = async_to_sync(executor.execute)("python /webapps/demo/build.py")
+
+        request = mocked_execute.await_args.args[1]
+        exposed = async_to_sync(executor.execute)('webapp expose /webapps/demo --name "Solar Demo"')
+        html_output = async_to_sync(executor.execute)("cat /webapps/demo/index.html")
+        webapp = WebApp.objects.get(thread=self.thread)
+
+        self.assertEqual(request.mode, "script")
+        self.assertEqual(request.entrypoint, "build.py")
+        self.assertEqual(request.cwd, ".")
+        self.assertTrue(any(item.path == "build.py" for item in request.workspace_files))
+        self.assertIn("Workspace changes synced: /webapps/demo/index.html", python_result)
+        self.assertIn("<!doctype html>", html_output)
+        self.assertIn("Exposed webapp", exposed)
+        self.assertEqual(webapp.source_root, "/webapps/demo")
+
+    def test_python_can_use_attachment_after_staging_it_into_workspace(self):
+        code_tool = self._create_code_execution_tool()
+        source_message = self.thread.add_message("Use attached data", actor=Actor.USER)
+        attachment = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            key=f"fake://{self.user.id}/{self.thread.id}/source/input.txt",
+            original_filename=f"/.message_attachments/message_{source_message.id}/input.txt",
+            mime_type="text/plain",
+            size=12,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents[attachment.key] = b"from attachment"
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+            source_message_id=source_message.id,
+        )
+        executor = TerminalExecutor(
+            vfs=vfs,
+            capabilities=TerminalCapabilities(code_execution_tool=code_tool),
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)("cp /inbox/input.txt /project/input.txt")
+        async_to_sync(executor.execute)(
+            'tee /project/process.py --text "print(\'process attachment\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="process attachment",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="report.txt",
+                            content=b"processed",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)("python /project/process.py")
+
+        request = mocked_execute.await_args.args[1]
+        report = async_to_sync(executor.execute)("cat /project/report.txt")
+
+        self.assertTrue(any(item.path == "input.txt" for item in request.workspace_files))
+        staged_input = next(item for item in request.workspace_files if item.path == "input.txt")
+        self.assertEqual(staged_input.content, b"from attachment")
+        self.assertEqual(report, "processed")
+        self.assertIn("Workspace changes synced: /project/report.txt", result)
+
+    def test_python_workspace_writeback_does_not_delete_existing_thread_files(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)('tee /project/keep.txt --text "keep me"')
+        async_to_sync(executor.execute)(
+            'tee /project/script.py --text "print(\'attempted cleanup\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="attempted cleanup",
+                    stderr="",
+                    output_files=(),
+                ),
+            ),
+        ):
+            async_to_sync(executor.execute)("python /project/script.py")
+
+        kept = async_to_sync(executor.execute)("cat /project/keep.txt")
+        self.assertEqual(kept, "keep me")
+
     def test_python_dash_c_with_workdir_syncs_workspace_files_back_into_vfs(self):
         code_tool = self._create_code_execution_tool()
         executor = self._build_executor(
@@ -2866,6 +3016,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("Judge0 sandbox", skills["python.md"])
+        self.assertIn("current Nova terminal session", skills["python.md"])
         self.assertIn("--workdir /project", skills["python.md"])
         self.assertIn("Copy attachments from `/inbox`", skills["python.md"])
         self.assertIn("date +%F %T", skills["date.md"])
@@ -2882,6 +3033,15 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("ls -laR /subagents", skills["terminal.md"])
         self.assertIn("printf", skills["terminal.md"])
         self.assertIn("file", skills["terminal.md"])
+
+    def test_skill_registry_subagent_guidance_keeps_thread_scoped_work_in_main_session(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(subagents=[SimpleNamespace(id=7, name="Image Agent")])
+        )
+
+        self.assertIn("subagents.md", skills)
+        self.assertIn("Do not delegate thread-scoped cleanup", skills["subagents.md"])
+        self.assertIn("webapp publication", skills["subagents.md"])
 
     def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
         skills = build_skill_registry(
@@ -4419,6 +4579,10 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("Use `python` directly", prompt)
         self.assertIn("--workdir", prompt)
         self.assertIn("Do not use Python as a substitute", prompt)
+        self.assertIn(
+            "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work",
+            prompt,
+        )
 
     def test_system_prompt_lists_subagent_descriptions_and_response_modes(self):
         child = AgentConfig.objects.create(

@@ -11,10 +11,11 @@ def _skill_docs(_capabilities, _thread_mode):
 Python execution runs in a Judge0 sandbox.
 
 Use it for computation, data processing, scripts, and code-driven file transformations.
+Python is meant to be used directly from the current Nova terminal session.
 When you want Python to work on Nova files, keep them in a dedicated workspace folder
 and run Python from there. Python syncs created and modified files back from that
 workspace, but it does not replace normal terminal commands for cleanup, moves, or
-webapp publishing.
+webapp publishing, and it does not own the final webapp lifecycle for the thread.
 
 Available forms:
 

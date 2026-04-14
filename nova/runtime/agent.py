@@ -299,6 +299,11 @@ class ReactTerminalRuntime:
                 "and run `python` from that folder or with `--workdir`. Do not use Python as a substitute "
                 "for `rm`, `mv`, or `webapp expose`."
             )
+        extra_guidance.append(
+            "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work in the "
+            "main terminal session. Use sub-agents only for focused specialist work; the main agent "
+            "must integrate outputs and own the final thread files."
+        )
         if self.capabilities.has_calendar:
             calendar_guidance = (
                 "Use `calendar` commands for CalDAV accounts and events. "
