@@ -292,6 +292,13 @@ class ReactTerminalRuntime:
                 "You may create directories there, but none are imposed by default. "
                 "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
             )
+        if self.capabilities.has_python:
+            extra_guidance.append(
+                "Use `python` directly for computation, data processing, and scripts. "
+                "When Python needs to work on Nova files, keep them in a dedicated workspace folder "
+                "and run `python` from that folder or with `--workdir`. Do not use Python as a substitute "
+                "for `rm`, `mv`, or `webapp expose`."
+            )
         if self.capabilities.has_calendar:
             calendar_guidance = (
                 "Use `calendar` commands for CalDAV accounts and events. "

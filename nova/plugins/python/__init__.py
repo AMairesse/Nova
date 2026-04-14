@@ -8,25 +8,34 @@ def _skill_docs(_capabilities, _thread_mode):
     return {
         "python.md": """# Python
 
-Python execution is available through a Judge0 sandbox, not a local interpreter
-attached to the Nova filesystem.
+Python execution runs in a Judge0 sandbox.
 
-Use it for computation, data processing, and self-contained scripts.
-Do not use it to mutate Nova files or directories. To change the Nova VFS, use
-terminal file commands such as `tee`, `cp`, `mv`, `rm`, and `mkdir`.
+Use it for computation, data processing, scripts, and code-driven file transformations.
+When you want Python to work on Nova files, keep them in a dedicated workspace folder
+and run Python from there. Python syncs created and modified files back from that
+workspace, but it does not replace normal terminal commands for cleanup, moves, or
+webapp publishing.
 
 Available forms:
 
 - `python /script.py`
+- `python --workdir /project /project/script.py`
 - `python -c "print('hello')"`
+- `python --workdir /project -c "from pathlib import Path; Path('out.txt').write_text('ok')"`
 - `python --output /result.txt /script.py`
 - `python --output /result.txt -c "print('hello')"`
 
-Keep scripts at stable paths in `/` when they are reused across multiple commands.
+`python -c` is stateless by default. Add `--workdir` when Python must read or write
+Nova files inside a real workspace.
+
+Copy attachments from `/inbox` or `/history` into a normal workspace folder before
+using them from Python.
+
 Typical workflow:
-- create a script with `tee /script.py --text "..."`
-- run it with `python /script.py`
-- capture stdout into a file with `python --output /result.txt /script.py`
+- create a project folder with `mkdir -p /project`
+- write files with `tee /project/script.py --text "..."`
+- run them with `python /project/script.py`
+- publish a generated site with `webapp expose /project`
 """,
     }
 

@@ -16,13 +16,13 @@ from django.utils import timezone
 from nova.api_tools import service as api_tools_service
 from nova.caldav import service as caldav_service
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
-from nova.memory.service import search_memory_items
+from nova.memory.service import MEMORY_ROOT, search_memory_items
 from nova.mcp import service as mcp_service
 from nova.models.Thread import Thread
 from nova.plugins.mail import service as mail_service
 from nova.plugins.python import service as python_service
 from nova.runtime.capabilities import TerminalCapabilities
-from nova.runtime.vfs import VFSError, VirtualFileSystem, normalize_vfs_path
+from nova.runtime.vfs import HISTORY_ROOT, INBOX_ROOT, VFSError, VirtualFileSystem, normalize_vfs_path
 from nova.webapp import service as webapp_service
 from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import download_http_file
@@ -93,6 +93,14 @@ class ParsedDownloadCommand:
     output_path: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     user_agent: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class ParsedPythonCommand:
+    output_path: str | None = None
+    workdir: str | None = None
+    inline_code: str | None = None
+    script_path: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -1283,6 +1291,20 @@ class TerminalExecutor:
         normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
         if normalized.startswith("/skills"):
             raise TerminalCommandError("Writing into /skills is not supported.")
+        return normalized
+
+    def _validate_python_workspace_root(self, raw_path: str) -> str:
+        normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
+        if normalized.startswith("/skills"):
+            raise TerminalCommandError("Python workspaces cannot live inside /skills.")
+        if normalized == INBOX_ROOT or normalized.startswith(f"{INBOX_ROOT}/"):
+            raise TerminalCommandError("Copy files out of /inbox before using them as a Python workspace.")
+        if normalized == HISTORY_ROOT or normalized.startswith(f"{HISTORY_ROOT}/"):
+            raise TerminalCommandError("Copy files out of /history before using them as a Python workspace.")
+        if normalized == MEMORY_ROOT or normalized.startswith(f"{MEMORY_ROOT}/"):
+            raise TerminalCommandError("Copy files out of /memory into a normal workspace before running Python there.")
+        if normalized == "/webdav" or normalized.startswith("/webdav/"):
+            raise TerminalCommandError("Copy files out of /webdav before using them as a Python workspace.")
         return normalized
 
     @staticmethod
@@ -2536,6 +2558,55 @@ class TerminalExecutor:
         if output_path is None and default_filename:
             output_path = posixpath.join(self.vfs.cwd, default_filename)
         return output_path, remaining
+
+    @staticmethod
+    def _python_usage() -> str:
+        return (
+            "Usage: python [--workdir PATH] [--output PATH] <script.py> or "
+            'python [--workdir PATH] [--output PATH] -c "..."'
+        )
+
+    def _parse_python_command(self, args: list[str]) -> ParsedPythonCommand:
+        output_path = None
+        workdir = None
+        remaining: list[str] = []
+        index = 0
+        while index < len(args):
+            token = args[index]
+            if token in {"--output", "-o", "-O"}:
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError(f"Missing value after {token}")
+                output_path = args[index]
+            elif token == "--workdir":
+                index += 1
+                if index >= len(args):
+                    raise TerminalCommandError("Missing value after --workdir")
+                workdir = args[index]
+            else:
+                remaining.append(token)
+            index += 1
+
+        if not remaining:
+            raise TerminalCommandError(self._python_usage())
+
+        if remaining[0] == "-c":
+            if len(remaining) != 2:
+                raise TerminalCommandError(self._python_usage())
+            return ParsedPythonCommand(
+                output_path=output_path,
+                workdir=workdir,
+                inline_code=remaining[1],
+            )
+
+        if len(remaining) != 1:
+            raise TerminalCommandError(self._python_usage())
+
+        return ParsedPythonCommand(
+            output_path=output_path,
+            workdir=workdir,
+            script_path=remaining[0],
+        )
 
     @staticmethod
     def _parse_http_header_value(header_value: str, *, command_name: str) -> tuple[str, str]:
@@ -3989,12 +4060,157 @@ class TerminalExecutor:
         return f"Email sent successfully to {to}"
 
     @staticmethod
-    def _format_python_result_text(result: python_service.Judge0ExecutionResult) -> str:
+    def _format_python_result_text(
+        result: python_service.Judge0ExecutionResult | python_service.PythonExecutionResult,
+    ) -> str:
         lines = [f"Status: {result.status_description}"]
         lines.append(f"Stdout: {result.stdout}" if result.stdout else "Stdout: ")
         if result.stderr:
             lines.append(f"Stderr: {result.stderr}")
         return "\n".join(lines).rstrip()
+
+    async def _collect_python_workspace(
+        self,
+        workdir: str,
+    ) -> tuple[list[str], list[python_service.PythonWorkspaceFile]]:
+        normalized_workdir = self._validate_python_workspace_root(workdir)
+        if not await self.vfs.path_exists(normalized_workdir):
+            raise TerminalCommandError(f"Path not found: {normalized_workdir}")
+        if not await self.vfs.is_dir(normalized_workdir):
+            raise TerminalCommandError(f"Not a directory: {normalized_workdir}")
+
+        directories: set[str] = set()
+        files: list[python_service.PythonWorkspaceFile] = []
+        prefix = normalized_workdir.rstrip("/") + "/"
+        special_roots = {
+            "/skills",
+            INBOX_ROOT,
+            HISTORY_ROOT,
+            MEMORY_ROOT,
+            "/tmp" if normalized_workdir == "/" else "",
+            "/webdav",
+        }
+        special_prefixes = tuple(f"{root.rstrip('/')}/" for root in special_roots if root)
+
+        for path in sorted(set(await self.vfs.find(normalized_workdir, ""))):
+            if path == normalized_workdir:
+                continue
+            if path in special_roots or any(path.startswith(item) for item in special_prefixes):
+                continue
+            if not path.startswith(prefix) and normalized_workdir != "/":
+                continue
+
+            relative_path = posixpath.relpath(path, normalized_workdir)
+            if relative_path.startswith("../"):
+                continue
+            if await self.vfs.is_dir(path):
+                if relative_path != ".":
+                    directories.add(relative_path)
+                continue
+            content, mime_type = await self.vfs.read_bytes(path)
+            files.append(
+                python_service.PythonWorkspaceFile(
+                    path=relative_path,
+                    content=content,
+                    mime_type=mime_type,
+                )
+            )
+
+        return sorted(directories), files
+
+    async def _build_python_execution_request(
+        self,
+        parsed: ParsedPythonCommand,
+        *,
+        timeout: int,
+    ) -> tuple[python_service.PythonExecutionRequest, str | None]:
+        if parsed.inline_code is not None:
+            if not parsed.workdir:
+                return (
+                    python_service.PythonExecutionRequest(
+                        code=parsed.inline_code,
+                        mode="inline",
+                        timeout=timeout,
+                    ),
+                    None,
+                )
+
+            workdir = self._validate_python_workspace_root(parsed.workdir)
+            directories, files = await self._collect_python_workspace(workdir)
+            return (
+                python_service.PythonExecutionRequest(
+                    code=parsed.inline_code,
+                    mode="inline",
+                    cwd=".",
+                    workspace_directories=tuple(directories),
+                    workspace_files=tuple(files),
+                    timeout=timeout,
+                ),
+                workdir,
+            )
+
+        script_path = normalize_vfs_path(parsed.script_path or "", cwd=self.vfs.cwd)
+        if not await self.vfs.path_exists(script_path):
+            raise TerminalCommandError(f"File not found: {script_path}")
+
+        if parsed.workdir:
+            workdir = self._validate_python_workspace_root(parsed.workdir)
+        else:
+            workdir = self._validate_python_workspace_root(posixpath.dirname(script_path) or "/")
+
+        if not await self.vfs.path_exists(workdir):
+            raise TerminalCommandError(f"Path not found: {workdir}")
+        if not await self.vfs.is_dir(workdir):
+            raise TerminalCommandError(f"Not a directory: {workdir}")
+        if script_path != workdir and not script_path.startswith(f"{workdir.rstrip('/')}/"):
+            raise TerminalCommandError(
+                f"Script path {script_path} must be inside the synchronized workspace {workdir}."
+            )
+
+        directories, files = await self._collect_python_workspace(workdir)
+        return (
+            python_service.PythonExecutionRequest(
+                mode="script",
+                entrypoint=posixpath.relpath(script_path, workdir),
+                cwd=".",
+                workspace_directories=tuple(directories),
+                workspace_files=tuple(files),
+                timeout=timeout,
+            ),
+            workdir,
+        )
+
+    async def _apply_python_workspace_writeback(
+        self,
+        workdir: str,
+        result: python_service.PythonExecutionResult,
+    ) -> str:
+        if not result.output_files:
+            return ""
+        if not result.ok:
+            return "Workspace changes were not synced because Python execution failed."
+
+        synced_paths: list[str] = []
+        collected_warnings: list[str] = []
+        workdir_prefix = workdir.rstrip("/") + "/"
+        for output_file in result.output_files:
+            destination = normalize_vfs_path(posixpath.join(workdir, output_file.path), cwd="/")
+            if destination != workdir and not destination.startswith(workdir_prefix):
+                raise TerminalCommandError(f"Invalid Python write-back path: {output_file.path}")
+            written = await self._write_file_and_notify(
+                destination,
+                output_file.content,
+                mime_type=output_file.mime_type,
+                overwrite=True,
+            )
+            synced_paths.append(destination)
+            collected_warnings.extend(list(getattr(written, "warnings", ()) or ()))
+
+        if len(synced_paths) == 1:
+            message = f"Workspace changes synced: {synced_paths[0]}"
+        else:
+            message = f"Workspace changes synced: {len(synced_paths)} files under {workdir}"
+        return self._append_warnings(message, tuple(dict.fromkeys(collected_warnings)))
 
     async def _cmd_python_result(self, args: list[str]) -> ShellStageResult:
         if not self.capabilities.has_python:
@@ -4005,43 +4221,31 @@ class TerminalExecutor:
         timeout = int(config.get("timeout") or 5)
 
         if not args:
-            raise TerminalCommandError("Usage: python [--output PATH] <script.py> or python [--output PATH] -c \"...\"")
+            raise TerminalCommandError(self._python_usage())
 
-        output_path, remaining = self._parse_output_path(args)
-        if remaining and remaining[0] == "-c":
-            if len(remaining) != 2:
-                raise TerminalCommandError("Usage: python [--output PATH] -c \"...\"")
-            code = remaining[1]
-            result = await python_service.execute_code_result(
-                host,
-                code,
-                language="python",
-                timeout=timeout,
-            )
-        else:
-            if len(remaining) != 1:
-                raise TerminalCommandError("Usage: python [--output PATH] <script.py>")
-            script_path = remaining[0]
-            code = await self.vfs.read_text(script_path)
-            result = await python_service.execute_code_result(
-                host,
-                code,
-                language="python",
-                timeout=timeout,
-            )
+        parsed = self._parse_python_command(args)
+        try:
+            request, workdir = await self._build_python_execution_request(parsed, timeout=timeout)
+            result = await python_service.execute_python_request(host, request)
+        except ValueError as exc:
+            raise TerminalCommandError(str(exc)) from exc
 
         visible_text = self._format_python_result_text(result)
+        if workdir:
+            workspace_note = await self._apply_python_workspace_writeback(workdir, result)
+            if workspace_note:
+                visible_text = f"{visible_text}\n{workspace_note}" if visible_text else workspace_note
         status = 0 if result.ok else 1
 
-        if output_path:
+        if parsed.output_path:
             output_name = "python-stdout.txt"
-            if remaining and remaining[0] != "-c":
-                script_name = posixpath.basename(normalize_vfs_path(remaining[0], cwd=self.vfs.cwd)) or "python"
+            if parsed.script_path:
+                script_name = posixpath.basename(normalize_vfs_path(parsed.script_path, cwd=self.vfs.cwd)) or "python"
                 stem, _ext = posixpath.splitext(script_name)
                 output_name = f"{stem or 'python'}.stdout.txt"
             try:
                 resolved_output = await self.vfs.resolve_output_path(
-                    self._validate_text_write_path(output_path),
+                    self._validate_text_write_path(parsed.output_path),
                     source_name=output_name,
                 )
             except VFSError as exc:

@@ -123,7 +123,6 @@ Default setup usually works well with:
 
 - one main agent: `Nova`
 - one internet-oriented sub-agent: `Internet Agent`
-- one coding-oriented sub-agent: `Python Agent`
 - optionally one media/image sub-agent if you use a dedicated image-capable provider
 
 ### Main Agent
@@ -134,6 +133,7 @@ Suggested attached capabilities:
 - `Memory`
 - `WebApp`
 - `Search` when a backend is available
+- `Python` when a backend is available
 - one or more `Email`
 - one or more `CalDAV`
 - optional `WebDAV`
@@ -143,7 +143,6 @@ Suggested attached capabilities:
 Suggested delegated sub-agents:
 
 - `Internet Agent`
-- `Python Agent`
 
 ### Internet Agent
 
@@ -158,17 +157,6 @@ Use it for:
 - web search
 - browsing
 - source gathering
-
-### Python Agent
-
-Suggested attached capabilities:
-
-- `Python` when a backend is available
-
-Use it for:
-
-- data processing
-- sandboxed Python/code execution
 
 ## 4. What the Runtime Exposes
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from unittest.mock import AsyncMock, patch
 
 from django.test import TransactionTestCase
@@ -84,6 +85,52 @@ class CodeExecutionBuiltinsTests(TransactionTestCase):
         self.assertIn("Stdout: hello", output)
         mocked_get_language.assert_awaited_once()
         mocked_api_request.assert_awaited_once()
+
+    @patch("nova.plugins.python.service.execute_code_result", new_callable=AsyncMock)
+    def test_execute_python_request_decodes_workspace_result(self, mocked_execute_code_result):
+        envelope = {
+            "status": "Accepted",
+            "stdout": "done",
+            "stderr": "",
+            "files": [
+                {
+                    "path": "result.txt",
+                    "content_b64": base64.b64encode(b"written").decode("utf-8"),
+                    "mime_type": "text/plain",
+                }
+            ],
+        }
+        mocked_execute_code_result.return_value = code_execution.Judge0ExecutionResult(
+            status_description="Accepted",
+            stdout=(
+                code_execution.PYTHON_WORKSPACE_RESULT_MARKER
+                + base64.b64encode(json.dumps(envelope).encode("utf-8")).decode("utf-8")
+            ),
+            stderr="",
+        )
+
+        result = asyncio.run(
+            code_execution.execute_python_request(
+                "https://judge.example.com",
+                code_execution.PythonExecutionRequest(
+                    mode="script",
+                    entrypoint="script.py",
+                    workspace_files=(
+                        code_execution.PythonWorkspaceFile(
+                            path="script.py",
+                            content=b"print('done')",
+                            mime_type="text/x-python",
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        self.assertEqual(result.status_description, "Accepted")
+        self.assertEqual(result.stdout, "done")
+        self.assertEqual(len(result.output_files), 1)
+        self.assertEqual(result.output_files[0].path, "result.txt")
+        self.assertEqual(result.output_files[0].content, b"written")
 
     @patch("nova.plugins.python.service.asyncio.sleep", new_callable=AsyncMock)
     @patch("nova.plugins.python.service.get_execution_status", new_callable=AsyncMock, return_value="Status: In Queue")

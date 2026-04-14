@@ -2742,9 +2742,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code_result",
+                "nova.plugins.python.service.execute_python_request",
                 new_callable=AsyncMock,
-                return_value=python_service.Judge0ExecutionResult(
+                return_value=python_service.PythonExecutionResult(
                     status_description="Accepted",
                     stdout="hello\nworld",
                     stderr="",
@@ -2758,7 +2758,95 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         output_file = async_to_sync(executor.execute)("cat /results/script.stdout.txt")
         self.assertIn("Status: Accepted", result)
         self.assertEqual(output_file, "hello\nworld")
-        self.assertEqual(mocked_execute.await_args.args[1], "print('hello')\nprint('world')")
+        request = mocked_execute.await_args.args[1]
+        self.assertEqual(request.mode, "script")
+        self.assertEqual(request.entrypoint, "script.py")
+
+    def test_python_script_syncs_workspace_files_back_into_vfs(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)(
+            'tee /project/script.py --text "from pathlib import Path\\nPath(\'out.txt\').write_text(\'done\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="out.txt",
+                            content=b"done",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)("python /project/script.py")
+
+        request = mocked_execute.await_args.args[1]
+        output_file = async_to_sync(executor.execute)("cat /project/out.txt")
+        self.assertEqual(request.mode, "script")
+        self.assertEqual(request.entrypoint, "script.py")
+        self.assertEqual(request.cwd, ".")
+        self.assertTrue(any(item.path == "script.py" for item in request.workspace_files))
+        self.assertEqual(output_file, "done")
+        self.assertIn("Workspace changes synced", result)
+
+    def test_python_dash_c_with_workdir_syncs_workspace_files_back_into_vfs(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="ok",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="generated.txt",
+                            content=b"created from python",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)(
+                'python --workdir /project -c "print(\'ok\')"'
+            )
+
+        request = mocked_execute.await_args.args[1]
+        generated = async_to_sync(executor.execute)("cat /project/generated.txt")
+        self.assertEqual(request.mode, "inline")
+        self.assertEqual(request.code, "print('ok')")
+        self.assertEqual(request.cwd, ".")
+        self.assertEqual(generated, "created from python")
+        self.assertIn("Workspace changes synced", result)
 
     def test_skill_registry_mentions_mail_python_and_date_guidance(self):
         skills = build_skill_registry(
@@ -2778,7 +2866,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("Judge0 sandbox", skills["python.md"])
-        self.assertIn("Do not use it to mutate Nova files", skills["python.md"])
+        self.assertIn("--workdir /project", skills["python.md"])
+        self.assertIn("Copy attachments from `/inbox`", skills["python.md"])
         self.assertIn("date +%F %T", skills["date.md"])
         self.assertIn("server locale", skills["date.md"])
         self.assertIn("pwd", skills["terminal.md"])
@@ -3712,9 +3801,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code_result",
+                "nova.plugins.python.service.execute_python_request",
                 new_callable=AsyncMock,
-                return_value=python_service.Judge0ExecutionResult(
+                return_value=python_service.PythonExecutionResult(
                     status_description="Accepted",
                     stdout="1575",
                     stderr="",
@@ -3728,7 +3817,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             agent_config=self.agent,
         )
         self.assertEqual(result.final_answer, "1575")
-        self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
+        self.assertEqual(mocked_execute.await_args.args[1].code, "print(45 * 35)")
         self.assertIn('python -c "print(45 * 35)"', session.session_state["history"])
 
     def test_runtime_recovers_terminal_tool_call_with_unescaped_inner_quotes(self):
@@ -3767,9 +3856,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code_result",
+                "nova.plugins.python.service.execute_python_request",
                 new_callable=AsyncMock,
-                return_value=python_service.Judge0ExecutionResult(
+                return_value=python_service.PythonExecutionResult(
                     status_description="Accepted",
                     stdout="1575",
                     stderr="",
@@ -3779,7 +3868,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             result = async_to_sync(runtime.run)()
 
         self.assertEqual(result.final_answer, "1575")
-        self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
+        self.assertEqual(mocked_execute.await_args.args[1].code, "print(45 * 35)")
 
     def test_runtime_repairs_html_escaped_terminal_shell_operator_and_records_trace(self):
         task = Task.objects.create(
@@ -4313,6 +4402,23 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("source files", prompt)
         self.assertIn("raw characters", prompt)
         self.assertIn("tee ... --text", prompt)
+
+    def test_system_prompt_mentions_python_direct_workflow(self):
+        code_tool = self._create_code_execution_tool()
+        self.agent.tools.add(code_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("Use `python` directly", prompt)
+        self.assertIn("--workdir", prompt)
+        self.assertIn("Do not use Python as a substitute", prompt)
 
     def test_system_prompt_lists_subagent_descriptions_and_response_modes(self):
         child = AgentConfig.objects.create(
