@@ -364,6 +364,39 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 self.assertIs(os.access, originals["access"])
                 self.assertIs(os.stat, originals["stat"])
 
+    def test_python_workspace_sitecustomize_preserves_python_environment_paths(self):
+        previous_root = os.environ.get("NOVA_WORKSPACE_ROOT")
+        previous_home = os.environ.get("HOME")
+        restore = None
+        with tempfile.TemporaryDirectory() as workspace_dir, tempfile.TemporaryDirectory() as home_dir:
+            workspace = Path(workspace_dir)
+            home = Path(home_dir)
+            (workspace / "data.csv").write_text("workspace\n", encoding="utf-8")
+            config_path = home / "matplotlibrc"
+            config_path.write_text("backend: Agg\n", encoding="utf-8")
+            os.environ["NOVA_WORKSPACE_ROOT"] = workspace_dir
+            os.environ["HOME"] = home_dir
+            namespace: dict[str, Any] = {}
+            try:
+                exec(PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE, namespace, namespace)
+                restore = namespace.get("_restore_nova_workspace_shims")
+                with open("/data.csv", encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "workspace\n")
+                with open(str(config_path), encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "backend: Agg\n")
+                self.assertTrue(os.access(str(config_path), os.R_OK))
+            finally:
+                if callable(restore):
+                    restore()
+                if previous_root is None:
+                    os.environ.pop("NOVA_WORKSPACE_ROOT", None)
+                else:
+                    os.environ["NOVA_WORKSPACE_ROOT"] = previous_root
+                if previous_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = previous_home
+
     def test_run_session_command_installs_python_workspace_sitecustomize(self):
         backend = DockerExecRunnerBackend(
             ExecRunnerConfig(

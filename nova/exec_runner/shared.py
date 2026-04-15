@@ -42,6 +42,8 @@ PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE = textwrap.dedent(
     import builtins
     import io
     import os
+    import site
+    import sys
 
 
     def _nova_install_python_workspace_shims(workspace_root):
@@ -49,8 +51,69 @@ PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE = textwrap.dedent(
         if not workspace_root:
             return lambda: None
 
-        preserved_prefixes = ("/dev", "/proc", "/sys")
+        static_preserved_prefixes = (
+            "/bin",
+            "/dev",
+            "/etc",
+            "/lib",
+            "/lib64",
+            "/opt",
+            "/proc",
+            "/sbin",
+            "/sys",
+            "/usr",
+        )
         originals = {}
+
+        def _normalize_preserved_prefix(value):
+            if not value:
+                return ""
+            try:
+                rendered = os.fspath(value)
+            except TypeError:
+                return ""
+            if isinstance(rendered, bytes):
+                return ""
+            if not isinstance(rendered, str) or not rendered.startswith("/"):
+                return ""
+            normalized = os.path.normpath(rendered)
+            if normalized in {"/", workspace_root}:
+                return ""
+            if normalized.startswith(workspace_root + "/"):
+                return ""
+            return normalized
+
+        preserved_prefixes = []
+        seen_prefixes = set()
+
+        def _register_preserved_prefix(value):
+            normalized = _normalize_preserved_prefix(value)
+            if not normalized or normalized in seen_prefixes:
+                return
+            seen_prefixes.add(normalized)
+            preserved_prefixes.append(normalized)
+
+        for prefix in static_preserved_prefixes:
+            _register_preserved_prefix(prefix)
+
+        for value in (
+            os.environ.get("HOME"),
+            os.environ.get("PYTHONUSERBASE"),
+            os.environ.get("PIP_CACHE_DIR"),
+            os.environ.get("UV_CACHE_DIR"),
+            os.environ.get("npm_config_cache"),
+            getattr(sys, "prefix", ""),
+            getattr(sys, "base_prefix", ""),
+            getattr(sys, "exec_prefix", ""),
+            getattr(sys, "base_exec_prefix", ""),
+            getattr(site, "USER_BASE", ""),
+            getattr(site, "USER_SITE", ""),
+        ):
+            _register_preserved_prefix(value)
+
+        for value in getattr(sys, "path", ()):
+            _register_preserved_prefix(value)
+
         def _translate(path):
             if isinstance(path, int) or path is None:
                 return path
@@ -64,7 +127,7 @@ PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE = textwrap.dedent(
                 return path
             if rendered == "/":
                 return workspace_root
-            if rendered in preserved_prefixes:
+            if rendered in seen_prefixes:
                 return rendered
             if any(rendered.startswith(prefix + "/") for prefix in preserved_prefixes):
                 return rendered
