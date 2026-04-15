@@ -27,13 +27,16 @@ from nova.runtime.commands import (
     resolve_boolean_command_status,
     should_execute_segment,
 )
+from nova.runtime.commands import filesystem as filesystem_commands
+from nova.runtime.commands import integrations as integration_commands
+from nova.runtime.commands import web as web_commands
+from nova.runtime.commands import webapp as webapp_commands
 from nova.runtime.capabilities import TerminalCapabilities
 from nova.runtime.vfs import HISTORY_ROOT, INBOX_ROOT, VFSError, VirtualFileSystem, normalize_vfs_path
 from nova.webdav.service import WEBDAV_VFS_ROOT
 from nova.webapp import service as webapp_service
 from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import download_http_file
-from nova.web.search_service import SEARXNG_MAX_RESULTS, search_web
 
 from .terminal_metrics import (
     FAILURE_KIND_COMMAND_ERROR,
@@ -67,17 +70,8 @@ class TerminalCommandError(Exception):
 
 logger = logging.getLogger(__name__)
 
-BROWSER_SINGLE_PANE_ERROR = "Nova browser currently has a single active page; only `--pane 0` is available."
-BROWSER_DEFAULT_ELEMENT_ATTRIBUTES = (
-    "tagName",
-    "href",
-    "src",
-    "data-src",
-    "srcset",
-    "alt",
-    "title",
-    "innerText",
-)
+BROWSER_SINGLE_PANE_ERROR = web_commands.BROWSER_SINGLE_PANE_ERROR
+BROWSER_DEFAULT_ELEMENT_ATTRIBUTES = web_commands.BROWSER_DEFAULT_ELEMENT_ATTRIBUTES
 
 
 @dataclass(slots=True, frozen=True)
@@ -1246,207 +1240,22 @@ class TerminalExecutor:
         return sections
 
     async def _cmd_ls(self, args: list[str]) -> str:
-        options, raw_paths = self._parse_ls_flags(args)
-        requested_paths = raw_paths or [self.vfs.cwd]
-        targets: list[str] = []
-        for raw_path in requested_paths:
-            expanded = await self._expand_ls_target(raw_path)
-            for normalized in expanded:
-                if normalized not in targets:
-                    targets.append(normalized)
-
-        if len(targets) == 1:
-            normalized = targets[0]
-            if not await self.vfs.is_dir(normalized):
-                entry = await self._lookup_ls_entry(normalized)
-                return self._format_ls_entry(
-                    entry,
-                    long_format=options["long_format"],
-                    human_readable=options["human_readable"],
-                )
-            if options["recursive"]:
-                sections = await self._render_ls_recursive_sections(
-                    normalized,
-                    show_all=options["show_all"],
-                    long_format=options["long_format"],
-                    human_readable=options["human_readable"],
-                )
-                return "\n\n".join(section for section in sections if section)
-            lines = await self._render_ls_directory(
-                normalized,
-                show_all=options["show_all"],
-                long_format=options["long_format"],
-                human_readable=options["human_readable"],
-            )
-            return "\n".join(lines)
-
-        rendered_sections: list[str] = []
-        for normalized in targets:
-            if await self.vfs.is_dir(normalized):
-                if options["recursive"]:
-                    sections = await self._render_ls_recursive_sections(
-                        normalized,
-                        show_all=options["show_all"],
-                        long_format=options["long_format"],
-                        human_readable=options["human_readable"],
-                    )
-                    section = "\n\n".join(item for item in sections if item)
-                else:
-                    lines = await self._render_ls_directory(
-                        normalized,
-                        show_all=options["show_all"],
-                        long_format=options["long_format"],
-                        human_readable=options["human_readable"],
-                    )
-                    section = normalized if not lines else f"{normalized}:\n" + "\n".join(lines)
-            else:
-                entry = await self._lookup_ls_entry(normalized)
-                section = self._format_ls_entry(
-                    entry,
-                    long_format=options["long_format"],
-                    human_readable=options["human_readable"],
-                )
-            rendered_sections.append(section)
-        return "\n\n".join(section for section in rendered_sections if section)
+        return await filesystem_commands.cmd_ls(self, args)
 
     async def _cmd_cd(self, args: list[str]) -> str:
-        target = args[0] if args else "/"
-        normalized = normalize_vfs_path(target, cwd=self.vfs.cwd)
-        if not await self.vfs.path_exists(normalized) or not await self.vfs.is_dir(normalized):
-            raise TerminalCommandError(f"Directory not found: {normalized}")
-        self.vfs.set_cwd(normalized)
-        return self.vfs.cwd
+        return await filesystem_commands.cmd_cd(self, args)
 
     async def _cmd_cat(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        usage = "cat [-n] [<path>]"
-        flags, positionals, _numeric_count = self._parse_short_flags(
-            args,
-            command_name=usage,
-            supported_flags={"n"},
-        )
-        if len(positionals) > 1:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-        if not positionals:
-            if stdin_text is None:
-                raise TerminalCommandError(
-                    f"Usage: {usage}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            content = str(stdin_text)
-            return self._number_lines(content) if "n" in flags else content
-        try:
-            content = await self.vfs.read_text(positionals[0])
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-        return self._number_lines(content) if "n" in flags else content
+        return await filesystem_commands.cmd_cat(self, args, stdin_text=stdin_text)
 
     async def _cmd_head_tail(self, args: list[str], *, tail: bool, stdin_text: str | None = None) -> str:
-        command = "tail" if tail else "head"
-        usage = f"{command} [-n N|-N|-c N] [<path>]"
-        flags, positionals, numeric_count = self._parse_short_flags(
-            args,
-            command_name=usage,
-            supported_flags={"n", "c"},
-            allow_numeric_count=True,
-        )
-        if "n" in flags and "c" in flags:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-        line_count = 10
-        byte_count: int | None = None
-        if "n" in flags:
-            if not positionals:
-                raise TerminalCommandError(
-                    "Missing value after -n",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            line_count = max(0, self._parse_int_flag("-n", positionals[0]))
-            positionals = positionals[1:]
-        elif "c" in flags:
-            if not positionals:
-                raise TerminalCommandError(
-                    "Missing value after -c",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            byte_count = max(0, self._parse_int_flag("-c", positionals[0]))
-            positionals = positionals[1:]
-        if numeric_count is not None:
-            if byte_count is not None:
-                raise TerminalCommandError(
-                    f"Usage: {usage}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            line_count = max(0, numeric_count)
-        if len(positionals) > 1:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-        if not positionals:
-            if stdin_text is None:
-                raise TerminalCommandError(
-                    f"Usage: {usage}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            content = str(stdin_text)
-        else:
-            content = await self._cmd_cat([positionals[0]])
-        if byte_count is not None:
-            payload = content.encode("utf-8")
-            selected_bytes = payload[-byte_count:] if tail else payload[:byte_count]
-            return selected_bytes.decode("utf-8", errors="ignore")
-        lines = content.splitlines()
-        selected = lines[-line_count:] if tail else lines[:line_count]
-        return "\n".join(selected)
+        return await filesystem_commands.cmd_head_tail(self, args, tail=tail, stdin_text=stdin_text)
 
     async def _cmd_mkdir(self, args: list[str]) -> str:
-        flags, positionals, _numeric_count = self._parse_short_flags(
-            args,
-            command_name="mkdir [-p] <path> [<path> ...]",
-            supported_flags={"p"},
-        )
-        if not positionals:
-            raise TerminalCommandError("Usage: mkdir [-p] <path> [<path> ...]")
-
-        recursive = "p" in flags
-        results: list[str] = []
-        for raw_path in positionals:
-            try:
-                if recursive:
-                    created = await self._mkdir_recursive_and_notify(raw_path)
-                    results.append(f"Ensured directory {created}")
-                else:
-                    created = await self._mkdir_and_notify(raw_path)
-                    results.append(f"Created directory {created}")
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-        return "\n".join(results)
+        return await filesystem_commands.cmd_mkdir(self, args)
 
     async def _cmd_rmdir(self, args: list[str]) -> str:
-        if not args:
-            raise TerminalCommandError(
-                "Usage: rmdir <path> [<path> ...]",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        removed_messages: list[str] = []
-        for raw_path in args:
-            normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
-            if not await self.vfs.path_exists(normalized):
-                raise TerminalCommandError(f"Path not found: {normalized}")
-            if not await self.vfs.is_dir(normalized):
-                raise TerminalCommandError(f"Not a directory: {normalized}")
-            try:
-                removed = await self._remove_and_notify(raw_path, recursive=False)
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            removed_messages.append(f"Removed {removed}")
-        return "\n".join(removed_messages)
+        return await filesystem_commands.cmd_rmdir(self, args)
 
     def _validate_text_write_path(self, raw_path: str) -> str:
         normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
@@ -1572,32 +1381,7 @@ class TerminalExecutor:
         return str(value or "")
 
     async def _cmd_printf(self, args: list[str]) -> str:
-        if not args:
-            raise TerminalCommandError(
-                "Usage: printf <format> [arg ...]",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-        format_text = self._decode_escaped_text(args[0])
-        values = [str(item) for item in args[1:]]
-        parts = self._parse_printf_parts(format_text)
-        specifiers = [value for kind, value in parts if kind == "spec"]
-        if not specifiers:
-            return format_text
-
-        chunk_size = len(specifiers)
-        iterations = max(1, (len(values) + chunk_size - 1) // chunk_size)
-        output_parts: list[str] = []
-        for iteration_index in range(iterations):
-            chunk = values[iteration_index * chunk_size:(iteration_index + 1) * chunk_size]
-            spec_index = 0
-            for kind, value in parts:
-                if kind == "literal":
-                    output_parts.append(value)
-                    continue
-                arg_value = chunk[spec_index] if spec_index < len(chunk) else None
-                output_parts.append(self._format_printf_value(value, arg_value))
-                spec_index += 1
-        return "".join(output_parts)
+        return await filesystem_commands.cmd_printf(self, args)
 
     async def _write_shell_output(self, raw_path: str, content: str, *, append: bool):
         normalized = self._validate_text_write_path(raw_path)
@@ -1618,203 +1402,22 @@ class TerminalExecutor:
             raise TerminalCommandError(str(exc)) from exc
 
     async def _cmd_touch(self, args: list[str]) -> str:
-        if len(args) != 1:
-            raise TerminalCommandError("Usage: touch <path>")
-        normalized = self._validate_text_write_path(args[0])
-        if await self.vfs.is_dir(normalized):
-            raise TerminalCommandError(f"Cannot touch a directory: {normalized}")
-        if await self.vfs.path_exists(normalized):
-            return f"Touched {normalized}"
-        try:
-            written = await self._write_file_and_notify(normalized, b"", mime_type="text/plain")
-            return self._format_write_result(f"Created empty file {written.path}", written)
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        return await filesystem_commands.cmd_touch(self, args)
 
     async def _cmd_tee(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        if not args:
-            raise TerminalCommandError('Usage: tee <path> [--text "<content>"] [--append]')
-        append = "--append" in args
-        remainder = [item for item in args if item != "--append"]
-        text, remainder = self._parse_flag_value(remainder, "--text")
-        if len(remainder) != 1:
-            raise TerminalCommandError('Usage: tee <path> [--text "<content>"] [--append]')
-        if text is not None and stdin_text is not None:
-            raise TerminalCommandError(
-                "tee cannot combine --text with piped or redirected input.",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-        if text is None and stdin_text is None:
-            raise TerminalCommandError('Usage: tee <path> [--text "<content>"] [--append]')
-
-        normalized = self._validate_text_write_path(remainder[0])
-        if await self.vfs.is_dir(normalized):
-            raise TerminalCommandError(f"Cannot write text into a directory: {normalized}")
-
-        if text is not None:
-            content = self._decode_escaped_text(str(text))
-            written = await self._write_shell_output(normalized, content, append=append)
-            return self._format_write_result(
-                f"Wrote {len(content.encode('utf-8'))} bytes to {written.path}",
-                written,
-            )
-
-        content = str(stdin_text or "")
-        await self._write_shell_output(normalized, content, append=append)
-        return content
+        return await filesystem_commands.cmd_tee(self, args, stdin_text=stdin_text)
 
     async def _cmd_cp(self, args: list[str]) -> str:
-        if len(args) != 2:
-            raise TerminalCommandError("Usage: cp <source> <destination>")
-        try:
-            copied = await self._copy_and_notify(args[0], args[1])
-            return f"Copied to {copied.path}"
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        return await filesystem_commands.cmd_cp(self, args)
 
     async def _cmd_mv(self, args: list[str]) -> str:
-        if len(args) != 2:
-            raise TerminalCommandError("Usage: mv <source> <destination>")
-        try:
-            destination = await self._move_and_notify(args[0], args[1])
-            return f"Moved to {destination}"
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        return await filesystem_commands.cmd_mv(self, args)
 
     async def _cmd_rm(self, args: list[str]) -> str:
-        usage = "rm [-f] [-r|-R] <path> [<path> ...]"
-        flags, positionals, _numeric_count = self._parse_short_flags(
-            args,
-            command_name=usage,
-            supported_flags={"f", "r", "R"},
-        )
-        if not positionals:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        removed_messages: list[str] = []
-        force = "f" in flags
-        recursive = "r" in flags or "R" in flags
-        for path in positionals:
-            try:
-                removed = await self._remove_and_notify(path, recursive=recursive)
-            except VFSError as exc:
-                message = str(exc)
-                if force and message.startswith("Path not found:"):
-                    continue
-                raise TerminalCommandError(message) from exc
-            removed_messages.append(f"Removed {removed}")
-        return "\n".join(removed_messages)
+        return await filesystem_commands.cmd_rm(self, args)
 
     async def _cmd_find(self, args: list[str]) -> str:
-        usage = "find <path> [<path> ...] [-type f|d] [-name <glob> [-o -name <glob> ...]]"
-        if not args:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        roots: list[str] = []
-        index = 0
-        while index < len(args):
-            token = str(args[index] or "").strip()
-            if not token:
-                index += 1
-                continue
-            if token.startswith("-") or token in {"(", ")", "!"}:
-                break
-            roots.append(token)
-            index += 1
-
-        if not roots:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        desired_type: str | None = None
-        name_patterns: list[str] = []
-        remaining = list(args[index:])
-        expect_name_after_or = False
-        clause_active = False
-        cursor = 0
-
-        def _unsupported_find_expression() -> TerminalCommandError:
-            return TerminalCommandError(
-                f"Unsupported find expression. Supported form: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        while cursor < len(remaining):
-            token = str(remaining[cursor] or "").strip()
-            if token == "-o":
-                if not clause_active:
-                    raise _unsupported_find_expression()
-                expect_name_after_or = True
-                clause_active = False
-                cursor += 1
-                continue
-            if token == "-type":
-                if cursor + 1 >= len(remaining):
-                    raise TerminalCommandError(
-                        f"Usage: {usage}",
-                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                    )
-                type_value = str(remaining[cursor + 1] or "").strip()
-                if type_value not in {"f", "d"}:
-                    raise TerminalCommandError(
-                        f"Unsupported find type: {type_value}",
-                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                    )
-                if desired_type is not None:
-                    raise _unsupported_find_expression()
-                desired_type = type_value
-                cursor += 2
-                continue
-            if token == "-name":
-                if cursor + 1 >= len(remaining):
-                    raise TerminalCommandError(
-                        "Missing value for -name",
-                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                    )
-                if name_patterns and not expect_name_after_or:
-                    raise _unsupported_find_expression()
-                name_patterns.append(str(remaining[cursor + 1] or ""))
-                clause_active = True
-                expect_name_after_or = False
-                cursor += 2
-                continue
-            raise _unsupported_find_expression()
-
-        if expect_name_after_or:
-            raise _unsupported_find_expression()
-
-        collected: set[str] = set()
-        for raw_root in roots:
-            normalized_root = normalize_vfs_path(raw_root, cwd=self.vfs.cwd)
-            if not await self.vfs.path_exists(normalized_root):
-                raise TerminalCommandError(f"Path not found: {normalized_root}")
-            try:
-                collected.update(await self.vfs.find(normalized_root, ""))
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-
-        filtered: list[str] = []
-        for path in sorted(collected):
-            if name_patterns:
-                basename = posixpath.basename(path.rstrip("/")) or path
-                if not any(fnmatch(basename, pattern) for pattern in name_patterns):
-                    continue
-            if desired_type is not None:
-                is_dir = await self.vfs.is_dir(path)
-                if desired_type == "f" and is_dir:
-                    continue
-                if desired_type == "d" and not is_dir:
-                    continue
-            filtered.append(path)
-        return "\n".join(filtered)
+        return await filesystem_commands.cmd_find(self, args)
 
     @staticmethod
     def _sort_text_lines(content: str) -> str:
@@ -1828,167 +1431,16 @@ class TerminalExecutor:
         return rendered
 
     async def _cmd_sort(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        usage = "sort [<path>]"
-        positionals: list[str] = []
-        for token in args:
-            if token.startswith("-") and token != "-":
-                raise TerminalCommandError(
-                    f"Unsupported sort flag: {token}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            positionals.append(token)
-
-        if len(positionals) > 1:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        if not positionals:
-            if stdin_text is None:
-                raise TerminalCommandError(
-                    f"Usage: {usage}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            return self._sort_text_lines(stdin_text)
-
-        try:
-            content = await self.vfs.read_text(positionals[0])
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-        return self._sort_text_lines(content)
+        return await filesystem_commands.cmd_sort(self, args, stdin_text=stdin_text)
 
     async def _cmd_file(self, args: list[str]) -> str:
-        if not args:
-            raise TerminalCommandError(
-                "Usage: file <path> [<path> ...]",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        lines: list[str] = []
-        for raw_path in args:
-            entry = await self._resolve_vfs_entry(raw_path)
-            normalized = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
-            if entry.get("type") == "dir":
-                lines.append(f"{normalized}: directory")
-                continue
-            mime_type = str(entry.get("mime_type") or "").strip()
-            size = int(entry.get("size") if entry.get("size") is not None else 0)
-            if mime_type:
-                lines.append(f"{normalized}: {mime_type}, {size} bytes")
-            else:
-                lines.append(f"{normalized}: file, {size} bytes")
-        return "\n".join(lines)
+        return await filesystem_commands.cmd_file(self, args)
 
     async def _cmd_grep(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        if not args:
-            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
-
-        flags, remaining, _numeric_count = self._parse_short_flags(
-            args,
-            command_name="grep [-r] [-i] [-n] <pattern> [<path>]",
-            supported_flags={"r", "i", "n"},
-        )
-        recursive = "r" in flags
-        ignore_case = "i" in flags
-        show_numbers = "n" in flags
-
-        if len(remaining) not in {1, 2}:
-            raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
-
-        pattern = remaining[0]
-        candidates: list[str] = []
-        stdin_candidate = len(remaining) == 1
-        if stdin_candidate:
-            if recursive:
-                raise TerminalCommandError(
-                    "grep -r requires a path.",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            if stdin_text is None:
-                raise TerminalCommandError("Usage: grep [-r] [-i] [-n] <pattern> [<path>]")
-        else:
-            raw_path = remaining[1]
-            normalized_path = normalize_vfs_path(raw_path, cwd=self.vfs.cwd)
-            if not await self.vfs.path_exists(normalized_path):
-                raise TerminalCommandError(f"Path not found: {normalized_path}")
-
-            if await self.vfs.is_dir(normalized_path):
-                if not recursive:
-                    raise TerminalCommandError("grep on directories requires -r")
-                try:
-                    candidates = await self.vfs.find(normalized_path, "")
-                except VFSError as exc:
-                    raise TerminalCommandError(str(exc)) from exc
-            else:
-                candidates = [normalized_path]
-
-        results: list[str] = []
-        flags = re.IGNORECASE if ignore_case else 0
-        try:
-            matcher = re.compile(pattern, flags)
-        except re.error as exc:
-            raise TerminalCommandError(f"Invalid grep pattern: {exc}") from exc
-
-        if stdin_candidate:
-            for line_number, line in enumerate(str(stdin_text or "").splitlines(), start=1):
-                if matcher.search(line):
-                    prefix = f"stdin:{line_number}:" if show_numbers else ""
-                    results.append(f"{prefix}{line}")
-            return "\n".join(results)
-
-        for candidate in candidates:
-            if await self.vfs.is_dir(candidate):
-                continue
-            try:
-                content = await self.vfs.read_text(candidate)
-            except VFSError:
-                continue
-            for line_number, line in enumerate(content.splitlines(), start=1):
-                if matcher.search(line):
-                    if show_numbers:
-                        results.append(f"{candidate}:{line_number}:{line}")
-                    else:
-                        results.append(f"{candidate}:{line}")
-        return "\n".join(results)
+        return await filesystem_commands.cmd_grep(self, args, stdin_text=stdin_text)
 
     async def _cmd_wc(self, args: list[str], *, stdin_text: str | None = None) -> str:
-        usage = "wc [-l] [-w] [-c] [<path>]"
-        flags, positionals, _numeric_count = self._parse_short_flags(
-            args,
-            command_name=usage,
-            supported_flags={"l", "w", "c"},
-        )
-        if len(positionals) > 1:
-            raise TerminalCommandError(
-                f"Usage: {usage}",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-
-        if not positionals:
-            if stdin_text is None:
-                raise TerminalCommandError(
-                    f"Usage: {usage}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            content = str(stdin_text)
-            path_label = ""
-        else:
-            path_label = normalize_vfs_path(positionals[0], cwd=self.vfs.cwd)
-            content = await self._cmd_cat([positionals[0]])
-
-        counts = {
-            "l": self._count_text_lines(content),
-            "w": len(str(content or "").split()),
-            "c": len(str(content or "").encode("utf-8")),
-        }
-        selected_flags = [flag for flag in ("l", "w", "c") if flag in flags]
-        if not selected_flags:
-            selected_flags = ["l", "w", "c"]
-        values = [str(counts[flag]) for flag in selected_flags]
-        if path_label:
-            values.append(path_label)
-        return " ".join(values)
+        return await filesystem_commands.cmd_wc(self, args, stdin_text=stdin_text)
 
     def _ensure_continuous_mode(self) -> None:
         if getattr(self.vfs.thread, "mode", None) != Thread.Mode.CONTINUOUS:
@@ -2255,182 +1707,12 @@ class TerminalExecutor:
         stdin_text: str | None = None,
         capture_output: bool = False,
     ) -> str:
-        if not self.capabilities.has_mcp:
-            raise TerminalCommandError("MCP commands are not enabled for this agent.")
-        if not args:
-            raise TerminalCommandError("Usage: mcp <servers|tools|schema|call|refresh> ...")
-
-        subcommand = str(args[0] or "").strip().lower()
-        remainder = args[1:]
-
-        if subcommand == "servers":
-            if remainder:
-                raise TerminalCommandError("Usage: mcp servers")
-            payload = [
-                {
-                    "id": tool.id,
-                    "name": tool.name,
-                    "endpoint": tool.endpoint,
-                    "transport_type": tool.transport_type,
-                }
-                for tool in self.capabilities.mcp_tools
-            ]
-            if capture_output:
-                return self._render_structured_stdout(payload, capture_output=True)
-            return self._format_remote_service_listing("MCP servers", payload)
-
-        if subcommand == "tools":
-            server_selector, remainder = self._parse_flag_value(remainder, "--server")
-            if remainder:
-                raise TerminalCommandError("Usage: mcp tools [--server <selector>]")
-            server = self._resolve_remote_tool(
-                selector=server_selector,
-                tools=self.capabilities.mcp_tools,
-                noun="MCP server",
-                flag_name="--server",
-            )
-            try:
-                payload = await mcp_service.list_mcp_tools(tool=server, user=self.vfs.user)
-            except mcp_service.MCPServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            if capture_output:
-                return self._render_structured_stdout(payload, capture_output=True)
-            if not payload:
-                return f"No MCP tools discovered on {server.name}."
-            lines = [f"Discovered MCP tools on {server.name}:"]
-            for item in payload:
-                line = f"- {item.get('name')}"
-                description = str(item.get("description") or "").strip()
-                if description:
-                    line += f" / {description}"
-                lines.append(line)
-            return "\n".join(lines)
-
-        if subcommand == "schema":
-            server_selector, remainder = self._parse_flag_value(remainder, "--server")
-            if len(remainder) != 1:
-                raise TerminalCommandError("Usage: mcp schema <tool-name> [--server <selector>]")
-            server = self._resolve_remote_tool(
-                selector=server_selector,
-                tools=self.capabilities.mcp_tools,
-                noun="MCP server",
-                flag_name="--server",
-            )
-            try:
-                payload = await mcp_service.describe_mcp_tool(
-                    tool=server,
-                    user=self.vfs.user,
-                    tool_name=remainder[0],
-                )
-            except mcp_service.MCPServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return self._render_structured_stdout(payload, capture_output=capture_output)
-
-        if subcommand == "refresh":
-            server_selector, remainder = self._parse_flag_value(remainder, "--server")
-            if remainder:
-                raise TerminalCommandError("Usage: mcp refresh [--server <selector>]")
-            servers = (
-                [self._resolve_remote_tool(
-                    selector=server_selector,
-                    tools=self.capabilities.mcp_tools,
-                    noun="MCP server",
-                    flag_name="--server",
-                )]
-                if server_selector is not None
-                else list(self.capabilities.mcp_tools)
-            )
-            payload: list[dict[str, Any]] = []
-            for server in servers:
-                try:
-                    tools = await mcp_service.list_mcp_tools(
-                        tool=server,
-                        user=self.vfs.user,
-                        force_refresh=True,
-                    )
-                except mcp_service.MCPServiceError as exc:
-                    raise TerminalCommandError(str(exc)) from exc
-                payload.append({"id": server.id, "name": server.name, "tool_count": len(tools)})
-            if capture_output:
-                return self._render_structured_stdout(payload, capture_output=True)
-            if len(payload) == 1:
-                entry = payload[0]
-                return f"Refreshed {entry['name']} ({entry['tool_count']} tools)."
-            return "\n".join(
-                [f"Refreshed {entry['name']} ({entry['tool_count']} tools)." for entry in payload]
-            )
-
-        if subcommand == "call":
-            server_selector, remainder = self._parse_flag_value(remainder, "--server")
-            output_path, remainder = self._parse_output_path(remainder)
-            extract_to, remainder = self._parse_flag_value(remainder, "--extract-to")
-            if not remainder:
-                raise TerminalCommandError(
-                    "Usage: mcp call <tool-name> [--server <selector>] [--input-file /path.json] "
-                    "[--output /path.json] [--extract-to /dir]"
-                )
-            server = self._resolve_remote_tool(
-                selector=server_selector,
-                tools=self.capabilities.mcp_tools,
-                noun="MCP server",
-                flag_name="--server",
-            )
-            tool_name = remainder[0]
-            inline_tokens = remainder[1:]
-            payload, leftover = await self._load_command_json_input(
-                remaining=inline_tokens,
-                stdin_text=stdin_text,
-            )
-            if leftover:
-                raise TerminalCommandError("Unexpected arguments after MCP input payload.")
-
-            try:
-                result = await mcp_service.call_mcp_tool(
-                    tool=server,
-                    user=self.vfs.user,
-                    tool_name=tool_name,
-                    payload=payload,
-                )
-            except mcp_service.MCPServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            artifacts = list(result.get("extractable_artifacts") or [])
-            if artifacts and not output_path and not extract_to:
-                raise TerminalCommandError(
-                    "This MCP result includes extractable files or resources. Use --output or --extract-to."
-                )
-
-            extracted_paths: list[str] = []
-            if extract_to:
-                try:
-                    await self._mkdir_and_notify(extract_to)
-                except VFSError:
-                    # Directory may already exist or be a special mount; resolve on writes below.
-                    pass
-                for artifact in artifacts:
-                    destination = posixpath.join(extract_to, artifact.path)
-                    written = await self._write_file_and_notify(
-                        destination,
-                        artifact.content,
-                        mime_type=artifact.mime_type,
-                    )
-                    extracted_paths.append(written.path)
-
-            if output_path:
-                written = await self._write_json_output(output_path, result["payload"])
-                message = self._format_write_result(f"Wrote MCP result to {written.path}", written)
-                if extracted_paths:
-                    message += "\nExtracted:\n" + "\n".join(f"- {path}" for path in extracted_paths)
-                return message
-
-            if capture_output:
-                return self._render_structured_stdout(result["payload"], capture_output=True)
-
-            message = self._truncate_output(self._render_mcp_call_interactive(result))
-            if extracted_paths:
-                message += "\nExtracted:\n" + "\n".join(f"- {path}" for path in extracted_paths)
-            return message
-
-        raise TerminalCommandError("Usage: mcp <servers|tools|schema|call|refresh> ...")
+        return await integration_commands.cmd_mcp(
+            self,
+            args,
+            stdin_text=stdin_text,
+            capture_output=capture_output,
+        )
 
     async def _cmd_api(
         self,
@@ -2439,139 +1721,12 @@ class TerminalExecutor:
         stdin_text: str | None = None,
         capture_output: bool = False,
     ) -> str:
-        if not self.capabilities.has_api:
-            raise TerminalCommandError("API commands are not enabled for this agent.")
-        if not args:
-            raise TerminalCommandError("Usage: api <services|operations|schema|call> ...")
-
-        subcommand = str(args[0] or "").strip().lower()
-        remainder = args[1:]
-
-        if subcommand == "services":
-            if remainder:
-                raise TerminalCommandError("Usage: api services")
-            payload = [
-                {
-                    "id": tool.id,
-                    "name": tool.name,
-                    "endpoint": tool.endpoint,
-                }
-                for tool in self.capabilities.api_tools
-            ]
-            if capture_output:
-                return self._render_structured_stdout(payload, capture_output=True)
-            return self._format_remote_service_listing("API services", payload)
-
-        if subcommand == "operations":
-            service_selector, remainder = self._parse_flag_value(remainder, "--service")
-            if remainder:
-                raise TerminalCommandError("Usage: api operations [--service <selector>]")
-            service = self._resolve_remote_tool(
-                selector=service_selector,
-                tools=self.capabilities.api_tools,
-                noun="API service",
-                flag_name="--service",
-            )
-            try:
-                payload = await api_tools_service.list_api_operations(tool=service)
-            except api_tools_service.APIServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            if capture_output:
-                return self._render_structured_stdout(payload, capture_output=True)
-            return self._format_api_operation_listing(payload)
-
-        if subcommand == "schema":
-            service_selector, remainder = self._parse_flag_value(remainder, "--service")
-            if len(remainder) != 1:
-                raise TerminalCommandError("Usage: api schema <operation> [--service <selector>]")
-            service = self._resolve_remote_tool(
-                selector=service_selector,
-                tools=self.capabilities.api_tools,
-                noun="API service",
-                flag_name="--service",
-            )
-            try:
-                payload = await api_tools_service.describe_api_operation(
-                    tool=service,
-                    operation_selector=remainder[0],
-                )
-            except api_tools_service.APIServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return self._render_structured_stdout(payload, capture_output=capture_output)
-
-        if subcommand == "call":
-            service_selector, remainder = self._parse_flag_value(remainder, "--service")
-            output_path, remainder = self._parse_output_path(remainder)
-            if not remainder:
-                raise TerminalCommandError(
-                    "Usage: api call <operation> [--service <selector>] [--input-file /path.json] "
-                    "[--output /path.json|/path.txt|/path.bin]"
-                )
-            service = self._resolve_remote_tool(
-                selector=service_selector,
-                tools=self.capabilities.api_tools,
-                noun="API service",
-                flag_name="--service",
-            )
-            operation_selector = remainder[0]
-            inline_tokens = remainder[1:]
-            payload, leftover = await self._load_command_json_input(
-                remaining=inline_tokens,
-                stdin_text=stdin_text,
-            )
-            if leftover:
-                raise TerminalCommandError("Unexpected arguments after API input payload.")
-
-            try:
-                result = await api_tools_service.call_api_operation(
-                    tool=service,
-                    user=self.vfs.user,
-                    operation_selector=operation_selector,
-                    payload=payload,
-                )
-            except api_tools_service.APIServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-
-            if output_path:
-                if result["body_kind"] == "binary":
-                    try:
-                        resolved_output = await self.vfs.resolve_output_path(
-                            output_path,
-                            source_name=str(result.get("filename") or "response.bin"),
-                        )
-                    except VFSError as exc:
-                        raise TerminalCommandError(str(exc)) from exc
-                    written = await self._write_file_and_notify(
-                        resolved_output,
-                        result["binary_content"],
-                        mime_type=result["content_type"],
-                    )
-                    return self._format_write_result(f"Wrote API response to {written.path}", written)
-                if result["body_kind"] == "json" and result["payload"]["response"].get("json") is not None:
-                    written = await self._write_json_output(output_path, result["payload"]["response"]["json"])
-                    return self._format_write_result(f"Wrote API response to {written.path}", written)
-                written = await self._write_text_output(
-                    output_path,
-                    str(result["payload"]["response"].get("text") or ""),
-                    mime_type="text/plain",
-                )
-                return self._format_write_result(f"Wrote API response to {written.path}", written)
-
-            if result["body_kind"] == "binary":
-                if capture_output:
-                    raise TerminalCommandError(
-                        "Binary API responses cannot be piped or redirected without --output."
-                    )
-                return (
-                    f"Binary API response ({result['content_type']}, {len(result['binary_content'])} bytes). "
-                    "Use --output to save it."
-                )
-
-            if capture_output:
-                return self._render_structured_stdout(result["payload"], capture_output=True)
-            return self._truncate_output(self._render_api_call_interactive(result))
-
-        raise TerminalCommandError("Usage: api <services|operations|schema|call> ...")
+        return await integration_commands.cmd_api(
+            self,
+            args,
+            stdin_text=stdin_text,
+            capture_output=capture_output,
+        )
 
     @staticmethod
     def _format_webapp_listing(items: list[dict]) -> str:
@@ -2602,82 +1757,7 @@ class TerminalExecutor:
         return "\n".join(lines)
 
     async def _cmd_webapp(self, args: list[str]) -> str:
-        if not self.capabilities.has_webapp:
-            raise TerminalCommandError("Webapp commands are not enabled for this agent.")
-        if not args:
-            raise TerminalCommandError("Usage: webapp <list|expose|show|delete> ...")
-
-        subcommand = str(args[0] or "").strip().lower()
-        remainder = args[1:]
-
-        if subcommand == "list":
-            if remainder:
-                raise TerminalCommandError("Usage: webapp list")
-            items = await webapp_service.list_thread_webapps(user=self.vfs.user, thread=self.vfs.thread)
-            return self._format_webapp_listing(items)
-
-        if subcommand == "show":
-            if len(remainder) != 1:
-                raise TerminalCommandError("Usage: webapp show <slug>")
-            try:
-                payload = await webapp_service.describe_webapp(
-                    user=self.vfs.user,
-                    thread=self.vfs.thread,
-                    slug=remainder[0],
-                )
-            except webapp_service.WebAppServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return self._format_webapp_details(payload)
-
-        if subcommand == "delete":
-            confirm = "--confirm" in remainder
-            remainder = [item for item in remainder if item != "--confirm"]
-            if len(remainder) != 1:
-                raise TerminalCommandError("Usage: webapp delete <slug> --confirm")
-            if not confirm:
-                raise TerminalCommandError("webapp delete requires --confirm")
-            try:
-                payload = await webapp_service.delete_webapp(
-                    user=self.vfs.user,
-                    thread=self.vfs.thread,
-                    slug=remainder[0],
-                    task_id=self.realtime_task_id,
-                    channel_layer=self.realtime_channel_layer,
-                )
-            except webapp_service.WebAppServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return f"Deleted webapp {payload['slug']}"
-
-        if subcommand == "expose":
-            slug, remainder = self._parse_flag_value(remainder, "--slug")
-            name, remainder = self._parse_flag_value(remainder, "--name")
-            entry_path, remainder = self._parse_flag_value(remainder, "--entry")
-            if len(remainder) != 1:
-                raise TerminalCommandError(
-                    "Usage: webapp expose <source_dir> [--name <display-name>] [--entry <relative-path>] "
-                    "[--slug <slug>]"
-                )
-            try:
-                payload = await webapp_service.expose_webapp(
-                    user=self.vfs.user,
-                    thread=self.vfs.thread,
-                    vfs=self.vfs,
-                    source_root=remainder[0],
-                    slug=slug,
-                    name=name,
-                    entry_path=entry_path,
-                    task_id=self.realtime_task_id,
-                    channel_layer=self.realtime_channel_layer,
-                )
-            except webapp_service.WebAppServiceError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            action = "Exposed" if payload.get("created") else "Updated"
-            return (
-                f"{action} webapp {payload['slug']} at {payload['public_url']} "
-                f"from {payload['source_root']} (entry {payload['entry_path']})"
-            )
-
-        raise TerminalCommandError("Usage: webapp <list|expose|show|delete> ...")
+        return await webapp_commands.cmd_webapp(self, args)
 
     async def _cmd_date(self, args: list[str]) -> str:
         if not self.capabilities.has_date_time:
@@ -3170,319 +2250,40 @@ class TerminalExecutor:
         return normalized
 
     async def _cmd_search(self, args: list[str], *, capture_output: bool = False) -> str:
-        if not self.capabilities.has_search:
-            raise TerminalCommandError("Search commands are not enabled for this agent.")
-
-        output_path, remaining = self._parse_output_path(args)
-        limit = None
-        query_tokens: list[str] = []
-        index = 0
-        while index < len(remaining):
-            token = remaining[index]
-            if token == "--limit":
-                index += 1
-                if index >= len(remaining):
-                    raise TerminalCommandError("Missing value after --limit")
-                limit = self._parse_int_flag("--limit", remaining[index])
-            else:
-                query_tokens.append(token)
-            index += 1
-
-        query = " ".join(query_tokens).strip()
-        if not query:
-            raise TerminalCommandError("Usage: search <query> [--limit N] [--output /path.json]")
-
-        try:
-            effective_limit = None if limit is None else max(1, min(limit, SEARXNG_MAX_RESULTS))
-            payload = await search_web(self.capabilities.searxng_tool, query=query, limit=effective_limit)
-        except Exception as exc:
-            raise TerminalCommandError(str(exc)) from exc
-
-        self._last_search_results = list(payload.get("results") or [])
-
-        if output_path:
-            written = await self._write_json_output(output_path, payload)
-            return self._format_write_result(f"Wrote search results to {written.path}", written)
-        if capture_output:
-            return self._render_structured_stdout(payload, capture_output=True)
-
-        lines: list[str] = []
-        for index, result in enumerate(self._last_search_results):
-            title = str(result.get("title") or "").strip() or "(untitled)"
-            url = str(result.get("url") or "").strip() or "(missing url)"
-            snippet = str(result.get("snippet") or "").strip()
-            line = f"{index}. {title} / {url}"
-            if snippet:
-                line += f" / {snippet}"
-            lines.append(line)
-        return "\n".join(lines) if lines else "No search results."
+        return await web_commands.cmd_search(self, args, capture_output=capture_output)
 
     async def _cmd_browse(self, args: list[str], *, capture_output: bool = False) -> str:
-        if not self.capabilities.has_web:
-            raise TerminalCommandError("Browse commands are not enabled for this agent.")
-        if not args:
-            raise TerminalCommandError(
-                "Usage: browse <open|ls|current|back|text|read|links|elements|click> ..."
-            )
-        action = args[0]
-        remainder = args[1:]
-        if action == "open":
-            return await self._cmd_browse_open(remainder)
-        if action == "ls":
-            return await self._cmd_browse_ls(remainder)
-        if action == "current":
-            return await self._cmd_browse_current(remainder)
-        if action == "back":
-            return await self._cmd_browse_back(remainder)
-        if action in {"text", "read"}:
-            return await self._cmd_browse_text(remainder, capture_output=capture_output)
-        if action == "links":
-            return await self._cmd_browse_links(remainder, capture_output=capture_output)
-        if action == "elements":
-            return await self._cmd_browse_elements(remainder, capture_output=capture_output)
-        if action == "click":
-            return await self._cmd_browse_click(remainder)
-        raise TerminalCommandError(
-            "Usage: browse <open|ls|current|back|text|read|links|elements|click> ..."
-        )
+        return await web_commands.cmd_browse(self, args, capture_output=capture_output)
 
     async def _cmd_browse_open(self, args: list[str]) -> str:
-        if not args:
-            raise TerminalCommandError("Usage: browse open <url> | browse open --result N")
-
-        result_index = None
-        remaining: list[str] = []
-        index = 0
-        while index < len(args):
-            token = args[index]
-            if token == "--result":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after --result")
-                result_index = self._parse_int_flag("--result", args[index])
-            else:
-                remaining.append(token)
-            index += 1
-
-        session = await self._get_browser_session()
-        try:
-            if result_index is not None:
-                if remaining:
-                    raise TerminalCommandError("Usage: browse open <url> | browse open --result N")
-                if not self._last_search_results:
-                    raise TerminalCommandError(
-                        "No cached search results are available in this run. Use `search` first."
-                    )
-                opened = await session.open_search_result(result_index, self._last_search_results)
-            else:
-                if len(remaining) != 1:
-                    raise TerminalCommandError("Usage: browse open <url> | browse open --result N")
-                opened = await session.open(remaining[0])
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-
-        status = opened.get("status")
-        url = str(opened.get("url") or "")
-        if status is None:
-            return f"Opened {url}"
-        return f"Opened {url} (status {status})"
+        return await web_commands.cmd_browse_open(self, args)
 
     async def _cmd_browse_current(self, args: list[str]) -> str:
-        _pane_index, remaining = self._parse_browser_pane(args)
-        if remaining:
-            raise TerminalCommandError("Usage: browse current [--pane 0]")
-        session = await self._get_browser_session()
-        try:
-            return await session.current()
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        return await web_commands.cmd_browse_current(self, args)
 
     async def _cmd_browse_ls(self, args: list[str]) -> str:
-        _pane_index, remaining = self._parse_browser_pane(args)
-        if remaining:
-            raise TerminalCommandError("Usage: browse ls [--pane 0]")
-        session = await self._get_browser_session()
-        try:
-            current_url = await session.current()
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-        return f"0  current  {current_url}"
+        return await web_commands.cmd_browse_ls(self, args)
 
     async def _cmd_browse_back(self, args: list[str]) -> str:
-        _pane_index, remaining = self._parse_browser_pane(args)
-        if remaining:
-            raise TerminalCommandError("Usage: browse back [--pane 0]")
-        session = await self._get_browser_session()
-        try:
-            payload = await session.back()
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-        return f"Went back to {payload['url']} (status {payload['status']})"
+        return await web_commands.cmd_browse_back(self, args)
 
     async def _cmd_browse_text(self, args: list[str], *, capture_output: bool = False) -> str:
-        output_path, remaining = self._parse_output_path(args)
-        _pane_index, remaining = self._parse_browser_pane(remaining)
-        if len(remaining) > 1:
-            raise TerminalCommandError("Usage: browse text [url] [--pane 0] [--output /path.txt]")
-        inline_url = remaining[0] if remaining else None
-        session = await self._get_browser_session()
-        await self._browse_open_inline_url(session, inline_url)
-        try:
-            content = await session.extract_text()
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(
-                self._format_browser_extraction_error(str(exc), inline_command="browse text")
-            ) from exc
-        if output_path:
-            try:
-                resolved_output = await self.vfs.resolve_output_path(output_path)
-                written = await self._write_file_and_notify(
-                    resolved_output,
-                    content.encode("utf-8"),
-                    mime_type="text/plain",
-                )
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return self._format_write_result(f"Wrote page text to {written.path}", written)
-        return content if capture_output else self._truncate_output(content)
+        return await web_commands.cmd_browse_text(self, args, capture_output=capture_output)
 
     async def _cmd_browse_links(self, args: list[str], *, capture_output: bool = False) -> str:
-        output_path, remaining = self._parse_output_path(args)
-        _pane_index, remaining = self._parse_browser_pane(remaining)
-        absolute = False
-        inline_url = None
-        for token in remaining:
-            if token == "--absolute":
-                absolute = True
-            elif inline_url is None:
-                inline_url = token
-            else:
-                raise TerminalCommandError("Usage: browse links [url] [--pane 0] [--absolute] [--output /path.json]")
-        session = await self._get_browser_session()
-        await self._browse_open_inline_url(session, inline_url)
-        try:
-            links = await session.extract_links(absolute=absolute)
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(
-                self._format_browser_extraction_error(str(exc), inline_command="browse links")
-            ) from exc
-        if output_path:
-            written = await self._write_json_output(output_path, links)
-            return self._format_write_result(f"Wrote page links to {written.path}", written)
-        rendered = json.dumps(links, ensure_ascii=False, indent=2)
-        return rendered if capture_output else self._truncate_output(rendered)
+        return await web_commands.cmd_browse_links(self, args, capture_output=capture_output)
 
     async def _cmd_browse_elements(self, args: list[str], *, capture_output: bool = False) -> str:
-        output_path, remaining = self._parse_output_path(args)
-        _pane_index, remaining = self._parse_browser_pane(remaining)
-        attributes, remaining = self._parse_multi_flag(remaining, "--attr")
-        if len(remaining) not in {1, 2}:
-            raise TerminalCommandError(
-                "Usage: browse elements <selector> [url] [--pane 0] [--attr NAME ...] [--output /path.json]"
-            )
-        selector = remaining[0]
-        inline_url = remaining[1] if len(remaining) == 2 else None
-        attrs = attributes or list(BROWSER_DEFAULT_ELEMENT_ATTRIBUTES)
-        session = await self._get_browser_session()
-        await self._browse_open_inline_url(session, inline_url)
-        try:
-            elements = await session.get_elements(selector, attrs)
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(
-                self._format_browser_extraction_error(str(exc), inline_command="browse elements")
-            ) from exc
-        payload = {
-            "selector": selector,
-            "attributes": attrs,
-            "elements": elements,
-        }
-        if output_path:
-            written = await self._write_json_output(output_path, payload)
-            return self._format_write_result(f"Wrote selected elements to {written.path}", written)
-        rendered = json.dumps(payload, ensure_ascii=False, indent=2)
-        return rendered if capture_output else self._truncate_output(rendered)
+        return await web_commands.cmd_browse_elements(self, args, capture_output=capture_output)
 
     async def _cmd_browse_click(self, args: list[str]) -> str:
-        _pane_index, remaining = self._parse_browser_pane(args)
-        if len(remaining) != 1:
-            raise TerminalCommandError("Usage: browse click <selector> [--pane 0]")
-        session = await self._get_browser_session()
-        try:
-            return await session.click(remaining[0])
-        except BrowserSessionError as exc:
-            raise TerminalCommandError(str(exc)) from exc
+        return await web_commands.cmd_browse_click(self, args)
 
     async def _cmd_wget(self, args: list[str]) -> str:
-        if not self.capabilities.has_web:
-            raise TerminalCommandError("Web commands are not enabled for this agent.")
-        parsed = self._parse_download_command(
-            args,
-            command_name="wget",
-            usage="Usage: wget [-O <path>] [--output <path>] [-U <value>] [--user-agent <value>] [--header <name: value>] <url>",
-            output_flags={"-O", "--output"},
-            user_agent_flags={"-U", "--user-agent"},
-            header_flags={"--header"},
-        )
-        content, mime_type, inferred_name = await self._download_http(
-            parsed.url,
-            headers=parsed.headers,
-            user_agent=parsed.user_agent,
-        )
-        destination = parsed.output_path or posixpath.join(self.vfs.cwd, inferred_name)
-        try:
-            destination = await self.vfs.resolve_output_path(destination, source_name=inferred_name)
-        except VFSError as exc:
-            raise TerminalCommandError(str(exc)) from exc
-        written = await self._write_file_and_notify(destination, content, mime_type=mime_type)
-        return self._format_write_result(f"Downloaded {parsed.url} to {written.path}", written)
+        return await web_commands.cmd_wget(self, args)
 
     async def _cmd_curl(self, args: list[str], *, capture_output: bool = False) -> str:
-        if not self.capabilities.has_web:
-            raise TerminalCommandError("Web commands are not enabled for this agent.")
-        parsed = self._parse_download_command(
-            args,
-            command_name="curl",
-            usage="Usage: curl [-o <path>] [--output <path>] [-A <value>] [--user-agent <value>] [-H <name: value>] [--header <name: value>] <url>",
-            output_flags={"-o", "--output"},
-            user_agent_flags={"-A", "--user-agent"},
-            header_flags={"-H", "--header"},
-        )
-        content, mime_type, inferred_name = await self._download_http(
-            parsed.url,
-            headers=parsed.headers,
-            user_agent=parsed.user_agent,
-        )
-        if parsed.output_path:
-            try:
-                resolved_output = await self.vfs.resolve_output_path(
-                    parsed.output_path,
-                    source_name=inferred_name,
-                )
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            written = await self._write_file_and_notify(resolved_output, content, mime_type=mime_type)
-            return self._format_write_result(f"Downloaded {parsed.url} to {written.path}", written)
-        if mime_type.startswith("text/") or mime_type in {"application/json", "application/xml"}:
-            try:
-                decoded = content.decode("utf-8")
-                return decoded if capture_output else decoded[:8000]
-            except UnicodeDecodeError:
-                if capture_output:
-                    raise TerminalCommandError(
-                        "curl only supports text output when used in a pipeline or shell redirection. "
-                        "Use curl --output <path> to save binary responses.",
-                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                    )
-        if capture_output:
-            raise TerminalCommandError(
-                "curl only supports text output when used in a pipeline or shell redirection. "
-                "Use curl --output <path> to save binary responses.",
-                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-            )
-        return (
-            f"Binary response from {parsed.url} ({mime_type}, {len(content)} bytes). "
-            f"Use curl --output {posixpath.join(self.vfs.cwd, inferred_name)} to save it."
-        )
+        return await web_commands.cmd_curl(self, args, capture_output=capture_output)
 
     def _parse_flag_value(self, args: list[str], flag: str) -> tuple[str | None, list[str]]:
         remaining: list[str] = []
@@ -3679,231 +2480,7 @@ class TerminalExecutor:
         return "\n".join(line for line in lines if line is not None).rstrip()
 
     async def _cmd_calendar(self, args: list[str]) -> str:
-        if not self.capabilities.has_calendar:
-            raise TerminalCommandError("Calendar commands are not enabled for this agent.")
-        if not args:
-            raise TerminalCommandError(
-                "Usage: calendar <accounts|calendars|upcoming|list|search|show|create|update|delete> ..."
-            )
-        subcommand = args[0]
-        remainder = args[1:]
-        account, remainder = self._parse_flag_value(remainder, "--account")
-
-        if subcommand == "accounts":
-            if remainder:
-                raise TerminalCommandError("Usage: calendar accounts")
-            _user, entries, _lookup, selector_values = await self._get_calendar_registry()
-            lines = [self._format_calendar_accounts(entries)]
-            if len(selector_values) > 1:
-                lines.append("Pass --account <selector> on calendar commands to choose an account explicitly.")
-            return "\n".join(lines)
-
-        entry, _selector_values = await self._resolve_terminal_calendar_account(account)
-        tool_id = int(entry["tool_id"])
-
-        if subcommand == "calendars":
-            if remainder:
-                raise TerminalCommandError("Usage: calendar calendars [--account <selector>]")
-            calendars = await caldav_service.list_calendars(self.vfs.user, tool_id)
-            if not calendars:
-                return "No calendars available."
-            return "\n".join(["Available calendars:", *[f"- {item}" for item in calendars]])
-
-        if subcommand == "upcoming":
-            output_path, remainder = self._parse_output_path(remainder)
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            days_value, remainder = self._parse_flag_value(remainder, "--days")
-            if remainder:
-                raise TerminalCommandError(
-                    "Usage: calendar upcoming [--account <selector>] [--calendar <name>] [--days N] [--output /path.md|json]"
-                )
-            days = self._parse_int_flag("--days", days_value or "7")
-            try:
-                events = await caldav_service.list_events_to_come(
-                    self.vfs.user,
-                    tool_id,
-                    days_ahead=days,
-                    calendar_name=calendar_name,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            if output_path:
-                return await self._write_calendar_output(
-                    output_path,
-                    {"events": events, "days": days, "account": entry["account"], "calendar": calendar_name},
-                    self._render_calendar_markdown(heading="Upcoming Events", events=events),
-                )
-            return self._format_calendar_event_list(events, heading="Upcoming events:")
-
-        if subcommand == "list":
-            output_path, remainder = self._parse_output_path(remainder)
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            start_value, remainder = self._parse_flag_value(remainder, "--from")
-            end_value, remainder = self._parse_flag_value(remainder, "--to")
-            if remainder or not start_value or not end_value:
-                raise TerminalCommandError(
-                    "Usage: calendar list --from <iso> --to <iso> [--account <selector>] [--calendar <name>] [--output /path.md|json]"
-                )
-            try:
-                events = await caldav_service.list_events(
-                    self.vfs.user,
-                    tool_id,
-                    start_date=start_value,
-                    end_date=end_value,
-                    calendar_name=calendar_name,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            if output_path:
-                return await self._write_calendar_output(
-                    output_path,
-                    {"events": events, "from": start_value, "to": end_value, "account": entry["account"], "calendar": calendar_name},
-                    self._render_calendar_markdown(heading="Calendar Events", events=events),
-                )
-            return self._format_calendar_event_list(events, heading="Calendar events:")
-
-        if subcommand == "search":
-            output_path, remainder = self._parse_output_path(remainder)
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            days_value, remainder = self._parse_flag_value(remainder, "--days")
-            query = " ".join(remainder).strip()
-            if not query:
-                raise TerminalCommandError(
-                    "Usage: calendar search <query> [--account <selector>] [--calendar <name>] [--days N] [--output /path.md|json]"
-                )
-            days = self._parse_int_flag("--days", days_value or "30")
-            try:
-                events = await caldav_service.search_events(
-                    self.vfs.user,
-                    tool_id,
-                    query=query,
-                    days_range=days,
-                    calendar_name=calendar_name,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            if output_path:
-                return await self._write_calendar_output(
-                    output_path,
-                    {"events": events, "query": query, "days": days, "account": entry["account"], "calendar": calendar_name},
-                    self._render_calendar_markdown(heading=f"Calendar Search: {query}", events=events),
-                )
-            return self._format_calendar_event_list(events, heading="Matching calendar events:")
-
-        if subcommand == "show":
-            output_path, remainder = self._parse_output_path(remainder)
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            if len(remainder) != 1:
-                raise TerminalCommandError(
-                    "Usage: calendar show <event-id> [--account <selector>] [--calendar <name>] [--output /path.md|json]"
-                )
-            try:
-                event = await caldav_service.get_event_detail(
-                    self.vfs.user,
-                    tool_id,
-                    event_id=remainder[0],
-                    calendar_name=calendar_name,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            if output_path:
-                return await self._write_calendar_output(
-                    output_path,
-                    {"event": event, "account": entry["account"], "calendar": calendar_name},
-                    self._render_calendar_markdown(heading="Calendar Event", event=event),
-                )
-            return self._format_calendar_event(event, detailed=True)
-
-        if subcommand == "create":
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            title, remainder = self._parse_flag_value(remainder, "--title")
-            start_value, remainder = self._parse_flag_value(remainder, "--start")
-            end_value, remainder = self._parse_flag_value(remainder, "--end")
-            location, remainder = self._parse_flag_value(remainder, "--location")
-            description_file, remainder = self._parse_flag_value(remainder, "--description-file")
-            all_day = "--all-day" in remainder
-            remainder = [item for item in remainder if item != "--all-day"]
-            if remainder or not calendar_name or not title or not start_value:
-                raise TerminalCommandError(
-                    "Usage: calendar create --title <text> --start <iso> [--end <iso>] [--all-day] --calendar <name> [--account <selector>] [--location <text>] [--description-file /path.md]"
-                )
-            description = await self.vfs.read_text(description_file) if description_file else None
-            try:
-                event = await caldav_service.create_event(
-                    self.vfs.user,
-                    tool_id,
-                    calendar_name=calendar_name,
-                    summary=title,
-                    start=start_value,
-                    end=end_value,
-                    all_day=all_day,
-                    location=location,
-                    description=description,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return f"Created event {event['uid']} in calendar {event['calendar_name']}"
-
-        if subcommand == "update":
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            title, remainder = self._parse_flag_value(remainder, "--title")
-            start_value, remainder = self._parse_flag_value(remainder, "--start")
-            end_value, remainder = self._parse_flag_value(remainder, "--end")
-            location, remainder = self._parse_flag_value(remainder, "--location")
-            description_file, remainder = self._parse_flag_value(remainder, "--description-file")
-            all_day = "--all-day" in remainder
-            remainder = [item for item in remainder if item != "--all-day"]
-            if len(remainder) != 1 or not calendar_name:
-                raise TerminalCommandError(
-                    "Usage: calendar update <event-id> [--account <selector>] --calendar <name> [--title <text>] [--start <iso>] [--end <iso>] [--all-day] [--location <text>] [--description-file /path.md]"
-                )
-            description = await self.vfs.read_text(description_file) if description_file else None
-            if not any(
-                value is not None
-                for value in [title, start_value, end_value, location, description]
-            ) and not all_day:
-                raise TerminalCommandError("calendar update requires at least one field to change.")
-            try:
-                event = await caldav_service.update_event(
-                    self.vfs.user,
-                    tool_id,
-                    event_id=remainder[0],
-                    calendar_name=calendar_name,
-                    summary=title,
-                    start=start_value,
-                    end=end_value,
-                    all_day=True if all_day else None,
-                    location=location,
-                    description=description,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return f"Updated event {event['uid']} in calendar {event['calendar_name']}"
-
-        if subcommand == "delete":
-            calendar_name, remainder = self._parse_flag_value(remainder, "--calendar")
-            confirm = "--confirm" in remainder
-            remainder = [item for item in remainder if item != "--confirm"]
-            if len(remainder) != 1:
-                raise TerminalCommandError(
-                    "Usage: calendar delete <event-id> [--account <selector>] [--calendar <name>] --confirm"
-                )
-            if not confirm:
-                raise TerminalCommandError("calendar delete requires --confirm")
-            try:
-                event = await caldav_service.delete_event(
-                    self.vfs.user,
-                    tool_id,
-                    event_id=remainder[0],
-                    calendar_name=calendar_name,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            return f"Deleted event {event['uid']} from calendar {event['calendar_name']}"
-
-        raise TerminalCommandError(
-            "Usage: calendar <accounts|calendars|upcoming|list|search|show|create|update|delete> ..."
-        )
+        return await integration_commands.cmd_calendar(self, args)
 
     async def _get_mailbox_registry(self):
         if self._mailbox_registry_cache is None:
@@ -3931,20 +2508,7 @@ class TerminalExecutor:
         return entry, selector_values
 
     async def _cmd_mail_accounts(self) -> str:
-        _user, entries, _lookup, _mailbox_schema, selector_values = await self._get_mailbox_registry()
-        if not entries:
-            raise TerminalCommandError("No email mailbox is configured for this agent.")
-        lines = ["Configured mailboxes:"]
-        for entry in entries:
-            label = str(entry.get("display_label") or "").strip()
-            label_part = f", label: {label}" if label else ""
-            sending = "enabled" if entry.get("can_send") else "disabled"
-            lines.append(
-                f"- {entry['selector_email']} (sending: {sending}{label_part})"
-            )
-        if len(selector_values) > 1:
-            lines.append("Pass --mailbox <email> on mail commands to choose an account explicitly.")
-        return "\n".join(lines)
+        return await integration_commands.cmd_mail_accounts(self)
 
     def _parse_mail_single_selector(
         self,
@@ -3980,197 +2544,7 @@ class TerminalExecutor:
         return message_ids, uids
 
     async def _cmd_mail(self, args: list[str]) -> str:
-        if not self.capabilities.has_email:
-            raise TerminalCommandError("Mail commands are not enabled for this agent.")
-        if not args:
-            raise TerminalCommandError("Usage: mail <accounts|list|read|attachments|import|folders|move|mark|send> ...")
-        subcommand = args[0]
-        remainder = args[1:]
-        mailbox, remainder = self._parse_flag_value(remainder, "--mailbox")
-
-        if subcommand == "accounts":
-            if remainder:
-                raise TerminalCommandError("Usage: mail accounts")
-            return await self._cmd_mail_accounts()
-
-        entry, _selector_values = await self._resolve_terminal_mailbox(mailbox)
-        tool_id = int(entry["tool_id"])
-
-        if subcommand == "list":
-            folder, remainder = self._parse_flag_value(remainder, "--folder")
-            limit, remainder = self._parse_flag_value(remainder, "--limit")
-            if remainder:
-                raise TerminalCommandError("Usage: mail list [--mailbox <email>] [--folder INBOX] [--limit N]")
-            return await mail_service.list_emails(
-                self.vfs.user,
-                tool_id,
-                folder=folder or "INBOX",
-                limit=int(limit or 10),
-            )
-
-        if subcommand == "read":
-            folder, remainder = self._parse_flag_value(remainder, "--folder")
-            full = "--full" in remainder
-            remainder = [item for item in remainder if item != "--full"]
-            message_id, uid = self._parse_mail_single_selector(
-                remainder,
-                usage="Usage: mail read [--mailbox <email>] [--folder F] (<id> | --uid <uid>) [--full]",
-            )
-            return await mail_service.read_email(
-                self.vfs.user,
-                tool_id,
-                message_id,
-                uid=uid,
-                folder=folder or "INBOX",
-                preview_only=not full,
-            )
-
-        if subcommand == "attachments":
-            folder, remainder = self._parse_flag_value(remainder, "--folder")
-            message_id, uid = self._parse_mail_single_selector(
-                remainder,
-                usage="Usage: mail attachments [--mailbox <email>] [--folder F] (<id> | --uid <uid>)",
-            )
-            return await mail_service.list_email_attachments(
-                self.vfs.user,
-                tool_id,
-                message_id,
-                uid=uid,
-                folder=folder or "INBOX",
-            )
-
-        if subcommand == "folders":
-            if remainder:
-                raise TerminalCommandError("Usage: mail folders [--mailbox <email>]")
-            return await mail_service.list_mailboxes(self.vfs.user, tool_id)
-
-        if subcommand == "move":
-            folder, remainder = self._parse_flag_value(remainder, "--folder")
-            to_folder, remainder = self._parse_flag_value(remainder, "--to-folder")
-            to_special, remainder = self._parse_flag_value(remainder, "--to-special")
-            message_ids, uids = self._parse_mail_multi_selectors(
-                remainder,
-                usage=(
-                    "Usage: mail move [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
-                    "[--uid <uid> ...] (--to-folder <dest> | --to-special <junk|trash|archive>)"
-                ),
-            )
-            try:
-                return await mail_service.move_emails(
-                    self.vfs.user,
-                    tool_id,
-                    message_ids=message_ids,
-                    uids=uids,
-                    source_folder=folder or "INBOX",
-                    target_folder=to_folder,
-                    target_special=to_special,
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-
-        if subcommand == "mark":
-            folder, remainder = self._parse_flag_value(remainder, "--folder")
-            action_tokens = {
-                "--seen": "seen",
-                "--unseen": "unseen",
-                "--flagged": "flagged",
-                "--unflagged": "unflagged",
-            }
-            selected_actions = [name for flag, name in action_tokens.items() if flag in remainder]
-            remainder = [item for item in remainder if item not in action_tokens]
-            if len(selected_actions) != 1:
-                raise TerminalCommandError(
-                    "Usage: mail mark [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
-                    "[--uid <uid> ...] (--seen | --unseen | --flagged | --unflagged)"
-                )
-            message_ids, uids = self._parse_mail_multi_selectors(
-                remainder,
-                usage=(
-                    "Usage: mail mark [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
-                    "[--uid <uid> ...] (--seen | --unseen | --flagged | --unflagged)"
-                ),
-            )
-            try:
-                return await mail_service.mark_emails(
-                    self.vfs.user,
-                    tool_id,
-                    message_ids=message_ids,
-                    uids=uids,
-                    folder=folder or "INBOX",
-                    action=selected_actions[0],
-                )
-            except ValueError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-
-        if subcommand == "import":
-            folder, remainder = self._parse_flag_value(remainder, "--folder")
-            attachment_id, remainder = self._parse_flag_value(remainder, "--attachment")
-            output_path, remainder = self._parse_flag_value(remainder, "--output")
-            if not attachment_id:
-                raise TerminalCommandError(
-                    "Usage: mail import [--mailbox <email>] [--folder F] (<id> | --uid <uid>) "
-                    "--attachment <part> [--output PATH]"
-                )
-            message_id, uid = self._parse_mail_single_selector(
-                remainder,
-                usage=(
-                    "Usage: mail import [--mailbox <email>] [--folder F] (<id> | --uid <uid>) "
-                    "--attachment <part> [--output PATH]"
-                ),
-            )
-            _envelope, _message, resolved_uid, _flags, attachments = await mail_service._load_email_message_with_attachments(
-                self.vfs.user,
-                tool_id,
-                message_id,
-                uid=uid,
-                folder=folder or "INBOX",
-            )
-            selected = next(
-                (item for item in attachments if str(item.get("attachment_id")) == str(attachment_id)),
-                None,
-            )
-            if selected is None:
-                selector = uid if uid is not None else message_id if message_id is not None else resolved_uid
-                raise TerminalCommandError(f"Attachment {attachment_id} not found on email {selector}.")
-            source_name = str(selected.get("filename") or f"attachment-{attachment_id}")
-            destination = output_path or posixpath.join(self.vfs.cwd, source_name)
-            try:
-                destination = await self.vfs.resolve_output_path(destination, source_name=source_name)
-            except VFSError as exc:
-                raise TerminalCommandError(str(exc)) from exc
-            written = await self._write_file_and_notify(
-                destination,
-                bytes(selected.get("content") or b""),
-                mime_type=str(selected.get("mime_type") or "application/octet-stream"),
-            )
-            return self._format_write_result(f"Imported attachment to {written.path}", written)
-
-        if subcommand == "send":
-            to, remainder = self._parse_flag_value(remainder, "--to")
-            cc, remainder = self._parse_flag_value(remainder, "--cc")
-            subject, remainder = self._parse_flag_value(remainder, "--subject")
-            body_file, remainder = self._parse_flag_value(remainder, "--body-file")
-            attach_paths, remainder = self._parse_multi_flag(remainder, "--attach")
-            if remainder or not to or not subject or not body_file:
-                raise TerminalCommandError(
-                    "Usage: mail send [--mailbox <email>] --to <addr> --subject <subject> "
-                    "--body-file <path> [--cc <addr>] [--attach <path> ...]"
-                )
-            if not entry.get("can_send"):
-                raise TerminalCommandError(
-                    f"Sending is disabled for mailbox '{entry['selector_email']}'."
-                )
-            body = await self.vfs.read_text(body_file)
-            return await self._send_mail_direct(
-                tool_id=tool_id,
-                to=to,
-                cc=cc,
-                subject=subject,
-                body=body,
-                attach_paths=attach_paths,
-            )
-
-        raise TerminalCommandError(f"Unknown mail subcommand: {subcommand}")
+        return await integration_commands.cmd_mail(self, args)
 
     async def _send_mail_direct(self, *, tool_id: int, to: str, cc: str | None,
                                 subject: str, body: str, attach_paths: list[str]) -> str:
