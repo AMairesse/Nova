@@ -73,7 +73,6 @@ BROWSER_DEFAULT_ELEMENT_ATTRIBUTES = (
     "title",
     "innerText",
 )
-_SANDBOX_COMMAND_NOT_FOUND_RE = re.compile(r"(?:^|\s)(?P<command>[A-Za-z0-9._-]+): command not found", re.IGNORECASE)
 
 
 @dataclass(slots=True, frozen=True)
@@ -366,17 +365,14 @@ class TerminalExecutor:
             vfs=self.vfs,
             command=command,
         )
-        normalized_status = 0 if int(sandbox_result.status or 0) == 0 else 1
+        raw_status = int(sandbox_result.status or 0)
         head_command = normalize_head_command(command)
-        stderr_text = sandbox_result.stderr
-        message = stderr_text or sandbox_result.stdout or "Command failed."
+        stderr_text = str(sandbox_result.stderr or "")
+        message = stderr_text or str(sandbox_result.stdout or "") or f"Exit status: {raw_status}"
         failure_kind = ""
-        if normalized_status != 0:
+        if raw_status != 0:
             if "command not found" in str(message).lower():
                 failure_kind = FAILURE_KIND_UNKNOWN_COMMAND
-                unknown_match = _SANDBOX_COMMAND_NOT_FOUND_RE.search(str(message))
-                missing_command = unknown_match.group("command") if unknown_match else head_command
-                stderr_text = f"Unknown command: {missing_command}" if missing_command else "Unknown command."
             else:
                 failure_kind = classify_terminal_failure(message)
         segment = ShellSegmentResult(
@@ -385,7 +381,7 @@ class TerminalExecutor:
             head_command=head_command,
             stdout=sandbox_result.stdout,
             stderr=stderr_text,
-            status=normalized_status,
+            status=raw_status,
             failure_kind=failure_kind,
             display_text=self._render_sandbox_display_text(
                 exec_runner_service.SandboxShellResult(
@@ -399,7 +395,7 @@ class TerminalExecutor:
         return ShellExecutionResult(
             stdout=sandbox_result.stdout,
             stderr=stderr_text,
-            status=normalized_status,
+            status=raw_status,
             failure_kind=failure_kind,
             segments=[segment],
         )

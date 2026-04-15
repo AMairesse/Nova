@@ -2439,6 +2439,28 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         output = async_to_sync(executor.execute)("echo $(pwd)")
         self.assertIn("/", output.strip())
 
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_sandbox_result_preserves_raw_exit_status_and_stderr(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="", stderr="grep: no matches", status=7, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
+        executor = self._build_executor()
+
+        result = async_to_sync(executor.execute_result)("pip list | grep pandas")
+
+        self.assertEqual(result.status, 7)
+        self.assertEqual(result.stderr, "grep: no matches")
+        self.assertEqual(result.failed_segment_indexes, [0])
+
     def test_history_commands_are_available_in_continuous_mode(self):
         continuous_thread = Thread.objects.create(
             user=self.user,
@@ -5551,6 +5573,66 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(result.trace_meta["status"], 0)
         self.assertIn("command not found", result.content)
         self.assertIn("skills", result.content)
+
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_runtime_terminal_command_preserves_sandbox_nonzero_result_text(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="", stderr="", status=1, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        result = async_to_sync(runtime._execute_terminal_command)(
+            "pip list | grep -E 'pandas|matplotlib'"
+        )
+
+        self.assertFalse(result.failed)
+        self.assertEqual(result.trace_meta["status"], 1)
+        self.assertEqual(result.content, "Exit status: 1")
+
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_runtime_terminal_command_keeps_sandbox_stderr_without_command_error_prefix(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="", stderr="grep: no matches", status=1, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        result = async_to_sync(runtime._execute_terminal_command)(
+            "pip list | grep pandas"
+        )
+
+        self.assertFalse(result.failed)
+        self.assertEqual(result.trace_meta["status"], 1)
+        self.assertEqual(result.content, "stderr: grep: no matches")
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):

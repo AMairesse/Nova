@@ -96,6 +96,16 @@ class ReactTerminalRuntime:
         "<link",
         "</",
     )
+
+    @staticmethod
+    def _render_sandbox_command_result(execution_result) -> str:
+        if execution_result is None:
+            return ""
+        rendered = execution_result.render_text()
+        if rendered:
+            return rendered
+        status = int(getattr(execution_result, "status", 0) or 0)
+        return f"Exit status: {status}" if status != 0 else ""
     _SUBAGENT_TRAILING_ID_RE = re.compile(r"^(?P<name>.+?)\s*\((?P<id>\d+)\)\s*$")
     _DATA_URL_RE = re.compile(
         r"^data:(?P<mime>[^;,]+)?(?:;charset=[^;,]+)?;base64,(?P<data>.+)$",
@@ -741,6 +751,7 @@ class ReactTerminalRuntime:
         before_files = await self.vfs.snapshot_visible_files()
         cwd_before = self.vfs.cwd
         failure_kind = ""
+        tool_failed = False
         segment_count = 1
         segment_head_commands: list[str] = []
         execution_result = None
@@ -765,12 +776,17 @@ class ReactTerminalRuntime:
             await self._persist_session()
             failure_kind = str(getattr(exc, "failure_kind", "") or classify_terminal_failure(str(exc)))
             content = f"Command error: {exc}"
+            tool_failed = True
             failed_segment_indexes = [failure.segment_index for failure in list(exc.segment_failures or [])]
             skipped_segment_indexes: list[int] = []
             execution_result = getattr(exc, "execution_result", None)
         else:
             if failure_kind:
-                content = f"Command error: {content or execution_result.stderr or 'Command failed.'}"
+                if getattr(self.terminal, "last_execution_plane", "nova") == "sandbox":
+                    content = self._render_sandbox_command_result(execution_result)
+                else:
+                    content = f"Command error: {content or execution_result.stderr or 'Command failed.'}"
+                    tool_failed = True
         after_files = await self.vfs.snapshot_visible_files()
         output_paths = sorted(
             path
@@ -808,7 +824,7 @@ class ReactTerminalRuntime:
         return ToolExecutionResult(
             content=content,
             trace_meta=trace_meta,
-            failed=bool(failure_kind),
+            failed=tool_failed,
         )
 
     def _resolve_subagent_match(self, selector: str):
