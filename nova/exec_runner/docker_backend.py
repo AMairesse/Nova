@@ -487,11 +487,12 @@ class DockerExecRunnerBackend:
         await self._docker_exec(
             container_name,
             (
-                "set +e; "
-                "pids=$(ps -eo pid= | awk '$1 != 1 {print $1}'); "
+                "set +e; self_pid=$$; "
+                "pids=$(ps -eo pid= | awk -v self=\"$self_pid\" '$1 != 1 && $1 != self {print $1}'); "
                 "if [ -n \"$pids\" ]; then kill -TERM $pids 2>/dev/null || true; sleep 1; fi; "
-                "pids=$(ps -eo pid= | awk '$1 != 1 {print $1}'); "
-                "if [ -n \"$pids\" ]; then kill -KILL $pids 2>/dev/null || true; fi"
+                "pids=$(ps -eo pid= | awk -v self=\"$self_pid\" '$1 != 1 && $1 != self {print $1}'); "
+                "if [ -n \"$pids\" ]; then kill -KILL $pids 2>/dev/null || true; fi; "
+                "exit 0"
             ),
         )
 

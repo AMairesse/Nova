@@ -19,6 +19,11 @@ RUNNER_ENV_FILENAME = "env.json"
 RUNNER_CWD_FILENAME = "cwd.txt"
 
 READ_ONLY_PROJECTION_ROOTS = (SKILLS_ROOT, INBOX_ROOT, HISTORY_ROOT)
+SHELL_SPECIAL_PATH_PREFIXES = (
+    "/dev/",
+    "/proc/",
+    "/sys/",
+)
 EXCLUDED_SYNC_ROOTS = {
     "/",
     SKILLS_ROOT,
@@ -135,12 +140,14 @@ def encode_environment_script(env: dict[str, str]) -> str:
 
 def rewrite_token_for_workspace(token: str, workspace_root: Path) -> str:
     value = str(token or "")
-    if not value or value in {"|", ";", "&&", "||", ">", ">>", "<"}:
+    if not value or value in {"|", ";", "&&", "||", ">", ">>", "<", "<<", ">&", "<&", "&>", "&>>"}:
         return value
     if "://" in value:
         return value
     if value == "/":
         return str(workspace_root)
+    if value in {"/dev", "/proc", "/sys"} or value.startswith(SHELL_SPECIAL_PATH_PREFIXES):
+        return value
     if not value.startswith("/"):
         return value
     return str(workspace_path_for_vfs_path(workspace_root, value))
@@ -157,21 +164,29 @@ def rewrite_shell_command_for_workspace(command: str, workspace_root: Path) -> s
         return raw
     rewritten = [rewrite_token_for_workspace(token, workspace_root) for token in tokens]
     rendered_tokens: list[str] = []
-    operator_tokens = {"|", ";", "&&", "||", ">", ">>", "<"}
-    for token in rewritten:
+    operator_tokens = {"|", ";", "&&", "||", ">", ">>", "<", "<<", ">&", "<&", "&>", "&>>"}
+    fd_redirect_operators = {">", ">>", "<", "<<", "<&", ">&"}
+    index = 0
+    while index < len(rewritten):
+        token = rewritten[index]
+        if token.isdigit() and index + 1 < len(rewritten) and rewritten[index + 1] in fd_redirect_operators:
+            rendered_tokens.append(f"{token}{rewritten[index + 1]}")
+            index += 2
+            continue
         if token in operator_tokens:
             rendered_tokens.append(token)
-            continue
-        has_shell_substitution = "$(" in token or "`" in token
-        needs_quotes = (
-            not token
-            or any(character.isspace() for character in token)
-            or (
-                any(character in token for character in "\"'<>;&|()")
-                and not has_shell_substitution
+        else:
+            has_shell_substitution = "$(" in token or "`" in token
+            needs_quotes = (
+                not token
+                or any(character.isspace() for character in token)
+                or (
+                    any(character in token for character in "\"'<>;&|()")
+                    and not has_shell_substitution
+                )
             )
-        )
-        rendered_tokens.append(shlex.quote(token) if needs_quotes else token)
+            rendered_tokens.append(shlex.quote(token) if needs_quotes else token)
+        index += 1
     return " ".join(rendered_tokens)
 
 

@@ -20,7 +20,11 @@ from nova.exec_runner.docker_backend import (
     load_exec_runner_config_from_env,
 )
 from nova.exec_runner import service as exec_runner_service
-from nova.exec_runner.shared import ExecSessionSelector, SandboxShellResult
+from nova.exec_runner.shared import (
+    ExecSessionSelector,
+    SandboxShellResult,
+    rewrite_shell_command_for_workspace,
+)
 
 
 class ExecRunnerServiceTests(SimpleTestCase):
@@ -268,3 +272,39 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
         docker_args = list(await_args.args)
         self.assertNotIn("--security-opt", docker_args)
         self.assertNotIn("no-new-privileges", docker_args)
+
+    def test_cleanup_processes_excludes_its_own_shell(self):
+        backend = self._build_backend()
+        backend._docker_exec = AsyncMock(return_value=None)
+
+        asyncio.run(backend._cleanup_processes("nova-exec-test"))
+
+        await_args = backend._docker_exec.await_args
+        assert await_args is not None
+        self.assertEqual(await_args.args[0], "nova-exec-test")
+        cleanup_script = await_args.args[1]
+        self.assertIn("self_pid=$$", cleanup_script)
+        self.assertIn("$1 != 1 && $1 != self", cleanup_script)
+        self.assertTrue(cleanup_script.endswith("exit 0"))
+
+
+class ExecRunnerSharedTests(SimpleTestCase):
+    def test_rewrite_shell_command_preserves_dev_null_redirection(self):
+        rewritten = rewrite_shell_command_for_workspace(
+            'find / -name "*.csv" 2>/dev/null || echo "No CSV files found"',
+            WORKSPACE_ROOT_IN_CONTAINER,
+        )
+
+        self.assertIn(f'find {WORKSPACE_ROOT_IN_CONTAINER}', rewritten)
+        self.assertIn('2> /dev/null', rewritten)
+        self.assertIn('|| echo', rewritten)
+
+    def test_rewrite_shell_command_leaves_special_system_paths_intact(self):
+        rewritten = rewrite_shell_command_for_workspace(
+            'python -c "print(1)" > /dev/null; cat /proc/version; ls /sys',
+            WORKSPACE_ROOT_IN_CONTAINER,
+        )
+
+        self.assertIn('> /dev/null', rewritten)
+        self.assertIn('cat /proc/version', rewritten)
+        self.assertIn('ls /sys', rewritten)
