@@ -37,7 +37,7 @@ services:
       EXEC_RUNNER_PORT: 8080
       EXEC_RUNNER_PROXY_PORT: 8091
       EXEC_RUNNER_STATE_ROOT: /var/lib/nova-exec-runner
-      EXEC_RUNNER_SANDBOX_NETWORK: exec-sandbox-net
+      EXEC_RUNNER_SANDBOX_NETWORK: ${COMPOSE_PROJECT_NAME:-nova}_exec-sandbox-net
       EXEC_RUNNER_SANDBOX_IMAGE: ${EXEC_RUNNER_SANDBOX_IMAGE:-amairesse/nova:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -61,3 +61,4 @@ volumes:
 
 networks:
   exec-sandbox-net:
+    name: ${COMPOSE_PROJECT_NAME:-nova}_exec-sandbox-net

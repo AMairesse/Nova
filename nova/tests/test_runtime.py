@@ -315,6 +315,20 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
         return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
+    def test_vfs_read_bytes_supports_skill_files(self):
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={"calendar.md": "# Calendar\n\nUse `calendar accounts`.\n"},
+        )
+
+        content, mime_type = async_to_sync(vfs.read_bytes)("/skills/calendar.md")
+
+        self.assertEqual(content, b"# Calendar\n\nUse `calendar accounts`.\n")
+        self.assertEqual(mime_type, "text/markdown")
+
     def _build_executor_for_thread(
         self,
         thread,

@@ -639,6 +639,11 @@ class VirtualFileSystem:
 
     async def read_bytes(self, path: str) -> tuple[bytes, str]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
+        if normalized.startswith("/skills/"):
+            skill_name = posixpath.basename(normalized)
+            if skill_name not in self.skill_registry:
+                raise VFSError(f"Skill file not found: {normalized}")
+            return self.skill_registry[skill_name].encode("utf-8"), "text/markdown"
         if self._is_memory_enabled_path(normalized):
             try:
                 entry = await read_memory_document(user=self.user, path=normalized)
