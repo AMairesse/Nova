@@ -17,7 +17,7 @@ from nova.api_tools import service as api_tools_service
 from nova.caldav import service as caldav_service
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
 from nova.exec_runner import service as exec_runner_service
-from nova.memory.service import MEMORY_ROOT, search_memory_items
+from nova.memory.service import MEMORY_ROOT
 from nova.mcp import service as mcp_service
 from nova.models.Thread import Thread
 from nova.plugins.mail import service as mail_service
@@ -29,6 +29,7 @@ from nova.runtime.commands import (
 )
 from nova.runtime.commands import filesystem as filesystem_commands
 from nova.runtime.commands import integrations as integration_commands
+from nova.runtime.commands import memory as memory_commands
 from nova.runtime.commands import web as web_commands
 from nova.runtime.commands import webapp as webapp_commands
 from nova.runtime.capabilities import TerminalCapabilities
@@ -1636,69 +1637,8 @@ class TerminalExecutor:
         )
         return self._format_history_get_payload(payload)
 
-    @staticmethod
-    def _format_memory_search_payload(payload: dict) -> str:
-        results = list(payload.get("results") or [])
-        notes = list(payload.get("notes") or [])
-        if not results:
-            if notes:
-                return "\n".join(str(note) for note in notes)
-            return "No matching memory entries found."
-
-        lines: list[str] = []
-        for index, result in enumerate(results, start=1):
-            section_heading = str(result.get("section_heading") or "").strip()
-            label = str(result.get("path") or "?")
-            if section_heading:
-                label = f"{label} :: {section_heading}"
-            lines.append(f"{index}. {label}")
-            lines.append(str(result.get("snippet") or "").strip() or "(empty snippet)")
-        if notes:
-            lines.append("")
-            lines.extend(f"Note: {note}" for note in notes)
-        return "\n".join(lines).strip()
-
     async def _cmd_memory(self, args: list[str]) -> str:
-        if not self.capabilities.has_memory:
-            raise TerminalCommandError("Memory commands are not enabled for this agent.")
-        if not args or str(args[0] or "").strip().lower() != "search":
-            raise TerminalCommandError(
-                "Usage: memory search <query> [--limit N] [--under /memory/path]"
-            )
-
-        query_tokens: list[str] = []
-        under = None
-        limit = 10
-        index = 1
-        while index < len(args):
-            token = args[index]
-            if token == "--limit":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after --limit")
-                limit = self._parse_int_flag("--limit", args[index])
-            elif token == "--under":
-                index += 1
-                if index >= len(args):
-                    raise TerminalCommandError("Missing value after --under")
-                under = normalize_vfs_path(args[index], cwd=self.vfs.cwd)
-            else:
-                query_tokens.append(token)
-            index += 1
-
-        query = " ".join(query_tokens).strip()
-        if not query:
-            raise TerminalCommandError(
-                "Usage: memory search <query> [--limit N] [--under /memory/path]"
-            )
-
-        payload = await search_memory_items(
-            query=query,
-            user=self.vfs.user,
-            limit=limit,
-            under=under,
-        )
-        return self._format_memory_search_payload(payload)
+        return await memory_commands.cmd_memory(self, args)
 
     async def _cmd_mcp(
         self,
