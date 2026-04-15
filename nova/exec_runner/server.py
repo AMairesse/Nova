@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import os
 import secrets
@@ -151,6 +152,16 @@ def build_app() -> Starlette:
     backend = DockerExecRunnerBackend(config)
     proxy_port = max(int(os.getenv("EXEC_RUNNER_PROXY_PORT", "8091")), 1)
     proxy_server = ExecRunnerProxyServer(ExecRunnerProxyConfig(port=proxy_port))
+
+    @asynccontextmanager
+    async def _lifespan(app: Starlette):
+        await app.state.backend.initialize()
+        await app.state.proxy_server.start()
+        try:
+            yield
+        finally:
+            await app.state.proxy_server.close()
+
     app = Starlette(
         debug=False,
         routes=[
@@ -158,19 +169,11 @@ def build_app() -> Starlette:
             Route("/v1/sessions/exec", _exec, methods=["POST"]),
             Route("/v1/sessions/{session_id}", _delete_session, methods=["DELETE"]),
         ],
+        lifespan=_lifespan,
     )
     app.state.backend = backend
     app.state.shared_token = config.shared_token
     app.state.proxy_server = proxy_server
-
-    @app.on_event("startup")
-    async def _startup() -> None:
-        await backend.initialize()
-        await proxy_server.start()
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await proxy_server.close()
 
     return app
 
