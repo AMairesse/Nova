@@ -27,6 +27,7 @@ class CatalogBackendFamily:
     subtype: str
     default_backend: Tool | None
     custom_backends: list[Tool]
+    allow_custom_backends: bool
 
 
 def _plugin_metadata_for_subtype(subtype: str) -> dict:
@@ -48,7 +49,7 @@ def _default_backend_name(subtype: str) -> str:
     if subtype == "searxng":
         return "System - SearXNG"
     if subtype == "code_execution":
-        return "System - Code Execution"
+        return "System - Python"
     plugin = get_plugin("search" if subtype == "searxng" else "python")
     label = plugin.label if plugin is not None else subtype
     return f"Local Nova {label}"
@@ -247,23 +248,18 @@ def sync_search_system_backend() -> Tool | None:
 
 
 def sync_python_system_backend() -> Tool | None:
-    judge0_url = settings.JUDGE0_SERVER_URL
     tool = _get_system_builtin_tool("code_execution")
 
-    if judge0_url:
+    if settings.EXEC_RUNNER_ENABLED:
         if tool is None:
             tool = Tool.objects.create(
                 user=None,
                 name=_default_backend_name("code_execution"),
-                description="Default local Judge0 backend managed by Nova.",
+                description="Default local Python capability managed by Nova.",
                 tool_type=Tool.ToolType.BUILTIN,
                 tool_subtype="code_execution",
                 python_path=_builtin_python_path("code_execution"),
             )
-        _sync_default_credential(
-            tool,
-            config={"judge0_url": judge0_url},
-        )
         return tool
 
     if tool is not None and not tool.agents.exists():
@@ -513,6 +509,7 @@ def build_tools_page_catalog(user, *, tools: list[Tool] | None = None) -> dict:
                     item for item in tools_by_subtype.get(subtype, [])
                     if item.user_id == user.id
                 ],
+                allow_custom_backends=bool(plugin.show_in_add_flow) if plugin is not None else False,
             )
         )
 

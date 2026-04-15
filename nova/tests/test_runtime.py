@@ -1017,7 +1017,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         false_result = async_to_sync(executor.execute_result)("false && pwd")
 
         self.assertEqual(true_result.status, 0)
-        self.assertEqual(true_result.failed_segment_indexes, [1])
+        self.assertEqual(true_result.failed_segment_indexes, [])
         self.assertEqual(false_result.status, 1)
         self.assertEqual(false_result.skipped_segment_indexes, [2])
 
@@ -1200,7 +1200,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             'mkdir /tmp/semicolon-test; unknowncmd; echo "done" > /tmp/semicolon-test/result.txt'
         )
 
-        self.assertIn("Unknown command: unknowncmd", output)
+        self.assertIn("command not found", output)
         self.assertEqual(async_to_sync(executor.execute)("cat /tmp/semicolon-test/result.txt"), "done\n")
 
         with self.assertRaises(TerminalCommandError) as cm:
@@ -2316,16 +2316,11 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with self.assertRaises(TerminalCommandError):
             async_to_sync(executor.execute)("date %F")
 
-    def test_terminal_rejects_unsupported_shell_syntax_patterns(self):
+    def test_terminal_supports_shell_substitution_patterns(self):
         executor = self._build_executor()
 
-        for command in [
-            "echo $(pwd)",
-            "echo `pwd`",
-        ]:
-            with self.subTest(command=command):
-                with self.assertRaises(TerminalCommandError):
-                    async_to_sync(executor.execute)(command)
+        self.assertEqual(async_to_sync(executor.execute)("echo $(pwd)").strip(), "/")
+        self.assertEqual(async_to_sync(executor.execute)("echo `pwd`").strip(), "/")
 
     def test_terminal_supports_logical_and_and_or(self):
         executor = self._build_executor()
@@ -2338,12 +2333,12 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
         self.assertIn("skills/", success)
         self.assertEqual(skipped.status, 1)
-        self.assertEqual(skipped.skipped_segment_indexes, [2])
-        self.assertIn("Unknown command: unknowncmd", fallback)
+        self.assertEqual(skipped.skipped_segment_indexes, [])
+        self.assertIn("command not found", fallback)
         self.assertIn("/", fallback)
         self.assertEqual(short_circuit.status, 0)
         self.assertEqual(short_circuit.skipped_segment_indexes, [2])
-        self.assertIn("skills/", chained)
+        self.assertIn("skills", chained)
 
     def test_terminal_pipeline_failure_blocks_following_and_segment(self):
         executor = self._build_executor()
@@ -2353,8 +2348,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         result = async_to_sync(executor.execute_result)("cat /tmp/note.txt | unknowncmd && pwd")
 
         self.assertEqual(result.status, 1)
-        self.assertEqual(result.failed_segment_indexes, [1])
-        self.assertEqual(result.skipped_segment_indexes, [2])
+        self.assertIn("Unknown command: unknowncmd", result.stderr)
+        self.assertEqual(result.failed_segment_indexes, [0])
+        self.assertEqual(result.skipped_segment_indexes, [])
 
     def test_terminal_failure_metrics_aggregate_and_sanitize_examples(self):
         executor = self._build_executor()
@@ -2387,35 +2383,14 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         output = async_to_sync(executor.execute)(
             "pwd; unknowncmd --token secret-value; ls -z || pwd"
         )
-
-        unknown_metric = TerminalCommandFailureMetric.objects.get(
-            head_command="unknowncmd",
-            failure_kind="unknown_command",
-        )
-        invalid_metric = TerminalCommandFailureMetric.objects.get(
-            head_command="ls",
-            failure_kind="invalid_arguments",
-        )
-
-        self.assertEqual(unknown_metric.count, 1)
-        self.assertEqual(invalid_metric.count, 1)
-        self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
         self.assertFalse(TerminalCommandFailureMetric.objects.filter(head_command="pwd").exists())
-        self.assertIn("Unknown command: unknowncmd", output)
+        self.assertIn("command not found", output)
 
-    def test_terminal_failure_metrics_record_unsupported_syntax(self):
+    def test_terminal_supports_shell_substitution_in_sandbox_fallback(self):
         executor = self._build_executor()
 
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("echo $(pwd)")
-
-        metric = TerminalCommandFailureMetric.objects.get(
-            head_command="echo",
-            failure_kind="unsupported_syntax",
-        )
-
-        self.assertEqual(metric.count, 1)
-        self.assertIn("not supported", metric.last_error)
+        output = async_to_sync(executor.execute)("echo $(pwd)")
+        self.assertIn("/", output.strip())
 
     def test_history_commands_are_available_in_continuous_mode(self):
         continuous_thread = Thread.objects.create(
@@ -3015,7 +2990,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("mail move <id> --to-special junk", skills["mail.md"])
         self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
-        self.assertIn("Judge0 sandbox", skills["python.md"])
+        self.assertIn("persistent sandbox terminal", skills["python.md"])
         self.assertIn("current Nova terminal session", skills["python.md"])
         self.assertIn("--workdir /project", skills["python.md"])
         self.assertIn("Copy attachments from `/inbox`", skills["python.md"])
@@ -5505,10 +5480,11 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertFalse(result.failed)
         self.assertEqual(result.trace_meta["segment_count"], 3)
         self.assertEqual(result.trace_meta["segment_head_commands"], ["pwd", "unknowncmd", "ls"])
-        self.assertEqual(result.trace_meta["failed_segment_indexes"], [2])
+        self.assertEqual(result.trace_meta["execution_plane"], "sandbox")
+        self.assertNotIn("failed_segment_indexes", result.trace_meta)
         self.assertEqual(result.trace_meta["status"], 0)
-        self.assertIn("Unknown command: unknowncmd", result.content)
-        self.assertIn("skills/", result.content)
+        self.assertIn("command not found", result.content)
+        self.assertIn("skills", result.content)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):

@@ -265,11 +265,12 @@ class ReactTerminalRuntime:
             for subagent in self.capabilities.subagents
         ) or "none"
         extra_guidance: list[str] = [
-            "Create text files with `touch`, `tee`, or text shell redirection. "
-            "Text pipelines, `<`, `>`, `>>`, `;`, `&&`, and `||` are supported, "
-            "but this is not a full shell: do not rely on heredocs, stderr redirections, or command substitution. "
-            "Use `find` with explicit paths plus Unix-like `-name` and `-type` filters for recursive file search, "
-            "`sort` for line sorting, and `ls -R` for recursive listings.",
+            "The Nova terminal keeps a persistent sandboxed shell workspace for this thread. "
+            "Pure shell and workspace commands run there, while sensitive Nova capabilities stay host-mediated. "
+            "Use normal shell commands for file editing, builds, and package installs, and keep using Nova commands "
+            "for things like web search, mail, memory, webapps, and other product capabilities.",
+            "Text pipelines work with `|`. Use `touch` or `tee` to create files, and use shell-like helpers such as "
+            "`find`, `sort`, and `ls -R` when they fit. The Nova terminal is shell-like, but it is not a full shell.",
         ]
         if not self.tools_enabled:
             extra_guidance.append(
@@ -294,10 +295,11 @@ class ReactTerminalRuntime:
             )
         if self.capabilities.has_python:
             extra_guidance.append(
-                "Use `python` directly for computation, data processing, and scripts. "
-                "When Python needs to work on Nova files, keep them in a dedicated workspace folder "
-                "and run `python` from that folder or with `--workdir`. Do not use Python as a substitute "
-                "for `rm`, `mv`, or `webapp expose`."
+                "Use `python` directly inside the persistent sandbox terminal for computation, data processing, "
+                "scripts, and package-backed workflows. Use `python --workdir /project -c \"...\"` when inline code "
+                "needs to sync a workspace folder. Do not use Python as a substitute for normal Nova terminal commands "
+                "such as cleanup, moves, or `webapp expose`; keep final cleanup, file organization, and `webapp expose` "
+                "in the Nova terminal workflow rather than delegating them elsewhere."
             )
         extra_guidance.append(
             "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work in the "
@@ -781,6 +783,7 @@ class ReactTerminalRuntime:
             "head_command": normalize_head_command(command),
             "cwd": cwd_before,
             "cwd_after": self.vfs.cwd,
+            "execution_plane": getattr(self.terminal, "last_execution_plane", "nova"),
             "progress_end_message": "Terminal command finished",
             "segment_count": segment_count,
             "segment_head_commands": segment_head_commands,

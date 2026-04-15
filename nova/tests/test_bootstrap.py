@@ -26,7 +26,7 @@ class BootstrapSkillsTests(TestCase):
         )
         create_tool(
             self.user,
-            name="Judge0",
+            name="Python",
             tool_subtype="code_execution",
             python_path="nova.plugins.python",
         )

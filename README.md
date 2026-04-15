@@ -96,7 +96,7 @@ Nova supports:
 - backend-backed capabilities for search and Python, with deployment defaults and optional custom backends
 - MCP servers with optional managed OAuth
 - custom API services defined through `APIToolOperation`
-- optional deployment services such as SearXNG and Judge0 when enabled in Docker
+- optional deployment services such as SearXNG, Ollama, and llama.cpp when enabled in Docker
 
 ### Web Apps
 

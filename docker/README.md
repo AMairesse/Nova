@@ -7,7 +7,6 @@ Using Docker Compose is the recommended way to run Nova (including development).
 ```
 Nova
 ├─ docker/
-|  ├─ judge0/
 |  ├─ nginx/
 |  ├─ ollama/
 |  ├─ searxng/
@@ -47,10 +46,6 @@ Use one of these values in `docker/.env`:
   - `COMPOSE_FILE=docker-compose.yml`
 - Base + SearXNG:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml`
-- Base + Judge0:
-  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-judge0.yml`
-- Base + SearXNG + Judge0:
-  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml:docker-compose.add-judge0.yml`
 - Base + Ollama:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-ollama.yml`
 - Base + llama.cpp:
@@ -110,10 +105,6 @@ newer dynamic upstream configuration.
   - Enables the deployment-default `Search` backend in Nova.
   - Users can still add their own custom remote search backends.
   - Requires `SEARXNG_SECRET` in `.env`.
-- `docker-compose.add-judge0.yml`
-  - Enables the deployment-default `Python` backend in Nova.
-  - Users can still add their own custom remote Python backends.
-  - Requires host cgroups configuration (see Judge0 upstream docs for v1.13+).
 - `docker-compose.add-ollama.yml`
   - Starts Ollama and exposes a system provider in Nova.
 - `docker-compose.add-llamacpp.yml`
@@ -186,3 +177,11 @@ Optional global settings:
 
 - `USERFILE_EXPIRATION_DAYS`
 - `DEBUG`
+- `EXEC_RUNNER_ENABLED`
+- `EXEC_RUNNER_ROOT`
+- `EXEC_RUNNER_TTL_SECONDS`
+- `EXEC_RUNNER_SHELL`
+
+Notes:
+
+- Nova's persistent Python sandbox terminal is included in the base stack; no extra compose file is required for it.

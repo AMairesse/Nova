@@ -33,7 +33,7 @@ from nova.models.APIToolOperation import APIToolOperation
 from nova.models.Tool import (
     Tool,
     ToolCredential,
-    check_and_create_judge0_tool,
+    check_and_create_python_tool,
     check_and_create_searxng_tool,
 )
 from nova.plugins import get_plugin_for_builtin_subtype
@@ -121,7 +121,7 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
     def get_queryset(self):
         ensure_standard_capability_tools()
         check_and_create_searxng_tool()
-        check_and_create_judge0_tool()
+        check_and_create_python_tool()
 
         # Limit tools to current user + system tools
         base_qs = Tool.objects.filter(
@@ -582,22 +582,6 @@ class _BuiltInConfigForm(SecretPreserveMixin, forms.Form):
             if cleaned.get("searxng_url") and duplicate_qs.exists():
                 raise forms.ValidationError(
                     _("A search backend with the same server URL and result limit already exists.")
-                )
-
-        if self.tool.tool_subtype == "code_execution":
-            duplicate_qs = ToolCredential.objects.filter(
-                user=self.user,
-                tool__user=self.user,
-                tool__tool_type=Tool.ToolType.BUILTIN,
-                tool__tool_subtype="code_execution",
-                config__judge0_url=cleaned.get("judge0_url"),
-                config__timeout=cleaned.get("timeout"),
-            )
-            if self.tool.pk:
-                duplicate_qs = duplicate_qs.exclude(tool_id=self.tool.pk)
-            if cleaned.get("judge0_url") and duplicate_qs.exists():
-                raise forms.ValidationError(
-                    _("A Python backend with the same Judge0 server settings already exists.")
                 )
 
         return cleaned

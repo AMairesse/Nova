@@ -8,14 +8,14 @@ def _skill_docs(_capabilities, _thread_mode):
     return {
         "python.md": """# Python
 
-Python execution runs in a Judge0 sandbox.
+Python execution runs inside Nova's persistent sandbox terminal.
 
 Use it for computation, data processing, scripts, and code-driven file transformations.
 Python is meant to be used directly from the current Nova terminal session.
 When you want Python to work on Nova files, keep them in a dedicated workspace folder
-and run Python from there. Python syncs created and modified files back from that
-workspace, but it does not replace normal terminal commands for cleanup, moves, or
-webapp publishing, and it does not own the final webapp lifecycle for the thread.
+and run Python from there. The sandbox terminal syncs workspace changes back to the
+thread filesystem, but Python does not replace normal terminal commands for cleanup,
+moves, or webapp publishing, and it does not own the final webapp lifecycle for the thread.
 
 Available forms:
 
@@ -26,8 +26,8 @@ Available forms:
 - `python --output /result.txt /script.py`
 - `python --output /result.txt -c "print('hello')"`
 
-`python -c` is stateless by default. Add `--workdir` when Python must read or write
-Nova files inside a real workspace.
+`python -c` runs from the current sandbox working directory unless you override it with
+`--workdir`.
 
 Copy attachments from `/inbox` or `/history` into a normal workspace folder before
 using them from Python.
@@ -48,23 +48,19 @@ PLUGIN = InternalPluginDescriptor(
     builtin_subtypes=("code_execution",),
     command_families=("python",),
     settings_metadata={
-        "name": "Code Execution",
-        "description": "Execute code snippets securely using Judge0 server",
-        "requires_config": True,
-        "config_fields": [
-            {"name": "judge0_url", "type": "string", "label": _("Judge0 Server URL"), "required": True},
-            {"name": "api_key", "type": "string", "label": _("Judge0 API Key (optional)"), "required": False},
-            {"name": "timeout", "type": "integer", "label": _("Default execution timeout (seconds)"), "required": False, "default": 5},
-        ],
+        "name": "Python",
+        "description": "Run Python scripts inside Nova's persistent sandbox terminal.",
+        "requires_config": False,
+        "config_fields": [],
     },
     runtime_capability_resolver=resolve_single_builtin_tool("code_execution"),
     skill_docs_provider=_skill_docs,
-    test_connection_handler="nova.plugins.python.service.test_judge0_access",
+    test_connection_handler="nova.plugins.python.service.test_exec_runner_access",
     python_path="nova.plugins.python",
     legacy_python_paths=("nova.plugins.python",),
     catalog_section="backend_capabilities",
     selection_mode="single_backend",
-    provisioning_sources=("deployment_default", "user_connection"),
-    show_in_add_flow=True,
-    add_label="Python backend",
+    provisioning_sources=("system_default",),
+    show_in_add_flow=False,
+    add_label="Python",
 )

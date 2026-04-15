@@ -72,8 +72,8 @@ Backend-backed capabilities:
   - deployment default when SearXNG is enabled in Docker
   - optional custom backends per user
 - `Python`
-  - deployment default when Judge0 is enabled in Docker
-  - optional custom backends per user
+  - provided locally by Nova's persistent sandbox terminal
+  - available as a deployment default without extra service setup
 
 Connections you add explicitly:
 

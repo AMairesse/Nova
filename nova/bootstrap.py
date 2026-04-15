@@ -278,7 +278,7 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     """
     Ensure the baseline builtin tools exist:
     - date, memory, browser
-    - plus discover SearXNG and Judge0 when available
+    - plus discover SearXNG and the local Python capability when available
 
     Returns a dict mapping logical names to Tool instances.
     """
@@ -304,9 +304,9 @@ def ensure_common_tools(user, summary: BootstrapSummary) -> Dict[str, Tool]:
     if tools["searxng"]:
         summary.reused_tools.append(tools["searxng"].name)
 
-    tools["judge0"] = get_preferred_backend_tool(user, "code_execution")
-    if tools["judge0"]:
-        summary.reused_tools.append(tools["judge0"].name)
+    tools["python"] = get_preferred_backend_tool(user, "code_execution")
+    if tools["python"]:
+        summary.reused_tools.append(tools["python"].name)
 
     return tools
 
@@ -565,7 +565,7 @@ def ensure_nova_agent(
         summary=summary,
         name="Nova",
         required_tools=["memory", "date_time"],
-        extra_tools=["webapp", "judge0"],
+        extra_tools=["webapp", "python"],
         system_prompt=nova_prompt,
         recursion_limit=25,
         is_tool=False,

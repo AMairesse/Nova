@@ -16,6 +16,7 @@ from django.utils import timezone
 from nova.api_tools import service as api_tools_service
 from nova.caldav import service as caldav_service
 from nova.continuous.tools.conversation_tools import conversation_get, conversation_search
+from nova.exec_runner import service as exec_runner_service
 from nova.memory.service import MEMORY_ROOT, search_memory_items
 from nova.mcp import service as mcp_service
 from nova.models.Thread import Thread
@@ -23,6 +24,7 @@ from nova.plugins.mail import service as mail_service
 from nova.plugins.python import service as python_service
 from nova.runtime.capabilities import TerminalCapabilities
 from nova.runtime.vfs import HISTORY_ROOT, INBOX_ROOT, VFSError, VirtualFileSystem, normalize_vfs_path
+from nova.webdav.service import WEBDAV_VFS_ROOT
 from nova.webapp import service as webapp_service
 from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import download_http_file
@@ -32,6 +34,7 @@ from .terminal_metrics import (
     FAILURE_KIND_COMMAND_ERROR,
     FAILURE_KIND_INVALID_ARGUMENTS,
     FAILURE_KIND_PARSE_ERROR,
+    FAILURE_KIND_UNKNOWN_COMMAND,
     FAILURE_KIND_UNSUPPORTED_SYNTAX,
     classify_terminal_failure,
     normalize_head_command,
@@ -70,6 +73,7 @@ BROWSER_DEFAULT_ELEMENT_ATTRIBUTES = (
     "title",
     "innerText",
 )
+_SANDBOX_COMMAND_NOT_FOUND_RE = re.compile(r"(?:^|\s)(?P<command>[A-Za-z0-9._-]+): command not found", re.IGNORECASE)
 
 
 @dataclass(slots=True, frozen=True)
@@ -220,6 +224,65 @@ class ShellExecutionResult:
 
 
 class TerminalExecutor:
+    NOVA_BUILTIN_COMMANDS = {
+        "api",
+        "browse",
+        "calendar",
+        "cat",
+        "cd",
+        "cp",
+        "curl",
+        "date",
+        "echo",
+        "false",
+        "file",
+        "find",
+        "grep",
+        "head",
+        "history",
+        "la",
+        "ll",
+        "ls",
+        "mail",
+        "mcp",
+        "memory",
+        "mkdir",
+        "mv",
+        "pwd",
+        "printf",
+        "python",
+        "rm",
+        "rmdir",
+        "search",
+        "sort",
+        "tail",
+        "tee",
+        "touch",
+        "true",
+        "wc",
+        "webapp",
+        "wget",
+    }
+    HOST_MEDIATED_COMMANDS = {
+        "api",
+        "browse",
+        "calendar",
+        "curl",
+        "date",
+        "history",
+        "mail",
+        "mcp",
+        "memory",
+        "python",
+        "search",
+        "webapp",
+        "wget",
+    }
+    HOST_MEDIATED_PATH_PREFIXES = (
+        f"{MEMORY_ROOT}/",
+        f"{WEBDAV_VFS_ROOT}/",
+    )
+
     def __init__(self, *, vfs: VirtualFileSystem, capabilities: TerminalCapabilities):
         self.vfs = vfs
         self.capabilities = capabilities
@@ -229,6 +292,117 @@ class TerminalExecutor:
         self._browser_session: BrowserSession | None = None
         self.realtime_task_id = None
         self.realtime_channel_layer = None
+        self.last_execution_plane = "nova"
+
+    def _iter_shell_heads_for_routing(self, raw: str) -> list[str]:
+        segments = self._split_shell_segments(str(raw or "").strip())
+        heads: list[str] = []
+        for _operator, segment in segments:
+            try:
+                lexer = shlex.shlex(segment, posix=True, punctuation_chars="|<>")
+                lexer.whitespace_split = True
+                lexer.commenters = ""
+                tokens = list(lexer)
+            except ValueError:
+                return []
+            stage: list[str] = []
+            for token in tokens:
+                if token == "|":
+                    if stage:
+                        heads.append(str(stage[0] or "").strip())
+                    stage = []
+                    continue
+                if token in {"<", ">", ">>"}:
+                    stage = list(stage)
+                    continue
+                stage.append(token)
+            if stage:
+                heads.append(str(stage[0] or "").strip())
+        return [head for head in heads if head]
+
+    def _command_uses_host_mediated_paths(self, raw: str) -> bool:
+        text = str(raw or "")
+        if MEMORY_ROOT in text or WEBDAV_VFS_ROOT in text:
+            return True
+        return False
+
+    def _should_route_command_to_sandbox(self, raw: str) -> bool:
+        if not exec_runner_service.exec_runner_is_enabled():
+            return False
+        if self._command_uses_host_mediated_paths(raw):
+            return False
+        heads = self._iter_shell_heads_for_routing(raw)
+        if not heads:
+            return False
+        if any(head in self.HOST_MEDIATED_COMMANDS for head in heads):
+            return False
+        if any(head not in self.NOVA_BUILTIN_COMMANDS for head in heads):
+            return True
+        try:
+            self._parse_shell_command(raw)
+        except TerminalCommandError as exc:
+            if str(getattr(exc, "failure_kind", "") or "") in {
+                FAILURE_KIND_PARSE_ERROR,
+                FAILURE_KIND_UNSUPPORTED_SYNTAX,
+            }:
+                return True
+            return False
+        return False
+
+    @staticmethod
+    def _render_sandbox_display_text(result: exec_runner_service.SandboxShellResult) -> str:
+        stdout = str(result.stdout or "")
+        stderr = str(result.stderr or "").rstrip("\n")
+        if not stderr:
+            return stdout
+        if stdout and not stdout.endswith("\n"):
+            stdout = f"{stdout}\n"
+        if "\n" in stderr:
+            return f"{stdout}stderr:\n{stderr}"
+        return f"{stdout}stderr: {stderr}"
+
+    async def _execute_sandbox_result(self, command: str) -> ShellExecutionResult:
+        sandbox_result, _sync_meta = await exec_runner_service.execute_sandbox_shell_command(
+            vfs=self.vfs,
+            command=command,
+        )
+        normalized_status = 0 if int(sandbox_result.status or 0) == 0 else 1
+        head_command = normalize_head_command(command)
+        stderr_text = sandbox_result.stderr
+        message = stderr_text or sandbox_result.stdout or "Command failed."
+        failure_kind = ""
+        if normalized_status != 0:
+            if "command not found" in str(message).lower():
+                failure_kind = FAILURE_KIND_UNKNOWN_COMMAND
+                unknown_match = _SANDBOX_COMMAND_NOT_FOUND_RE.search(str(message))
+                missing_command = unknown_match.group("command") if unknown_match else head_command
+                stderr_text = f"Unknown command: {missing_command}" if missing_command else "Unknown command."
+            else:
+                failure_kind = classify_terminal_failure(message)
+        segment = ShellSegmentResult(
+            segment_index=0,
+            command=str(command or "").strip(),
+            head_command=head_command,
+            stdout=sandbox_result.stdout,
+            stderr=stderr_text,
+            status=normalized_status,
+            failure_kind=failure_kind,
+            display_text=self._render_sandbox_display_text(
+                exec_runner_service.SandboxShellResult(
+                    stdout=sandbox_result.stdout,
+                    stderr=stderr_text,
+                    status=sandbox_result.status,
+                    cwd_after=sandbox_result.cwd_after,
+                )
+            ),
+        )
+        return ShellExecutionResult(
+            stdout=sandbox_result.stdout,
+            stderr=stderr_text,
+            status=normalized_status,
+            failure_kind=failure_kind,
+            segments=[segment],
+        )
 
     def _validate_shell_operators(self, raw: str) -> None:
         in_single = False
@@ -797,6 +971,13 @@ class TerminalExecutor:
     async def execute_result(self, command: str) -> ShellExecutionResult:
         self.vfs.remember_command(command)
         try:
+            if self._should_route_command_to_sandbox(command):
+                self.last_execution_plane = "sandbox"
+                result = await self._execute_sandbox_result(command)
+                if result.segment_failures:
+                    await self._record_segment_failures(result.segment_failures)
+                return result
+            self.last_execution_plane = "nova"
             parsed = self._parse_shell_command(command)
             result = await self._run_shell_command_result(parsed)
             if result.segment_failures:
@@ -4215,19 +4396,18 @@ class TerminalExecutor:
     async def _cmd_python_result(self, args: list[str]) -> ShellStageResult:
         if not self.capabilities.has_python:
             raise TerminalCommandError("Python execution is not enabled for this agent.")
-        tool = self.capabilities.code_execution_tool
-        config = await python_service.get_judge0_config(tool)
-        host = config["url"]
-        timeout = int(config.get("timeout") or 5)
-
         if not args:
             raise TerminalCommandError(self._python_usage())
 
         parsed = self._parse_python_command(args)
         try:
-            request, workdir = await self._build_python_execution_request(parsed, timeout=timeout)
-            result = await python_service.execute_python_request(host, request)
-        except ValueError as exc:
+            request, workdir = await self._build_python_execution_request(parsed, timeout=5)
+            context_tokens = python_service.push_runtime_context(self.vfs, workdir or self.vfs.cwd)
+            try:
+                result = await python_service.execute_python_request("", request)
+            finally:
+                python_service.pop_runtime_context(context_tokens)
+        except (ValueError, exec_runner_service.ExecRunnerError) as exc:
             raise TerminalCommandError(str(exc)) from exc
 
         visible_text = self._format_python_result_text(result)

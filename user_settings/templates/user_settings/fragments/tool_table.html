@@ -52,10 +52,12 @@
                 <h6 class="card-title mb-1">{{ family.label }}</h6>
                 <p class="card-text text-muted small mb-0">{{ family.description }}</p>
               </div>
-              <a href="{% url 'user_settings:tool-add' %}?from=tools&kind={{ family.plugin_id }}"
-                 class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-plus-lg me-1"></i>{% trans "Add custom backend" %}
-              </a>
+              {% if family.allow_custom_backends %}
+                <a href="{% url 'user_settings:tool-add' %}?from=tools&kind={{ family.plugin_id }}"
+                   class="btn btn-sm btn-outline-primary">
+                  <i class="bi bi-plus-lg me-1"></i>{% trans "Add custom backend" %}
+                </a>
+              {% endif %}
             </div>
 
             <div class="small mb-3">
@@ -99,7 +101,11 @@
                 </table>
               </div>
             {% else %}
-              <p class="small text-muted mb-0">{% trans "No custom backends configured yet." %}</p>
+              {% if family.allow_custom_backends %}
+                <p class="small text-muted mb-0">{% trans "No custom backends configured yet." %}</p>
+              {% else %}
+                <p class="small text-muted mb-0">{% trans "Custom backends are not available for this capability." %}</p>
+              {% endif %}
             {% endif %}
           </div>
         </div>

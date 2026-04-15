@@ -2,7 +2,7 @@
 from django.core.exceptions import ValidationError
 from django.test import override_settings
 
-from nova.models.Tool import Tool, ToolCredential, check_and_create_searxng_tool, check_and_create_judge0_tool
+from nova.models.Tool import Tool, ToolCredential, check_and_create_python_tool, check_and_create_searxng_tool
 from nova.tests.base import BaseTestCase
 from nova.tests.factories import create_provider, create_agent, create_tool
 
@@ -254,106 +254,78 @@ class ToolModelsTest(BaseTestCase):
         self.assertTrue(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
                                             tool_subtype='searxng').exists())
 
-    @override_settings(
-        JUDGE0_SERVER_URL='http://judge0:2358',
-    )
-    def test_check_and_create_judge0_tool_simple_create(self):
+    @override_settings(EXEC_RUNNER_ENABLED=True)
+    def test_check_and_create_python_tool_simple_create(self):
         """
-        Test system Judge0 tool creation function for basic creation of the system tool.
+        Test system Python capability creation for the local exec runner backend.
         """
-        # Call the function, should create the tool
-        check_and_create_judge0_tool()
+        check_and_create_python_tool()
 
-        tool = Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
-                                   tool_subtype='code_execution').first()
-        tool_credentials = ToolCredential.objects.filter(user=None, tool=tool).first()
+        tool = Tool.objects.filter(
+            user=None,
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype='code_execution',
+        ).first()
         self.assertIsNotNone(tool)
-        self.assertIsNotNone(tool_credentials)
-        self.assertEqual(tool.name, 'System - Code Execution')
-        self.assertEqual(tool_credentials.config['judge0_url'], 'http://judge0:2358')
-
-    @override_settings(
-        JUDGE0_SERVER_URL='http://judge0:2358',
-    )
-    def test_check_and_create_judge0_tool_create_credentials_only(self):
-        """
-        Test system Judge0 tool creation function for missing credentials on an already existing tool
-        """
-        # First create a system tool for judge0 but without credential
-        tool = Tool.objects.create(user=None, tool_type=Tool.ToolType.BUILTIN, tool_subtype='code_execution')
-
-        # Call the function, should create the missing credentials
-        check_and_create_judge0_tool()
-
-        tool_credentials = ToolCredential.objects.filter(user=None, tool=tool).first()
-        self.assertIsNotNone(tool_credentials)
-        self.assertEqual(tool_credentials.config['judge0_url'], 'http://judge0:2358')
-
-    @override_settings(
-        JUDGE0_SERVER_URL='http://judge0:2358',
-    )
-    def test_check_and_create_judge0_update_credentials(self):
-        """
-        Test system Judge0 tool creation function for update of credentials on an already existing tool
-        """
-        # First create a system tool for judge0 and it's credential
-        tool = Tool.objects.create(user=None, tool_type=Tool.ToolType.BUILTIN, tool_subtype='code_execution')
-        tool_credentials = ToolCredential.objects.create(user=None, tool=tool,
-                                                         config={'judge0_url': 'http://oldserver:8000'})
-
-        # Call the function, should update the credentials
-        check_and_create_judge0_tool()
-
-        tool_credentials.refresh_from_db()
-        self.assertEqual(tool_credentials.config['judge0_url'], 'http://judge0:2358')
-
-    @override_settings(
-        JUDGE0_SERVER_URL=None,
-    )
-    def test_check_and_create_judge0_delete_unused(self):
-        """
-        Test system Judge0 tool creation function for deletion of an unused tool
-        """
-        # First create a system tool for judge0
-        tool = Tool.objects.create(user=None, tool_type=Tool.ToolType.BUILTIN, tool_subtype='code_execution')
-        ToolCredential.objects.create(user=None, tool=tool,
-                                      config={'judge0_url': 'http://judge0:2358'})
-
-        # Call the function, should delete the tool
-        check_and_create_judge0_tool()
-
+        self.assertEqual(tool.name, 'System - Python')
         self.assertFalse(ToolCredential.objects.filter(user=None, tool=tool).exists())
-        self.assertFalse(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
-                                             tool_subtype='code_execution').exists())
 
-    @override_settings(
-        JUDGE0_SERVER_URL=None,
-    )
-    def test_check_and_create_judge0_delete_used(self):
+    @override_settings(EXEC_RUNNER_ENABLED=True)
+    def test_check_and_create_python_tool_reuses_existing_system_tool(self):
         """
-        Test system Judge0 tool creation function for deletion of an unused tool
+        Test that the system Python capability is reused instead of duplicated.
         """
-        # First create a system tool for judge0
-        tool = create_tool(None, name='System - Code Execution', tool_subtype="code_execution")
-        ToolCredential.objects.create(user=None, tool=tool,
-                                      config={'judge0_url': 'http://judge0:2358'})
+        tool = Tool.objects.create(
+            user=None,
+            name='System - Python',
+            description='Existing Python capability',
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype='code_execution',
+        )
 
-        # Create an agent using the tool
+        check_and_create_python_tool()
+
+        self.assertEqual(
+            Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN, tool_subtype='code_execution').count(),
+            1,
+        )
+        self.assertTrue(Tool.objects.filter(pk=tool.pk).exists())
+        self.assertFalse(ToolCredential.objects.filter(user=None, tool=tool).exists())
+
+    @override_settings(EXEC_RUNNER_ENABLED=False)
+    def test_check_and_create_python_tool_delete_unused(self):
+        """
+        Test that the system Python capability is removed when disabled and unused.
+        """
+        tool = Tool.objects.create(
+            user=None,
+            name='System - Python',
+            description='Local Python capability',
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype='code_execution',
+        )
+
+        check_and_create_python_tool()
+
+        self.assertFalse(Tool.objects.filter(pk=tool.pk).exists())
+
+    @override_settings(EXEC_RUNNER_ENABLED=False)
+    def test_check_and_create_python_tool_delete_used(self):
+        """
+        Test that the system Python capability is kept when disabled but already in use.
+        """
+        tool = create_tool(None, name='System - Python', tool_subtype="code_execution")
+
         provider = create_provider(self.user)
         agent = create_agent(self.user, provider)
         agent.tools.add(tool)
 
-        # Call the function, should not delete the tool
         with self.assertLogs("nova.models.Tool") as logger:
-            check_and_create_judge0_tool()
+            check_and_create_python_tool()
 
-        # Check that a warning was created
         self.assertListEqual(logger.output, [
-            """WARNING:nova.models.Tool:WARNING: JUDGE0_SERVER_URL not set, but a system
+            """WARNING:nova.models.Tool:WARNING: EXEC_RUNNER_ENABLED is false, but a system
                        tool exists and is being used by at least one agent."""
         ])
-
-        # Check that the tool and credentials still exists
-        self.assertTrue(ToolCredential.objects.filter(user=None, tool=tool).exists())
         self.assertTrue(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
                                             tool_subtype='code_execution').exists())

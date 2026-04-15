@@ -161,13 +161,17 @@ def check_and_create_searxng_tool():
             )
 
 
-def check_and_create_judge0_tool():
+def check_and_create_python_tool():
     from nova.plugins.catalog import sync_python_system_backend
 
     tool = sync_python_system_backend()
-    if not settings.JUDGE0_SERVER_URL:
+    if not settings.EXEC_RUNNER_ENABLED:
         if tool is not None and tool.agents.exists():
             logger.warning(
-                """WARNING: JUDGE0_SERVER_URL not set, but a system
+                """WARNING: EXEC_RUNNER_ENABLED is false, but a system
                        tool exists and is being used by at least one agent."""
             )
+
+
+def check_and_create_judge0_tool():
+    check_and_create_python_tool()
