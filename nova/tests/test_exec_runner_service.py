@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
+import io
 import json
 import os
 from pathlib import Path
+import tempfile
 from typing import Any, cast
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -13,6 +16,7 @@ from django.test import SimpleTestCase, override_settings
 from nova.exec_runner.docker_backend import (
     CACHE_ROOT_IN_CONTAINER,
     SESSION_ROOT_IN_CONTAINER,
+    SITECUSTOMIZE_PATH,
     WORKSPACE_ROOT_IN_CONTAINER,
     DockerExecRunnerBackend,
     ExecRunnerConfig,
@@ -22,6 +26,7 @@ from nova.exec_runner.docker_backend import (
 from nova.exec_runner import service as exec_runner_service
 from nova.exec_runner.shared import (
     ExecSessionSelector,
+    PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE,
     SandboxShellResult,
     rewrite_output_paths_from_workspace,
     rewrite_shell_command_for_workspace,
@@ -317,3 +322,94 @@ class ExecRunnerSharedTests(SimpleTestCase):
         )
 
         self.assertEqual(rendered, "/openrouter_activity_2026-04-15.csv\n")
+
+    def test_python_workspace_sitecustomize_maps_absolute_nova_paths(self):
+        originals = {
+            "open": builtins.open,
+            "io_open": io.open,
+            "listdir": os.listdir,
+            "access": os.access,
+            "stat": os.stat,
+            "exists": os.path.exists,
+        }
+        previous_root = os.environ.get("NOVA_WORKSPACE_ROOT")
+        restore = None
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace = Path(workspace_dir)
+            (workspace / "openrouter_activity_2026-04-15.csv").write_text(
+                "col\nvalue\n",
+                encoding="utf-8",
+            )
+            os.environ["NOVA_WORKSPACE_ROOT"] = workspace_dir
+            namespace: dict[str, Any] = {}
+            try:
+                exec(PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE, namespace, namespace)
+                restore = namespace.get("_restore_nova_workspace_shims")
+                self.assertIn(
+                    "openrouter_activity_2026-04-15.csv",
+                    os.listdir("/"),
+                )
+                with open("/openrouter_activity_2026-04-15.csv", encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "col\nvalue\n")
+                self.assertTrue(os.access("/openrouter_activity_2026-04-15.csv", os.R_OK))
+                self.assertTrue(os.path.exists("/openrouter_activity_2026-04-15.csv"))
+            finally:
+                if callable(restore):
+                    restore()
+                if previous_root is None:
+                    os.environ.pop("NOVA_WORKSPACE_ROOT", None)
+                else:
+                    os.environ["NOVA_WORKSPACE_ROOT"] = previous_root
+                self.assertIs(builtins.open, originals["open"])
+                self.assertIs(io.open, originals["io_open"])
+                self.assertIs(os.listdir, originals["listdir"])
+                self.assertIs(os.access, originals["access"])
+                self.assertIs(os.stat, originals["stat"])
+                self.assertIs(os.path.exists, originals["exists"])
+
+    def test_run_session_command_installs_python_workspace_sitecustomize(self):
+        backend = DockerExecRunnerBackend(
+            ExecRunnerConfig(
+                shared_token="runner-token",
+                state_root=Path("/tmp/nova-exec-runner-tests"),
+                session_ttl_seconds=3600,
+                sandbox_image="amairesse/nova:latest",
+                sandbox_network="nova_exec-sandbox-net",
+                sandbox_memory_limit_mb=1024,
+                sandbox_cpu_limit="1.0",
+                sandbox_pids_limit=256,
+                sandbox_no_new_privileges=True,
+                max_sync_bytes=50 * 1024 * 1024,
+                max_diff_bytes=50 * 1024 * 1024,
+                proxy_url="http://exec-runner:8091",
+            )
+        )
+        backend._load_persisted_env = AsyncMock(return_value={})
+        backend._write_text_into_container = AsyncMock()
+        backend._docker_exec_capture = AsyncMock(
+            return_value=("", "", 0)
+        )
+        backend._cleanup_processes = AsyncMock()
+        backend._read_text_from_container = AsyncMock(return_value=str(WORKSPACE_ROOT_IN_CONTAINER))
+
+        asyncio.run(
+            backend._run_session_command(
+                ExecSession(
+                    selector=ExecSessionSelector(user_id=1, thread_id=2, agent_id=3),
+                    container_name="nova-exec-test",
+                    volume_name="nova-exec-session-test",
+                    metadata_dir=Path("/tmp/nova-exec-runner-tests/sessions/test"),
+                    metadata_path=Path("/tmp/nova-exec-runner-tests/sessions/test/session.json"),
+                ),
+                command='python -c "print(1)"',
+                cwd="/",
+            )
+        )
+
+        await_calls = backend._write_text_into_container.await_args_list
+        self.assertGreaterEqual(len(await_calls), 2)
+        self.assertEqual(await_calls[0].args[1], SITECUSTOMIZE_PATH)
+        self.assertIn("_nova_install_python_workspace_shims", await_calls[0].args[2])
+        command_script = await_calls[1].args[2]
+        self.assertIn('export NOVA_WORKSPACE_ROOT="/srv/nova-session/workspace"', command_script)
+        self.assertIn('export PYTHONPATH="/srv/nova-session/workspace/.nova_runner"', command_script)

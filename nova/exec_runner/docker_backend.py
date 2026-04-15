@@ -12,6 +12,7 @@ from pathlib import Path
 from nova.exec_runner.shared import (
     ExecRunnerError,
     ExecSessionSelector,
+    PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE,
     RUNNER_COMMAND_FILENAME,
     RUNNER_CWD_FILENAME,
     RUNNER_ENV_FILENAME,
@@ -34,6 +35,7 @@ DIFF_METADATA_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "di
 COMMAND_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_COMMAND_FILENAME
 CWD_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_CWD_FILENAME
 ENV_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_ENV_FILENAME
+SITECUSTOMIZE_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "sitecustomize.py"
 
 
 @dataclass(slots=True, frozen=True)
@@ -341,11 +343,24 @@ class DockerExecRunnerBackend:
         persisted_env = await self._load_persisted_env(session.container_name)
         env = self._base_environment()
         env.update({key: value for key, value in persisted_env.items() if not key.startswith("NOVA_")})
+        internal_python_path = str(WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME)
+        existing_python_path = str(env.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = (
+            internal_python_path
+            if not existing_python_path
+            else f"{internal_python_path}:{existing_python_path}"
+        )
+        env["NOVA_WORKSPACE_ROOT"] = str(WORKSPACE_ROOT_IN_CONTAINER)
         normalized_cwd = normalize_sandbox_path(cwd, cwd="/")
         if normalized_cwd in {"/skills", "/inbox", "/history", "/memory", "/webdav"}:
             normalized_cwd = "/"
         rewritten_command = rewrite_shell_command_for_workspace(command, WORKSPACE_ROOT_IN_CONTAINER)
         rendered_env = encode_environment_script(env)
+        await self._write_text_into_container(
+            session.container_name,
+            SITECUSTOMIZE_PATH,
+            PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE,
+        )
         command_script = "\n".join(
             [
                 "set +e",

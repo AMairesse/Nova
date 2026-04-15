@@ -9,7 +9,7 @@ WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Install system deps for Nova, Playwright, and the sandbox runner image.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     build-essential \
     ca-certificates \
@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy files & install dependencies
 COPY requirements.txt /app/
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 COPY nova/ /app/nova/
 COPY user_settings/ /app/user_settings/
 COPY manage.py ./docker/entrypoint.sh /app/

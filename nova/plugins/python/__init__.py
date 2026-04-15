@@ -29,8 +29,13 @@ Available forms:
 `python -c` runs from the current sandbox working directory unless you override it with
 `--workdir`.
 
-Copy attachments from `/inbox` or `/history` into a normal workspace folder before
-using them from Python.
+Inside Python, absolute Nova paths such as `/report.csv`, `/inbox/photo.jpg`, or
+`/history/message-123/data.json` are translated to the synchronized workspace view
+of the sandbox.
+
+Copy attachments from `/inbox` or `/history` into a normal workspace folder when
+you want to modify them, keep generated outputs together, or publish the results as
+part of a project folder.
 
 Typical workflow:
 - create a project folder with `mkdir -p /project`

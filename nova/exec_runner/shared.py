@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import posixpath
 import shlex
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +35,98 @@ EXCLUDED_SYNC_ROOTS = {
 }
 EXCLUDED_SYNC_PREFIXES = tuple(
     f"{root.rstrip('/')}/" for root in EXCLUDED_SYNC_ROOTS if root != "/"
+)
+
+PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE = textwrap.dedent(
+    """\
+    import builtins
+    import io
+    import os
+
+
+    def _nova_install_python_workspace_shims(workspace_root):
+        workspace_root = str(workspace_root or "").strip()
+        if not workspace_root:
+            return lambda: None
+
+        preserved_prefixes = ("/dev", "/proc", "/sys")
+        originals = {}
+
+        def _translate(path):
+            if isinstance(path, int) or path is None:
+                return path
+            try:
+                rendered = os.fspath(path)
+            except TypeError:
+                return path
+            if isinstance(rendered, bytes):
+                return path
+            if not isinstance(rendered, str) or not rendered.startswith("/"):
+                return path
+            if rendered == "/":
+                return workspace_root
+            if rendered in preserved_prefixes:
+                return rendered
+            if any(rendered.startswith(prefix + "/") for prefix in preserved_prefixes):
+                return rendered
+            return os.path.join(workspace_root, rendered.lstrip("/"))
+
+        def _wrap_single(module, name):
+            original = getattr(module, name)
+            originals[(module, name)] = original
+
+            def wrapper(*args, **kwargs):
+                if not args:
+                    return original(*args, **kwargs)
+                mapped_args = (_translate(args[0]),) + args[1:]
+                return original(*mapped_args, **kwargs)
+
+            setattr(module, name, wrapper)
+
+        def _wrap_double(module, name):
+            original = getattr(module, name)
+            originals[(module, name)] = original
+
+            def wrapper(*args, **kwargs):
+                if len(args) < 2:
+                    return original(*args, **kwargs)
+                mapped_args = (_translate(args[0]), _translate(args[1])) + args[2:]
+                return original(*mapped_args, **kwargs)
+
+            setattr(module, name, wrapper)
+
+        for module, name in (
+            (builtins, "open"),
+            (io, "open"),
+            (os, "access"),
+            (os, "chdir"),
+            (os, "listdir"),
+            (os, "mkdir"),
+            (os, "makedirs"),
+            (os, "open"),
+            (os, "remove"),
+            (os, "rmdir"),
+            (os, "scandir"),
+            (os, "stat"),
+            (os, "lstat"),
+            (os, "unlink"),
+        ):
+            _wrap_single(module, name)
+
+        for module, name in ((os, "rename"), (os, "replace")):
+            _wrap_double(module, name)
+
+        def _restore():
+            for (module, name), original in originals.items():
+                setattr(module, name, original)
+
+        return _restore
+
+
+    _restore_nova_workspace_shims = _nova_install_python_workspace_shims(
+        os.environ.get("NOVA_WORKSPACE_ROOT", "")
+    )
+    """
 )
 
 
