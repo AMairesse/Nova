@@ -49,6 +49,7 @@ class ExecRunnerConfig:
     max_sync_bytes: int
     max_diff_bytes: int
     proxy_url: str
+    sandbox_no_new_privileges: bool = True
     shared_cache_volume: str = "exec_runner_cache"
     command_timeout_seconds: int = 300
 
@@ -79,6 +80,10 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
     sandbox_memory_limit_mb = max(int(os.getenv("EXEC_RUNNER_SANDBOX_MEMORY_LIMIT_MB", "1024")), 256)
     sandbox_cpu_limit = str(os.getenv("EXEC_RUNNER_SANDBOX_CPU_LIMIT", "1.0")).strip() or "1.0"
     sandbox_pids_limit = max(int(os.getenv("EXEC_RUNNER_SANDBOX_PIDS_LIMIT", "256")), 64)
+    sandbox_no_new_privileges = (
+        str(os.getenv("EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES", "true")).strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
     max_sync_bytes = max(int(os.getenv("EXEC_RUNNER_MAX_SYNC_BYTES", str(50 * 1024 * 1024))), 1024 * 1024)
     max_diff_bytes = max(int(os.getenv("EXEC_RUNNER_MAX_DIFF_BYTES", str(50 * 1024 * 1024))), 1024 * 1024)
     proxy_port = max(int(os.getenv("EXEC_RUNNER_PROXY_PORT", "8091")), 1)
@@ -93,6 +98,7 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
         sandbox_memory_limit_mb=sandbox_memory_limit_mb,
         sandbox_cpu_limit=sandbox_cpu_limit,
         sandbox_pids_limit=sandbox_pids_limit,
+        sandbox_no_new_privileges=sandbox_no_new_privileges,
         max_sync_bytes=max_sync_bytes,
         max_diff_bytes=max_diff_bytes,
         proxy_url=proxy_url,
@@ -213,7 +219,7 @@ class DockerExecRunnerBackend:
         )
 
     async def _create_container(self, session: ExecSession) -> None:
-        await self._run_docker(
+        docker_args = [
             "run",
             "-d",
             "--name",
@@ -223,48 +229,53 @@ class DockerExecRunnerBackend:
             "--read-only",
             "--cap-drop",
             "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--tmpfs",
-            "/tmp:rw,nodev,nosuid,size=256m,mode=1777",
-            "--mount",
-            f"source={session.volume_name},target={SESSION_ROOT_IN_CONTAINER}",
-            "--mount",
-            f"source={self.config.shared_cache_volume},target={CACHE_ROOT_IN_CONTAINER}",
-            "--memory",
-            f"{self.config.sandbox_memory_limit_mb}m",
-            "--cpus",
-            self.config.sandbox_cpu_limit,
-            "--pids-limit",
-            str(self.config.sandbox_pids_limit),
-            "--user",
-            "nova",
-            "--env",
-            f"HOME={SESSION_ROOT_IN_CONTAINER / 'home'}",
-            "--env",
-            f"PIP_CACHE_DIR={CACHE_ROOT_IN_CONTAINER / 'pip'}",
-            "--env",
-            f"UV_CACHE_DIR={CACHE_ROOT_IN_CONTAINER / 'uv'}",
-            "--env",
-            f"npm_config_cache={CACHE_ROOT_IN_CONTAINER / 'npm'}",
-            "--env",
-            f"HTTP_PROXY={self.config.proxy_url}",
-            "--env",
-            f"HTTPS_PROXY={self.config.proxy_url}",
-            "--env",
-            "NO_PROXY=127.0.0.1,localhost",
-            self.config.sandbox_image,
-            "bash",
-            "-lc",
-            (
-                f'mkdir -p "{WORKSPACE_ROOT_IN_CONTAINER}" '
-                f'"{SESSION_ROOT_IN_CONTAINER / "home"}" '
-                f'"{CACHE_ROOT_IN_CONTAINER / "pip"}" '
-                f'"{CACHE_ROOT_IN_CONTAINER / "uv"}" '
-                f'"{CACHE_ROOT_IN_CONTAINER / "npm"}" '
-                "&& exec sleep infinity"
-            ),
+        ]
+        if self.config.sandbox_no_new_privileges:
+            docker_args.extend(["--security-opt", "no-new-privileges"])
+        docker_args.extend(
+            [
+                "--tmpfs",
+                "/tmp:rw,nodev,nosuid,size=256m,mode=1777",
+                "--mount",
+                f"source={session.volume_name},target={SESSION_ROOT_IN_CONTAINER}",
+                "--mount",
+                f"source={self.config.shared_cache_volume},target={CACHE_ROOT_IN_CONTAINER}",
+                "--memory",
+                f"{self.config.sandbox_memory_limit_mb}m",
+                "--cpus",
+                self.config.sandbox_cpu_limit,
+                "--pids-limit",
+                str(self.config.sandbox_pids_limit),
+                "--user",
+                "nova",
+                "--env",
+                f"HOME={SESSION_ROOT_IN_CONTAINER / 'home'}",
+                "--env",
+                f"PIP_CACHE_DIR={CACHE_ROOT_IN_CONTAINER / 'pip'}",
+                "--env",
+                f"UV_CACHE_DIR={CACHE_ROOT_IN_CONTAINER / 'uv'}",
+                "--env",
+                f"npm_config_cache={CACHE_ROOT_IN_CONTAINER / 'npm'}",
+                "--env",
+                f"HTTP_PROXY={self.config.proxy_url}",
+                "--env",
+                f"HTTPS_PROXY={self.config.proxy_url}",
+                "--env",
+                "NO_PROXY=127.0.0.1,localhost",
+                self.config.sandbox_image,
+                "bash",
+                "-lc",
+                (
+                    f'mkdir -p "{WORKSPACE_ROOT_IN_CONTAINER}" '
+                    f'"{SESSION_ROOT_IN_CONTAINER / "home"}" '
+                    f'"{CACHE_ROOT_IN_CONTAINER / "pip"}" '
+                    f'"{CACHE_ROOT_IN_CONTAINER / "uv"}" '
+                    f'"{CACHE_ROOT_IN_CONTAINER / "npm"}" '
+                    "&& exec sleep infinity"
+                ),
+            ]
         )
+        await self._run_docker(*docker_args)
 
     async def _ensure_container_running(self, container_name: str) -> None:
         running = await self._container_running(container_name)

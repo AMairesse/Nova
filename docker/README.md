@@ -210,6 +210,7 @@ Exec-runner settings:
   - `EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS`
   - `EXEC_RUNNER_SESSION_TTL_SECONDS`
   - `EXEC_RUNNER_SANDBOX_IMAGE`
+  - `EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES`
   - `EXEC_RUNNER_SANDBOX_MEMORY_LIMIT_MB`
   - `EXEC_RUNNER_SANDBOX_CPU_LIMIT`
   - `EXEC_RUNNER_SANDBOX_PIDS_LIMIT`
@@ -225,3 +226,4 @@ Notes:
 - Without `exec-runner`, Nova still works for its main product features, but it does not expose the default Python backend or advanced sandboxed code/build workflows.
 - `exec-runner` is the only service that receives the Docker socket. `web` and `celery-worker` call it over an authenticated internal HTTP API.
 - In the standard Docker module setup, `EXEC_RUNNER_SHARED_TOKEN` is the only exec-runner value you normally need to set in `.env`.
+- The Docker module disables `EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES` by default for compatibility with hosts where the sandbox bootstrap shell cannot start under that hardening flag.

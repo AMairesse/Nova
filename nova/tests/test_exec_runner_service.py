@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any, cast
 from types import SimpleNamespace
@@ -9,7 +10,15 @@ from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
-from nova.exec_runner.docker_backend import DockerExecRunnerBackend, ExecRunnerConfig, ExecSession
+from nova.exec_runner.docker_backend import (
+    CACHE_ROOT_IN_CONTAINER,
+    SESSION_ROOT_IN_CONTAINER,
+    WORKSPACE_ROOT_IN_CONTAINER,
+    DockerExecRunnerBackend,
+    ExecRunnerConfig,
+    ExecSession,
+    load_exec_runner_config_from_env,
+)
 from nova.exec_runner import service as exec_runner_service
 from nova.exec_runner.shared import ExecSessionSelector, SandboxShellResult
 
@@ -125,7 +134,7 @@ class ExecRunnerServiceTests(SimpleTestCase):
 
 
 class DockerExecRunnerBackendTests(SimpleTestCase):
-    def _build_backend(self) -> DockerExecRunnerBackend:
+    def _build_backend(self, *, sandbox_no_new_privileges: bool = True) -> DockerExecRunnerBackend:
         return DockerExecRunnerBackend(
             ExecRunnerConfig(
                 shared_token="runner-token",
@@ -136,11 +145,37 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
                 sandbox_memory_limit_mb=1024,
                 sandbox_cpu_limit="1.0",
                 sandbox_pids_limit=256,
+                sandbox_no_new_privileges=sandbox_no_new_privileges,
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
             )
         )
+
+    def _build_session(self) -> ExecSession:
+        return ExecSession(
+            selector=ExecSessionSelector(user_id=1, thread_id=2, agent_id=3),
+            container_name="nova-exec-test",
+            volume_name="nova-exec-session-test",
+            metadata_dir=Path("/tmp/nova-exec-runner-tests/sessions/test"),
+            metadata_path=Path("/tmp/nova-exec-runner-tests/sessions/test/session.json"),
+        )
+
+    def test_load_exec_runner_config_enables_no_new_privileges_by_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_exec_runner_config_from_env()
+
+        self.assertTrue(config.sandbox_no_new_privileges)
+
+    def test_load_exec_runner_config_accepts_falsey_no_new_privileges_values(self):
+        with patch.dict(
+            os.environ,
+            {"EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES": "false"},
+            clear=True,
+        ):
+            config = load_exec_runner_config_from_env()
+
+        self.assertFalse(config.sandbox_no_new_privileges)
 
     def test_write_bytes_into_container_streams_content_over_stdin(self):
         backend = self._build_backend()
@@ -186,13 +221,7 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
         backend = self._build_backend()
         backend._write_bytes_into_container = AsyncMock()
         backend._docker_exec = AsyncMock()
-        session = ExecSession(
-            selector=ExecSessionSelector(user_id=1, thread_id=2, agent_id=3),
-            container_name="nova-exec-test",
-            volume_name="nova-exec-session-test",
-            metadata_dir=Path("/tmp/nova-exec-runner-tests/sessions/test"),
-            metadata_path=Path("/tmp/nova-exec-runner-tests/sessions/test/session.json"),
-        )
+        session = self._build_session()
 
         asyncio.run(backend._sync_bundle_into_session(session, b"sync-bundle"))
 
@@ -202,3 +231,40 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
             b"sync-bundle",
         )
         backend._docker_exec.assert_awaited_once()
+
+    def test_create_container_includes_no_new_privileges_when_enabled(self):
+        backend = self._build_backend(sandbox_no_new_privileges=True)
+        backend._run_docker = AsyncMock(return_value="container-id")
+
+        asyncio.run(backend._create_container(self._build_session()))
+
+        await_args = backend._run_docker.await_args
+        assert await_args is not None
+        docker_args = list(await_args.args)
+        self.assertIn("--security-opt", docker_args)
+        self.assertIn("no-new-privileges", docker_args)
+        self.assertIn(f"source=nova-exec-session-test,target={SESSION_ROOT_IN_CONTAINER}", docker_args)
+        self.assertIn(f"source=exec_runner_cache,target={CACHE_ROOT_IN_CONTAINER}", docker_args)
+        self.assertIn(
+            (
+                f'mkdir -p "{WORKSPACE_ROOT_IN_CONTAINER}" '
+                f'"{SESSION_ROOT_IN_CONTAINER / "home"}" '
+                f'"{CACHE_ROOT_IN_CONTAINER / "pip"}" '
+                f'"{CACHE_ROOT_IN_CONTAINER / "uv"}" '
+                f'"{CACHE_ROOT_IN_CONTAINER / "npm"}" '
+                "&& exec sleep infinity"
+            ),
+            docker_args,
+        )
+
+    def test_create_container_omits_no_new_privileges_when_disabled(self):
+        backend = self._build_backend(sandbox_no_new_privileges=False)
+        backend._run_docker = AsyncMock(return_value="container-id")
+
+        asyncio.run(backend._create_container(self._build_session()))
+
+        await_args = backend._run_docker.await_args
+        assert await_args is not None
+        docker_args = list(await_args.args)
+        self.assertNotIn("--security-opt", docker_args)
+        self.assertNotIn("no-new-privileges", docker_args)

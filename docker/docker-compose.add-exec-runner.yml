@@ -39,6 +39,7 @@ services:
       EXEC_RUNNER_STATE_ROOT: /var/lib/nova-exec-runner
       EXEC_RUNNER_SANDBOX_NETWORK: ${COMPOSE_PROJECT_NAME:-nova}_exec-sandbox-net
       EXEC_RUNNER_SANDBOX_IMAGE: ${EXEC_RUNNER_SANDBOX_IMAGE:-amairesse/nova:latest}
+      EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES: ${EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES:-false}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - exec_runner_state:/var/lib/nova-exec-runner
