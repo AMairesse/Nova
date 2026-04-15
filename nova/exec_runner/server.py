@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import json
+import logging
 import os
 import secrets
 
@@ -18,6 +20,8 @@ from nova.exec_runner.docker_backend import (
     load_exec_runner_config_from_env,
 )
 from nova.exec_runner.proxy import ExecRunnerProxyConfig, ExecRunnerProxyServer
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -147,6 +151,34 @@ async def _delete_session(request: Request) -> JSONResponse:
     return JSONResponse({"status": "success"})
 
 
+async def _delete_thread_sessions(request: Request) -> JSONResponse:
+    app = request.app
+    token = _extract_bearer_token(request)
+    if not _is_authorized(app, token):
+        return JSONResponse({"status": "error", "message": "Forbidden"}, status_code=403)
+    user_id = str(request.path_params.get("user_id") or "").strip()
+    thread_id = str(request.path_params.get("thread_id") or "").strip()
+    if not user_id or not thread_id:
+        return JSONResponse({"status": "error", "message": "Missing user or thread id."}, status_code=400)
+    try:
+        removed = await app.state.backend.delete_sessions_for_thread(user_id=user_id, thread_id=thread_id)
+    except ExecRunnerError as exc:
+        return JSONResponse({"status": "error", "message": str(exc)}, status_code=400)
+    return JSONResponse({"status": "success", "removed_sessions": removed})
+
+
+async def _maintenance_loop(app: Starlette) -> None:
+    interval_seconds = max(int(app.state.backend.config.gc_interval_seconds), 60)
+    while True:
+        try:
+            await app.state.backend.run_maintenance_cycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("exec-runner maintenance loop failed")
+        await asyncio.sleep(interval_seconds)
+
+
 def build_app() -> Starlette:
     config = load_exec_runner_config_from_env()
     backend = DockerExecRunnerBackend(config)
@@ -157,9 +189,16 @@ def build_app() -> Starlette:
     async def _lifespan(app: Starlette):
         await app.state.backend.initialize()
         await app.state.proxy_server.start()
+        maintenance_task = asyncio.create_task(_maintenance_loop(app))
+        app.state.maintenance_task = maintenance_task
         try:
             yield
         finally:
+            maintenance_task.cancel()
+            try:
+                await maintenance_task
+            except asyncio.CancelledError:
+                pass
             await app.state.proxy_server.close()
 
     app = Starlette(
@@ -168,6 +207,7 @@ def build_app() -> Starlette:
             Route("/healthz", _healthz, methods=["GET"]),
             Route("/v1/sessions/exec", _exec, methods=["POST"]),
             Route("/v1/sessions/{session_id}", _delete_session, methods=["DELETE"]),
+            Route("/v1/users/{user_id}/threads/{thread_id}/sessions", _delete_thread_sessions, methods=["DELETE"]),
         ],
         lifespan=_lifespan,
     )

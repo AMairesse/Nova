@@ -1,6 +1,6 @@
 # Nova Runtime
 
-Last reviewed: 2026-04-06  
+Last reviewed: 2026-04-15  
 Status: implemented
 
 ## Goal
@@ -11,7 +11,7 @@ Nova uses a single terminal-first runtime centered on:
 - `delegate_to_agent(agent_id: str, question: str, input_paths: list[str] | null)`
 - `ask_user(question: str, schema?: object)`
 
-The runtime is file-centric, plugin-backed, and designed around a persistent pseudo-terminal mental model.
+The runtime is file-centric, plugin-backed, and designed around a persistent terminal-style mental model.
 
 ## Runtime Package
 
@@ -58,6 +58,12 @@ Current plugin families include:
 - `mcp`
 - `api`
 
+## Sandbox Execution
+
+- When the optional `exec-runner` module is enabled, Nova exposes a persistent sandbox terminal backend for Python and compatible workspace commands.
+- Warm sandbox sessions are keyed by user/thread/agent, reused across turns, and maintained by the runner with TTL-based cleanup.
+- Sensitive Nova capabilities such as mail, calendar, memory, webapp, MCP, and custom API calls remain mediated by Nova rather than being exposed directly inside arbitrary sandboxed code.
+
 ## Filesystem Model
 
 ### Persistent root
@@ -72,7 +78,7 @@ Current plugin families include:
 - `/history`: readonly files attached to earlier live messages still present in runtime context
 - `/memory`: user-scoped Markdown memory workspace
 - `/webdav`: remote WebDAV mounts when configured
-- `/tmp`: per-run scratch area backed by `UserFile(scope=MESSAGE_ATTACHMENT)`
+- `/tmp`: thread-scoped scratch area hidden from the normal file sidebar and backed by `UserFile(scope=MESSAGE_ATTACHMENT)`
 - `/generated`: conventional output area for provider-native media/files created during the run
 - `/subagents/<agent-id>-<run-id>/`: copied-back outputs from delegated runs
 

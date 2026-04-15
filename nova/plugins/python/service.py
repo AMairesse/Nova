@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextvars
 from dataclasses import dataclass
 import posixpath
-import shlex
 
 from nova.exec_runner import service as exec_runner_service
 from nova.runtime.vfs import normalize_vfs_path
@@ -85,37 +84,28 @@ async def execute_python_request(_host: str, request: PythonExecutionRequest) ->
             posixpath.join(cwd_override, request.entrypoint),
             cwd="/",
         )
-        command = f"python {shlex.quote(script_path)}"
+        args = [script_path]
     else:
-        command = "python -c " + shlex.quote(request.code)
+        args = ["-c", request.code]
 
-    result, sync_meta = await exec_runner_service.execute_sandbox_shell_command(
+    result, output_files = await exec_runner_service.execute_workspace_python_command(
         vfs=current_vfs,
-        command=command,
-        ensure_python=True,
+        args=args,
         cwd_override=cwd_override,
+        initial_paths={item.path for item in request.workspace_files},
     )
-    initial_paths = {item.path for item in request.workspace_files}
-    output_files: list[PythonWorkspaceFile] = []
-    for synced_path in list(sync_meta.get("synced_paths") or []):
-        if not synced_path.startswith(f"{cwd_override.rstrip('/')}/") and synced_path != cwd_override:
-            continue
-        relative_path = posixpath.relpath(synced_path, cwd_override)
-        if relative_path in initial_paths:
-            continue
-        content, mime_type = await current_vfs.read_bytes(synced_path)
-        output_files.append(
-            PythonWorkspaceFile(
-                path=relative_path,
-                content=content,
-                mime_type=mime_type,
-            )
-        )
     return PythonExecutionResult(
         status_description="Accepted" if result.status == 0 else f"Exited with status {result.status}",
         stdout=result.stdout,
         stderr=result.stderr,
-        output_files=tuple(output_files),
+        output_files=tuple(
+            PythonWorkspaceFile(
+                path=item.path,
+                content=item.content,
+                mime_type=item.mime_type,
+            )
+            for item in output_files
+        ),
     )
 
 

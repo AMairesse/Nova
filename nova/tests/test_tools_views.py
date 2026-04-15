@@ -32,12 +32,10 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
-    @patch("user_settings.views.tool.check_and_create_python_tool")
-    @patch("user_settings.views.tool.check_and_create_searxng_tool")
+    @patch("user_settings.views.tool.ensure_capability_tooling")
     def test_list_partial_renders_fragment_and_bootstraps_system_tools(
         self,
-        mock_searxng,
-        mock_python,
+        mock_ensure_capability_tooling,
     ):
         create_tool(
             user=None,
@@ -57,12 +55,10 @@ class ToolsViewsTests(TestCase):
         self.assertContains(response, "Built-in capabilities")
         self.assertContains(response, "Capabilities with backends")
         self.assertContains(response, "Add connection")
-        mock_searxng.assert_called_once()
-        mock_python.assert_called_once()
+        mock_ensure_capability_tooling.assert_called_once()
 
-    @patch("user_settings.views.tool.check_and_create_python_tool")
-    @patch("user_settings.views.tool.check_and_create_searxng_tool")
-    def test_list_includes_user_and_system_tools(self, mock_searxng, mock_python):
+    @patch("user_settings.views.tool.ensure_capability_tooling")
+    def test_list_includes_user_and_system_tools(self, mock_ensure_capability_tooling):
         user_tool = create_tool(self.user, name="User Tool")
         system_tool = create_tool(
             user=None,
@@ -75,8 +71,7 @@ class ToolsViewsTests(TestCase):
         tools = response.context["tools"]
         self.assertIn(user_tool, tools)
         self.assertIn(system_tool, tools)
-        mock_searxng.assert_called_once()
-        mock_python.assert_called_once()
+        mock_ensure_capability_tooling.assert_called_once()
 
     def test_create_tool_requires_login(self):
         self.client.logout()

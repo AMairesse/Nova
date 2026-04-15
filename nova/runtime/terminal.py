@@ -22,6 +22,11 @@ from nova.mcp import service as mcp_service
 from nova.models.Thread import Thread
 from nova.plugins.mail import service as mail_service
 from nova.plugins.python import service as python_service
+from nova.runtime.commands import (
+    merge_command_outputs,
+    resolve_boolean_command_status,
+    should_execute_segment,
+)
 from nova.runtime.capabilities import TerminalCapabilities
 from nova.runtime.vfs import HISTORY_ROOT, INBOX_ROOT, VFSError, VirtualFileSystem, normalize_vfs_path
 from nova.webdav.service import WEBDAV_VFS_ROOT
@@ -681,31 +686,11 @@ class TerminalExecutor:
 
     @staticmethod
     def _merge_command_outputs(outputs: list[str]) -> str:
-        merged = ""
-        for item in outputs:
-            text = str(item or "")
-            if not text:
-                continue
-            if not merged:
-                merged = text
-                continue
-            if merged.endswith("\n") or text.startswith("\n"):
-                merged = f"{merged}{text}"
-            else:
-                merged = f"{merged}\n{text}"
-        return merged
+        return merge_command_outputs(outputs)
 
     @staticmethod
     def _should_execute_segment(operator: str | None, previous_status: int) -> bool:
-        if operator in {None, ""}:
-            return True
-        if operator == ";":
-            return True
-        if operator == "&&":
-            return previous_status == 0
-        if operator == "||":
-            return previous_status != 0
-        return True
+        return should_execute_segment(operator, previous_status)
 
     async def _run_shell_segment_result(
         self,
@@ -849,10 +834,9 @@ class TerminalExecutor:
         name = str(tokens[0] or "").strip()
         args = tokens[1:]
         try:
-            if name == "true":
-                return ShellStageResult(stdout="", status=0)
-            if name == "false":
-                return ShellStageResult(stdout="", status=1)
+            boolean_status = resolve_boolean_command_status(name)
+            if boolean_status is not None:
+                return ShellStageResult(stdout="", status=boolean_status)
             if name == "python":
                 return await self._cmd_python_result(args)
             return ShellStageResult(

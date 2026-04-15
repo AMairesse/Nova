@@ -209,6 +209,7 @@ Exec-runner settings:
 - Optional tuning:
   - `EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS`
   - `EXEC_RUNNER_SESSION_TTL_SECONDS`
+  - `EXEC_RUNNER_GC_INTERVAL_SECONDS`
   - `EXEC_RUNNER_SANDBOX_IMAGE`
   - `EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES`
   - `EXEC_RUNNER_SANDBOX_MEMORY_LIMIT_MB`
@@ -216,6 +217,9 @@ Exec-runner settings:
   - `EXEC_RUNNER_SANDBOX_PIDS_LIMIT`
   - `EXEC_RUNNER_MAX_SYNC_BYTES`
   - `EXEC_RUNNER_MAX_DIFF_BYTES`
+  - `EXEC_RUNNER_CACHE_MAX_BYTES`
+  - `EXEC_RUNNER_CACHE_TARGET_BYTES`
+  - `EXEC_RUNNER_CACHE_MAX_AGE_DAYS`
 - Advanced topology overrides only:
   - `EXEC_RUNNER_BASE_URL`
   - `EXEC_RUNNER_ENABLED`
@@ -226,12 +230,17 @@ Notes:
 - Without `exec-runner`, Nova still works for its main product features, but it does not expose the default Python backend or advanced sandboxed code/build workflows.
 - `exec-runner` is the only service that receives the Docker socket. `web` and `celery-worker` call it over an authenticated internal HTTP API.
 - In the standard Docker module setup, `EXEC_RUNNER_SHARED_TOKEN` is the only exec-runner value you normally need to set in `.env`.
+- Warm sandbox sessions are kept for 4 hours of inactivity by default, then purged automatically.
+- `exec-runner` runs an internal periodic maintenance loop that removes expired/orphaned session resources and trims the shared package cache.
 - The Docker module disables `EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES` by default for compatibility with hosts where the sandbox bootstrap shell cannot start under that hardening flag.
 
 ## Exec-runner troubleshooting
 
-If an `exec-runner` sandbox gets stuck or keeps a warm session in a bad state, you may need to
-remove the sandbox containers that were created by `exec-runner` itself before running a full
+`exec-runner` now purges expired warm sessions automatically and trims its shared cache in the
+background. In normal operation, `nova-exec-session-*` volumes should not keep accumulating.
+
+If an `exec-runner` sandbox still gets stuck or keeps a warm session in a bad state, you may need
+to remove the sandbox containers that were created by `exec-runner` itself before running a full
 `docker compose down`.
 
 List active sandbox containers:

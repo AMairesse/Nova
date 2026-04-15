@@ -228,6 +228,13 @@ class SandboxShellResult:
     execution_plane: str = "sandbox"
 
 
+@dataclass(slots=True, frozen=True)
+class SandboxOutputFile:
+    path: str
+    content: bytes
+    mime_type: str = "application/octet-stream"
+
+
 def normalize_sandbox_path(raw_path: str, *, cwd: str = "/") -> str:
     candidate = str(raw_path or "").strip()
     if not candidate:

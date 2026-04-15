@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from django.conf import settings
@@ -13,6 +14,8 @@ from nova.llm.embeddings import resolve_embeddings_provider_for_values
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.plugins import get_internal_plugins, get_plugin, get_plugin_for_builtin_subtype
+
+logger = logging.getLogger(__name__)
 
 
 STANDARD_CAPABILITY_SUBTYPES = ("date", "memory", "browser", "webapp")
@@ -245,6 +248,11 @@ def sync_search_system_backend() -> Tool | None:
     if tool is not None and not tool.agents.exists():
         tool.delete()
         return None
+    if tool is not None and tool.agents.exists():
+        logger.warning(
+            """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent."""
+        )
     return tool
 
 
@@ -266,6 +274,11 @@ def sync_python_system_backend() -> Tool | None:
     if tool is not None and not tool.agents.exists():
         tool.delete()
         return None
+    if tool is not None and tool.agents.exists():
+        logger.warning(
+            """WARNING: exec-runner is not configured, but a system
+                       tool exists and is being used by at least one agent."""
+        )
     return tool
 
 

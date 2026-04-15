@@ -13,6 +13,7 @@ from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
+from nova.threads.service import ThreadDeletionError, delete_thread_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,8 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
     finally:
         if ephemeral:
             try:
-                thread.delete()
+                delete_thread_for_user(thread, task_definition.user)
+            except ThreadDeletionError:
+                logger.warning("Skipping ephemeral thread cleanup for thread %s because it is still active.", thread.id)
             except Exception:
                 logger.exception("Failed to delete ephemeral thread %s", thread.id)

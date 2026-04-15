@@ -8,7 +8,7 @@ from django.http import HttpResponse
 from django.urls import reverse
 from django.utils import timezone
 from types import SimpleNamespace
-from unittest.mock import ANY, patch, AsyncMock
+from unittest.mock import ANY, patch, AsyncMock, Mock
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Message import Actor
@@ -272,6 +272,21 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json().get("status"), "OK")
         self.assertFalse(Thread.objects.filter(id=thread.id).exists())
+
+    @patch("nova.views.thread_views.delete_thread_for_user")
+    def test_delete_thread_returns_service_error_payload(self, mocked_delete_thread_for_user):
+        thread = Thread.objects.create(user=self.user, subject="Delete error")
+        mocked_delete_thread_for_user.side_effect = thread_views.ThreadDeletionError(
+            "Cannot delete thread with active tasks.",
+            status_code=400,
+        )
+
+        self.client.login(username="alice", password="pass")
+        resp = self.client.post(reverse("delete_thread", args=[thread.id]))
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["status"], "ERROR")
+        self.assertEqual(resp.json()["message"], "Cannot delete thread with active tasks.")
 
     # ------------ add_message -------------------------------------------
 

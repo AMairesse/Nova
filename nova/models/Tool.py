@@ -1,6 +1,4 @@
 # nova/models/Tool.py
-import logging
-
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -9,8 +7,6 @@ from encrypted_model_fields.fields import EncryptedCharField
 
 from nova.plugins.builtins import get_tool_type
 from nova.utils import validate_relaxed_url
-
-logger = logging.getLogger(__name__)
 
 
 def get_default_schema():
@@ -147,32 +143,3 @@ class ToolCredential(models.Model):
     def __str__(self):
         return _("{}'s credentials for {}").format(self.user.username,
                                                    self.tool.name)
-
-
-def check_and_create_searxng_tool():
-    from nova.plugins.catalog import sync_search_system_backend
-
-    tool = sync_search_system_backend()
-    if not settings.SEARNGX_SERVER_URL or not settings.SEARNGX_NUM_RESULTS:
-        if tool is not None and tool.agents.exists():
-            logger.warning(
-                """WARNING: SEARXNG_SERVER_URL not set, but a system
-                       tool exists and is being used by at least one agent."""
-            )
-
-
-def check_and_create_python_tool():
-    from nova.plugins.catalog import sync_python_system_backend
-    from nova.exec_runner.service import exec_runner_is_configured
-
-    tool = sync_python_system_backend()
-    if not exec_runner_is_configured():
-        if tool is not None and tool.agents.exists():
-            logger.warning(
-                """WARNING: exec-runner is not configured, but a system
-                       tool exists and is being used by at least one agent."""
-            )
-
-
-def check_and_create_judge0_tool():
-    check_and_create_python_tool()

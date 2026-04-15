@@ -53,16 +53,17 @@ class ExecRunnerServiceTests(SimpleTestCase):
         EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
         EXEC_RUNNER_SHARED_TOKEN="runner-token",
     )
-    @patch("nova.exec_runner.service.httpx.AsyncClient.get", new_callable=AsyncMock)
-    def test_test_exec_runner_access_calls_remote_healthcheck(self, mocked_get):
-        mocked_get.return_value = SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+    @patch("nova.exec_runner.service.httpx.AsyncClient.request", new_callable=AsyncMock)
+    def test_test_exec_runner_access_calls_remote_healthcheck(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
 
         result = asyncio.run(exec_runner_service.test_exec_runner_access())
 
         self.assertEqual(result["status"], "success")
-        self.assertIn("/healthz", mocked_get.await_args.args[0])
+        self.assertEqual(mocked_request.await_args.args[0], "GET")
+        self.assertIn("/healthz", mocked_request.await_args.args[1])
         self.assertEqual(
-            mocked_get.await_args.kwargs["headers"]["Authorization"],
+            mocked_request.await_args.kwargs["headers"]["Authorization"],
             "Bearer runner-token",
         )
 
@@ -73,17 +74,17 @@ class ExecRunnerServiceTests(SimpleTestCase):
     )
     @patch("nova.exec_runner.service._apply_diff_bundle", new_callable=AsyncMock)
     @patch("nova.exec_runner.service._parse_multipart_response")
-    @patch("nova.exec_runner.service.httpx.AsyncClient.post", new_callable=AsyncMock)
+    @patch("nova.exec_runner.service.httpx.AsyncClient.request", new_callable=AsyncMock)
     @patch("nova.exec_runner.service._build_sync_bundle", new_callable=AsyncMock)
     def test_execute_sandbox_shell_command_posts_to_runner_and_updates_cwd(
         self,
         mocked_build_bundle,
-        mocked_post,
+        mocked_request,
         mocked_parse_response,
         mocked_apply_diff,
     ):
         mocked_build_bundle.return_value = b"sync-bundle"
-        mocked_post.return_value = SimpleNamespace(status_code=200)
+        mocked_request.return_value = SimpleNamespace(status_code=200)
         mocked_parse_response.return_value = (
             {
                 "stdout": "ok\n",
@@ -119,7 +120,9 @@ class ExecRunnerServiceTests(SimpleTestCase):
         self.assertEqual(result, SandboxShellResult(stdout="ok\n", stderr="", status=0, cwd_after="/workspace"))
         self.assertEqual(sync_meta["synced_paths"], ["/workspace/new.txt"])
         self.assertEqual(mock_vfs.session_state["cwd"], "/workspace")
-        metadata = json.loads(mocked_post.await_args.kwargs["data"]["metadata"])
+        self.assertEqual(mocked_request.await_args.args[0], "POST")
+        self.assertIn("/v1/sessions/exec", mocked_request.await_args.args[1])
+        metadata = json.loads(mocked_request.await_args.kwargs["data"]["metadata"])
         self.assertEqual(metadata["cwd"], "/")
         self.assertEqual(metadata["command"], "pwd")
         self.assertEqual(metadata["selector"]["thread_id"], 2)
@@ -129,9 +132,9 @@ class ExecRunnerServiceTests(SimpleTestCase):
         EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
         EXEC_RUNNER_SHARED_TOKEN="runner-token",
     )
-    @patch("nova.exec_runner.service.httpx.AsyncClient.delete", new_callable=AsyncMock)
-    def test_delete_sandbox_session_calls_runner_delete_endpoint(self, mocked_delete):
-        mocked_delete.return_value = SimpleNamespace(status_code=200)
+    @patch("nova.exec_runner.service.httpx.AsyncClient.request", new_callable=AsyncMock)
+    def test_delete_sandbox_session_calls_runner_delete_endpoint(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(status_code=200)
         mock_vfs = SimpleNamespace(
             user=SimpleNamespace(id=1),
             thread=SimpleNamespace(id=2),
@@ -140,16 +143,39 @@ class ExecRunnerServiceTests(SimpleTestCase):
 
         asyncio.run(exec_runner_service.delete_sandbox_session(cast(Any, mock_vfs)))
 
-        self.assertIn("/v1/sessions/user-1--thread-2--agent-3", mocked_delete.await_args.args[0])
+        self.assertEqual(mocked_request.await_args.args[0], "DELETE")
+        self.assertIn("/v1/sessions/user-1--thread-2--agent-3", mocked_request.await_args.args[1])
+
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch("nova.exec_runner.service.httpx.AsyncClient.request", new_callable=AsyncMock)
+    def test_delete_thread_sandbox_sessions_calls_runner_thread_endpoint(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(status_code=200)
+
+        asyncio.run(exec_runner_service.delete_thread_sandbox_sessions(user_id=7, thread_id=9))
+
+        self.assertEqual(mocked_request.await_args.args[0], "DELETE")
+        self.assertIn("/v1/users/7/threads/9/sessions", mocked_request.await_args.args[1])
 
 
 class DockerExecRunnerBackendTests(SimpleTestCase):
-    def _build_backend(self, *, sandbox_no_new_privileges: bool = True) -> DockerExecRunnerBackend:
+    def _build_backend(
+        self,
+        *,
+        sandbox_no_new_privileges: bool = True,
+        state_root: Path | None = None,
+        cache_root: Path | None = None,
+        session_ttl_seconds: int = 14400,
+    ) -> DockerExecRunnerBackend:
         return DockerExecRunnerBackend(
             ExecRunnerConfig(
                 shared_token="runner-token",
-                state_root=Path("/tmp/nova-exec-runner-tests"),
-                session_ttl_seconds=3600,
+                state_root=state_root or Path("/tmp/nova-exec-runner-tests"),
+                session_ttl_seconds=session_ttl_seconds,
+                gc_interval_seconds=900,
                 sandbox_image="amairesse/nova:latest",
                 sandbox_network="nova_exec-sandbox-net",
                 sandbox_memory_limit_mb=1024,
@@ -159,6 +185,10 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
+                cache_root=cache_root or Path("/tmp/nova-exec-runner-cache"),
+                cache_max_bytes=5 * 1024 * 1024 * 1024,
+                cache_target_bytes=3 * 1024 * 1024 * 1024,
+                cache_max_age_days=14,
             )
         )
 
@@ -176,6 +206,11 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
             config = load_exec_runner_config_from_env()
 
         self.assertTrue(config.sandbox_no_new_privileges)
+        self.assertEqual(config.session_ttl_seconds, 14400)
+        self.assertEqual(config.gc_interval_seconds, 900)
+        self.assertEqual(config.cache_max_bytes, 5 * 1024 * 1024 * 1024)
+        self.assertEqual(config.cache_target_bytes, 3 * 1024 * 1024 * 1024)
+        self.assertEqual(config.cache_max_age_days, 14)
 
     def test_load_exec_runner_config_accepts_falsey_no_new_privileges_values(self):
         with patch.dict(
@@ -278,6 +313,118 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
         docker_args = list(await_args.args)
         self.assertNotIn("--security-opt", docker_args)
         self.assertNotIn("no-new-privileges", docker_args)
+
+    def test_create_container_sets_exec_runner_session_labels(self):
+        backend = self._build_backend()
+        backend._run_docker = AsyncMock(return_value="container-id")
+
+        asyncio.run(backend._create_container(self._build_session()))
+
+        await_args = backend._run_docker.await_args
+        assert await_args is not None
+        docker_args = list(await_args.args)
+        self.assertIn("--label", docker_args)
+        rendered = " ".join(str(item) for item in docker_args)
+        self.assertIn("nova.exec_runner.managed=true", rendered)
+        self.assertIn("nova.exec_runner.resource=session", rendered)
+        self.assertIn("nova.exec_runner.session_id=user-1--thread-2--agent-3", rendered)
+
+    def test_delete_sessions_for_thread_removes_matching_resources(self):
+        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as cache_dir:
+            backend = self._build_backend(
+                state_root=Path(state_dir),
+                cache_root=Path(cache_dir),
+            )
+            target_dir = Path(state_dir) / "sessions" / "user-7--thread-9--agent-3"
+            target_dir.mkdir(parents=True)
+            (target_dir / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "user-7--thread-9--agent-3",
+                        "user_id": "7",
+                        "thread_id": "9",
+                        "agent_id": "3",
+                        "last_used_at": "2026-04-15T10:00:00+00:00",
+                        "container_name": "nova-exec-user-7--thread-9--agent-3",
+                        "volume_name": "nova-exec-session-user-7--thread-9--agent-3",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            other_dir = Path(state_dir) / "sessions" / "user-7--thread-10--agent-4"
+            other_dir.mkdir(parents=True)
+            (other_dir / "session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "user-7--thread-10--agent-4",
+                        "user_id": "7",
+                        "thread_id": "10",
+                        "agent_id": "4",
+                        "last_used_at": "2026-04-15T10:00:00+00:00",
+                        "container_name": "nova-exec-user-7--thread-10--agent-4",
+                        "volume_name": "nova-exec-session-user-7--thread-10--agent-4",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            backend._initialized = True
+            backend._remove_container = AsyncMock()
+            backend._remove_volume = AsyncMock()
+            backend._list_managed_resources = AsyncMock(return_value=([], []))
+
+            removed = asyncio.run(backend.delete_sessions_for_thread(user_id=7, thread_id=9))
+
+            self.assertEqual(removed, 1)
+            backend._remove_container.assert_awaited_once_with("nova-exec-user-7--thread-9--agent-3")
+            backend._remove_volume.assert_awaited_once_with("nova-exec-session-user-7--thread-9--agent-3")
+            self.assertFalse(target_dir.exists())
+            self.assertTrue(other_dir.exists())
+
+    def test_prune_shared_cache_removes_old_files_and_trims_large_cache(self):
+        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as cache_dir:
+            backend = DockerExecRunnerBackend(
+                ExecRunnerConfig(
+                    shared_token="runner-token",
+                    state_root=Path(state_dir),
+                    session_ttl_seconds=14400,
+                    gc_interval_seconds=900,
+                    sandbox_image="amairesse/nova:latest",
+                    sandbox_network="nova_exec-sandbox-net",
+                    sandbox_memory_limit_mb=1024,
+                    sandbox_cpu_limit="1.0",
+                    sandbox_pids_limit=256,
+                    sandbox_no_new_privileges=True,
+                    max_sync_bytes=50 * 1024 * 1024,
+                    max_diff_bytes=50 * 1024 * 1024,
+                    proxy_url="http://exec-runner:8091",
+                    cache_root=Path(cache_dir),
+                    cache_max_bytes=12,
+                    cache_target_bytes=8,
+                    cache_max_age_days=14,
+                )
+            )
+            old_path = Path(cache_dir) / "pip" / "old.whl"
+            old_path.parent.mkdir(parents=True)
+            old_path.write_bytes(b"old-data")
+            fresh_a = Path(cache_dir) / "uv" / "fresh-a.bin"
+            fresh_a.parent.mkdir(parents=True)
+            fresh_a.write_bytes(b"abcdefgh")
+            fresh_b = Path(cache_dir) / "npm" / "fresh-b.bin"
+            fresh_b.parent.mkdir(parents=True)
+            fresh_b.write_bytes(b"ijklmnop")
+            now = os.path.getmtime(fresh_b)
+            old_ts = now - (15 * 24 * 60 * 60)
+            fresh_a_ts = now - 7200
+            os.utime(old_path, (old_ts, old_ts))
+            os.utime(fresh_a, (fresh_a_ts, fresh_a_ts))
+
+            summary = backend._prune_shared_cache()
+
+            self.assertEqual(summary["files_removed"], 2)
+            self.assertGreaterEqual(summary["bytes_reclaimed"], len(b"old-data") + len(b"abcdefgh"))
+            self.assertFalse(old_path.exists())
+            self.assertFalse(fresh_a.exists())
+            self.assertTrue(fresh_b.exists())
 
     def test_cleanup_processes_excludes_its_own_shell(self):
         backend = self._build_backend()
@@ -402,7 +549,8 @@ class ExecRunnerSharedTests(SimpleTestCase):
             ExecRunnerConfig(
                 shared_token="runner-token",
                 state_root=Path("/tmp/nova-exec-runner-tests"),
-                session_ttl_seconds=3600,
+                session_ttl_seconds=14400,
+                gc_interval_seconds=900,
                 sandbox_image="amairesse/nova:latest",
                 sandbox_network="nova_exec-sandbox-net",
                 sandbox_memory_limit_mb=1024,
@@ -412,6 +560,10 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
+                cache_root=Path("/tmp/nova-exec-runner-cache"),
+                cache_max_bytes=5 * 1024 * 1024 * 1024,
+                cache_target_bytes=3 * 1024 * 1024 * 1024,
+                cache_max_age_days=14,
             )
         )
         backend._load_persisted_env = AsyncMock(return_value={})
@@ -452,7 +604,8 @@ class ExecRunnerSharedTests(SimpleTestCase):
             ExecRunnerConfig(
                 shared_token="runner-token",
                 state_root=Path("/tmp/nova-exec-runner-tests"),
-                session_ttl_seconds=3600,
+                session_ttl_seconds=14400,
+                gc_interval_seconds=900,
                 sandbox_image="amairesse/nova:latest",
                 sandbox_network="nova_exec-sandbox-net",
                 sandbox_memory_limit_mb=1024,
@@ -462,6 +615,10 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
+                cache_root=Path("/tmp/nova-exec-runner-cache"),
+                cache_max_bytes=5 * 1024 * 1024 * 1024,
+                cache_target_bytes=3 * 1024 * 1024 * 1024,
+                cache_max_age_days=14,
             )
         )
         backend._load_persisted_env = AsyncMock(return_value={})

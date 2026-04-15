@@ -17,9 +17,9 @@ class PythonBuiltinsTests(SimpleTestCase):
         EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
         EXEC_RUNNER_SHARED_TOKEN="runner-token",
     )
-    @patch("nova.exec_runner.service.httpx.AsyncClient.get", new_callable=AsyncMock)
-    def test_test_exec_runner_access_reports_success_when_enabled(self, mocked_get):
-        mocked_get.return_value = SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+    @patch("nova.exec_runner.service.httpx.AsyncClient.request", new_callable=AsyncMock)
+    def test_test_exec_runner_access_reports_success_when_enabled(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
         result = asyncio.run(python_service.test_exec_runner_access())
 
         self.assertEqual(result["status"], "success")
@@ -51,7 +51,7 @@ class PythonBuiltinsTests(SimpleTestCase):
                 )
             )
 
-    @patch("nova.plugins.python.service.exec_runner_service.execute_sandbox_shell_command", new_callable=AsyncMock)
+    @patch("nova.plugins.python.service.exec_runner_service.execute_workspace_python_command", new_callable=AsyncMock)
     def test_execute_python_request_uses_runtime_context_and_collects_synced_files(self, mocked_execute):
         mocked_execute.return_value = (
             SandboxShellResult(
@@ -60,7 +60,13 @@ class PythonBuiltinsTests(SimpleTestCase):
                 status=0,
                 cwd_after="/project",
             ),
-            {"synced_paths": ["/project/result.txt"]},
+            (
+                SimpleNamespace(
+                    path="result.txt",
+                    content=b"written",
+                    mime_type="text/plain",
+                ),
+            ),
         )
         mock_vfs = SimpleNamespace(
             read_bytes=AsyncMock(return_value=(b"written", "text/plain")),
@@ -88,7 +94,7 @@ class PythonBuiltinsTests(SimpleTestCase):
             python_service.pop_runtime_context(tokens)
 
         mocked_execute.assert_awaited_once()
-        mock_vfs.read_bytes.assert_awaited_once_with("/project/result.txt")
+        mock_vfs.read_bytes.assert_not_awaited()
         self.assertTrue(result.ok)
         self.assertEqual(result.stdout, "done\n")
         self.assertEqual(len(result.output_files), 1)

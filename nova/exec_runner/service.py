@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import mimetypes
+import posixpath
 import tarfile
 import tempfile
 from email.parser import BytesParser
@@ -22,6 +23,7 @@ from .shared import (
     EXCLUDED_SYNC_ROOTS,
     ExecRunnerError,
     ExecSessionSelector,
+    SandboxOutputFile,
     SandboxShellResult,
 )
 
@@ -59,6 +61,46 @@ def _runner_headers() -> dict[str, str]:
     if not token:
         raise ExecRunnerError("The Nova exec runner shared token is not configured.")
     return {"Authorization": f"Bearer {token}"}
+
+
+def _runner_error_message(response: httpx.Response, default_message: str) -> str:
+    if response.status_code < 400:
+        return ""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    return str(payload.get("message") or default_message)
+
+
+async def _runner_request(
+    method: str,
+    path: str,
+    *,
+    default_error_message: str,
+    **request_kwargs,
+) -> httpx.Response:
+    base_url = _runner_base_url().rstrip("/")
+    if not base_url:
+        raise ExecRunnerError("The Nova exec runner is not fully configured.")
+
+    headers = dict(request_kwargs.pop("headers", {}) or {})
+    headers.update(_runner_headers())
+
+    try:
+        async with httpx.AsyncClient(timeout=_runner_timeout_seconds()) as client:
+            response = await client.request(
+                method,
+                f"{base_url}{path}",
+                headers=headers,
+                **request_kwargs,
+            )
+    except httpx.HTTPError as exc:
+        raise ExecRunnerError(f"Could not reach the Nova exec runner: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise ExecRunnerError(_runner_error_message(response, default_error_message))
+    return response
 
 
 def _selector_for_vfs(vfs: VirtualFileSystem) -> ExecSessionSelector:
@@ -224,8 +266,6 @@ async def execute_sandbox_shell_command(
     if not exec_runner_is_configured():
         raise ExecRunnerError("The Nova exec runner is not fully configured.")
 
-    base_url = _runner_base_url().rstrip("/")
-
     cwd = normalize_vfs_path(str(cwd_override or vfs.session_state.get("cwd") or "/"), cwd="/")
     if cwd in {"/skills", INBOX_ROOT, HISTORY_ROOT, MEMORY_ROOT, WEBDAV_VFS_ROOT}:
         cwd = "/"
@@ -246,21 +286,14 @@ async def execute_sandbox_shell_command(
         request_bundle_path = Path(handle.name)
         handle.write(sync_bundle_bytes)
     try:
-        async with httpx.AsyncClient(timeout=_runner_timeout_seconds()) as client:
-            with request_bundle_path.open("rb") as bundle_handle:
-                response = await client.post(
-                    f"{base_url}/v1/sessions/exec",
-                    headers=_runner_headers(),
-                    data={"metadata": json.dumps(metadata, ensure_ascii=False)},
-                    files={"sync_bundle": ("sync.tar.gz", bundle_handle, "application/gzip")},
-                )
-        if response.status_code >= 400:
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = {}
-            message = str(payload.get("message") or f"Exec runner request failed with status {response.status_code}.")
-            raise ExecRunnerError(message)
+        with request_bundle_path.open("rb") as bundle_handle:
+            response = await _runner_request(
+                "POST",
+                "/v1/sessions/exec",
+                default_error_message="Exec runner request failed.",
+                data={"metadata": json.dumps(metadata, ensure_ascii=False)},
+                files={"sync_bundle": ("sync.tar.gz", bundle_handle, "application/gzip")},
+            )
         response_metadata, diff_bundle_bytes = _parse_multipart_response(response)
         sync_meta = await _apply_diff_bundle(
             vfs,
@@ -277,8 +310,6 @@ async def execute_sandbox_shell_command(
         )
         vfs.set_cwd(result.cwd_after)
         return result, sync_meta
-    except httpx.HTTPError as exc:
-        raise ExecRunnerError(f"Could not reach the Nova exec runner: {exc}") from exc
     finally:
         request_bundle_path.unlink(missing_ok=True)
 
@@ -300,21 +331,61 @@ async def execute_sandbox_python_command(
     )
 
 
+async def execute_workspace_python_command(
+    *,
+    vfs: VirtualFileSystem,
+    args: list[str],
+    cwd_override: str | None = None,
+    initial_paths: set[str] | None = None,
+) -> tuple[SandboxShellResult, tuple[SandboxOutputFile, ...]]:
+    cwd = normalize_vfs_path(str(cwd_override or vfs.session_state.get("cwd") or "/"), cwd="/")
+    if cwd in {"/skills", INBOX_ROOT, HISTORY_ROOT, MEMORY_ROOT, WEBDAV_VFS_ROOT}:
+        cwd = "/"
+    result, sync_meta = await execute_sandbox_python_command(
+        vfs=vfs,
+        args=args,
+        cwd_override=cwd,
+    )
+
+    output_files: list[SandboxOutputFile] = []
+    initial_paths = set(initial_paths or set())
+    cwd_prefix = f"{cwd.rstrip('/')}/"
+    for synced_path in list(sync_meta.get("synced_paths") or []):
+        if synced_path != cwd and not synced_path.startswith(cwd_prefix):
+            continue
+        relative_path = posixpath.relpath(synced_path, cwd)
+        if relative_path in initial_paths:
+            continue
+        content, mime_type = await vfs.read_bytes(synced_path)
+        output_files.append(
+            SandboxOutputFile(
+                path=relative_path,
+                content=content,
+                mime_type=mime_type,
+            )
+        )
+    return result, tuple(output_files)
+
+
 async def delete_sandbox_session(vfs: VirtualFileSystem) -> None:
     if not exec_runner_is_configured():
         return
-    base_url = _runner_base_url().rstrip("/")
-    if not base_url:
-        return
     selector = _selector_for_vfs(vfs)
-    try:
-        async with httpx.AsyncClient(timeout=_runner_timeout_seconds()) as client:
-            await client.delete(
-                f"{base_url}/v1/sessions/{selector.session_id}",
-                headers=_runner_headers(),
-            )
-    except httpx.HTTPError as exc:
-        raise ExecRunnerError(f"Could not reach the Nova exec runner: {exc}") from exc
+    await _runner_request(
+        "DELETE",
+        f"/v1/sessions/{selector.session_id}",
+        default_error_message="Exec runner session deletion failed.",
+    )
+
+
+async def delete_thread_sandbox_sessions(user_id: int | str, thread_id: int | str) -> None:
+    if not exec_runner_is_configured():
+        return
+    await _runner_request(
+        "DELETE",
+        f"/v1/users/{user_id}/threads/{thread_id}/sessions",
+        default_error_message="Exec runner thread session deletion failed.",
+    )
 
 
 async def test_exec_runner_access(_tool=None) -> dict[str, str]:
@@ -328,19 +399,12 @@ async def test_exec_runner_access(_tool=None) -> dict[str, str]:
             "status": "error",
             "message": _("The Nova exec runner is not configured."),
         }
-    base_url = _runner_base_url().rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=_runner_timeout_seconds()) as client:
-            response = await client.get(
-                f"{base_url}/healthz",
-                headers=_runner_headers(),
-            )
-        if response.status_code >= 400:
-            message = response.json().get("message", "Exec runner unavailable.")
-            return {
-                "status": "error",
-                "message": str(message),
-            }
+        await _runner_request(
+            "GET",
+            "/healthz",
+            default_error_message="Exec runner unavailable.",
+        )
     except (httpx.HTTPError, ExecRunnerError) as exc:
         return {
             "status": "error",

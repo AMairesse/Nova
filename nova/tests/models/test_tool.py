@@ -2,7 +2,8 @@
 from django.core.exceptions import ValidationError
 from django.test import override_settings
 
-from nova.models.Tool import Tool, ToolCredential, check_and_create_python_tool, check_and_create_searxng_tool
+from nova.models.Tool import Tool, ToolCredential
+from nova.plugins.catalog import sync_python_system_backend, sync_search_system_backend
 from nova.tests.base import BaseTestCase
 from nova.tests.factories import create_provider, create_agent, create_tool
 
@@ -143,12 +144,12 @@ class ToolModelsTest(BaseTestCase):
         SEARNGX_SERVER_URL='http://searxng:8080',
         SEARNGX_NUM_RESULTS=5,
     )
-    def test_check_and_create_searxng_tool_simple_create(self):
+    def test_sync_search_system_backend_simple_create(self):
         """
         Test system SearXNG tool creation function for basic creation of the system tool.
         """
         # Call the function, should create the tool
-        check_and_create_searxng_tool()
+        sync_search_system_backend()
 
         tool = Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
                                    tool_subtype='searxng').first()
@@ -163,7 +164,7 @@ class ToolModelsTest(BaseTestCase):
         SEARNGX_SERVER_URL='http://searxng:8080',
         SEARNGX_NUM_RESULTS=5,
     )
-    def test_check_and_create_searxng_tool_create_credentials_only(self):
+    def test_sync_search_system_backend_create_credentials_only(self):
         """
         Test system SearXNG tool creation function for missing credentials on an already existing tool
         """
@@ -171,7 +172,7 @@ class ToolModelsTest(BaseTestCase):
         tool = Tool.objects.create(user=None, tool_type=Tool.ToolType.BUILTIN, tool_subtype='searxng')
 
         # Call the function, should create the missing credentials
-        check_and_create_searxng_tool()
+        sync_search_system_backend()
 
         tool_credentials = ToolCredential.objects.filter(user=None, tool=tool).first()
         self.assertIsNotNone(tool_credentials)
@@ -182,7 +183,7 @@ class ToolModelsTest(BaseTestCase):
         SEARNGX_SERVER_URL='http://searxng:8080',
         SEARNGX_NUM_RESULTS=5,
     )
-    def test_check_and_create_searxng_update_credentials(self):
+    def test_sync_search_system_backend_updates_credentials(self):
         """
         Test system SearXNG tool creation function for update of credentials on an already existing tool
         """
@@ -193,7 +194,7 @@ class ToolModelsTest(BaseTestCase):
                                                                  'num_results': 10})
 
         # Call the function, should update the credentials
-        check_and_create_searxng_tool()
+        sync_search_system_backend()
 
         tool_credentials.refresh_from_db()
         self.assertEqual(tool_credentials.config['searxng_url'], 'http://searxng:8080')
@@ -203,7 +204,7 @@ class ToolModelsTest(BaseTestCase):
         SEARNGX_SERVER_URL=None,
         SEARNGX_NUM_RESULTS=None,
     )
-    def test_check_and_create_searxng_delete_unused(self):
+    def test_sync_search_system_backend_deletes_unused_tool(self):
         """
         Test system SearXNG tool creation function for deletion of an unused tool
         """
@@ -214,7 +215,7 @@ class ToolModelsTest(BaseTestCase):
                                               'num_results': 5})
 
         # Call the function, should delete the tool
-        check_and_create_searxng_tool()
+        sync_search_system_backend()
 
         self.assertFalse(ToolCredential.objects.filter(user=None, tool=tool).exists())
         self.assertFalse(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
@@ -224,7 +225,7 @@ class ToolModelsTest(BaseTestCase):
         SEARNGX_SERVER_URL=None,
         SEARNGX_NUM_RESULTS=None,
     )
-    def test_check_and_create_searxng_delete_used(self):
+    def test_sync_search_system_backend_keeps_used_tool_when_config_missing(self):
         """
         Test system SearXNG tool creation function for deletion of an unused tool
         """
@@ -240,12 +241,12 @@ class ToolModelsTest(BaseTestCase):
         agent.tools.add(tool)
 
         # Call the function, should not delete the tool
-        with self.assertLogs("nova.models.Tool") as logger:
-            check_and_create_searxng_tool()
+        with self.assertLogs("nova.plugins.catalog") as logger:
+            sync_search_system_backend()
 
         # Check that a warning was created
         self.assertListEqual(logger.output, [
-            """WARNING:nova.models.Tool:WARNING: SEARXNG_SERVER_URL not set, but a system
+            """WARNING:nova.plugins.catalog:WARNING: SEARXNG_SERVER_URL not set, but a system
                        tool exists and is being used by at least one agent."""
         ])
 
@@ -259,11 +260,11 @@ class ToolModelsTest(BaseTestCase):
         EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
         EXEC_RUNNER_SHARED_TOKEN="runner-token",
     )
-    def test_check_and_create_python_tool_simple_create(self):
+    def test_sync_python_system_backend_simple_create(self):
         """
         Test system Python capability creation for the local exec runner backend.
         """
-        check_and_create_python_tool()
+        sync_python_system_backend()
 
         tool = Tool.objects.filter(
             user=None,
@@ -279,7 +280,7 @@ class ToolModelsTest(BaseTestCase):
         EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
         EXEC_RUNNER_SHARED_TOKEN="runner-token",
     )
-    def test_check_and_create_python_tool_reuses_existing_system_tool(self):
+    def test_sync_python_system_backend_reuses_existing_system_tool(self):
         """
         Test that the system Python capability is reused instead of duplicated.
         """
@@ -291,7 +292,7 @@ class ToolModelsTest(BaseTestCase):
             tool_subtype='code_execution',
         )
 
-        check_and_create_python_tool()
+        sync_python_system_backend()
 
         self.assertEqual(
             Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN, tool_subtype='code_execution').count(),
@@ -305,7 +306,7 @@ class ToolModelsTest(BaseTestCase):
         EXEC_RUNNER_BASE_URL="",
         EXEC_RUNNER_SHARED_TOKEN="",
     )
-    def test_check_and_create_python_tool_delete_unused_when_runner_not_configured(self):
+    def test_sync_python_system_backend_deletes_unused_when_runner_not_configured(self):
         """
         Test that the system Python capability is removed when the runner is not configured and unused.
         """
@@ -317,7 +318,7 @@ class ToolModelsTest(BaseTestCase):
             tool_subtype='code_execution',
         )
 
-        check_and_create_python_tool()
+        sync_python_system_backend()
 
         self.assertFalse(Tool.objects.filter(pk=tool.pk).exists())
 
@@ -326,7 +327,7 @@ class ToolModelsTest(BaseTestCase):
         EXEC_RUNNER_BASE_URL="",
         EXEC_RUNNER_SHARED_TOKEN="",
     )
-    def test_check_and_create_python_tool_keep_used_when_runner_not_configured(self):
+    def test_sync_python_system_backend_keeps_used_when_runner_not_configured(self):
         """
         Test that the system Python capability is kept when the runner is not configured but already in use.
         """
@@ -336,11 +337,11 @@ class ToolModelsTest(BaseTestCase):
         agent = create_agent(self.user, provider)
         agent.tools.add(tool)
 
-        with self.assertLogs("nova.models.Tool") as logger:
-            check_and_create_python_tool()
+        with self.assertLogs("nova.plugins.catalog") as logger:
+            sync_python_system_backend()
 
         self.assertListEqual(logger.output, [
-            """WARNING:nova.models.Tool:WARNING: exec-runner is not configured, but a system
+            """WARNING:nova.plugins.catalog:WARNING: exec-runner is not configured, but a system
                        tool exists and is being used by at least one agent."""
         ])
         self.assertTrue(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,

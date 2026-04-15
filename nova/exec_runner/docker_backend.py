@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import logging
 import os
 import secrets
 import tempfile
@@ -29,6 +30,7 @@ from nova.exec_runner.shared import (
 WORKSPACE_ROOT_IN_CONTAINER = Path("/srv/nova-session/workspace")
 SESSION_ROOT_IN_CONTAINER = Path("/srv/nova-session")
 CACHE_ROOT_IN_CONTAINER = Path("/srv/nova-cache")
+EXEC_RUNNER_CACHE_ROOT = Path("/var/lib/nova-exec-runner-cache")
 BEFORE_MANIFEST_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "before.json"
 DIFF_BUNDLE_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "diff.tar.gz"
 DIFF_METADATA_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "diff.json"
@@ -36,6 +38,17 @@ COMMAND_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_CO
 CWD_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_CWD_FILENAME
 ENV_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_ENV_FILENAME
 SITECUSTOMIZE_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "sitecustomize.py"
+MANAGED_LABEL_KEY = "nova.exec_runner.managed"
+RESOURCE_LABEL_KEY = "nova.exec_runner.resource"
+SESSION_ID_LABEL_KEY = "nova.exec_runner.session_id"
+USER_ID_LABEL_KEY = "nova.exec_runner.user_id"
+THREAD_ID_LABEL_KEY = "nova.exec_runner.thread_id"
+AGENT_ID_LABEL_KEY = "nova.exec_runner.agent_id"
+SESSION_RESOURCE_LABEL_VALUE = "session"
+CACHE_RESOURCE_LABEL_VALUE = "cache"
+CACHE_RECENT_GUARD_SECONDS = 3600
+
+logger = logging.getLogger(__name__)
 
 
 def _render_shell_export(name: str, value: str) -> str:
@@ -48,6 +61,7 @@ class ExecRunnerConfig:
     shared_token: str
     state_root: Path
     session_ttl_seconds: int
+    gc_interval_seconds: int
     sandbox_image: str
     sandbox_network: str
     sandbox_memory_limit_mb: int
@@ -56,6 +70,10 @@ class ExecRunnerConfig:
     max_sync_bytes: int
     max_diff_bytes: int
     proxy_url: str
+    cache_root: Path
+    cache_max_bytes: int
+    cache_target_bytes: int
+    cache_max_age_days: int
     sandbox_no_new_privileges: bool = True
     shared_cache_volume: str = "exec_runner_cache"
     command_timeout_seconds: int = 300
@@ -64,6 +82,19 @@ class ExecRunnerConfig:
 @dataclass(slots=True, frozen=True)
 class ExecSession:
     selector: ExecSessionSelector
+    container_name: str
+    volume_name: str
+    metadata_dir: Path
+    metadata_path: Path
+
+
+@dataclass(slots=True, frozen=True)
+class ManagedSessionRecord:
+    session_id: str
+    user_id: str
+    thread_id: str
+    agent_id: str
+    last_used_at: dt.datetime | None
     container_name: str
     volume_name: str
     metadata_dir: Path
@@ -81,7 +112,8 @@ class ExecResponse:
 def load_exec_runner_config_from_env() -> ExecRunnerConfig:
     shared_token = str(os.getenv("EXEC_RUNNER_SHARED_TOKEN", "") or "").strip()
     state_root = Path(str(os.getenv("EXEC_RUNNER_STATE_ROOT", "/var/lib/nova-exec-runner")).strip())
-    session_ttl_seconds = max(int(os.getenv("EXEC_RUNNER_SESSION_TTL_SECONDS", "3600")), 60)
+    session_ttl_seconds = max(int(os.getenv("EXEC_RUNNER_SESSION_TTL_SECONDS", "14400")), 60)
+    gc_interval_seconds = max(int(os.getenv("EXEC_RUNNER_GC_INTERVAL_SECONDS", "900")), 60)
     sandbox_image = str(os.getenv("EXEC_RUNNER_SANDBOX_IMAGE", "amairesse/nova:latest")).strip()
     sandbox_network = str(os.getenv("EXEC_RUNNER_SANDBOX_NETWORK", "exec-sandbox-net")).strip()
     sandbox_memory_limit_mb = max(int(os.getenv("EXEC_RUNNER_SANDBOX_MEMORY_LIMIT_MB", "1024")), 256)
@@ -93,6 +125,11 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
     )
     max_sync_bytes = max(int(os.getenv("EXEC_RUNNER_MAX_SYNC_BYTES", str(50 * 1024 * 1024))), 1024 * 1024)
     max_diff_bytes = max(int(os.getenv("EXEC_RUNNER_MAX_DIFF_BYTES", str(50 * 1024 * 1024))), 1024 * 1024)
+    cache_root = Path(str(os.getenv("EXEC_RUNNER_CACHE_ROOT", str(EXEC_RUNNER_CACHE_ROOT))).strip())
+    cache_max_bytes = max(int(os.getenv("EXEC_RUNNER_CACHE_MAX_BYTES", str(5 * 1024 * 1024 * 1024))), 1024 * 1024)
+    cache_target_bytes = max(int(os.getenv("EXEC_RUNNER_CACHE_TARGET_BYTES", str(3 * 1024 * 1024 * 1024))), 1024 * 1024)
+    cache_target_bytes = min(cache_target_bytes, cache_max_bytes)
+    cache_max_age_days = max(int(os.getenv("EXEC_RUNNER_CACHE_MAX_AGE_DAYS", "14")), 1)
     proxy_port = max(int(os.getenv("EXEC_RUNNER_PROXY_PORT", "8091")), 1)
     proxy_url = str(os.getenv("EXEC_RUNNER_PROXY_URL", f"http://exec-runner:{proxy_port}")).strip()
     command_timeout_seconds = max(int(os.getenv("EXEC_RUNNER_COMMAND_TIMEOUT_SECONDS", "300")), 5)
@@ -100,6 +137,7 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
         shared_token=shared_token,
         state_root=state_root,
         session_ttl_seconds=session_ttl_seconds,
+        gc_interval_seconds=gc_interval_seconds,
         sandbox_image=sandbox_image,
         sandbox_network=sandbox_network,
         sandbox_memory_limit_mb=sandbox_memory_limit_mb,
@@ -109,6 +147,10 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
         max_sync_bytes=max_sync_bytes,
         max_diff_bytes=max_diff_bytes,
         proxy_url=proxy_url,
+        cache_root=cache_root,
+        cache_max_bytes=cache_max_bytes,
+        cache_target_bytes=cache_target_bytes,
+        cache_max_age_days=cache_max_age_days,
         command_timeout_seconds=command_timeout_seconds,
     )
 
@@ -117,11 +159,13 @@ class DockerExecRunnerBackend:
     def __init__(self, config: ExecRunnerConfig):
         self.config = config
         self._initialized = False
+        self._maintenance_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         if self._initialized:
             return
         await asyncio.to_thread(self.config.state_root.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(self.config.cache_root.mkdir, parents=True, exist_ok=True)
         await self._run_docker("version", "--format", "{{json .Server.Version}}")
         await self._ensure_cache_volume()
         await self._gc_expired_sessions()
@@ -137,15 +181,95 @@ class DockerExecRunnerBackend:
 
     async def delete_session(self, selector: ExecSessionSelector) -> None:
         session = self._session(selector)
-        await self._remove_container(session.container_name)
-        await self._remove_volume(session.volume_name)
-        if session.metadata_dir.exists():
-            for child in sorted(session.metadata_dir.rglob("*"), reverse=True):
-                if child.is_file():
-                    child.unlink(missing_ok=True)
-                else:
-                    child.rmdir()
-            session.metadata_dir.rmdir()
+        await self._delete_session_artifacts(
+            ManagedSessionRecord(
+                session_id=selector.session_id,
+                user_id=str(selector.user_id),
+                thread_id=str(selector.thread_id),
+                agent_id=str(selector.agent_id),
+                last_used_at=None,
+                container_name=session.container_name,
+                volume_name=session.volume_name,
+                metadata_dir=session.metadata_dir,
+                metadata_path=session.metadata_path,
+            )
+        )
+
+    async def delete_sessions_for_thread(self, *, user_id: int | str, thread_id: int | str) -> int:
+        await self.initialize()
+        removed_session_ids: set[str] = set()
+        for record in await self._load_session_records():
+            if record.user_id != str(user_id) or record.thread_id != str(thread_id):
+                continue
+            await self._delete_session_artifacts(record)
+            removed_session_ids.add(record.session_id)
+
+        containers, volumes = await self._list_managed_resources()
+        removed_container_names: set[str] = set()
+        removed_volume_names: set[str] = set()
+
+        for resource in containers:
+            labels = resource.get("labels") or {}
+            if str(labels.get(USER_ID_LABEL_KEY) or "") != str(user_id):
+                continue
+            if str(labels.get(THREAD_ID_LABEL_KEY) or "") != str(thread_id):
+                continue
+            name = str(resource.get("name") or "").strip()
+            session_id = str(labels.get(SESSION_ID_LABEL_KEY) or self._session_id_from_container_name(name) or "").strip()
+            if name and await self._remove_container(name):
+                removed_container_names.add(name)
+            if session_id:
+                removed_session_ids.add(session_id)
+
+        for resource in volumes:
+            labels = resource.get("labels") or {}
+            if str(labels.get(USER_ID_LABEL_KEY) or "") != str(user_id):
+                continue
+            if str(labels.get(THREAD_ID_LABEL_KEY) or "") != str(thread_id):
+                continue
+            name = str(resource.get("name") or "").strip()
+            session_id = str(labels.get(SESSION_ID_LABEL_KEY) or self._session_id_from_volume_name(name) or "").strip()
+            if name and await self._remove_volume(name):
+                removed_volume_names.add(name)
+            if session_id:
+                removed_session_ids.add(session_id)
+
+        if removed_session_ids or removed_container_names or removed_volume_names:
+            logger.info(
+                "exec-runner removed %s warm session(s) for user=%s thread=%s",
+                len(removed_session_ids) or max(len(removed_container_names), len(removed_volume_names)),
+                user_id,
+                thread_id,
+            )
+        return len(removed_session_ids) or max(len(removed_container_names), len(removed_volume_names))
+
+    async def run_maintenance_cycle(self) -> dict[str, int]:
+        await self.initialize()
+        async with self._maintenance_lock:
+            expired_sessions_removed = await self._gc_expired_sessions_locked()
+            orphaned = await self._sweep_orphaned_resources_locked()
+            cache_prune = await asyncio.to_thread(self._prune_shared_cache)
+
+        summary = {
+            "expired_sessions_removed": expired_sessions_removed,
+            "orphaned_containers_removed": orphaned["containers_removed"],
+            "orphaned_volumes_removed": orphaned["volumes_removed"],
+            "cache_files_removed": cache_prune["files_removed"],
+            "cache_directories_removed": cache_prune["directories_removed"],
+            "cache_bytes_reclaimed": cache_prune["bytes_reclaimed"],
+            "errors": orphaned["errors"] + cache_prune["errors"],
+        }
+        logger.info(
+            "exec-runner maintenance: expired_sessions=%s orphaned_containers=%s orphaned_volumes=%s cache_files=%s cache_dirs=%s cache_bytes=%s errors=%s",
+            summary["expired_sessions_removed"],
+            summary["orphaned_containers_removed"],
+            summary["orphaned_volumes_removed"],
+            summary["cache_files_removed"],
+            summary["cache_directories_removed"],
+            summary["cache_bytes_reclaimed"],
+            summary["errors"],
+        )
+        return summary
 
     async def execute(
         self,
@@ -161,6 +285,7 @@ class DockerExecRunnerBackend:
         await self.initialize()
         await self._gc_expired_sessions()
         session = await self._ensure_session(selector)
+        await self._write_session_metadata(session)
         await self._sync_bundle_into_session(session, sync_bundle_bytes)
         result = await self._run_session_command(
             session,
@@ -196,7 +321,11 @@ class DockerExecRunnerBackend:
     async def _ensure_session(self, selector: ExecSessionSelector) -> ExecSession:
         session = self._session(selector)
         await asyncio.to_thread(session.metadata_dir.mkdir, parents=True, exist_ok=True)
-        await self._ensure_volume(session.volume_name, SESSION_ROOT_IN_CONTAINER)
+        await self._ensure_volume(
+            session.volume_name,
+            SESSION_ROOT_IN_CONTAINER,
+            labels=self._session_resource_labels(session.selector),
+        )
         exists = await self._container_exists(session.container_name)
         if not exists:
             await self._create_container(session)
@@ -205,12 +334,29 @@ class DockerExecRunnerBackend:
         return session
 
     async def _ensure_cache_volume(self) -> None:
-        await self._ensure_volume(self.config.shared_cache_volume, CACHE_ROOT_IN_CONTAINER)
+        await self._ensure_volume(
+            self.config.shared_cache_volume,
+            CACHE_ROOT_IN_CONTAINER,
+            labels={
+                MANAGED_LABEL_KEY: "true",
+                RESOURCE_LABEL_KEY: CACHE_RESOURCE_LABEL_VALUE,
+            },
+        )
 
-    async def _ensure_volume(self, volume_name: str, target_path: Path) -> None:
+    async def _ensure_volume(
+        self,
+        volume_name: str,
+        target_path: Path,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> None:
         exists = await self._volume_exists(volume_name)
         if not exists:
-            await self._run_docker("volume", "create", volume_name)
+            create_args = ["volume", "create"]
+            for key, value in sorted((labels or {}).items()):
+                create_args.extend(["--label", f"{key}={value}"])
+            create_args.append(volume_name)
+            await self._run_docker(*create_args)
         await self._run_docker(
             "run",
             "--rm",
@@ -226,6 +372,7 @@ class DockerExecRunnerBackend:
         )
 
     async def _create_container(self, session: ExecSession) -> None:
+        labels = self._session_resource_labels(session.selector)
         docker_args = [
             "run",
             "-d",
@@ -237,6 +384,8 @@ class DockerExecRunnerBackend:
             "--cap-drop",
             "ALL",
         ]
+        for key, value in sorted(labels.items()):
+            docker_args.extend(["--label", f"{key}={value}"])
         if self.config.sandbox_no_new_privileges:
             docker_args.extend(["--security-opt", "no-new-privileges"])
         docker_args.extend(
@@ -525,52 +674,343 @@ class DockerExecRunnerBackend:
             ),
         )
 
-    async def _write_session_metadata(self, session: ExecSession) -> None:
+    def _session_resource_labels(self, selector: ExecSessionSelector) -> dict[str, str]:
+        return {
+            MANAGED_LABEL_KEY: "true",
+            RESOURCE_LABEL_KEY: SESSION_RESOURCE_LABEL_VALUE,
+            SESSION_ID_LABEL_KEY: selector.session_id,
+            USER_ID_LABEL_KEY: str(selector.user_id),
+            THREAD_ID_LABEL_KEY: str(selector.thread_id),
+            AGENT_ID_LABEL_KEY: str(selector.agent_id),
+        }
+
+    async def _write_session_metadata(self, session: ExecSession, *, timestamp: dt.datetime | None = None) -> None:
+        written_at = (timestamp or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
         payload = {
             "session_id": session.selector.session_id,
-            "last_used_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "user_id": str(session.selector.user_id),
+            "thread_id": str(session.selector.thread_id),
+            "agent_id": str(session.selector.agent_id),
+            "last_used_at": written_at.isoformat(),
             "container_name": session.container_name,
             "volume_name": session.volume_name,
         }
         await asyncio.to_thread(session.metadata_path.write_text, json.dumps(payload, ensure_ascii=False), "utf-8")
 
     async def _gc_expired_sessions(self) -> None:
+        async with self._maintenance_lock:
+            await self._gc_expired_sessions_locked()
+
+    async def _gc_expired_sessions_locked(self) -> int:
         sessions_root = self.config.state_root / "sessions"
         if not sessions_root.exists():
-            return
+            return 0
         now = dt.datetime.now(dt.timezone.utc)
-        for metadata_path in sessions_root.glob("*/session.json"):
+        removed_count = 0
+        for record in await self._load_session_records():
+            if record.last_used_at is None:
+                continue
+            last_used = record.last_used_at.astimezone(dt.timezone.utc)
+            if (now - last_used).total_seconds() <= self.config.session_ttl_seconds:
+                continue
+            await self._delete_session_artifacts(record)
+            removed_count += 1
+        return removed_count
+
+    async def _load_session_records(self) -> list[ManagedSessionRecord]:
+        sessions_root = self.config.state_root / "sessions"
+        if not sessions_root.exists():
+            return []
+        records: list[ManagedSessionRecord] = []
+        for metadata_path in sorted(sessions_root.glob("*/session.json")):
+            record = await asyncio.to_thread(self._load_session_record_from_path, metadata_path)
+            if record is not None:
+                records.append(record)
+        return records
+
+    def _load_session_record_from_path(self, metadata_path: Path) -> ManagedSessionRecord | None:
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return None
+
+        session_id = str(data.get("session_id") or metadata_path.parent.name).strip() or metadata_path.parent.name
+        session_parts = self._parse_session_id(session_id)
+        last_used_raw = str(data.get("last_used_at") or "").strip()
+        last_used: dt.datetime | None = None
+        if last_used_raw:
             try:
-                data = json.loads(metadata_path.read_text(encoding="utf-8"))
-                last_used = dt.datetime.fromisoformat(str(data.get("last_used_at") or ""))
-            except (OSError, TypeError, ValueError):
-                continue
-            if last_used.tzinfo is None:
-                last_used = last_used.replace(tzinfo=dt.timezone.utc)
-            if (now - last_used.astimezone(dt.timezone.utc)).total_seconds() <= self.config.session_ttl_seconds:
-                continue
-            selector = ExecSessionSelector(
-                user_id=str(data.get("session_id") or metadata_path.parent.name).split("--")[0].replace("user-", "", 1),
-                thread_id="expired",
-                agent_id="expired",
+                parsed = dt.datetime.fromisoformat(last_used_raw)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=dt.timezone.utc)
+                last_used = parsed.astimezone(dt.timezone.utc)
+            except ValueError:
+                last_used = None
+        return ManagedSessionRecord(
+            session_id=session_id,
+            user_id=str(data.get("user_id") or session_parts.get("user") or ""),
+            thread_id=str(data.get("thread_id") or session_parts.get("thread") or ""),
+            agent_id=str(data.get("agent_id") or session_parts.get("agent") or ""),
+            last_used_at=last_used,
+            container_name=str(data.get("container_name") or ""),
+            volume_name=str(data.get("volume_name") or ""),
+            metadata_dir=metadata_path.parent,
+            metadata_path=metadata_path,
+        )
+
+    def _parse_session_id(self, session_id: str) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in (
+                item.split("-", 1)
+                for item in str(session_id or "").split("--")
+                if "-" in item
             )
-            session = ExecSession(
-                selector=selector,
-                container_name=str(data.get("container_name") or ""),
-                volume_name=str(data.get("volume_name") or ""),
-                metadata_dir=metadata_path.parent,
-                metadata_path=metadata_path,
+        }
+
+    def _session_id_from_container_name(self, container_name: str) -> str:
+        prefix = "nova-exec-"
+        text = str(container_name or "").strip()
+        if text.startswith(prefix):
+            return text[len(prefix):]
+        return ""
+
+    def _session_id_from_volume_name(self, volume_name: str) -> str:
+        prefix = "nova-exec-session-"
+        text = str(volume_name or "").strip()
+        if text.startswith(prefix):
+            return text[len(prefix):]
+        return ""
+
+    async def _delete_session_artifacts(self, record: ManagedSessionRecord) -> None:
+        if record.container_name:
+            await self._remove_container(record.container_name)
+        if record.volume_name:
+            await self._remove_volume(record.volume_name)
+        await asyncio.to_thread(self._remove_metadata_dir, record.metadata_dir)
+
+    def _remove_metadata_dir(self, metadata_dir: Path) -> None:
+        if not metadata_dir.exists():
+            return
+        for child in sorted(metadata_dir.rglob("*"), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            else:
+                child.rmdir()
+        metadata_dir.rmdir()
+
+    async def _list_managed_resources(self) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        container_ids = set(await self._list_docker_items("ps", "-aq", "--filter", f"label={MANAGED_LABEL_KEY}=true"))
+        container_ids.update(await self._list_docker_items("ps", "-aq", "--filter", "name=nova-exec-"))
+
+        volume_names = set(
+            name
+            for name in await self._list_docker_items("volume", "ls", "-q", "--filter", f"label={MANAGED_LABEL_KEY}=true")
+            if name != self.config.shared_cache_volume
+        )
+        volume_names.update(
+            name
+            for name in await self._list_docker_items("volume", "ls", "-q", "--filter", "name=nova-exec-session-")
+            if name != self.config.shared_cache_volume
+        )
+
+        containers = await self._inspect_containers(sorted(container_ids))
+        volumes = await self._inspect_volumes(sorted(volume_names))
+        return containers, volumes
+
+    async def _list_docker_items(self, *args: str) -> list[str]:
+        try:
+            stdout = await self._run_docker(*args)
+        except ExecRunnerError:
+            return []
+        return [line.strip() for line in stdout.splitlines() if line.strip()]
+
+    async def _inspect_containers(self, container_ids: list[str]) -> list[dict[str, str]]:
+        if not container_ids:
+            return []
+        try:
+            raw = await self._run_docker("inspect", *container_ids)
+        except ExecRunnerError:
+            return []
+        try:
+            payload = json.loads(raw or "[]")
+        except ValueError:
+            return []
+        resources: list[dict[str, str]] = []
+        for item in payload if isinstance(payload, list) else []:
+            labels = ((item.get("Config") or {}).get("Labels") or {}) if isinstance(item, dict) else {}
+            resources.append(
+                {
+                    "name": str(item.get("Name") or "").lstrip("/"),
+                    "created_at": str(item.get("Created") or ""),
+                    "session_id": str(labels.get(SESSION_ID_LABEL_KEY) or ""),
+                    "labels": labels,
+                }
             )
-            if session.container_name:
-                await self._remove_container(session.container_name)
-            if session.volume_name:
-                await self._remove_volume(session.volume_name)
-            for child in sorted(session.metadata_dir.rglob("*"), reverse=True):
-                if child.is_file():
-                    child.unlink(missing_ok=True)
+        return resources
+
+    async def _inspect_volumes(self, volume_names: list[str]) -> list[dict[str, str]]:
+        if not volume_names:
+            return []
+        try:
+            raw = await self._run_docker("volume", "inspect", *volume_names)
+        except ExecRunnerError:
+            return []
+        try:
+            payload = json.loads(raw or "[]")
+        except ValueError:
+            return []
+        resources: list[dict[str, str]] = []
+        for item in payload if isinstance(payload, list) else []:
+            labels = (item.get("Labels") or {}) if isinstance(item, dict) else {}
+            resources.append(
+                {
+                    "name": str(item.get("Name") or ""),
+                    "created_at": str(item.get("CreatedAt") or ""),
+                    "session_id": str(labels.get(SESSION_ID_LABEL_KEY) or ""),
+                    "labels": labels,
+                }
+            )
+        return resources
+
+    def _is_resource_older_than_ttl(self, created_at: str) -> bool:
+        text = str(created_at or "").strip()
+        if not text:
+            return True
+        try:
+            normalized = text.replace("Z", "+00:00")
+            parsed = dt.datetime.fromisoformat(normalized)
+        except ValueError:
+            return True
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        age_seconds = (dt.datetime.now(dt.timezone.utc) - parsed.astimezone(dt.timezone.utc)).total_seconds()
+        return age_seconds > self.config.session_ttl_seconds
+
+    async def _sweep_orphaned_resources_locked(self) -> dict[str, int]:
+        records = {record.session_id for record in await self._load_session_records()}
+        containers, volumes = await self._list_managed_resources()
+        containers_removed = 0
+        volumes_removed = 0
+        errors = 0
+
+        for resource in containers:
+            session_id = str(resource.get("session_id") or self._session_id_from_container_name(str(resource.get("name") or "")) or "").strip()
+            if session_id and session_id in records:
+                continue
+            if session_id and not self._is_resource_older_than_ttl(str(resource.get("created_at") or "")):
+                continue
+            try:
+                removed = await self._remove_container(str(resource.get("name") or ""))
+                if removed:
+                    containers_removed += 1
                 else:
-                    child.rmdir()
-            session.metadata_dir.rmdir()
+                    errors += 1
+                    logger.warning("Failed to remove orphaned exec-runner container %s", resource.get("name"))
+            except Exception:
+                errors += 1
+                logger.exception("Failed to remove orphaned exec-runner container %s", resource.get("name"))
+
+        for resource in volumes:
+            session_id = str(resource.get("session_id") or self._session_id_from_volume_name(str(resource.get("name") or "")) or "").strip()
+            if session_id and session_id in records:
+                continue
+            if session_id and not self._is_resource_older_than_ttl(str(resource.get("created_at") or "")):
+                continue
+            try:
+                removed = await self._remove_volume(str(resource.get("name") or ""))
+                if removed:
+                    volumes_removed += 1
+                else:
+                    errors += 1
+                    logger.warning("Failed to remove orphaned exec-runner volume %s", resource.get("name"))
+            except Exception:
+                errors += 1
+                logger.exception("Failed to remove orphaned exec-runner volume %s", resource.get("name"))
+
+        return {
+            "containers_removed": containers_removed,
+            "volumes_removed": volumes_removed,
+            "errors": errors,
+        }
+
+    def _prune_shared_cache(self) -> dict[str, int]:
+        files_removed = 0
+        directories_removed = 0
+        bytes_reclaimed = 0
+        errors = 0
+        cache_root = self.config.cache_root
+        if not cache_root.exists():
+            return {
+                "files_removed": 0,
+                "directories_removed": 0,
+                "bytes_reclaimed": 0,
+                "errors": 0,
+            }
+
+        now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
+        max_age_seconds = self.config.cache_max_age_days * 24 * 60 * 60
+
+        def collect_files() -> list[tuple[Path, int, float]]:
+            collected: list[tuple[Path, int, float]] = []
+            for current_root, _dirnames, filenames in os.walk(cache_root):
+                for filename in filenames:
+                    path = Path(current_root) / filename
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        continue
+                    collected.append((path, int(stat.st_size), float(stat.st_mtime)))
+            return collected
+
+        def delete_file(path: Path, size: int) -> None:
+            nonlocal files_removed, bytes_reclaimed, errors
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                errors += 1
+                logger.exception("Failed to remove exec-runner cache file %s", path)
+                return
+            files_removed += 1
+            bytes_reclaimed += max(size, 0)
+
+        files = collect_files()
+        total_size = sum(size for _path, size, _mtime in files)
+        recent_cutoff = now_ts - CACHE_RECENT_GUARD_SECONDS
+        age_cutoff = now_ts - max_age_seconds
+
+        remaining: list[tuple[Path, int, float]] = []
+        for path, size, mtime in files:
+            if mtime <= age_cutoff and mtime <= recent_cutoff:
+                delete_file(path, size)
+                total_size -= size
+            else:
+                remaining.append((path, size, mtime))
+
+        if total_size > self.config.cache_max_bytes:
+            for path, size, mtime in sorted(remaining, key=lambda item: item[2]):
+                if total_size <= self.config.cache_target_bytes:
+                    break
+                if mtime > recent_cutoff:
+                    continue
+                delete_file(path, size)
+                total_size -= size
+
+        for current_root, dirnames, _filenames in os.walk(cache_root, topdown=False):
+            for dirname in dirnames:
+                directory = Path(current_root) / dirname
+                try:
+                    directory.rmdir()
+                except OSError:
+                    continue
+                directories_removed += 1
+
+        return {
+            "files_removed": files_removed,
+            "directories_removed": directories_removed,
+            "bytes_reclaimed": bytes_reclaimed,
+            "errors": errors,
+        }
 
     async def _container_exists(self, container_name: str) -> bool:
         try:
@@ -593,21 +1033,23 @@ class DockerExecRunnerBackend:
             return False
         return True
 
-    async def _remove_container(self, container_name: str) -> None:
+    async def _remove_container(self, container_name: str) -> bool:
         if not container_name:
-            return
+            return False
         try:
             await self._run_docker("rm", "-f", container_name)
+            return True
         except ExecRunnerError:
-            return
+            return False
 
-    async def _remove_volume(self, volume_name: str) -> None:
+    async def _remove_volume(self, volume_name: str) -> bool:
         if not volume_name:
-            return
+            return False
         try:
             await self._run_docker("volume", "rm", "-f", volume_name)
+            return True
         except ExecRunnerError:
-            return
+            return False
 
     async def _write_text_into_container(self, container_name: str, path: Path, text: str) -> None:
         await self._write_bytes_into_container(container_name, path, text.encode("utf-8"))

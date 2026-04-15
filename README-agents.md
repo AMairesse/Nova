@@ -72,8 +72,8 @@ Backend-backed capabilities:
   - deployment default when SearXNG is enabled in Docker
   - optional custom backends per user
 - `Python`
-  - provided locally by Nova's persistent sandbox terminal
-  - available as a deployment default without extra service setup
+  - deployment default when the optional `exec-runner` module is enabled
+  - exposes Nova's persistent sandbox terminal to agents without extra per-user setup
 
 Connections you add explicitly:
 
@@ -89,6 +89,8 @@ Notes:
 - email, calendar, WebDAV, MCP, and API connections can be configured multiple times for one user
 - `Search` and `Python` are selected per agent as one backend each
 - MCP connections can use managed OAuth when the server requires it
+
+If `exec-runner` is not enabled, the default Python backend is simply unavailable and agents keep working without it.
 
 ### MCP Authentication
 

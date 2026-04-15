@@ -13,6 +13,7 @@ from nova.models.UserObjects import UserProfile
 from nova.models.Thread import Thread
 from nova.runtime.agent import ReactTerminalRuntime
 from nova.runtime.support import get_runtime_error
+from nova.threads.service import ThreadDeletionError, delete_thread_for_user
 
 
 class QuestionAnswerView(APIView):
@@ -89,7 +90,10 @@ class QuestionAnswerView(APIView):
             )
         finally:
             if thread is not None:
-                thread.delete()
+                try:
+                    delete_thread_for_user(thread, request.user)
+                except ThreadDeletionError:
+                    pass
 
         response_data = {"question": question, "answer": answer}
         return Response(response_data, status=status.HTTP_200_OK)

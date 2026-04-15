@@ -1,4 +1,3 @@
-# nova/views/thread_views.py
 from django.http import JsonResponse, Http404
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
@@ -8,7 +7,6 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
 from nova.models.Message import Actor
-from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.message_panel import (
     get_message_panel_agents,
@@ -30,8 +28,8 @@ from nova.message_submission import (
 )
 from nova.runtime.compaction import get_compactable_message_count, get_compaction_error
 from nova.message_utils import upload_message_attachments
-from nova.tasks.runtime_state import reconcile_stale_running_tasks
 from nova.realtime.sidebar_updates import publish_file_update
+from nova.threads import ThreadDeletionError, delete_thread_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -204,23 +202,13 @@ def create_thread(request):
 @login_required(login_url='login')
 def delete_thread(request, thread_id):
     thread = get_object_or_404(Thread, id=thread_id, user=request.user)
-
-    reconcile_stale_running_tasks(thread=thread, user=request.user)
-
-    # Check for actively running tasks only. AWAITING_INPUT is a suspended state
-    # that can safely disappear with the thread.
-    running_tasks = Task.objects.filter(
-        thread=thread,
-        user=request.user,
-        status=TaskStatus.RUNNING,
-    )
-    if running_tasks.exists():
+    try:
+        delete_thread_for_user(thread, request.user)
+    except ThreadDeletionError as exc:
         return JsonResponse({
             "status": "ERROR",
-            "message": "Cannot delete thread with active tasks. Please wait for the current run to finish."
-        }, status=400)
-
-    thread.delete()
+            "message": str(exc),
+        }, status=exc.status_code)
     # JSON response (frontend uses fetch, and handles DOM removal).
     return JsonResponse({"status": "OK"})
 

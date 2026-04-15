@@ -30,16 +30,11 @@ from user_settings.mixins import (
 )
 from user_settings.forms import APIToolOperationForm, ToolForm, ToolCredentialForm
 from nova.models.APIToolOperation import APIToolOperation
-from nova.models.Tool import (
-    Tool,
-    ToolCredential,
-    check_and_create_python_tool,
-    check_and_create_searxng_tool,
-)
+from nova.models.Tool import Tool, ToolCredential
 from nova.plugins import get_plugin_for_builtin_subtype
 from nova.plugins.catalog import (
     build_tools_page_catalog,
-    ensure_standard_capability_tools,
+    ensure_capability_tooling,
     get_tool_connection_status,
     get_user_creatable_plugins,
     resolve_connection_kind,
@@ -119,9 +114,7 @@ class ToolListView(LoginRequiredMixin, UserOwnedQuerySetMixin, ListView):
         return super().get_template_names()
 
     def get_queryset(self):
-        ensure_standard_capability_tools()
-        check_and_create_searxng_tool()
-        check_and_create_python_tool()
+        ensure_capability_tooling()
 
         # Limit tools to current user + system tools
         base_qs = Tool.objects.filter(

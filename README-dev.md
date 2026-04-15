@@ -7,8 +7,11 @@ Nova is a Django application with a single agent runtime centered on `nova/runti
 Important backend slices:
 
 - `nova/runtime/`: Nova runtime, provider client, VFS, task executor
+- `nova/runtime/commands/`: progressively extracted terminal command helpers
+- `nova/exec_runner/`: optional sandbox terminal backend and runner client/server pieces
 - `nova/plugins/`: internal plugin registry for builtins/system capabilities
 - `nova/providers/`: provider-specific model discovery and capability handling
+- `nova/threads/`: thread lifecycle domain services
 - `nova/continuous/`: continuous-mode summaries, recall, and context builder
 - `nova/tasks/`: Celery tasks, scheduled task execution, maintenance flows
 - `nova/web/`: web search, browsing, and downloads
@@ -24,16 +27,19 @@ Nova
 ├─ nova/
 │  ├─ api/                      # Minimal REST facade
 │  ├─ continuous/               # Continuous-mode context and maintenance
+│  ├─ exec_runner/              # Optional sandbox terminal backend
 │  ├─ memory/                   # Memory document/chunk services
 │  ├─ mcp/                      # MCP client and managed OAuth support
 │  ├─ models/                   # One model per file
 │  ├─ plugins/                  # Internal plugin descriptors and shared helpers
 │  ├─ providers/                # Provider adapters and capability logic
 │  ├─ runtime/                  # Nova runtime
+│  │  └─ commands/              # Terminal command helpers
 │  ├─ static/                   # JS/CSS assets
 │  ├─ tasks/                    # Celery tasks and task templates
 │  ├─ templates/                # Django templates
 │  ├─ tests/                    # Django test suite
+│  ├─ threads/                  # Thread lifecycle services
 │  ├─ views/                    # Django views
 │  ├─ web/                      # Search/browser/download services
 │  └─ webapp/                   # Live webapp publication
@@ -101,7 +107,7 @@ Examples:
 - mail: `mail ...`
 - calendar: `calendar ...`
 - memory: `grep ...`, `memory search ...`
-- Python backend: `python ...`
+- Python backend: `python ...` via `exec-runner` when enabled
 - webapp: `webapp expose ...`
 - MCP: `mcp ...`
 - API tools: `api ...`
@@ -127,6 +133,11 @@ At the product level, the registry distinguishes:
 - built-in capabilities available by default
 - backend-backed capabilities where an agent selects one backend (`Search`, `Python`)
 - multi-instance user connections such as mail, calendar, WebDAV, MCP, and API
+
+Current nuance:
+
+- `Search` can use a deployment default and optional user-defined custom backends
+- `Python` currently uses the deployment-default sandbox backend when `exec-runner` is enabled
 
 ## Provider-Aware Behavior
 
