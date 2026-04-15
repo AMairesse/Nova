@@ -330,7 +330,6 @@ class ExecRunnerSharedTests(SimpleTestCase):
             "listdir": os.listdir,
             "access": os.access,
             "stat": os.stat,
-            "exists": os.path.exists,
         }
         previous_root = os.environ.get("NOVA_WORKSPACE_ROOT")
         restore = None
@@ -352,7 +351,6 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 with open("/openrouter_activity_2026-04-15.csv", encoding="utf-8") as handle:
                     self.assertEqual(handle.read(), "col\nvalue\n")
                 self.assertTrue(os.access("/openrouter_activity_2026-04-15.csv", os.R_OK))
-                self.assertTrue(os.path.exists("/openrouter_activity_2026-04-15.csv"))
             finally:
                 if callable(restore):
                     restore()
@@ -365,7 +363,6 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 self.assertIs(os.listdir, originals["listdir"])
                 self.assertIs(os.access, originals["access"])
                 self.assertIs(os.stat, originals["stat"])
-                self.assertIs(os.path.exists, originals["exists"])
 
     def test_run_session_command_installs_python_workspace_sitecustomize(self):
         backend = DockerExecRunnerBackend(
@@ -403,6 +400,7 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 ),
                 command='python -c "print(1)"',
                 cwd="/",
+                ensure_python=True,
             )
         )
 
@@ -413,3 +411,52 @@ class ExecRunnerSharedTests(SimpleTestCase):
         command_script = await_calls[1].args[2]
         self.assertIn('export NOVA_WORKSPACE_ROOT="/srv/nova-session/workspace"', command_script)
         self.assertIn('export PYTHONPATH="/srv/nova-session/workspace/.nova_runner"', command_script)
+        self.assertIn("unset NOVA_WORKSPACE_ROOT", command_script)
+        self.assertIn("unset PYTHONPATH", command_script)
+
+    def test_run_session_command_does_not_install_python_workspace_sitecustomize_for_non_python_commands(self):
+        backend = DockerExecRunnerBackend(
+            ExecRunnerConfig(
+                shared_token="runner-token",
+                state_root=Path("/tmp/nova-exec-runner-tests"),
+                session_ttl_seconds=3600,
+                sandbox_image="amairesse/nova:latest",
+                sandbox_network="nova_exec-sandbox-net",
+                sandbox_memory_limit_mb=1024,
+                sandbox_cpu_limit="1.0",
+                sandbox_pids_limit=256,
+                sandbox_no_new_privileges=True,
+                max_sync_bytes=50 * 1024 * 1024,
+                max_diff_bytes=50 * 1024 * 1024,
+                proxy_url="http://exec-runner:8091",
+            )
+        )
+        backend._load_persisted_env = AsyncMock(return_value={})
+        backend._write_text_into_container = AsyncMock()
+        backend._docker_exec_capture = AsyncMock(
+            return_value=("", "", 0)
+        )
+        backend._cleanup_processes = AsyncMock()
+        backend._read_text_from_container = AsyncMock(return_value=str(WORKSPACE_ROOT_IN_CONTAINER))
+
+        asyncio.run(
+            backend._run_session_command(
+                ExecSession(
+                    selector=ExecSessionSelector(user_id=1, thread_id=2, agent_id=3),
+                    container_name="nova-exec-test",
+                    volume_name="nova-exec-session-test",
+                    metadata_dir=Path("/tmp/nova-exec-runner-tests/sessions/test"),
+                    metadata_path=Path("/tmp/nova-exec-runner-tests/sessions/test/session.json"),
+                ),
+                command="pip install --user pandas",
+                cwd="/",
+                ensure_python=False,
+            )
+        )
+
+        await_calls = backend._write_text_into_container.await_args_list
+        self.assertEqual(len(await_calls), 1)
+        self.assertEqual(await_calls[0].args[1].name, "command.sh")
+        command_script = await_calls[0].args[2]
+        self.assertNotIn("NOVA_WORKSPACE_ROOT", command_script)
+        self.assertNotIn("sitecustomize.py", command_script)

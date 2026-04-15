@@ -38,6 +38,11 @@ ENV_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / RUNNER_ENV_FI
 SITECUSTOMIZE_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "sitecustomize.py"
 
 
+def _render_shell_export(name: str, value: str) -> str:
+    safe_value = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'export {name}="{safe_value}"'
+
+
 @dataclass(slots=True, frozen=True)
 class ExecRunnerConfig:
     shared_token: str
@@ -339,28 +344,36 @@ class DockerExecRunnerBackend:
         cwd: str,
         ensure_python: bool = False,
     ) -> SandboxShellResult:
-        del ensure_python
         persisted_env = await self._load_persisted_env(session.container_name)
         env = self._base_environment()
         env.update({key: value for key, value in persisted_env.items() if not key.startswith("NOVA_")})
-        internal_python_path = str(WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME)
-        existing_python_path = str(env.get("PYTHONPATH") or "").strip()
-        env["PYTHONPATH"] = (
-            internal_python_path
-            if not existing_python_path
-            else f"{internal_python_path}:{existing_python_path}"
-        )
-        env["NOVA_WORKSPACE_ROOT"] = str(WORKSPACE_ROOT_IN_CONTAINER)
+        restore_python_env_lines: list[str] = []
+        if ensure_python:
+            internal_python_path = str(WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME)
+            existing_python_path = str(env.get("PYTHONPATH") or "").strip()
+            env["PYTHONPATH"] = (
+                internal_python_path
+                if not existing_python_path
+                else f"{internal_python_path}:{existing_python_path}"
+            )
+            env["NOVA_WORKSPACE_ROOT"] = str(WORKSPACE_ROOT_IN_CONTAINER)
+            restore_python_env_lines.append(
+                _render_shell_export("PYTHONPATH", existing_python_path)
+                if existing_python_path
+                else "unset PYTHONPATH"
+            )
+            restore_python_env_lines.append("unset NOVA_WORKSPACE_ROOT")
         normalized_cwd = normalize_sandbox_path(cwd, cwd="/")
         if normalized_cwd in {"/skills", "/inbox", "/history", "/memory", "/webdav"}:
             normalized_cwd = "/"
         rewritten_command = rewrite_shell_command_for_workspace(command, WORKSPACE_ROOT_IN_CONTAINER)
         rendered_env = encode_environment_script(env)
-        await self._write_text_into_container(
-            session.container_name,
-            SITECUSTOMIZE_PATH,
-            PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE,
-        )
+        if ensure_python:
+            await self._write_text_into_container(
+                session.container_name,
+                SITECUSTOMIZE_PATH,
+                PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE,
+            )
         command_script = "\n".join(
             [
                 "set +e",
@@ -368,6 +381,7 @@ class DockerExecRunnerBackend:
                 rendered_env,
                 rewritten_command,
                 "status=$?",
+                *restore_python_env_lines,
                 f'pwd > "{CWD_PATH}"',
                 f'python3 - <<\'PYENV\' > "{ENV_PATH}"',
                 "import json, os",

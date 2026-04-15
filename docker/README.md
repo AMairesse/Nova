@@ -227,3 +227,40 @@ Notes:
 - `exec-runner` is the only service that receives the Docker socket. `web` and `celery-worker` call it over an authenticated internal HTTP API.
 - In the standard Docker module setup, `EXEC_RUNNER_SHARED_TOKEN` is the only exec-runner value you normally need to set in `.env`.
 - The Docker module disables `EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES` by default for compatibility with hosts where the sandbox bootstrap shell cannot start under that hardening flag.
+
+## Exec-runner troubleshooting
+
+If an `exec-runner` sandbox gets stuck or keeps a warm session in a bad state, you may need to
+remove the sandbox containers that were created by `exec-runner` itself before running a full
+`docker compose down`.
+
+List active sandbox containers:
+
+```bash
+docker ps --filter "name=^/nova-exec-"
+```
+
+Force-remove all sandbox containers created by `exec-runner`:
+
+```bash
+for id in $(docker ps -aq --filter "name=^/nova-exec-"); do
+  docker rm -f "$id"
+done
+```
+
+If you also want to remove their persistent session volumes:
+
+```bash
+for v in $(docker volume ls -q --filter "name=^nova-exec-session-"); do
+  docker volume rm "$v"
+done
+```
+
+Then you can stop the Nova stack normally:
+
+```bash
+docker compose down
+```
+
+This is useful when debugging warm sandbox sessions, package installs, or workspace state that
+does not reset as expected between runs.

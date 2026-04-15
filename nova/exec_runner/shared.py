@@ -51,7 +51,6 @@ PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE = textwrap.dedent(
 
         preserved_prefixes = ("/dev", "/proc", "/sys")
         originals = {}
-
         def _translate(path):
             if isinstance(path, int) or path is None:
                 return path
