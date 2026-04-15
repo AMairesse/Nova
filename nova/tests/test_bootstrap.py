@@ -200,6 +200,7 @@ class BootstrapSkillsTests(TestCase):
         self.assertIn("date/time capability", nova.system_prompt)
         self.assertIn("Keep thread-scoped filesystem organization", nova.system_prompt)
         self.assertIn("Use `python` directly", nova.system_prompt)
+        self.assertIn("pip install --user <package>", nova.system_prompt)
         self.assertIn("Do not delegate thread-scoped filesystem cleanup", nova.system_prompt)
         self.assertNotIn("Python Agent", nova.system_prompt)
 

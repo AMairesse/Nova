@@ -4599,6 +4599,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("Use `python` directly", prompt)
+        self.assertIn("pip install --user <package>", prompt)
         self.assertIn("--workdir", prompt)
         self.assertIn("Do not use Python as a substitute", prompt)
         self.assertIn(

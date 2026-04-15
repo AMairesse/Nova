@@ -23,6 +23,7 @@ from nova.exec_runner import service as exec_runner_service
 from nova.exec_runner.shared import (
     ExecSessionSelector,
     SandboxShellResult,
+    rewrite_output_paths_from_workspace,
     rewrite_shell_command_for_workspace,
 )
 
@@ -308,3 +309,11 @@ class ExecRunnerSharedTests(SimpleTestCase):
         self.assertIn('> /dev/null', rewritten)
         self.assertIn('cat /proc/version', rewritten)
         self.assertIn('ls /sys', rewritten)
+
+    def test_rewrite_output_paths_keeps_single_leading_slash_for_root_files(self):
+        rendered = rewrite_output_paths_from_workspace(
+            f"{WORKSPACE_ROOT_IN_CONTAINER}/openrouter_activity_2026-04-15.csv\n",
+            WORKSPACE_ROOT_IN_CONTAINER,
+        )
+
+        self.assertEqual(rendered, "/openrouter_activity_2026-04-15.csv\n")

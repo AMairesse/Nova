@@ -196,11 +196,12 @@ def rewrite_output_paths_from_workspace(text: str, workspace_root: Path) -> str:
     if not root:
         return rendered
     candidates = {
-        root: "/",
         f"{root}/tmp": "/tmp",
         f"{root}/skills": SKILLS_ROOT,
         f"{root}/inbox": INBOX_ROOT,
         f"{root}/history": HISTORY_ROOT,
+        f"{root}/": "/",
+        root: "/",
     }
     for candidate, replacement in sorted(
         candidates.items(),

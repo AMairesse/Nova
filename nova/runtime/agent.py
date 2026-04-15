@@ -267,7 +267,7 @@ class ReactTerminalRuntime:
         extra_guidance: list[str] = [
             "The Nova terminal keeps a persistent sandboxed shell workspace for this thread. "
             "Pure shell and workspace commands run there, while sensitive Nova capabilities stay host-mediated. "
-            "Use normal shell commands for file editing, builds, and package installs, and keep using Nova commands "
+            "Use normal shell commands for file editing, builds, and package installs such as `pip install --user <package>`, and keep using Nova commands "
             "for things like web search, mail, memory, webapps, and other product capabilities.",
             "Text pipelines work with `|`. Use `touch` or `tee` to create files, and use shell-like helpers such as "
             "`find`, `sort`, and `ls -R` when they fit. The Nova terminal is shell-like, but it is not a full shell.",
@@ -296,10 +296,11 @@ class ReactTerminalRuntime:
         if self.capabilities.has_python:
             extra_guidance.append(
                 "Use `python` directly inside the persistent sandbox terminal for computation, data processing, "
-                "scripts, and package-backed workflows. Use `python --workdir /project -c \"...\"` when inline code "
-                "needs to sync a workspace folder. Do not use Python as a substitute for normal Nova terminal commands "
-                "such as cleanup, moves, or `webapp expose`; keep final cleanup, file organization, and `webapp expose` "
-                "in the Nova terminal workflow rather than delegating them elsewhere."
+                "scripts, and package-backed workflows. If an import is missing, install the dependency in the sandbox "
+                "with `pip install --user <package>` and retry. Use `python --workdir /project -c \"...\"` "
+                "when inline code needs to sync a workspace folder. Do not use Python as a substitute for normal Nova "
+                "terminal commands such as cleanup, moves, or `webapp expose`; keep final cleanup, file organization, "
+                "and `webapp expose` in the Nova terminal workflow rather than delegating them elsewhere."
             )
         extra_guidance.append(
             "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work in the "
