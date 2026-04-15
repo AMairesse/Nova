@@ -327,7 +327,7 @@ class TerminalExecutor:
         return False
 
     def _should_route_command_to_sandbox(self, raw: str) -> bool:
-        if not exec_runner_service.exec_runner_is_enabled():
+        if not exec_runner_service.exec_runner_is_configured():
             return False
         if self._command_uses_host_mediated_paths(raw):
             return False
@@ -4242,7 +4242,7 @@ class TerminalExecutor:
 
     @staticmethod
     def _format_python_result_text(
-        result: python_service.Judge0ExecutionResult | python_service.PythonExecutionResult,
+        result: python_service.PythonCommandResult | python_service.PythonExecutionResult,
     ) -> str:
         lines = [f"Status: {result.status_description}"]
         lines.append(f"Stdout: {result.stdout}" if result.stdout else "Stdout: ")
@@ -4459,7 +4459,7 @@ class TerminalExecutor:
         if result.display_text:
             return result.display_text
         return self._format_python_result_text(
-            python_service.Judge0ExecutionResult(
+            python_service.PythonCommandResult(
                 status_description=result.status_label or ("Accepted" if result.status == 0 else "Error"),
                 stdout=result.stdout,
                 stderr=result.stderr,

@@ -8,6 +8,7 @@ from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
+from nova.exec_runner.service import exec_runner_is_configured
 from nova.llm.embeddings import resolve_embeddings_provider_for_values
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
@@ -250,7 +251,7 @@ def sync_search_system_backend() -> Tool | None:
 def sync_python_system_backend() -> Tool | None:
     tool = _get_system_builtin_tool("code_execution")
 
-    if settings.EXEC_RUNNER_ENABLED:
+    if exec_runner_is_configured():
         if tool is None:
             tool = Tool.objects.create(
                 user=None,

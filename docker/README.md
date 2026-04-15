@@ -46,6 +46,10 @@ Use one of these values in `docker/.env`:
   - `COMPOSE_FILE=docker-compose.yml`
 - Base + SearXNG:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml`
+- Base + exec-runner:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-exec-runner.yml`
+- Base + SearXNG + exec-runner:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml:docker-compose.add-exec-runner.yml`
 - Base + Ollama:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-ollama.yml`
 - Base + llama.cpp:
@@ -54,8 +58,12 @@ Use one of these values in `docker/.env`:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-llamacpp-embeddings.yml`
 - Development:
   - `COMPOSE_FILE=docker-compose.dev.yml`
+- Development + exec-runner:
+  - `COMPOSE_FILE=docker-compose.dev.yml:docker-compose.add-exec-runner.yml:docker-compose.add-exec-runner.dev.yml`
 - Build from source:
   - `COMPOSE_FILE=docker-compose.from-source.yml`
+- Build from source + exec-runner:
+  - `COMPOSE_FILE=docker-compose.from-source.yml:docker-compose.add-exec-runner.yml:docker-compose.add-exec-runner.from-source.yml`
 
 Note:
 - On macOS/Linux, separate compose files with `:`.
@@ -105,6 +113,10 @@ newer dynamic upstream configuration.
   - Enables the deployment-default `Search` backend in Nova.
   - Users can still add their own custom remote search backends.
   - Requires `SEARXNG_SECRET` in `.env`.
+- `docker-compose.add-exec-runner.yml`
+  - Enables Nova's sandbox terminal backend for Python, package install, build workflows, and code-driven webapp generation.
+  - Optional for Nova overall, but recommended for code-heavy workflows.
+  - In the standard Docker setup, the only required `.env` value is `EXEC_RUNNER_SHARED_TOKEN`.
 - `docker-compose.add-ollama.yml`
   - Starts Ollama and exposes a system provider in Nova.
 - `docker-compose.add-llamacpp.yml`
@@ -128,6 +140,12 @@ Then run:
 docker compose up -d --build
 ```
 
+To add the sandbox runner in development:
+
+```dotenv
+COMPOSE_FILE=docker-compose.dev.yml:docker-compose.add-exec-runner.yml:docker-compose.add-exec-runner.dev.yml
+```
+
 Access:
 
 - Nova via Nginx: `http://localhost:${HOST_PORT}` (default `8080`)
@@ -148,6 +166,12 @@ Then run:
 
 ```bash
 docker compose up -d --build
+```
+
+To add the sandbox runner while building Nova from source:
+
+```dotenv
+COMPOSE_FILE=docker-compose.from-source.yml:docker-compose.add-exec-runner.yml:docker-compose.add-exec-runner.from-source.yml
 ```
 
 ## Environment variables
@@ -177,11 +201,27 @@ Optional global settings:
 
 - `USERFILE_EXPIRATION_DAYS`
 - `DEBUG`
-- `EXEC_RUNNER_ENABLED`
-- `EXEC_RUNNER_ROOT`
-- `EXEC_RUNNER_TTL_SECONDS`
-- `EXEC_RUNNER_SHELL`
+
+Exec-runner settings:
+
+- Required in the standard module setup:
+  - `EXEC_RUNNER_SHARED_TOKEN`
+- Optional tuning:
+  - `EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS`
+  - `EXEC_RUNNER_SESSION_TTL_SECONDS`
+  - `EXEC_RUNNER_SANDBOX_IMAGE`
+  - `EXEC_RUNNER_SANDBOX_MEMORY_LIMIT_MB`
+  - `EXEC_RUNNER_SANDBOX_CPU_LIMIT`
+  - `EXEC_RUNNER_SANDBOX_PIDS_LIMIT`
+  - `EXEC_RUNNER_MAX_SYNC_BYTES`
+  - `EXEC_RUNNER_MAX_DIFF_BYTES`
+- Advanced topology overrides only:
+  - `EXEC_RUNNER_BASE_URL`
+  - `EXEC_RUNNER_ENABLED`
 
 Notes:
 
-- Nova's persistent Python sandbox terminal is included in the base stack; no extra compose file is required for it.
+- `exec-runner` is optional at the infrastructure level and enabled through `docker-compose.add-exec-runner.yml`.
+- Without `exec-runner`, Nova still works for its main product features, but it does not expose the default Python backend or advanced sandboxed code/build workflows.
+- `exec-runner` is the only service that receives the Docker socket. `web` and `celery-worker` call it over an authenticated internal HTTP API.
+- In the standard Docker module setup, `EXEC_RUNNER_SHARED_TOKEN` is the only exec-runner value you normally need to set in `.env`.

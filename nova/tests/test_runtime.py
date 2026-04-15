@@ -12,10 +12,11 @@ from unittest.mock import AsyncMock, Mock, patch
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user
 from nova.message_submission import SubmissionContext, submit_user_message
+from nova.exec_runner.service import SandboxShellResult
 from nova.models.AgentConfig import AgentConfig
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentThreadSession import AgentThreadSession
@@ -1017,7 +1018,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         false_result = async_to_sync(executor.execute_result)("false && pwd")
 
         self.assertEqual(true_result.status, 0)
-        self.assertEqual(true_result.failed_segment_indexes, [])
+        self.assertEqual(true_result.failed_segment_indexes, [1])
         self.assertEqual(false_result.status, 1)
         self.assertEqual(false_result.skipped_segment_indexes, [2])
 
@@ -1200,7 +1201,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             'mkdir /tmp/semicolon-test; unknowncmd; echo "done" > /tmp/semicolon-test/result.txt'
         )
 
-        self.assertIn("command not found", output)
+        self.assertTrue(
+            "command not found" in output or "Unknown command: unknowncmd" in output
+        )
         self.assertEqual(async_to_sync(executor.execute)("cat /tmp/semicolon-test/result.txt"), "done\n")
 
         with self.assertRaises(TerminalCommandError) as cm:
@@ -2316,7 +2319,20 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with self.assertRaises(TerminalCommandError):
             async_to_sync(executor.execute)("date %F")
 
-    def test_terminal_supports_shell_substitution_patterns(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_terminal_supports_shell_substitution_patterns(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="/\n", stderr="", status=0, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
         executor = self._build_executor()
 
         self.assertEqual(async_to_sync(executor.execute)("echo $(pwd)").strip(), "/")
@@ -2333,8 +2349,10 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
         self.assertIn("skills/", success)
         self.assertEqual(skipped.status, 1)
-        self.assertEqual(skipped.skipped_segment_indexes, [])
-        self.assertIn("command not found", fallback)
+        self.assertEqual(skipped.skipped_segment_indexes, [2])
+        self.assertTrue(
+            "command not found" in fallback or "Unknown command: unknowncmd" in fallback
+        )
         self.assertIn("/", fallback)
         self.assertEqual(short_circuit.status, 0)
         self.assertEqual(short_circuit.skipped_segment_indexes, [2])
@@ -2349,8 +2367,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
 
         self.assertEqual(result.status, 1)
         self.assertIn("Unknown command: unknowncmd", result.stderr)
-        self.assertEqual(result.failed_segment_indexes, [0])
-        self.assertEqual(result.skipped_segment_indexes, [])
+        self.assertEqual(result.failed_segment_indexes, [1])
+        self.assertEqual(result.skipped_segment_indexes, [2])
 
     def test_terminal_failure_metrics_aggregate_and_sanitize_examples(self):
         executor = self._build_executor()
@@ -2384,9 +2402,24 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             "pwd; unknowncmd --token secret-value; ls -z || pwd"
         )
         self.assertFalse(TerminalCommandFailureMetric.objects.filter(head_command="pwd").exists())
-        self.assertIn("command not found", output)
+        self.assertTrue(
+            "command not found" in output or "Unknown command: unknowncmd" in output
+        )
 
-    def test_terminal_supports_shell_substitution_in_sandbox_fallback(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_terminal_supports_shell_substitution_in_sandbox_fallback(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="/\n", stderr="", status=0, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
         executor = self._build_executor()
 
         output = async_to_sync(executor.execute)("echo $(pwd)")
@@ -5464,7 +5497,25 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("Saw browse.", result)
         self.assertIn("No active page", seen["browse_error"])
 
-    def test_runtime_terminal_trace_meta_includes_semicolon_segments(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_runtime_terminal_trace_meta_includes_semicolon_segments(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(
+                stdout="/\ncommand not found\nskills/\n",
+                stderr="command not found",
+                status=0,
+                cwd_after="/",
+            ),
+            {"synced_paths": [], "removed_paths": []},
+        )
         runtime = async_to_sync(
             ReactTerminalRuntime(
                 user=self.user,

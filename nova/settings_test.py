@@ -66,6 +66,12 @@ WEBPUSH_VAPID_PUBLIC_KEY = ''
 WEBPUSH_VAPID_PRIVATE_KEY = ''
 WEBPUSH_VAPID_SUBJECT = ''
 
+# The Docker exec-runner is not available during the default unit test suite.
+EXEC_RUNNER_ENABLED = False
+EXEC_RUNNER_BASE_URL = 'http://exec-runner:8080'
+EXEC_RUNNER_SHARED_TOKEN = 'test-exec-runner-token'
+EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS = 5
+
 # Disable any external service integrations that might cause issues
 # Add any other service-specific overrides here as needed
 

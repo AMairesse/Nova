@@ -8,8 +8,34 @@ WORKDIR /app
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Install system deps (for psycopg2, pg_isready, gettext for i18n, and redis-cli for health checks)
-RUN apt-get update && apt-get install -y gcc libpq-dev postgresql-client gettext redis-tools libmagic1 && rm -rf /var/lib/apt/lists/*
+# Install system deps for Nova, Playwright, and the sandbox runner image.
+RUN apt-get update && apt-get install -y \
+    bash \
+    build-essential \
+    ca-certificates \
+    coreutils \
+    curl \
+    docker.io \
+    file \
+    findutils \
+    gcc \
+    gettext \
+    git \
+    grep \
+    gzip \
+    libmagic1 \
+    libpq-dev \
+    nodejs \
+    npm \
+    postgresql-client \
+    python3-venv \
+    redis-tools \
+    ripgrep \
+    sed \
+    tar \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy files & install dependencies
 COPY requirements.txt /app/

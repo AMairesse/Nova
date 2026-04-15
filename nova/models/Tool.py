@@ -163,12 +163,13 @@ def check_and_create_searxng_tool():
 
 def check_and_create_python_tool():
     from nova.plugins.catalog import sync_python_system_backend
+    from nova.exec_runner.service import exec_runner_is_configured
 
     tool = sync_python_system_backend()
-    if not settings.EXEC_RUNNER_ENABLED:
+    if not exec_runner_is_configured():
         if tool is not None and tool.agents.exists():
             logger.warning(
-                """WARNING: EXEC_RUNNER_ENABLED is false, but a system
+                """WARNING: exec-runner is not configured, but a system
                        tool exists and is being used by at least one agent."""
             )
 

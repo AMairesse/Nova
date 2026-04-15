@@ -303,10 +303,10 @@ SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)
 SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)
 
 # Nova exec runner (sandbox terminal)
-EXEC_RUNNER_ENABLED = os.getenv('EXEC_RUNNER_ENABLED', 'True').lower() == 'true'
-EXEC_RUNNER_ROOT = os.getenv('EXEC_RUNNER_ROOT', '')
-EXEC_RUNNER_TTL_SECONDS = int(os.getenv('EXEC_RUNNER_TTL_SECONDS', '3600'))
-EXEC_RUNNER_SHELL = os.getenv('EXEC_RUNNER_SHELL', '')
+EXEC_RUNNER_ENABLED = os.getenv('EXEC_RUNNER_ENABLED', 'False').lower() == 'true'
+EXEC_RUNNER_BASE_URL = os.getenv('EXEC_RUNNER_BASE_URL', '')
+EXEC_RUNNER_SHARED_TOKEN = os.getenv('EXEC_RUNNER_SHARED_TOKEN', '')
+EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS = int(os.getenv('EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS', '120'))
 
 # Web Push notifications (disabled by default)
 WEBPUSH_ENABLED = os.getenv('WEBPUSH_ENABLED', 'False').lower() == 'true'

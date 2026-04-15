@@ -125,3 +125,14 @@ async def assert_public_http_url(url: str) -> str:
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     await asyncio.to_thread(_assert_public_host, parsed.hostname, port)
     return candidate
+
+
+async def assert_public_host_port(hostname: str, port: int) -> tuple[str, int]:
+    host = str(hostname or "").strip()
+    if not host:
+        raise NetworkPolicyError("URL host is required.")
+    validated_port = int(port or 0)
+    if validated_port <= 0:
+        raise NetworkPolicyError("A valid network port is required.")
+    await asyncio.to_thread(_assert_public_host, host, validated_port)
+    return host, validated_port

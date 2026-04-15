@@ -254,7 +254,11 @@ class ToolModelsTest(BaseTestCase):
         self.assertTrue(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
                                             tool_subtype='searxng').exists())
 
-    @override_settings(EXEC_RUNNER_ENABLED=True)
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
     def test_check_and_create_python_tool_simple_create(self):
         """
         Test system Python capability creation for the local exec runner backend.
@@ -270,7 +274,11 @@ class ToolModelsTest(BaseTestCase):
         self.assertEqual(tool.name, 'System - Python')
         self.assertFalse(ToolCredential.objects.filter(user=None, tool=tool).exists())
 
-    @override_settings(EXEC_RUNNER_ENABLED=True)
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
     def test_check_and_create_python_tool_reuses_existing_system_tool(self):
         """
         Test that the system Python capability is reused instead of duplicated.
@@ -292,10 +300,14 @@ class ToolModelsTest(BaseTestCase):
         self.assertTrue(Tool.objects.filter(pk=tool.pk).exists())
         self.assertFalse(ToolCredential.objects.filter(user=None, tool=tool).exists())
 
-    @override_settings(EXEC_RUNNER_ENABLED=False)
-    def test_check_and_create_python_tool_delete_unused(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="",
+        EXEC_RUNNER_SHARED_TOKEN="",
+    )
+    def test_check_and_create_python_tool_delete_unused_when_runner_not_configured(self):
         """
-        Test that the system Python capability is removed when disabled and unused.
+        Test that the system Python capability is removed when the runner is not configured and unused.
         """
         tool = Tool.objects.create(
             user=None,
@@ -309,10 +321,14 @@ class ToolModelsTest(BaseTestCase):
 
         self.assertFalse(Tool.objects.filter(pk=tool.pk).exists())
 
-    @override_settings(EXEC_RUNNER_ENABLED=False)
-    def test_check_and_create_python_tool_delete_used(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="",
+        EXEC_RUNNER_SHARED_TOKEN="",
+    )
+    def test_check_and_create_python_tool_keep_used_when_runner_not_configured(self):
         """
-        Test that the system Python capability is kept when disabled but already in use.
+        Test that the system Python capability is kept when the runner is not configured but already in use.
         """
         tool = create_tool(None, name='System - Python', tool_subtype="code_execution")
 
@@ -324,7 +340,7 @@ class ToolModelsTest(BaseTestCase):
             check_and_create_python_tool()
 
         self.assertListEqual(logger.output, [
-            """WARNING:nova.models.Tool:WARNING: EXEC_RUNNER_ENABLED is false, but a system
+            """WARNING:nova.models.Tool:WARNING: exec-runner is not configured, but a system
                        tool exists and is being used by at least one agent."""
         ])
         self.assertTrue(Tool.objects.filter(user=None, tool_type=Tool.ToolType.BUILTIN,
