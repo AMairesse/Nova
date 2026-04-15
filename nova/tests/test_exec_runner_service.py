@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
+from typing import Any, cast
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
+from nova.exec_runner.docker_backend import DockerExecRunnerBackend, ExecRunnerConfig, ExecSession
 from nova.exec_runner import service as exec_runner_service
-from nova.exec_runner.shared import SandboxShellResult
+from nova.exec_runner.shared import ExecSessionSelector, SandboxShellResult
 
 
 class ExecRunnerServiceTests(SimpleTestCase):
@@ -89,7 +92,7 @@ class ExecRunnerServiceTests(SimpleTestCase):
 
         result, sync_meta = asyncio.run(
             exec_runner_service.execute_sandbox_shell_command(
-                vfs=mock_vfs,
+                vfs=cast(Any, mock_vfs),
                 command="pwd",
             )
         )
@@ -116,6 +119,86 @@ class ExecRunnerServiceTests(SimpleTestCase):
             agent_config=SimpleNamespace(id=3),
         )
 
-        asyncio.run(exec_runner_service.delete_sandbox_session(mock_vfs))
+        asyncio.run(exec_runner_service.delete_sandbox_session(cast(Any, mock_vfs)))
 
         self.assertIn("/v1/sessions/user-1--thread-2--agent-3", mocked_delete.await_args.args[0])
+
+
+class DockerExecRunnerBackendTests(SimpleTestCase):
+    def _build_backend(self) -> DockerExecRunnerBackend:
+        return DockerExecRunnerBackend(
+            ExecRunnerConfig(
+                shared_token="runner-token",
+                state_root=Path("/tmp/nova-exec-runner-tests"),
+                session_ttl_seconds=3600,
+                sandbox_image="amairesse/nova:latest",
+                sandbox_network="nova_exec-sandbox-net",
+                sandbox_memory_limit_mb=1024,
+                sandbox_cpu_limit="1.0",
+                sandbox_pids_limit=256,
+                max_sync_bytes=50 * 1024 * 1024,
+                max_diff_bytes=50 * 1024 * 1024,
+                proxy_url="http://exec-runner:8091",
+            )
+        )
+
+    def test_write_bytes_into_container_streams_content_over_stdin(self):
+        backend = self._build_backend()
+        backend._run_process = AsyncMock(return_value=("", "", 0))
+
+        asyncio.run(
+            backend._write_bytes_into_container(
+                "nova-exec-test",
+                Path("/tmp/example.txt"),
+                b"hello world",
+            )
+        )
+
+        await_args = backend._run_process.await_args
+        assert await_args is not None
+        command = await_args.args[0]
+        self.assertEqual(command[:6], ["docker", "exec", "-i", "-u", "nova", "nova-exec-test"])
+        self.assertEqual(command[-1], "/tmp/example.txt")
+        self.assertEqual(
+            await_args.kwargs["input_bytes"],
+            b"hello world",
+        )
+
+    def test_write_text_into_container_delegates_to_binary_writer(self):
+        backend = self._build_backend()
+        backend._write_bytes_into_container = AsyncMock()
+
+        asyncio.run(
+            backend._write_text_into_container(
+                "nova-exec-test",
+                Path("/srv/nova-session/workspace/.nova_runner/command.sh"),
+                "echo test",
+            )
+        )
+
+        backend._write_bytes_into_container.assert_awaited_once_with(
+            "nova-exec-test",
+            Path("/srv/nova-session/workspace/.nova_runner/command.sh"),
+            b"echo test",
+        )
+
+    def test_sync_bundle_uses_container_writer_instead_of_docker_cp(self):
+        backend = self._build_backend()
+        backend._write_bytes_into_container = AsyncMock()
+        backend._docker_exec = AsyncMock()
+        session = ExecSession(
+            selector=ExecSessionSelector(user_id=1, thread_id=2, agent_id=3),
+            container_name="nova-exec-test",
+            volume_name="nova-exec-session-test",
+            metadata_dir=Path("/tmp/nova-exec-runner-tests/sessions/test"),
+            metadata_path=Path("/tmp/nova-exec-runner-tests/sessions/test/session.json"),
+        )
+
+        asyncio.run(backend._sync_bundle_into_session(session, b"sync-bundle"))
+
+        backend._write_bytes_into_container.assert_awaited_once_with(
+            "nova-exec-test",
+            Path("/tmp/nova-sync.tar.gz"),
+            b"sync-bundle",
+        )
+        backend._docker_exec.assert_awaited_once()

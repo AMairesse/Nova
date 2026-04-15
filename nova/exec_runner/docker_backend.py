@@ -272,53 +272,51 @@ class DockerExecRunnerBackend:
             await self._run_docker("start", container_name)
 
     async def _sync_bundle_into_session(self, session: ExecSession, sync_bundle_bytes: bytes) -> None:
-        with tempfile.NamedTemporaryFile(prefix="nova-sync-", suffix=".tar.gz", delete=False) as handle:
-            handle.write(sync_bundle_bytes)
-            local_path = Path(handle.name)
-        try:
-            remote_bundle_path = "/tmp/nova-sync.tar.gz"
-            await self._run_docker("cp", str(local_path), f"{session.container_name}:{remote_bundle_path}")
-            await self._docker_exec(
-                session.container_name,
-                (
-                    f'set -euo pipefail; '
-                    f'mkdir -p "{WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME}"; '
-                    f'find "{WORKSPACE_ROOT_IN_CONTAINER}" -mindepth 1 -maxdepth 1 ! -name "{RUNNER_INTERNAL_DIRNAME}" -exec rm -rf {{}} +; '
-                    f'tar -xzf "{remote_bundle_path}" -C "{WORKSPACE_ROOT_IN_CONTAINER}"; '
-                    f'rm -f "{remote_bundle_path}"; '
-                    f'python3 - <<\'PY\'\n'
-                    f'import hashlib, json, os\n'
-                    f'from pathlib import Path\n'
-                    f'workspace_root = Path("{WORKSPACE_ROOT_IN_CONTAINER}")\n'
-                    f'before_path = Path("{BEFORE_MANIFEST_PATH}")\n'
-                    f'read_only_roots = {list(root.lstrip("/") for root in ("/skills", "/inbox", "/history"))!r}\n'
-                    f'manifest = {{"files": {{}}, "directories": []}}\n'
-                    f'for current_root, dirnames, filenames in os.walk(workspace_root):\n'
-                    f'    current = Path(current_root)\n'
-                    f'    relative_root = current.relative_to(workspace_root)\n'
-                    f'    if relative_root.parts and relative_root.parts[0] == "{RUNNER_INTERNAL_DIRNAME}":\n'
-                    f'        dirnames[:] = []\n'
-                    f'        continue\n'
-                    f'    normalized_dir = "/" if not relative_root.parts else "/" + "/".join(relative_root.parts)\n'
-                    f'    if normalized_dir != "/" and not any(normalized_dir == f"/{{root}}" or normalized_dir.startswith(f"/{{root}}/") for root in read_only_roots):\n'
-                    f'        manifest["directories"].append(normalized_dir)\n'
-                    f'    for filename in filenames:\n'
-                    f'        relative_path = relative_root / filename if relative_root.parts else Path(filename)\n'
-                    f'        normalized = "/" + relative_path.as_posix()\n'
-                    f'        if any(normalized == f"/{{root}}" or normalized.startswith(f"/{{root}}/") for root in read_only_roots):\n'
-                    f'            continue\n'
-                    f'        with (workspace_root / relative_path).open("rb") as handle:\n'
-                    f'            digest = hashlib.sha256(handle.read()).hexdigest()\n'
-                    f'        manifest["files"][normalized] = digest\n'
-                    f'before_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")\n'
-                    f'PY\n'
-                    f'for root in "{WORKSPACE_ROOT_IN_CONTAINER / "skills"}" "{WORKSPACE_ROOT_IN_CONTAINER / "inbox"}" "{WORKSPACE_ROOT_IN_CONTAINER / "history"}"; do '
-                    f'  if [ -e "$root" ]; then chmod -R a-w "$root" || true; fi; '
-                    f'done'
-                ),
-            )
-        finally:
-            local_path.unlink(missing_ok=True)
+        remote_bundle_path = Path("/tmp/nova-sync.tar.gz")
+        await self._write_bytes_into_container(
+            session.container_name,
+            remote_bundle_path,
+            sync_bundle_bytes,
+        )
+        await self._docker_exec(
+            session.container_name,
+            (
+                f'set -euo pipefail; '
+                f'mkdir -p "{WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME}"; '
+                f'find "{WORKSPACE_ROOT_IN_CONTAINER}" -mindepth 1 -maxdepth 1 ! -name "{RUNNER_INTERNAL_DIRNAME}" -exec rm -rf {{}} +; '
+                f'tar -xzf "{remote_bundle_path}" -C "{WORKSPACE_ROOT_IN_CONTAINER}"; '
+                f'rm -f "{remote_bundle_path}"; '
+                f'python3 - <<\'PY\'\n'
+                f'import hashlib, json, os\n'
+                f'from pathlib import Path\n'
+                f'workspace_root = Path("{WORKSPACE_ROOT_IN_CONTAINER}")\n'
+                f'before_path = Path("{BEFORE_MANIFEST_PATH}")\n'
+                f'read_only_roots = {list(root.lstrip("/") for root in ("/skills", "/inbox", "/history"))!r}\n'
+                f'manifest = {{"files": {{}}, "directories": []}}\n'
+                f'for current_root, dirnames, filenames in os.walk(workspace_root):\n'
+                f'    current = Path(current_root)\n'
+                f'    relative_root = current.relative_to(workspace_root)\n'
+                f'    if relative_root.parts and relative_root.parts[0] == "{RUNNER_INTERNAL_DIRNAME}":\n'
+                f'        dirnames[:] = []\n'
+                f'        continue\n'
+                f'    normalized_dir = "/" if not relative_root.parts else "/" + "/".join(relative_root.parts)\n'
+                f'    if normalized_dir != "/" and not any(normalized_dir == f"/{{root}}" or normalized_dir.startswith(f"/{{root}}/") for root in read_only_roots):\n'
+                f'        manifest["directories"].append(normalized_dir)\n'
+                f'    for filename in filenames:\n'
+                f'        relative_path = relative_root / filename if relative_root.parts else Path(filename)\n'
+                f'        normalized = "/" + relative_path.as_posix()\n'
+                f'        if any(normalized == f"/{{root}}" or normalized.startswith(f"/{{root}}/") for root in read_only_roots):\n'
+                f'            continue\n'
+                f'        with (workspace_root / relative_path).open("rb") as handle:\n'
+                f'            digest = hashlib.sha256(handle.read()).hexdigest()\n'
+                f'        manifest["files"][normalized] = digest\n'
+                f'before_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")\n'
+                f'PY\n'
+                f'for root in "{WORKSPACE_ROOT_IN_CONTAINER / "skills"}" "{WORKSPACE_ROOT_IN_CONTAINER / "inbox"}" "{WORKSPACE_ROOT_IN_CONTAINER / "history"}"; do '
+                f'  if [ -e "$root" ]; then chmod -R a-w "$root" || true; fi; '
+                f'done'
+            ),
+        )
 
     async def _run_session_command(
         self,
@@ -571,13 +569,32 @@ class DockerExecRunnerBackend:
             return
 
     async def _write_text_into_container(self, container_name: str, path: Path, text: str) -> None:
-        with tempfile.NamedTemporaryFile(prefix="nova-runner-script-", suffix=".txt", delete=False) as handle:
-            handle.write(text.encode("utf-8"))
-            local_path = Path(handle.name)
-        try:
-            await self._run_docker("cp", str(local_path), f"{container_name}:{path}")
-        finally:
-            local_path.unlink(missing_ok=True)
+        await self._write_bytes_into_container(container_name, path, text.encode("utf-8"))
+
+    async def _write_bytes_into_container(self, container_name: str, path: Path, content: bytes) -> None:
+        stdout, stderr, status = await self._run_process(
+            [
+                "docker",
+                "exec",
+                "-i",
+                "-u",
+                "nova",
+                container_name,
+                "python3",
+                "-c",
+                (
+                    "from pathlib import Path; import sys; "
+                    "target = Path(sys.argv[1]); "
+                    "target.parent.mkdir(parents=True, exist_ok=True); "
+                    "target.write_bytes(sys.stdin.buffer.read())"
+                ),
+                str(path),
+            ],
+            timeout=self.config.command_timeout_seconds,
+            input_bytes=content,
+        )
+        if status != 0:
+            raise ExecRunnerError(stderr.strip() or f"Docker exec failed while writing {path}.")
 
     async def _read_text_from_container(self, container_name: str, path: Path, *, default: str = "") -> str:
         try:
@@ -621,14 +638,21 @@ class DockerExecRunnerBackend:
             raise ExecRunnerError(stderr.strip() or f"Docker command failed: {' '.join(args)}")
         return stdout
 
-    async def _run_process(self, command: list[str], *, timeout: int) -> tuple[str, str, int]:
+    async def _run_process(
+        self,
+        command: list[str],
+        *,
+        timeout: int,
+        input_bytes: bytes | None = None,
+    ) -> tuple[str, str, int]:
         process = await asyncio.create_subprocess_exec(
             *command,
+            stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(process.communicate(input=input_bytes), timeout=timeout)
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.communicate()
