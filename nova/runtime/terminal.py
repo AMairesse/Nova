@@ -2666,8 +2666,6 @@ class TerminalExecutor:
     ) -> str:
         if not result.output_files:
             return ""
-        if not result.ok:
-            return "Workspace changes were not synced because Python execution failed."
 
         synced_paths: list[str] = []
         collected_warnings: list[str] = []

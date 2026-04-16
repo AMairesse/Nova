@@ -1213,6 +1213,49 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(output_file, "done")
         self.assertIn("Workspace changes synced", result)
 
+    def test_python_script_keeps_synced_workspace_note_even_when_execution_fails(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)(
+            'tee /project/script.py --text "from pathlib import Path\\nPath(\'out.txt\').write_text(\'done\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Exited with status 1",
+                    stdout="partial",
+                    stderr="boom",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="out.txt",
+                            content=b"done",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ),
+        ):
+            result = async_to_sync(executor.execute_result)("python /project/script.py")
+
+        output_file = async_to_sync(executor.execute)("cat /project/out.txt")
+        rendered = result.render_text()
+        self.assertEqual(result.status, 1)
+        self.assertEqual(output_file, "done")
+        self.assertIn("Status: Exited with status 1", rendered)
+        self.assertIn("Workspace changes synced: /project/out.txt", rendered)
+        self.assertNotIn("were not synced", rendered)
+
     def test_python_workspace_flow_can_publish_webapp_from_same_thread_directory(self):
         code_tool = self._create_code_execution_tool()
         webapp_tool = self._create_webapp_tool()

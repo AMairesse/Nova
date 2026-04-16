@@ -160,14 +160,17 @@ async def cmd_mail(executor: TerminalExecutor, args: list[str]) -> str:
                 "Usage: mail mark [--mailbox <email>] [--folder <src>] <id> [<id> ...] "
                 "[--uid <uid> ...] (--seen | --unseen | --flagged | --unflagged)"
             )
-        return await mail_service.mark_emails(
-            executor.vfs.user,
-            tool_id,
-            message_ids=message_ids,
-            uids=uids,
-            folder=folder or "INBOX",
-            action=selected_action,
-        )
+        try:
+            return await mail_service.mark_emails(
+                executor.vfs.user,
+                tool_id,
+                message_ids=message_ids,
+                uids=uids,
+                folder=folder or "INBOX",
+                action=selected_action,
+            )
+        except ValueError as exc:
+            raise _terminal_command_error(str(exc)) from exc
 
     if subcommand == "import":
         folder, remainder = executor._parse_flag_value(remainder, "--folder")

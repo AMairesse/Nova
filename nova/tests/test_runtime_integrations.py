@@ -416,6 +416,20 @@ class IntegrationCommandTests(TerminalExecutorCommandTestCase):
             action="flagged",
         )
 
+    def test_mail_mark_wraps_backend_value_errors_as_terminal_command_errors(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
+
+        with patch(
+            "nova.plugins.mail.service.mark_emails",
+            new_callable=AsyncMock,
+            side_effect=ValueError("No IMAP credential found for tool 123"),
+        ):
+            with self.assertRaises(TerminalCommandError) as cm:
+                async_to_sync(executor.execute)("mail mark --uid 99 --flagged")
+
+        self.assertIn("No IMAP credential found", str(cm.exception))
+
     def test_mail_move_requires_exactly_one_destination(self):
         work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
         executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
