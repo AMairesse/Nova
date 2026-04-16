@@ -85,7 +85,7 @@ class ExecRunnerProxyServerTests(SimpleTestCase):
             upstream_writer = _MemoryStreamWriter()
 
             with patch(
-                "nova.exec_runner.proxy.assert_public_http_url",
+                "nova.web.safe_proxy.assert_public_http_url",
                 AsyncMock(
                     return_value=ResolvedHttpTarget(
                         url="https://example.com:8443/path?q=1",
@@ -97,7 +97,7 @@ class ExecRunnerProxyServerTests(SimpleTestCase):
                     )
                 ),
             ), patch(
-                "nova.exec_runner.proxy.asyncio.open_connection",
+                "nova.web.safe_proxy.asyncio.open_connection",
                 AsyncMock(return_value=(upstream_reader, upstream_writer)),
             ) as mocked_open:
                 _reader, _writer, outbound = await proxy._build_http_request(
@@ -135,10 +135,10 @@ class ExecRunnerProxyServerTests(SimpleTestCase):
             upstream_writer = _MemoryStreamWriter()
 
             with patch(
-                "nova.exec_runner.proxy.assert_public_host_port",
+                "nova.web.safe_proxy.assert_public_host_port",
                 AsyncMock(return_value=ResolvedHostPort(hostname="example.com", ip="93.184.216.34", port=443)),
             ), patch(
-                "nova.exec_runner.proxy.asyncio.open_connection",
+                "nova.web.safe_proxy.asyncio.open_connection",
                 AsyncMock(return_value=(upstream_reader, upstream_writer)),
             ) as mocked_open:
                 await proxy._open_connect_target("example.com:443")

@@ -452,28 +452,31 @@ class DockerExecRunnerBackend:
         target_path: Path,
         *,
         labels: dict[str, str] | None = None,
-    ) -> None:
+    ) -> bool:
         exists = await self._volume_exists(volume_name)
+        created = not exists
         if not exists:
             create_args = ["volume", "create"]
             for key, value in sorted((labels or {}).items()):
                 create_args.extend(["--label", f"{key}={value}"])
             create_args.append(volume_name)
             await self._run_docker(*create_args)
-        await self._run_docker(
-            "run",
-            "--rm",
-            "--mount",
-            f"source={volume_name},target={target_path}",
-            self.config.sandbox_image,
-            "bash",
-            "-lc",
-            (
-                f'mkdir -p "{target_path}" '
-                f'&& chown -R nova:nova "{target_path}" '
-                f'&& chmod -R u+rwX,go-rwx "{target_path}"'
-            ),
-        )
+        if created:
+            await self._run_docker(
+                "run",
+                "--rm",
+                "--mount",
+                f"source={volume_name},target={target_path}",
+                self.config.sandbox_image,
+                "bash",
+                "-lc",
+                (
+                    f'mkdir -p "{target_path}" '
+                    f'&& chown nova:nova "{target_path}" '
+                    f'&& chmod u+rwx,go-rwx "{target_path}"'
+                ),
+            )
+        return created
 
     async def _create_container(self, session: ExecSession) -> None:
         labels = self._session_resource_labels(session.selector)

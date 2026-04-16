@@ -158,8 +158,9 @@ class DownloadServiceTests(SimpleTestCase):
 
         class FakeAsyncClient:
             def __init__(self, *, headers=None, **kwargs):
-                del kwargs
                 captured["headers"] = dict(headers or {})
+                captured["proxy"] = kwargs.get("proxy")
+                captured["trust_env"] = kwargs.get("trust_env")
 
             async def __aenter__(self):
                 return self
@@ -175,10 +176,15 @@ class DownloadServiceTests(SimpleTestCase):
                     chunks=[b"hello"],
                 )
 
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
-        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
             payload = async_to_sync(download_http_file)("https://example.com/hello.txt")
 
         normalized_headers = {
@@ -188,6 +194,8 @@ class DownloadServiceTests(SimpleTestCase):
         self.assertEqual(payload["mime_type"], "text/plain")
         self.assertEqual(captured["method"], "GET")
         self.assertEqual(captured["url"], "https://example.com/hello.txt")
+        self.assertEqual(captured["proxy"], "http://127.0.0.1:43123")
+        self.assertFalse(captured["trust_env"])
         self.assertEqual(normalized_headers["user-agent"], DEFAULT_DOWNLOAD_USER_AGENT)
 
     def test_download_http_file_allows_user_agent_override_and_custom_headers(self):
@@ -195,8 +203,8 @@ class DownloadServiceTests(SimpleTestCase):
 
         class FakeAsyncClient:
             def __init__(self, *, headers=None, **kwargs):
-                del kwargs
                 captured["headers"] = dict(headers or {})
+                captured["proxy"] = kwargs.get("proxy")
 
             async def __aenter__(self):
                 return self
@@ -211,10 +219,15 @@ class DownloadServiceTests(SimpleTestCase):
                     chunks=[b"ok"],
                 )
 
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
-        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
             payload = async_to_sync(download_http_file)(
                 "https://example.com/data.txt",
                 headers={"Referer": "https://example.com", "User-Agent": "HeaderUA/1.0"},
@@ -225,6 +238,7 @@ class DownloadServiceTests(SimpleTestCase):
             str(name).lower(): value for name, value in captured["headers"].items()
         }
         self.assertEqual(payload["content"], b"ok")
+        self.assertEqual(captured["proxy"], "http://127.0.0.1:43123")
         self.assertEqual(normalized_headers["user-agent"], "NovaOverride/2.0")
         self.assertEqual(normalized_headers["referer"], "https://example.com")
 

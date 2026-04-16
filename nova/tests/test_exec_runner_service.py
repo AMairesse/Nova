@@ -438,6 +438,47 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
             },
         )
 
+    def test_ensure_volume_initializes_new_volume_once_without_recursive_permissions(self):
+        backend = self._build_backend()
+        backend._volume_exists = AsyncMock(return_value=False)
+        backend._run_docker = AsyncMock(return_value="")
+
+        created = asyncio.run(
+            backend._ensure_volume(
+                "nova-exec-cache-user-1",
+                CACHE_ROOT_IN_CONTAINER,
+                labels={"nova.exec_runner.managed": "true"},
+            )
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(backend._run_docker.await_count, 2)
+        create_call = backend._run_docker.await_args_list[0]
+        helper_call = backend._run_docker.await_args_list[1]
+        self.assertEqual(create_call.args[:2], ("volume", "create"))
+        helper_script = str(helper_call.args[-1])
+        self.assertIn(f'mkdir -p "{CACHE_ROOT_IN_CONTAINER}"', helper_script)
+        self.assertIn(f'chown nova:nova "{CACHE_ROOT_IN_CONTAINER}"', helper_script)
+        self.assertIn(f'chmod u+rwx,go-rwx "{CACHE_ROOT_IN_CONTAINER}"', helper_script)
+        self.assertNotIn("chown -R", helper_script)
+        self.assertNotIn("chmod -R", helper_script)
+
+    def test_ensure_volume_skips_permission_init_for_existing_volume(self):
+        backend = self._build_backend()
+        backend._volume_exists = AsyncMock(return_value=True)
+        backend._run_docker = AsyncMock(return_value="")
+
+        created = asyncio.run(
+            backend._ensure_volume(
+                "nova-exec-cache-user-1",
+                CACHE_ROOT_IN_CONTAINER,
+                labels={"nova.exec_runner.managed": "true"},
+            )
+        )
+
+        self.assertFalse(created)
+        backend._run_docker.assert_not_awaited()
+
     def test_cleanup_processes_excludes_its_own_shell(self):
         backend = self._build_backend()
         backend._docker_exec = AsyncMock(return_value=None)

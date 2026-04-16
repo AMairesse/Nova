@@ -3,15 +3,27 @@ from __future__ import annotations
 import re
 from typing import Any
 from urllib.parse import urljoin, urlparse
+from contextlib import asynccontextmanager
 
 import httpx
 
 from nova.file_utils import MAX_FILE_SIZE
 from nova.web.network_policy import assert_public_http_url, max_redirects
+from nova.web.safe_proxy import SafeHttpProxyConfig, SafeHttpProxyServer
 
 DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 _FILENAME_RE = re.compile(r'filename\*?=(?:UTF-8\'\')?"?([^\";]+)"?')
 DEFAULT_DOWNLOAD_USER_AGENT = "NovaTerminal/1.0 (+https://github.com/AMairesse/Nova)"
+
+
+@asynccontextmanager
+async def _local_safe_proxy():
+    proxy_server = SafeHttpProxyServer(SafeHttpProxyConfig(host="127.0.0.1", port=0))
+    await proxy_server.start()
+    try:
+        yield proxy_server
+    finally:
+        await proxy_server.close()
 
 
 def infer_download_filename(url: str, headers: Any, explicit_filename: str = "") -> str:
@@ -55,37 +67,40 @@ async def download_http_file(
     elif "User-Agent" not in request_headers:
         request_headers["User-Agent"] = DEFAULT_DOWNLOAD_USER_AGENT
 
-    async with httpx.AsyncClient(
-        timeout=DOWNLOAD_TIMEOUT,
-        follow_redirects=False,
-        headers=request_headers,
-    ) as client:
-        current_target = await assert_public_http_url(url)
-        redirect_count = 0
+    async with _local_safe_proxy() as proxy_server:
+        async with httpx.AsyncClient(
+            timeout=DOWNLOAD_TIMEOUT,
+            follow_redirects=False,
+            headers=request_headers,
+            proxy=proxy_server.proxy_url,
+            trust_env=False,
+        ) as client:
+            current_target = await assert_public_http_url(url)
+            redirect_count = 0
 
-        while True:
-            async with client.stream("GET", current_target.url) as response:
-                if 300 <= response.status_code < 400:
-                    location = str(response.headers.get("location") or "").strip()
-                    if not location:
-                        response.raise_for_status()
-                    redirect_count += 1
-                    if redirect_count > max_redirects():
-                        raise ValueError("Too many redirects while downloading the requested URL.")
-                    current_target = await assert_public_http_url(urljoin(str(response.request.url), location))
-                    continue
-
-                response.raise_for_status()
-                inferred_name = infer_download_filename(current_target.url, response.headers, filename)
-                mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-                async for chunk in response.aiter_bytes():
-                    if not chunk:
+            while True:
+                async with client.stream("GET", current_target.url) as response:
+                    if 300 <= response.status_code < 400:
+                        location = str(response.headers.get("location") or "").strip()
+                        if not location:
+                            response.raise_for_status()
+                        redirect_count += 1
+                        if redirect_count > max_redirects():
+                            raise ValueError("Too many redirects while downloading the requested URL.")
+                        current_target = await assert_public_http_url(urljoin(str(response.request.url), location))
                         continue
-                    bytes_read += len(chunk)
-                    if bytes_read > max_size:
-                        raise ValueError(f"Downloaded file exceeds the {max_size} byte limit.")
-                    chunks.append(chunk)
-                break
+
+                    response.raise_for_status()
+                    inferred_name = infer_download_filename(current_target.url, response.headers, filename)
+                    mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                    async for chunk in response.aiter_bytes():
+                        if not chunk:
+                            continue
+                        bytes_read += len(chunk)
+                        if bytes_read > max_size:
+                            raise ValueError(f"Downloaded file exceeds the {max_size} byte limit.")
+                        chunks.append(chunk)
+                    break
 
     return {
         "url": str(current_target.url or ""),
