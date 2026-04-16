@@ -3997,6 +3997,35 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(result.trace_meta["status"], 1)
         self.assertEqual(result.content, "stderr: grep: no matches")
 
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    def test_terminal_sandbox_routing_ignores_memory_substrings_inside_unrelated_paths(self):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        webdav_tool = self._create_webdav_tool()
+        self.agent.tools.add(memory_tool, webdav_tool)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        self.assertTrue(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /tmp/memory.txt"))
+        self.assertFalse(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /memory/note.txt"))
+        self.assertTrue(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /tmp/webdav.txt"))
+        self.assertFalse(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /webdav/docs/note.txt"))
+
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):
         memory_tool = Tool.objects.create(

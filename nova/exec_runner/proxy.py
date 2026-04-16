@@ -64,6 +64,7 @@ class ExecRunnerProxyServer:
             )
             upstream_writer.write(outbound_request)
             await upstream_writer.drain()
+            await self._forward_http_request_body(reader, upstream_writer, header_lines)
             await self._relay_stream(upstream_reader, writer)
         except (asyncio.IncompleteReadError, ValueError):
             writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
@@ -120,6 +121,63 @@ class ExecRunnerProxyServer:
             filtered_headers.append(header)
         outbound = "\r\n".join([f"{method} {path} {version}", *filtered_headers, "", ""]).encode("latin-1")
         return upstream_reader, upstream_writer, outbound
+
+    @staticmethod
+    def _get_header_value(header_lines: list[str], header_name: str) -> str:
+        prefix = f"{header_name.lower()}:"
+        for raw_header in header_lines:
+            header = str(raw_header or "").strip()
+            if header.lower().startswith(prefix):
+                return header.split(":", 1)[1].strip()
+        return ""
+
+    async def _forward_http_request_body(
+        self,
+        reader: asyncio.StreamReader,
+        upstream_writer: asyncio.StreamWriter,
+        header_lines: list[str],
+    ) -> None:
+        transfer_encoding = self._get_header_value(header_lines, "transfer-encoding").lower()
+        if "chunked" in transfer_encoding:
+            await self._forward_chunked_body(reader, upstream_writer)
+            return
+
+        content_length_text = self._get_header_value(header_lines, "content-length")
+        if not content_length_text:
+            return
+        content_length = int(content_length_text)
+        remaining = max(content_length, 0)
+        while remaining > 0:
+            chunk = await reader.read(min(65536, remaining))
+            if not chunk:
+                raise asyncio.IncompleteReadError(partial=b"", expected=remaining)
+            upstream_writer.write(chunk)
+            await upstream_writer.drain()
+            remaining -= len(chunk)
+
+    async def _forward_chunked_body(
+        self,
+        reader: asyncio.StreamReader,
+        upstream_writer: asyncio.StreamWriter,
+    ) -> None:
+        while True:
+            chunk_header = await reader.readuntil(b"\r\n")
+            upstream_writer.write(chunk_header)
+            await upstream_writer.drain()
+
+            chunk_size_text = chunk_header.split(b";", 1)[0].strip()
+            chunk_size = int(chunk_size_text, 16)
+            if chunk_size == 0:
+                while True:
+                    trailer_line = await reader.readuntil(b"\r\n")
+                    upstream_writer.write(trailer_line)
+                    await upstream_writer.drain()
+                    if trailer_line == b"\r\n":
+                        return
+
+            chunk_payload = await reader.readexactly(chunk_size + 2)
+            upstream_writer.write(chunk_payload)
+            await upstream_writer.drain()
 
     async def _relay_stream(
         self,

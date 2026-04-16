@@ -321,9 +321,13 @@ class TerminalExecutor:
 
     def _command_uses_host_mediated_paths(self, raw: str) -> bool:
         text = str(raw or "")
-        if MEMORY_ROOT in text or WEBDAV_VFS_ROOT in text:
-            return True
-        return False
+        return any(
+            re.search(
+                rf"(?<![A-Za-z0-9_.-]){re.escape(root)}(?![A-Za-z0-9_.-])",
+                text,
+            )
+            for root in (MEMORY_ROOT, WEBDAV_VFS_ROOT)
+        )
 
     def _should_route_command_to_sandbox(self, raw: str) -> bool:
         if not exec_runner_service.exec_runner_is_configured():
