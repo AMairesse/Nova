@@ -208,6 +208,50 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
         )
 
+    def _create_agent_markdown_image_thread(self) -> tuple[Thread, int]:
+        thread = Thread.objects.create(user=self.user, subject="Markdown image thread")
+        UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            key=f"users/{self.user.id}/threads/{thread.id}/generated/chart.png",
+            original_filename="/generated/chart.png",
+            mime_type="image/png",
+            size=4096,
+            scope=UserFile.Scope.THREAD_SHARED,
+        )
+        message = thread.add_message("Done", actor=Actor.AGENT)
+        message.internal_data = {
+            "display_markdown": "Chart preview\n\n![Chart](/generated/chart.png)",
+        }
+        message.save(update_fields=["internal_data"])
+        return thread, int(message.id)
+
+    def _assert_markdown_image_fits_message_width(self):
+        return self.page.evaluate(
+            """
+            () => {
+              const img = document.querySelector('#messages-list .assistant-markdown img');
+              const cardBody = img?.closest('.card-body');
+              if (!img || !cardBody) {
+                return { ok: false, reason: 'missing' };
+              }
+              img.style.width = '1600px';
+              img.style.height = '1200px';
+              img.style.maxWidth = '';
+              img.style.maxHeight = '';
+              const imgRect = img.getBoundingClientRect();
+              const bodyRect = cardBody.getBoundingClientRect();
+              return {
+                ok: imgRect.width <= bodyRect.width + 1 && imgRect.right <= bodyRect.right + 1,
+                imageWidth: imgRect.width,
+                bodyWidth: bodyRect.width,
+                imageRight: imgRect.right,
+                bodyRight: bodyRect.right,
+              };
+            }
+            """
+        )
+
     def _create_scrollable_thread(self, *, mode: str) -> tuple[Thread, int]:
         if mode == Thread.Mode.CONTINUOUS:
             thread = ensure_continuous_thread(self.user)
@@ -383,6 +427,34 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self.page.wait_for_timeout(300)
 
         self.assertGreater(self._conversation_bottom_distance(), 100)
+
+    def test_agent_markdown_image_is_constrained_to_message_width_on_desktop(self):
+        thread, message_id = self._create_agent_markdown_image_thread()
+        self.page.set_viewport_size({"width": 1280, "height": 720})
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector(f"#message-{message_id} .assistant-markdown img")
+
+        result = self._assert_markdown_image_fits_message_width()
+
+        self.assertTrue(result["ok"], result)
+
+    def test_agent_markdown_image_is_constrained_to_message_width_on_mobile(self):
+        thread, message_id = self._create_agent_markdown_image_thread()
+        self.recreate_browser_context(
+            viewport={"width": 390, "height": 844},
+            init_scripts=[_TOUCH_ENABLED_INIT_SCRIPT],
+        )
+        self.login_to_browser(self.user)
+
+        self.open_path("/")
+        self._wait_for_selected_thread(thread.id)
+        self.page.wait_for_selector(f"#message-{message_id} .assistant-markdown img")
+
+        result = self._assert_markdown_image_fits_message_width()
+
+        self.assertTrue(result["ok"], result)
 
     def test_create_and_delete_thread_update_desktop_sidebar(self):
         original_thread = Thread.objects.create(user=self.user, subject="Existing thread")
