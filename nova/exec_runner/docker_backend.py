@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import tempfile
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +31,6 @@ from nova.exec_runner.shared import (
 WORKSPACE_ROOT_IN_CONTAINER = Path("/srv/nova-session/workspace")
 SESSION_ROOT_IN_CONTAINER = Path("/srv/nova-session")
 CACHE_ROOT_IN_CONTAINER = Path("/srv/nova-cache")
-EXEC_RUNNER_CACHE_ROOT = Path("/var/lib/nova-exec-runner-cache")
 BEFORE_MANIFEST_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "before.json"
 DIFF_BUNDLE_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "diff.tar.gz"
 DIFF_METADATA_PATH = WORKSPACE_ROOT_IN_CONTAINER / RUNNER_INTERNAL_DIRNAME / "diff.json"
@@ -47,6 +47,99 @@ AGENT_ID_LABEL_KEY = "nova.exec_runner.agent_id"
 SESSION_RESOURCE_LABEL_VALUE = "session"
 CACHE_RESOURCE_LABEL_VALUE = "cache"
 CACHE_RECENT_GUARD_SECONDS = 3600
+CACHE_VOLUME_PREFIX = "nova-exec-cache-user-"
+
+_CACHE_PRUNE_SCRIPT = textwrap.dedent(
+    """\
+    import json
+    import os
+    import sys
+    import time
+    from pathlib import Path
+
+    cache_root = Path(sys.argv[1])
+    cache_max_bytes = int(sys.argv[2])
+    cache_target_bytes = int(sys.argv[3])
+    cache_max_age_days = int(sys.argv[4])
+    recent_guard_seconds = int(sys.argv[5])
+
+    files_removed = 0
+    directories_removed = 0
+    bytes_reclaimed = 0
+
+    if not cache_root.exists():
+        print(json.dumps(
+            {
+                "files_removed": 0,
+                "directories_removed": 0,
+                "bytes_reclaimed": 0,
+                "errors": 0,
+            }
+        ))
+        raise SystemExit(0)
+
+    now_ts = time.time()
+    max_age_seconds = cache_max_age_days * 24 * 60 * 60
+
+    def collect_files():
+        collected = []
+        for current_root, _dirnames, filenames in os.walk(cache_root):
+            for filename in filenames:
+                path = Path(current_root) / filename
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                collected.append((path, int(stat.st_size), float(stat.st_mtime)))
+        return collected
+
+    def delete_file(path, size):
+        global files_removed, bytes_reclaimed
+        path.unlink(missing_ok=True)
+        files_removed += 1
+        bytes_reclaimed += max(size, 0)
+
+    files = collect_files()
+    total_size = sum(size for _path, size, _mtime in files)
+    recent_cutoff = now_ts - recent_guard_seconds
+    age_cutoff = now_ts - max_age_seconds
+
+    remaining = []
+    for path, size, mtime in files:
+        if mtime <= age_cutoff and mtime <= recent_cutoff:
+            delete_file(path, size)
+            total_size -= size
+        else:
+            remaining.append((path, size, mtime))
+
+    if total_size > cache_max_bytes:
+        for path, size, mtime in sorted(remaining, key=lambda item: item[2]):
+            if total_size <= cache_target_bytes:
+                break
+            if mtime > recent_cutoff:
+                continue
+            delete_file(path, size)
+            total_size -= size
+
+    for current_root, dirnames, _filenames in os.walk(cache_root, topdown=False):
+        for dirname in dirnames:
+            directory = Path(current_root) / dirname
+            try:
+                directory.rmdir()
+            except OSError:
+                continue
+            directories_removed += 1
+
+    print(json.dumps(
+        {
+            "files_removed": files_removed,
+            "directories_removed": directories_removed,
+            "bytes_reclaimed": bytes_reclaimed,
+            "errors": 0,
+        }
+    ))
+    """
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +163,10 @@ class ExecRunnerConfig:
     max_sync_bytes: int
     max_diff_bytes: int
     proxy_url: str
-    cache_root: Path
     cache_max_bytes: int
     cache_target_bytes: int
     cache_max_age_days: int
     sandbox_no_new_privileges: bool = True
-    shared_cache_volume: str = "exec_runner_cache"
     command_timeout_seconds: int = 300
 
 
@@ -125,7 +216,6 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
     )
     max_sync_bytes = max(int(os.getenv("EXEC_RUNNER_MAX_SYNC_BYTES", str(50 * 1024 * 1024))), 1024 * 1024)
     max_diff_bytes = max(int(os.getenv("EXEC_RUNNER_MAX_DIFF_BYTES", str(50 * 1024 * 1024))), 1024 * 1024)
-    cache_root = Path(str(os.getenv("EXEC_RUNNER_CACHE_ROOT", str(EXEC_RUNNER_CACHE_ROOT))).strip())
     cache_max_bytes = max(int(os.getenv("EXEC_RUNNER_CACHE_MAX_BYTES", str(5 * 1024 * 1024 * 1024))), 1024 * 1024)
     cache_target_bytes = max(int(os.getenv("EXEC_RUNNER_CACHE_TARGET_BYTES", str(3 * 1024 * 1024 * 1024))), 1024 * 1024)
     cache_target_bytes = min(cache_target_bytes, cache_max_bytes)
@@ -147,7 +237,6 @@ def load_exec_runner_config_from_env() -> ExecRunnerConfig:
         max_sync_bytes=max_sync_bytes,
         max_diff_bytes=max_diff_bytes,
         proxy_url=proxy_url,
-        cache_root=cache_root,
         cache_max_bytes=cache_max_bytes,
         cache_target_bytes=cache_target_bytes,
         cache_max_age_days=cache_max_age_days,
@@ -165,9 +254,7 @@ class DockerExecRunnerBackend:
         if self._initialized:
             return
         await asyncio.to_thread(self.config.state_root.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(self.config.cache_root.mkdir, parents=True, exist_ok=True)
         await self._run_docker("version", "--format", "{{json .Server.Version}}")
-        await self._ensure_cache_volume()
         await self._gc_expired_sessions()
         self._initialized = True
 
@@ -248,7 +335,7 @@ class DockerExecRunnerBackend:
         async with self._maintenance_lock:
             expired_sessions_removed = await self._gc_expired_sessions_locked()
             orphaned = await self._sweep_orphaned_resources_locked()
-            cache_prune = await asyncio.to_thread(self._prune_shared_cache)
+            cache_prune = await self._prune_cache_volumes_locked()
 
         summary = {
             "expired_sessions_removed": expired_sessions_removed,
@@ -326,21 +413,37 @@ class DockerExecRunnerBackend:
             SESSION_ROOT_IN_CONTAINER,
             labels=self._session_resource_labels(session.selector),
         )
+        await self._ensure_user_cache_volume(selector.user_id)
         exists = await self._container_exists(session.container_name)
+        expected_cache_volume = self._cache_volume_name(selector.user_id)
+        if exists and not await self._container_has_mount(
+            session.container_name,
+            source=expected_cache_volume,
+            destination=str(CACHE_ROOT_IN_CONTAINER),
+        ):
+            await self._remove_container(session.container_name)
+            exists = False
         if not exists:
             await self._create_container(session)
         else:
             await self._ensure_container_running(session.container_name)
         return session
 
-    async def _ensure_cache_volume(self) -> None:
+    def _cache_volume_name(self, user_id: int | str) -> str:
+        return f"{CACHE_VOLUME_PREFIX}{ExecSessionSelector._slug(user_id)}"
+
+    def _cache_volume_labels(self, user_id: int | str) -> dict[str, str]:
+        return {
+            MANAGED_LABEL_KEY: "true",
+            RESOURCE_LABEL_KEY: CACHE_RESOURCE_LABEL_VALUE,
+            USER_ID_LABEL_KEY: str(user_id),
+        }
+
+    async def _ensure_user_cache_volume(self, user_id: int | str) -> None:
         await self._ensure_volume(
-            self.config.shared_cache_volume,
+            self._cache_volume_name(user_id),
             CACHE_ROOT_IN_CONTAINER,
-            labels={
-                MANAGED_LABEL_KEY: "true",
-                RESOURCE_LABEL_KEY: CACHE_RESOURCE_LABEL_VALUE,
-            },
+            labels=self._cache_volume_labels(user_id),
         )
 
     async def _ensure_volume(
@@ -367,7 +470,8 @@ class DockerExecRunnerBackend:
             "-lc",
             (
                 f'mkdir -p "{target_path}" '
-                f'&& chmod -R 0777 "{target_path}"'
+                f'&& chown -R nova:nova "{target_path}" '
+                f'&& chmod -R u+rwX,go-rwx "{target_path}"'
             ),
         )
 
@@ -395,7 +499,7 @@ class DockerExecRunnerBackend:
                 "--mount",
                 f"source={session.volume_name},target={SESSION_ROOT_IN_CONTAINER}",
                 "--mount",
-                f"source={self.config.shared_cache_volume},target={CACHE_ROOT_IN_CONTAINER}",
+                f"source={self._cache_volume_name(session.selector.user_id)},target={CACHE_ROOT_IN_CONTAINER}",
                 "--memory",
                 f"{self.config.sandbox_memory_limit_mb}m",
                 "--cpus",
@@ -805,18 +909,43 @@ class DockerExecRunnerBackend:
 
         volume_names = set(
             name
-            for name in await self._list_docker_items("volume", "ls", "-q", "--filter", f"label={MANAGED_LABEL_KEY}=true")
-            if name != self.config.shared_cache_volume
+            for name in await self._list_docker_items(
+                "volume",
+                "ls",
+                "-q",
+                "--filter",
+                f"label={MANAGED_LABEL_KEY}=true",
+                "--filter",
+                f"label={RESOURCE_LABEL_KEY}={SESSION_RESOURCE_LABEL_VALUE}",
+            )
         )
         volume_names.update(
             name
             for name in await self._list_docker_items("volume", "ls", "-q", "--filter", "name=nova-exec-session-")
-            if name != self.config.shared_cache_volume
         )
 
         containers = await self._inspect_containers(sorted(container_ids))
         volumes = await self._inspect_volumes(sorted(volume_names))
         return containers, volumes
+
+    async def _list_managed_cache_volumes(self) -> list[dict[str, str]]:
+        volume_names = set(
+            await self._list_docker_items(
+                "volume",
+                "ls",
+                "-q",
+                "--filter",
+                f"label={MANAGED_LABEL_KEY}=true",
+                "--filter",
+                f"label={RESOURCE_LABEL_KEY}={CACHE_RESOURCE_LABEL_VALUE}",
+            )
+        )
+        volumes = await self._inspect_volumes(sorted(volume_names))
+        return [
+            resource
+            for resource in volumes
+            if str((resource.get("labels") or {}).get(RESOURCE_LABEL_KEY) or "") == CACHE_RESOURCE_LABEL_VALUE
+        ]
 
     async def _list_docker_items(self, *args: str) -> list[str]:
         try:
@@ -934,82 +1063,52 @@ class DockerExecRunnerBackend:
             "errors": errors,
         }
 
-    def _prune_shared_cache(self) -> dict[str, int]:
-        files_removed = 0
-        directories_removed = 0
-        bytes_reclaimed = 0
-        errors = 0
-        cache_root = self.config.cache_root
-        if not cache_root.exists():
-            return {
-                "files_removed": 0,
-                "directories_removed": 0,
-                "bytes_reclaimed": 0,
-                "errors": 0,
-            }
-
-        now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
-        max_age_seconds = self.config.cache_max_age_days * 24 * 60 * 60
-
-        def collect_files() -> list[tuple[Path, int, float]]:
-            collected: list[tuple[Path, int, float]] = []
-            for current_root, _dirnames, filenames in os.walk(cache_root):
-                for filename in filenames:
-                    path = Path(current_root) / filename
-                    try:
-                        stat = path.stat()
-                    except OSError:
-                        continue
-                    collected.append((path, int(stat.st_size), float(stat.st_mtime)))
-            return collected
-
-        def delete_file(path: Path, size: int) -> None:
-            nonlocal files_removed, bytes_reclaimed, errors
+    async def _prune_cache_volumes_locked(self) -> dict[str, int]:
+        summary = {
+            "files_removed": 0,
+            "directories_removed": 0,
+            "bytes_reclaimed": 0,
+            "errors": 0,
+        }
+        for resource in await self._list_managed_cache_volumes():
+            volume_name = str(resource.get("name") or "").strip()
+            if not volume_name:
+                continue
             try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                errors += 1
-                logger.exception("Failed to remove exec-runner cache file %s", path)
-                return
-            files_removed += 1
-            bytes_reclaimed += max(size, 0)
+                volume_summary = await self._prune_cache_volume(volume_name)
+            except Exception:
+                summary["errors"] += 1
+                logger.exception("Failed to prune exec-runner cache volume %s", volume_name)
+                continue
+            for key in summary:
+                summary[key] += int(volume_summary.get(key, 0) or 0)
+        return summary
 
-        files = collect_files()
-        total_size = sum(size for _path, size, _mtime in files)
-        recent_cutoff = now_ts - CACHE_RECENT_GUARD_SECONDS
-        age_cutoff = now_ts - max_age_seconds
-
-        remaining: list[tuple[Path, int, float]] = []
-        for path, size, mtime in files:
-            if mtime <= age_cutoff and mtime <= recent_cutoff:
-                delete_file(path, size)
-                total_size -= size
-            else:
-                remaining.append((path, size, mtime))
-
-        if total_size > self.config.cache_max_bytes:
-            for path, size, mtime in sorted(remaining, key=lambda item: item[2]):
-                if total_size <= self.config.cache_target_bytes:
-                    break
-                if mtime > recent_cutoff:
-                    continue
-                delete_file(path, size)
-                total_size -= size
-
-        for current_root, dirnames, _filenames in os.walk(cache_root, topdown=False):
-            for dirname in dirnames:
-                directory = Path(current_root) / dirname
-                try:
-                    directory.rmdir()
-                except OSError:
-                    continue
-                directories_removed += 1
-
+    async def _prune_cache_volume(self, volume_name: str) -> dict[str, int]:
+        stdout = await self._run_docker(
+            "run",
+            "--rm",
+            "--mount",
+            f"source={volume_name},target={CACHE_ROOT_IN_CONTAINER}",
+            self.config.sandbox_image,
+            "python3",
+            "-c",
+            _CACHE_PRUNE_SCRIPT,
+            str(CACHE_ROOT_IN_CONTAINER),
+            str(self.config.cache_max_bytes),
+            str(self.config.cache_target_bytes),
+            str(self.config.cache_max_age_days),
+            str(CACHE_RECENT_GUARD_SECONDS),
+        )
+        try:
+            payload = json.loads(stdout or "{}")
+        except ValueError as exc:
+            raise ExecRunnerError(f"Invalid cache prune response for volume {volume_name}.") from exc
         return {
-            "files_removed": files_removed,
-            "directories_removed": directories_removed,
-            "bytes_reclaimed": bytes_reclaimed,
-            "errors": errors,
+            "files_removed": int(payload.get("files_removed") or 0),
+            "directories_removed": int(payload.get("directories_removed") or 0),
+            "bytes_reclaimed": int(payload.get("bytes_reclaimed") or 0),
+            "errors": int(payload.get("errors") or 0),
         }
 
     async def _container_exists(self, container_name: str) -> bool:
@@ -1018,6 +1117,26 @@ class DockerExecRunnerBackend:
         except ExecRunnerError:
             return False
         return True
+
+    async def _container_has_mount(self, container_name: str, *, source: str, destination: str) -> bool:
+        try:
+            raw = await self._run_docker("inspect", container_name)
+        except ExecRunnerError:
+            return False
+        try:
+            payload = json.loads(raw or "[]")
+        except ValueError:
+            return False
+        if not isinstance(payload, list) or not payload:
+            return False
+        mounts = payload[0].get("Mounts") or []
+        for mount in mounts if isinstance(mounts, list) else []:
+            if str(mount.get("Name") or "").strip() != source:
+                continue
+            if str(mount.get("Destination") or "").strip() != destination:
+                continue
+            return True
+        return False
 
     async def _container_running(self, container_name: str) -> bool:
         try:

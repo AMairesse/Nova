@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Sequence
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -55,10 +55,9 @@ class BrowserSession:
             candidate = await assert_public_http_url(url)
         except NetworkPolicyError as exc:
             raise BrowserSessionError(str(exc)) from exc
-        parsed = urlparse(candidate)
-        if parsed.scheme not in {"http", "https"}:
+        if candidate.scheme not in {"http", "https"}:
             raise BrowserSessionError("Browser navigation only supports http and https URLs.")
-        return candidate
+        return candidate.url
 
     async def _require_open_page(self):
         if not self._has_opened_page or self._page is None:

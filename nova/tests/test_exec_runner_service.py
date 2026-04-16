@@ -167,7 +167,6 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
         *,
         sandbox_no_new_privileges: bool = True,
         state_root: Path | None = None,
-        cache_root: Path | None = None,
         session_ttl_seconds: int = 14400,
     ) -> DockerExecRunnerBackend:
         return DockerExecRunnerBackend(
@@ -185,7 +184,6 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
-                cache_root=cache_root or Path("/tmp/nova-exec-runner-cache"),
                 cache_max_bytes=5 * 1024 * 1024 * 1024,
                 cache_target_bytes=3 * 1024 * 1024 * 1024,
                 cache_max_age_days=14,
@@ -289,7 +287,7 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
         self.assertIn("--security-opt", docker_args)
         self.assertIn("no-new-privileges", docker_args)
         self.assertIn(f"source=nova-exec-session-test,target={SESSION_ROOT_IN_CONTAINER}", docker_args)
-        self.assertIn(f"source=exec_runner_cache,target={CACHE_ROOT_IN_CONTAINER}", docker_args)
+        self.assertIn(f"source=nova-exec-cache-user-1,target={CACHE_ROOT_IN_CONTAINER}", docker_args)
         self.assertIn(
             (
                 f'mkdir -p "{WORKSPACE_ROOT_IN_CONTAINER}" '
@@ -329,11 +327,27 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
         self.assertIn("nova.exec_runner.resource=session", rendered)
         self.assertIn("nova.exec_runner.session_id=user-1--thread-2--agent-3", rendered)
 
+    def test_ensure_session_recreates_container_when_cache_mount_uses_legacy_volume(self):
+        backend = self._build_backend()
+        backend._ensure_volume = AsyncMock()
+        backend._ensure_user_cache_volume = AsyncMock()
+        backend._container_exists = AsyncMock(return_value=True)
+        backend._container_has_mount = AsyncMock(return_value=False)
+        backend._remove_container = AsyncMock(return_value=True)
+        backend._create_container = AsyncMock()
+        backend._ensure_container_running = AsyncMock()
+
+        session = asyncio.run(backend._ensure_session(ExecSessionSelector(user_id=1, thread_id=2, agent_id=3)))
+
+        self.assertEqual(session.container_name, "nova-exec-user-1--thread-2--agent-3")
+        backend._remove_container.assert_awaited_once_with("nova-exec-user-1--thread-2--agent-3")
+        backend._create_container.assert_awaited_once()
+        backend._ensure_container_running.assert_not_awaited()
+
     def test_delete_sessions_for_thread_removes_matching_resources(self):
-        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as cache_dir:
+        with tempfile.TemporaryDirectory() as state_dir:
             backend = self._build_backend(
                 state_root=Path(state_dir),
-                cache_root=Path(cache_dir),
             )
             target_dir = Path(state_dir) / "sessions" / "user-7--thread-9--agent-3"
             target_dir.mkdir(parents=True)
@@ -380,51 +394,49 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
             self.assertFalse(target_dir.exists())
             self.assertTrue(other_dir.exists())
 
-    def test_prune_shared_cache_removes_old_files_and_trims_large_cache(self):
-        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as cache_dir:
-            backend = DockerExecRunnerBackend(
-                ExecRunnerConfig(
-                    shared_token="runner-token",
-                    state_root=Path(state_dir),
-                    session_ttl_seconds=14400,
-                    gc_interval_seconds=900,
-                    sandbox_image="amairesse/nova:latest",
-                    sandbox_network="nova_exec-sandbox-net",
-                    sandbox_memory_limit_mb=1024,
-                    sandbox_cpu_limit="1.0",
-                    sandbox_pids_limit=256,
-                    sandbox_no_new_privileges=True,
-                    max_sync_bytes=50 * 1024 * 1024,
-                    max_diff_bytes=50 * 1024 * 1024,
-                    proxy_url="http://exec-runner:8091",
-                    cache_root=Path(cache_dir),
-                    cache_max_bytes=12,
-                    cache_target_bytes=8,
-                    cache_max_age_days=14,
-                )
-            )
-            old_path = Path(cache_dir) / "pip" / "old.whl"
-            old_path.parent.mkdir(parents=True)
-            old_path.write_bytes(b"old-data")
-            fresh_a = Path(cache_dir) / "uv" / "fresh-a.bin"
-            fresh_a.parent.mkdir(parents=True)
-            fresh_a.write_bytes(b"abcdefgh")
-            fresh_b = Path(cache_dir) / "npm" / "fresh-b.bin"
-            fresh_b.parent.mkdir(parents=True)
-            fresh_b.write_bytes(b"ijklmnop")
-            now = os.path.getmtime(fresh_b)
-            old_ts = now - (15 * 24 * 60 * 60)
-            fresh_a_ts = now - 7200
-            os.utime(old_path, (old_ts, old_ts))
-            os.utime(fresh_a, (fresh_a_ts, fresh_a_ts))
+    def test_prune_cache_volumes_aggregates_all_user_cache_volumes(self):
+        backend = self._build_backend()
+        backend._list_managed_cache_volumes = AsyncMock(
+            return_value=[
+                {"name": "nova-exec-cache-user-1", "labels": {}},
+                {"name": "nova-exec-cache-user-2", "labels": {}},
+            ]
+        )
+        backend._prune_cache_volume = AsyncMock(
+            side_effect=[
+                {"files_removed": 2, "directories_removed": 1, "bytes_reclaimed": 12, "errors": 0},
+                {"files_removed": 1, "directories_removed": 0, "bytes_reclaimed": 7, "errors": 0},
+            ]
+        )
 
-            summary = backend._prune_shared_cache()
+        summary = asyncio.run(backend._prune_cache_volumes_locked())
 
-            self.assertEqual(summary["files_removed"], 2)
-            self.assertGreaterEqual(summary["bytes_reclaimed"], len(b"old-data") + len(b"abcdefgh"))
-            self.assertFalse(old_path.exists())
-            self.assertFalse(fresh_a.exists())
-            self.assertTrue(fresh_b.exists())
+        self.assertEqual(summary["files_removed"], 3)
+        self.assertEqual(summary["directories_removed"], 1)
+        self.assertEqual(summary["bytes_reclaimed"], 19)
+        self.assertEqual(summary["errors"], 0)
+
+    def test_cache_volume_name_is_scoped_per_user(self):
+        backend = self._build_backend()
+
+        self.assertEqual(backend._cache_volume_name(7), "nova-exec-cache-user-7")
+        self.assertEqual(backend._cache_volume_name("user@example.com"), "nova-exec-cache-user-user-example-com")
+
+    def test_ensure_user_cache_volume_creates_labeled_volume(self):
+        backend = self._build_backend()
+        backend._ensure_volume = AsyncMock()
+
+        asyncio.run(backend._ensure_user_cache_volume("user@example.com"))
+
+        backend._ensure_volume.assert_awaited_once_with(
+            "nova-exec-cache-user-user-example-com",
+            CACHE_ROOT_IN_CONTAINER,
+            labels={
+                "nova.exec_runner.managed": "true",
+                "nova.exec_runner.resource": "cache",
+                "nova.exec_runner.user_id": "user@example.com",
+            },
+        )
 
     def test_cleanup_processes_excludes_its_own_shell(self):
         backend = self._build_backend()
@@ -560,7 +572,6 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
-                cache_root=Path("/tmp/nova-exec-runner-cache"),
                 cache_max_bytes=5 * 1024 * 1024 * 1024,
                 cache_target_bytes=3 * 1024 * 1024 * 1024,
                 cache_max_age_days=14,
@@ -615,7 +626,6 @@ class ExecRunnerSharedTests(SimpleTestCase):
                 max_sync_bytes=50 * 1024 * 1024,
                 max_diff_bytes=50 * 1024 * 1024,
                 proxy_url="http://exec-runner:8091",
-                cache_root=Path("/tmp/nova-exec-runner-cache"),
                 cache_max_bytes=5 * 1024 * 1024 * 1024,
                 cache_target_bytes=3 * 1024 * 1024 * 1024,
                 cache_max_age_days=14,

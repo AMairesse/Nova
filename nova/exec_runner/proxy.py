@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
-from nova.web.network_policy import assert_public_host_port, assert_public_http_url
+from nova.web.network_policy import NetworkPolicyError, ResolvedHttpTarget, assert_public_host_port, assert_public_http_url
+
+ALLOWED_CONNECT_PORTS = {443}
 
 
 @dataclass(slots=True, frozen=True)
@@ -83,10 +84,15 @@ class ExecRunnerProxyServer:
         self,
         target: str,
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        host, _, port_text = str(target or "").rpartition(":")
+        target_text = str(target or "").strip()
+        host, separator, port_text = target_text.rpartition(":")
+        if not separator:
+            host = target_text
         port = int(port_text or "443")
-        validated_host, validated_port = await assert_public_host_port(host, port)
-        return await asyncio.open_connection(validated_host, validated_port)
+        if port not in ALLOWED_CONNECT_PORTS:
+            raise NetworkPolicyError("CONNECT only supports public HTTPS on port 443.")
+        resolved = await assert_public_host_port(host, port)
+        return await asyncio.open_connection(resolved.ip, resolved.port)
 
     async def _build_http_request(
         self,
@@ -97,30 +103,41 @@ class ExecRunnerProxyServer:
         header_lines: list[str],
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, bytes]:
         validated_target = await assert_public_http_url(target)
-        parsed = urlsplit(validated_target)
-        host = str(parsed.hostname or "")
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        await assert_public_host_port(host, port)
         upstream_reader, upstream_writer = await asyncio.open_connection(
-            host,
-            port,
-            ssl=parsed.scheme == "https",
-            server_hostname=host if parsed.scheme == "https" else None,
+            validated_target.ip,
+            validated_target.port,
+            ssl=validated_target.scheme == "https",
+            server_hostname=validated_target.hostname if validated_target.scheme == "https" else None,
         )
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
         filtered_headers: list[str] = []
         for raw_header in header_lines:
             header = str(raw_header or "").strip()
             if not header:
                 continue
             lowered = header.lower()
-            if lowered.startswith("proxy-connection:"):
+            if lowered.startswith("proxy-connection:") or lowered.startswith("host:"):
                 continue
             filtered_headers.append(header)
-        outbound = "\r\n".join([f"{method} {path} {version}", *filtered_headers, "", ""]).encode("latin-1")
+        outbound = "\r\n".join(
+            [
+                f"{method} {validated_target.path_with_query} {version}",
+                f"Host: {self._format_host_header(validated_target)}",
+                *filtered_headers,
+                "",
+                "",
+            ]
+        ).encode("latin-1")
         return upstream_reader, upstream_writer, outbound
+
+    @staticmethod
+    def _format_host_header(target: ResolvedHttpTarget) -> str:
+        host = str(target.hostname or "").strip()
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        default_port = 443 if target.scheme == "https" else 80
+        if target.port == default_port:
+            return host
+        return f"{host}:{target.port}"
 
     @staticmethod
     def _get_header_value(header_lines: list[str], header_name: str) -> str:

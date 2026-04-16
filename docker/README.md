@@ -231,12 +231,12 @@ Notes:
 - `exec-runner` is the only service that receives the Docker socket. `web` and `celery-worker` call it over an authenticated internal HTTP API.
 - In the standard Docker module setup, `EXEC_RUNNER_SHARED_TOKEN` is the only exec-runner value you normally need to set in `.env`.
 - Warm sandbox sessions are kept for 4 hours of inactivity by default, then purged automatically.
-- `exec-runner` runs an internal periodic maintenance loop that removes expired/orphaned session resources and trims the shared package cache.
+- `exec-runner` runs an internal periodic maintenance loop that removes expired/orphaned session resources and trims per-user package caches.
 - The Docker module disables `EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES` by default for compatibility with hosts where the sandbox bootstrap shell cannot start under that hardening flag.
 
 ## Exec-runner troubleshooting
 
-`exec-runner` now purges expired warm sessions automatically and trims its shared cache in the
+`exec-runner` now purges expired warm sessions automatically and trims its per-user package caches in the
 background. In normal operation, `nova-exec-session-*` volumes should not keep accumulating.
 
 If an `exec-runner` sandbox still gets stuck or keeps a warm session in a bad state, you may need

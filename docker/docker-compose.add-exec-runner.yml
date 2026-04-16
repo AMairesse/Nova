@@ -43,7 +43,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - exec_runner_state:/var/lib/nova-exec-runner
-      - exec_runner_cache:/var/lib/nova-exec-runner-cache
     networks:
       - default
       - exec-sandbox-net
@@ -58,7 +57,6 @@ services:
 
 volumes:
   exec_runner_state:
-  exec_runner_cache:
 
 networks:
   exec-sandbox-net:

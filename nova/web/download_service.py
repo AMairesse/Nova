@@ -60,11 +60,11 @@ async def download_http_file(
         follow_redirects=False,
         headers=request_headers,
     ) as client:
-        current_url = await assert_public_http_url(url)
+        current_target = await assert_public_http_url(url)
         redirect_count = 0
 
         while True:
-            async with client.stream("GET", current_url) as response:
+            async with client.stream("GET", current_target.url) as response:
                 if 300 <= response.status_code < 400:
                     location = str(response.headers.get("location") or "").strip()
                     if not location:
@@ -72,11 +72,11 @@ async def download_http_file(
                     redirect_count += 1
                     if redirect_count > max_redirects():
                         raise ValueError("Too many redirects while downloading the requested URL.")
-                    current_url = await assert_public_http_url(urljoin(str(response.request.url), location))
+                    current_target = await assert_public_http_url(urljoin(str(response.request.url), location))
                     continue
 
                 response.raise_for_status()
-                inferred_name = infer_download_filename(current_url, response.headers, filename)
+                inferred_name = infer_download_filename(current_target.url, response.headers, filename)
                 mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
                 async for chunk in response.aiter_bytes():
                     if not chunk:
@@ -88,7 +88,7 @@ async def download_http_file(
                 break
 
     return {
-        "url": str(current_url or ""),
+        "url": str(current_target.url or ""),
         "filename": inferred_name,
         "mime_type": mime_type or "application/octet-stream",
         "content": b"".join(chunks),

@@ -76,9 +76,23 @@ class NetworkPolicyTests(SimpleTestCase):
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
         ):
-            url = async_to_sync(assert_public_http_url)("https://example.com/resource")
+            target = async_to_sync(assert_public_http_url)("https://example.com/resource")
 
-        self.assertEqual(url, "https://example.com/resource")
+        self.assertEqual(target.url, "https://example.com/resource")
+        self.assertEqual(target.hostname, "example.com")
+        self.assertEqual(target.ip, "93.184.216.34")
+
+    def test_resolved_target_keeps_original_hostname_while_binding_public_ip(self):
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ):
+            target = async_to_sync(assert_public_http_url)("https://Example.COM:8443/resource?q=1")
+
+        self.assertEqual(target.hostname, "example.com")
+        self.assertEqual(target.ip, "93.184.216.34")
+        self.assertEqual(target.port, 8443)
+        self.assertEqual(target.path_with_query, "/resource?q=1")
 
     def test_download_revalidates_redirect_targets(self):
         requests: list[str] = []
