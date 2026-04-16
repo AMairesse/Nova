@@ -4,6 +4,7 @@ import base64
 import binascii
 import html
 import json
+import logging
 import mimetypes
 import posixpath
 import re
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 
 from asgiref.sync import sync_to_async
+from django.db.models import Q
 from django.utils.text import slugify
 
 from nova.agent_markdown import collect_markdown_vfs_targets, extract_markdown_vfs_image_paths
@@ -50,6 +52,8 @@ from .skills_registry import build_skill_registry
 from .terminal import TerminalCommandError, TerminalExecutor
 from .terminal_metrics import classify_terminal_failure, normalize_head_command
 from .vfs import VirtualFileSystem
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -934,102 +938,134 @@ class ReactTerminalRuntime:
             tmp_storage_prefix=child_tmp_prefix,
         ).initialize()
 
-        copied_inputs: list[str] = []
-        for input_path in list(input_paths or []):
-            basename = posixpath.basename(str(input_path or "").strip()) or "input"
-            child_target = f"/inbox/{basename}"
-            try:
-                normalized_input = str(input_path or "").strip()
-                if normalized_input.startswith("/skills/"):
-                    content = (await self.vfs.read_text(normalized_input)).encode("utf-8")
-                    mime_type = "text/markdown"
-                else:
-                    content, mime_type = await self.vfs.read_bytes(normalized_input)
-                await child_runtime.vfs.write_file(
-                    child_target,
-                    content,
-                    mime_type=mime_type,
-                    allow_inbox_write=True,
+        async def _cleanup_child_runtime_files() -> None:
+            def _load_child_files():
+                return list(
+                    UserFile.objects.filter(
+                        user=self.user,
+                        thread=self.thread,
+                        scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                    ).filter(
+                        Q(original_filename__startswith=child_root_prefix)
+                        | Q(original_filename__startswith=child_tmp_prefix)
+                    )
                 )
+
+            child_files = await sync_to_async(_load_child_files, thread_sensitive=True)()
+            for user_file in child_files:
+                try:
+                    await sync_to_async(user_file.delete, thread_sensitive=True)()
+                except Exception as exc:
+                    logger.warning(
+                        "Could not clean delegated runtime file %s for child run %s: %s",
+                        getattr(user_file, "id", None),
+                        child_run_id,
+                        exc,
+                    )
+
+        copied_inputs: list[str] = []
+        copied_outputs: list[str] = []
+        answer = ""
+        try:
+            for input_path in list(input_paths or []):
+                basename = posixpath.basename(str(input_path or "").strip()) or "input"
+                child_target = f"/inbox/{basename}"
+                try:
+                    normalized_input = str(input_path or "").strip()
+                    if normalized_input.startswith("/skills/"):
+                        content = (await self.vfs.read_text(normalized_input)).encode("utf-8")
+                        mime_type = "text/markdown"
+                    else:
+                        content, mime_type = await self.vfs.read_bytes(normalized_input)
+                    await child_runtime.vfs.write_file(
+                        child_target,
+                        content,
+                        mime_type=mime_type,
+                        allow_inbox_write=True,
+                    )
+                except Exception as exc:
+                    suggestion = await self.vfs.suggest_inbox_path(input_path)
+                    error_text = str(exc)
+                    if suggestion:
+                        error_text = f"{error_text} Did you mean {suggestion}?"
+                    if self.trace_handler and node_id:
+                        await self.trace_handler.fail_subagent(
+                            node_id,
+                            error=error_text,
+                            meta={
+                                "input_paths_requested": list(input_paths or []),
+                                "input_paths_copied": list(copied_inputs),
+                            },
+                        )
+                    delegate_trace_meta["input_paths_copied"] = list(copied_inputs)
+                    delegate_trace_meta["error_kind"] = "copy_input_failed"
+                    return ToolExecutionResult(
+                        content=f"Failed to copy {input_path} into the sub-agent input area: {error_text}",
+                        trace_meta=delegate_trace_meta,
+                        failed=True,
+                    )
+                copied_inputs.append(child_target)
+            delegate_trace_meta["input_paths_copied"] = list(copied_inputs)
+
+            before_files = await child_runtime.vfs.snapshot_persistent_files()
+            child_question = str(question or "").strip()
+            if copied_inputs:
+                child_question += (
+                    "\n\nInput files were copied into /inbox:\n"
+                    + "\n".join(f"- {path}" for path in copied_inputs)
+                )
+
+            try:
+                child_result = await child_runtime.run(
+                    ephemeral_user_prompt=child_question,
+                    ensure_root_trace=False,
+                )
+                answer = child_result.final_answer
             except Exception as exc:
-                suggestion = await self.vfs.suggest_inbox_path(input_path)
-                error_text = str(exc)
-                if suggestion:
-                    error_text = f"{error_text} Did you mean {suggestion}?"
                 if self.trace_handler and node_id:
                     await self.trace_handler.fail_subagent(
                         node_id,
-                        error=error_text,
-                        meta={
-                            "input_paths_requested": list(input_paths or []),
-                            "input_paths_copied": list(copied_inputs),
-                        },
+                        error=str(exc),
+                        meta=delegate_trace_meta,
                     )
-                delegate_trace_meta["input_paths_copied"] = list(copied_inputs)
-                delegate_trace_meta["error_kind"] = "copy_input_failed"
+                delegate_trace_meta["error_kind"] = "subagent_failed"
                 return ToolExecutionResult(
-                    content=f"Failed to copy {input_path} into the sub-agent input area: {error_text}",
+                    content=f"Sub-agent failed: {exc}",
                     trace_meta=delegate_trace_meta,
                     failed=True,
                 )
-            copied_inputs.append(child_target)
-        delegate_trace_meta["input_paths_copied"] = list(copied_inputs)
 
-        before_files = await child_runtime.vfs.snapshot_persistent_files()
-        child_question = str(question or "").strip()
-        if copied_inputs:
-            child_question += (
-                "\n\nInput files were copied into /inbox:\n"
-                + "\n".join(f"- {path}" for path in copied_inputs)
-            )
+            after_files = await child_runtime.vfs.snapshot_persistent_files()
+            changed_files = sorted([
+                path
+                for path, snapshot in after_files.items()
+                if before_files.get(path) != snapshot
+            ])
+            if changed_files:
+                subagent_slug = slugify(str(match.name or "").strip()) or f"agent-{match.id}"
+                target_dir = f"/subagents/{subagent_slug}-{child_run_id}"
 
-        try:
-            child_result = await child_runtime.run(ephemeral_user_prompt=child_question, ensure_root_trace=False)
-            answer = child_result.final_answer
-        except Exception as exc:
-            if self.trace_handler and node_id:
-                await self.trace_handler.fail_subagent(
-                    node_id,
-                    error=str(exc),
-                    meta=delegate_trace_meta,
-                )
-            delegate_trace_meta["error_kind"] = "subagent_failed"
-            return ToolExecutionResult(
-                content=f"Sub-agent failed: {exc}",
-                trace_meta=delegate_trace_meta,
-                failed=True,
-            )
+                async def _ensure_parent_dirs(full_path: str) -> None:
+                    current = "/"
+                    for segment in [part for part in full_path.strip("/").split("/")[:-1] if part]:
+                        current = posixpath.join(current, segment) if current != "/" else f"/{segment}"
+                        await self.vfs.mkdir(current)
 
-        after_files = await child_runtime.vfs.snapshot_persistent_files()
-        changed_files = sorted([
-            path
-            for path, snapshot in after_files.items()
-            if before_files.get(path) != snapshot
-        ])
-        copied_outputs: list[str] = []
-        if changed_files:
-            subagent_slug = slugify(str(match.name or "").strip()) or f"agent-{match.id}"
-            target_dir = f"/subagents/{subagent_slug}-{child_run_id}"
-
-            async def _ensure_parent_dirs(full_path: str) -> None:
-                current = "/"
-                for segment in [part for part in full_path.strip("/").split("/")[:-1] if part]:
-                    current = posixpath.join(current, segment) if current != "/" else f"/{segment}"
-                    await self.vfs.mkdir(current)
-
-            await self.vfs.mkdir("/subagents")
-            await self.vfs.mkdir(target_dir)
-            for created_path in changed_files:
-                if created_path.startswith("/generated/"):
-                    relative_path = created_path[len("/generated/"):].lstrip("/")
-                else:
-                    relative_path = created_path.lstrip("/")
-                parent_target = posixpath.join(target_dir, relative_path)
-                await _ensure_parent_dirs(parent_target)
-                content, mime_type = await child_runtime.vfs.read_bytes(created_path)
-                await self.vfs.write_file(parent_target, content, mime_type=mime_type)
-                copied_outputs.append(parent_target)
-            await self._persist_session()
+                await self.vfs.mkdir("/subagents")
+                await self.vfs.mkdir(target_dir)
+                for created_path in changed_files:
+                    if created_path.startswith("/generated/"):
+                        relative_path = created_path[len("/generated/"):].lstrip("/")
+                    else:
+                        relative_path = created_path.lstrip("/")
+                    parent_target = posixpath.join(target_dir, relative_path)
+                    await _ensure_parent_dirs(parent_target)
+                    content, mime_type = await child_runtime.vfs.read_bytes(created_path)
+                    await self.vfs.write_file(parent_target, content, mime_type=mime_type)
+                    copied_outputs.append(parent_target)
+                await self._persist_session()
+        finally:
+            await _cleanup_child_runtime_files()
 
         if self.trace_handler and node_id:
             await self.trace_handler.complete_subagent(

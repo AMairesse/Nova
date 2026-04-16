@@ -3,6 +3,7 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
+from nova.file_utils import build_message_attachment_path
 from nova.message_rendering import prepare_messages_for_display, with_message_display_relations
 from nova.models.Message import Actor, Message
 from nova.models.Thread import Thread
@@ -41,7 +42,7 @@ class MessageRenderingTests(TestCase):
             thread=self.thread,
             source_message=message,
             key=f"users/{self.user.id}/threads/{self.thread.id}/photo.jpg",
-            original_filename="photo.jpg",
+            original_filename=build_message_attachment_path(message.id, "photo.jpg"),
             mime_type="image/jpeg",
             size=2048,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
@@ -68,7 +69,7 @@ class MessageRenderingTests(TestCase):
             thread=self.thread,
             source_message=message,
             key=f"users/{self.user.id}/threads/{self.thread.id}/photo.jpg",
-            original_filename="photo.jpg",
+            original_filename=build_message_attachment_path(message.id, "photo.jpg"),
             mime_type="image/jpeg",
             size=2048,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
@@ -106,7 +107,7 @@ class MessageRenderingTests(TestCase):
             thread=self.thread,
             source_message=message,
             key=f"users/{self.user.id}/threads/{self.thread.id}/photo.jpg",
-            original_filename="photo.jpg",
+            original_filename=build_message_attachment_path(message.id, "photo.jpg"),
             mime_type="image/jpeg",
             size=2048,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
@@ -131,11 +132,92 @@ class MessageRenderingTests(TestCase):
             ["photo.jpg"],
         )
 
+    def test_prepare_messages_for_display_excludes_runtime_message_attachment_files(self):
+        message = self.thread.add_message("Hello", actor=Actor.USER)
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/photo.jpg",
+            original_filename=build_message_attachment_path(message.id, "photo.jpg"),
+            mime_type="image/jpeg",
+            size=2048,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{self.thread.id}/runtime/input.jpg",
+            original_filename="/runtime/input.jpg",
+            mime_type="image/jpeg",
+            size=4096,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+
+        prepared = prepare_messages_for_display(
+            list(
+                with_message_display_relations(
+                    Message.objects.filter(id=message.id).order_by("created_at", "id")
+                )
+            )
+        )
+
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0].message_attachment_count, 1)
+        self.assertEqual(
+            [item["label"] for item in prepared[0].message_attachments],
+            ["photo.jpg"],
+        )
+
     def test_prepare_messages_for_display_renders_agent_vfs_image_markdown_inline(self):
         user_file = self._create_thread_file(path="/generated/flyer.png")
         message = self.thread.add_message("Done", actor=Actor.AGENT)
         message.internal_data = {
             "display_markdown": "Preview\n\n![Flyer](/generated/flyer.png)",
+        }
+        message.save(update_fields=["internal_data"])
+
+        prepared = prepare_messages_for_display(
+            list(
+                with_message_display_relations(
+                    Message.objects.filter(id=message.id).order_by("created_at", "id")
+                )
+            )
+        )
+
+        self.assertEqual(len(prepared), 1)
+        self.assertIn("<img", prepared[0].rendered_html)
+        self.assertIn(f"/files/content/{user_file.id}/", prepared[0].rendered_html)
+
+    def test_prepare_messages_for_display_renders_subagent_image_markdown_inline(self):
+        user_file = self._create_thread_file(path="/subagents/image-agent-123/generated-image-1.png")
+        message = self.thread.add_message("Done", actor=Actor.AGENT)
+        message.internal_data = {
+            "display_markdown": "Preview\n\n![Result](/subagents/image-agent-123/generated-image-1.png)",
+        }
+        message.save(update_fields=["internal_data"])
+
+        prepared = prepare_messages_for_display(
+            list(
+                with_message_display_relations(
+                    Message.objects.filter(id=message.id).order_by("created_at", "id")
+                )
+            )
+        )
+
+        self.assertEqual(len(prepared), 1)
+        self.assertIn("<img", prepared[0].rendered_html)
+        self.assertIn(f"/files/content/{user_file.id}/", prepared[0].rendered_html)
+
+    def test_prepare_messages_for_display_treats_octet_stream_png_reference_as_image(self):
+        user_file = self._create_thread_file(
+            path="/subagents/image-agent-123/generated-image-1.png",
+            mime_type="application/octet-stream",
+        )
+        message = self.thread.add_message("Done", actor=Actor.AGENT)
+        message.internal_data = {
+            "display_markdown": "Preview\n\n![Result](/subagents/image-agent-123/generated-image-1.png)",
         }
         message.save(update_fields=["internal_data"])
 

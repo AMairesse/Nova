@@ -10,6 +10,7 @@ from django.utils import timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, patch, AsyncMock, Mock
 
+from nova.file_utils import build_message_attachment_path
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Message import Actor
 from nova.models.Provider import ProviderType, LLMProvider
@@ -921,9 +922,19 @@ class MainViewsTests(TestCase):
             thread=thread,
             source_message=source_message,
             key="users/1/threads/1/attachments/IMG_6433.jpg",
-            original_filename="/uploads/IMG_6433.jpg",
+            original_filename=build_message_attachment_path(source_message.id, "IMG_6433.jpg"),
             mime_type="image/jpeg",
             size=456,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=source_message,
+            key="users/1/threads/1/runtime/IMG_6433.jpg",
+            original_filename="/runtime/IMG_6433.jpg",
+            mime_type="image/jpeg",
+            size=789,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
         )
 

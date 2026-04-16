@@ -13,6 +13,7 @@ from django.utils.translation import gettext as _
 from nova.file_utils import download_file_content
 from nova.message_attachments import (
     AttachmentKind,
+    build_explicit_message_attachment_query,
     build_attachment_label,
     build_message_attachment_inbox_paths,
     detect_attachment_kind,
@@ -205,9 +206,9 @@ async def load_message_turn_inputs(source_message) -> list[ResolvedTurnInput]:
             UserFile.objects.filter(
                 user=source_message.user,
                 thread=source_message.thread,
-                source_message_id=source_message_id,
-                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-            ).order_by("created_at", "id")
+            )
+            .filter(build_explicit_message_attachment_query(source_message_id))
+            .order_by("created_at", "id")
         )
         inbox_paths = build_message_attachment_inbox_paths(user_files)
         return [

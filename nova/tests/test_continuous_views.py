@@ -9,6 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
+from nova.file_utils import build_message_attachment_path
 from nova.message_submission import MessageSubmissionError
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
@@ -161,9 +162,19 @@ class ContinuousViewsTests(TestCase):
             thread=thread,
             source_message=message,
             key=f"users/{self.user.id}/threads/{thread.id}/photo.jpg",
-            original_filename="photo.jpg",
+            original_filename=build_message_attachment_path(message.id, "photo.jpg"),
             mime_type="image/jpeg",
             size=2048,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=message,
+            key=f"users/{self.user.id}/threads/{thread.id}/runtime/generated.png",
+            original_filename="/runtime/generated.png",
+            mime_type="image/png",
+            size=1024,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
         )
         UserFile.objects.create(
@@ -182,6 +193,7 @@ class ContinuousViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
         self.assertIn("photo.jpg", html)
+        self.assertNotIn("/runtime/generated.png", html)
         self.assertNotIn("/generated/output.png", html)
         self.assertRegex(html, r"1 attachment (?:was added|added)")
 

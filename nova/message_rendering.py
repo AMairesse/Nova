@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.db.models import Prefetch
 
 from nova.agent_markdown import render_agent_markdown, resolve_markdown_vfs_targets
+from nova.message_attachments import build_explicit_message_attachment_query
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor
 from nova.models.UserFile import UserFile
@@ -12,7 +13,7 @@ from nova.utils import markdown_to_html
 MESSAGE_ATTACHMENT_DISPLAY_PREFETCH = Prefetch(
     "attached_files",
     queryset=UserFile.objects.filter(
-        scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        build_explicit_message_attachment_query(),
     ).order_by(
         "created_at",
         "id",

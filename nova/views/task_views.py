@@ -6,10 +6,13 @@ from django.urls import reverse
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
+from nova.message_attachments import (
+    build_explicit_message_attachment_query,
+    build_message_attachment_inbox_paths,
+)
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
-from nova.message_attachments import build_message_attachment_inbox_paths
 from nova.tasks.runtime_state import reconcile_stale_running_tasks
 
 TRACE_FILE_META_KEYS = {
@@ -84,9 +87,8 @@ def _resolve_trace_file_refs(*, user, thread, paths, source_message_id=None):
             UserFile.objects.filter(
                 user=user,
                 thread=thread,
-                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
-                source_message_id=source_message_id,
             )
+            .filter(build_explicit_message_attachment_query(source_message_id))
         )
         aliases = build_message_attachment_inbox_paths(inbox_files)
         for user_file in inbox_files:
