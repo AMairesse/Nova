@@ -1,0 +1,63 @@
+services:
+  web:
+    extends:
+      file: docker-compose.base.yml
+      service: web
+    depends_on:
+      exec-runner:
+        condition: service_healthy
+    environment:
+      EXEC_RUNNER_ENABLED: "True"
+      EXEC_RUNNER_BASE_URL: ${EXEC_RUNNER_BASE_URL:-http://exec-runner:8080}
+      EXEC_RUNNER_SHARED_TOKEN: ${EXEC_RUNNER_SHARED_TOKEN:-}
+      EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS: ${EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS:-120}
+
+  celery-worker:
+    extends:
+      file: docker-compose.base.yml
+      service: celery-worker
+    depends_on:
+      exec-runner:
+        condition: service_healthy
+    environment:
+      EXEC_RUNNER_ENABLED: "True"
+      EXEC_RUNNER_BASE_URL: ${EXEC_RUNNER_BASE_URL:-http://exec-runner:8080}
+      EXEC_RUNNER_SHARED_TOKEN: ${EXEC_RUNNER_SHARED_TOKEN:-}
+      EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS: ${EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS:-120}
+
+  exec-runner:
+    image: amairesse/nova:latest
+    restart: unless-stopped
+    command: >
+      python -m nova.exec_runner.server
+    env_file:
+      - .env
+    environment:
+      EXEC_RUNNER_HOST: 0.0.0.0
+      EXEC_RUNNER_PORT: 8080
+      EXEC_RUNNER_PROXY_PORT: 8091
+      EXEC_RUNNER_STATE_ROOT: /var/lib/nova-exec-runner
+      EXEC_RUNNER_SANDBOX_NETWORK: ${COMPOSE_PROJECT_NAME:-nova}_exec-sandbox-net
+      EXEC_RUNNER_SANDBOX_IMAGE: ${EXEC_RUNNER_SANDBOX_IMAGE:-amairesse/nova:latest}
+      EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES: ${EXEC_RUNNER_SANDBOX_NO_NEW_PRIVILEGES:-false}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - exec_runner_state:/var/lib/nova-exec-runner
+    networks:
+      - default
+      - exec-sandbox-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'python -c ''import os, urllib.request; token = os.getenv("EXEC_RUNNER_SHARED_TOKEN", ""); req = urllib.request.Request("http://127.0.0.1:8080/healthz", headers={"Authorization": "Bearer %s" % token}); urllib.request.urlopen(req, timeout=5)'''
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  exec_runner_state:
+
+networks:
+  exec-sandbox-net:
+    name: ${COMPOSE_PROJECT_NAME:-nova}_exec-sandbox-net

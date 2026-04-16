@@ -4,8 +4,10 @@ import posixpath
 from typing import Any
 
 from django.conf import settings
+from django.db.models import Q
 from django.urls import reverse
 
+from nova.file_utils import MESSAGE_ATTACHMENT_STORAGE_PREFIX
 from nova.models.UserFile import UserFile
 
 
@@ -149,10 +151,67 @@ def build_attachment_label(user_file: UserFile | None, *, fallback: str = "") ->
     return fallback or "attachment"
 
 
+def is_canonical_message_attachment_storage_path(
+    path: str | None,
+    source_message_id: int | None = None,
+) -> bool:
+    normalized = str(path or "").strip()
+    if source_message_id is None:
+        return normalized.startswith(f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_")
+    try:
+        resolved_message_id = int(source_message_id)
+    except (TypeError, ValueError):
+        return False
+    return normalized.startswith(
+        f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_{resolved_message_id}/"
+    )
+
+
+def is_explicit_message_attachment_file(
+    user_file: UserFile | None,
+    source_message_id: int | None = None,
+) -> bool:
+    if user_file is None:
+        return False
+    if getattr(user_file, "scope", None) != UserFile.Scope.MESSAGE_ATTACHMENT:
+        return False
+    file_source_message_id = getattr(user_file, "source_message_id", None)
+    if source_message_id is not None and file_source_message_id != source_message_id:
+        return False
+    if file_source_message_id is None:
+        return False
+    return is_canonical_message_attachment_storage_path(
+        getattr(user_file, "original_filename", None),
+        source_message_id=file_source_message_id,
+    )
+
+
+def build_explicit_message_attachment_query(
+    source_message_id: int | None = None,
+) -> Q:
+    query = Q(scope=UserFile.Scope.MESSAGE_ATTACHMENT)
+    if source_message_id is None:
+        return query & Q(
+            original_filename__startswith=f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_"
+        )
+    try:
+        resolved_message_id = int(source_message_id)
+    except (TypeError, ValueError):
+        return query & Q(pk__in=[])
+    return query & Q(
+        source_message_id=resolved_message_id,
+        original_filename__startswith=(
+            f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_{resolved_message_id}/"
+        ),
+    )
+
+
 def build_message_attachment_inbox_paths(user_files: list[UserFile]) -> dict[int, str]:
     aliases: dict[int, str] = {}
     used_names: dict[str, int] = {}
     for user_file in user_files:
+        if not is_explicit_message_attachment_file(user_file):
+            continue
         file_id = getattr(user_file, "id", None)
         if file_id is None:
             continue
@@ -169,6 +228,8 @@ def build_message_attachment_history_paths(user_files: list[UserFile]) -> dict[i
     aliases: dict[int, str] = {}
     used_names_by_message: dict[int, dict[str, int]] = {}
     for user_file in user_files:
+        if not is_explicit_message_attachment_file(user_file):
+            continue
         file_id = getattr(user_file, "id", None)
         source_message_id = getattr(user_file, "source_message_id", None)
         if file_id is None or source_message_id is None:

@@ -61,7 +61,7 @@ Then configure your providers, capabilities/connections, and agents: [README-age
 
 ### Nova Runtime
 
-Nova agents work through a persistent pseudo-terminal mental model:
+Nova agents work through a persistent terminal-style mental model:
 
 - normal file operations (`ls`, `cat`, `find`, `tee`, `mv`, `rm`, ...)
 - current-message inputs under `/inbox` and earlier live-message attachments under `/history`
@@ -93,10 +93,11 @@ Continuous mode relies on stored messages, summaries, and embeddings.
 Nova supports:
 
 - built-in capabilities exposed through internal plugins
-- backend-backed capabilities for search and Python, with deployment defaults and optional custom backends
+- backend-backed capabilities for search and Python, with deployment defaults when the matching deployment modules are enabled
+- optional custom user backends for search
 - MCP servers with optional managed OAuth
 - custom API services defined through `APIToolOperation`
-- optional deployment services such as SearXNG and Judge0 when enabled in Docker
+- optional deployment services such as SearXNG, `exec-runner`, Ollama, and llama.cpp when enabled in Docker
 
 ### Web Apps
 

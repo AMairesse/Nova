@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from typing import Any, Sequence
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from nova.web.network_policy import NetworkPolicyError, assert_public_http_url
+from nova.web.safe_proxy import SafeHttpProxyConfig, SafeHttpProxyServer
 
 
 class BrowserSessionError(Exception):
@@ -20,6 +21,7 @@ class BrowserSession:
         self._browser = None
         self._context = None
         self._page = None
+        self._proxy_server = None
         self._has_opened_page = False
         self._blocked_request_error = ""
 
@@ -29,7 +31,12 @@ class BrowserSession:
 
         self._playwright = await async_playwright().start()
         try:
-            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._proxy_server = SafeHttpProxyServer(SafeHttpProxyConfig(host="127.0.0.1", port=0))
+            await self._proxy_server.start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                proxy={"server": self._proxy_server.proxy_url},
+            )
             self._context = await self._browser.new_context()
             await self._context.route("**/*", self._handle_route)
             self._page = await self._context.new_page()
@@ -55,10 +62,9 @@ class BrowserSession:
             candidate = await assert_public_http_url(url)
         except NetworkPolicyError as exc:
             raise BrowserSessionError(str(exc)) from exc
-        parsed = urlparse(candidate)
-        if parsed.scheme not in {"http", "https"}:
+        if candidate.scheme not in {"http", "https"}:
             raise BrowserSessionError("Browser navigation only supports http and https URLs.")
-        return candidate
+        return candidate.url
 
     async def _require_open_page(self):
         if not self._has_opened_page or self._page is None:
@@ -169,11 +175,13 @@ class BrowserSession:
         context = self._context
         browser = self._browser
         playwright = self._playwright
+        proxy_server = self._proxy_server
 
         self._page = None
         self._context = None
         self._browser = None
         self._playwright = None
+        self._proxy_server = None
         self._has_opened_page = False
 
         if page is not None:
@@ -195,5 +203,10 @@ class BrowserSession:
         if playwright is not None:
             try:
                 await playwright.stop()
+            except Exception:
+                pass
+        if proxy_server is not None:
+            try:
+                await proxy_server.close()
             except Exception:
                 pass

@@ -8,25 +8,40 @@ def _skill_docs(_capabilities, _thread_mode):
     return {
         "python.md": """# Python
 
-Python execution is available through a Judge0 sandbox, not a local interpreter
-attached to the Nova filesystem.
+Python execution runs inside Nova's persistent sandbox terminal.
 
-Use it for computation, data processing, and self-contained scripts.
-Do not use it to mutate Nova files or directories. To change the Nova VFS, use
-terminal file commands such as `tee`, `cp`, `mv`, `rm`, and `mkdir`.
+Use it for computation, data processing, scripts, and code-driven file transformations.
+Python is meant to be used directly from the current Nova terminal session.
+When you want Python to work on Nova files, keep them in a dedicated workspace folder
+and run Python from there. The sandbox terminal syncs workspace changes back to the
+thread filesystem, but Python does not replace normal terminal commands for cleanup,
+moves, or webapp publishing, and it does not own the final webapp lifecycle for the thread.
 
 Available forms:
 
 - `python /script.py`
+- `python --workdir /project /project/script.py`
 - `python -c "print('hello')"`
+- `python --workdir /project -c "from pathlib import Path; Path('out.txt').write_text('ok')"`
 - `python --output /result.txt /script.py`
 - `python --output /result.txt -c "print('hello')"`
 
-Keep scripts at stable paths in `/` when they are reused across multiple commands.
+`python -c` runs from the current sandbox working directory unless you override it with
+`--workdir`.
+
+Inside Python, absolute Nova paths such as `/report.csv`, `/inbox/photo.jpg`, or
+`/history/message-123/data.json` are translated to the synchronized workspace view
+of the sandbox.
+
+Copy attachments from `/inbox` or `/history` into a normal workspace folder when
+you want to modify them, keep generated outputs together, or publish the results as
+part of a project folder.
+
 Typical workflow:
-- create a script with `tee /script.py --text "..."`
-- run it with `python /script.py`
-- capture stdout into a file with `python --output /result.txt /script.py`
+- create a project folder with `mkdir -p /project`
+- write files with `tee /project/script.py --text "..."`
+- run them with `python /project/script.py`
+- publish a generated site with `webapp expose /project`
 """,
     }
 
@@ -38,23 +53,19 @@ PLUGIN = InternalPluginDescriptor(
     builtin_subtypes=("code_execution",),
     command_families=("python",),
     settings_metadata={
-        "name": "Code Execution",
-        "description": "Execute code snippets securely using Judge0 server",
-        "requires_config": True,
-        "config_fields": [
-            {"name": "judge0_url", "type": "string", "label": _("Judge0 Server URL"), "required": True},
-            {"name": "api_key", "type": "string", "label": _("Judge0 API Key (optional)"), "required": False},
-            {"name": "timeout", "type": "integer", "label": _("Default execution timeout (seconds)"), "required": False, "default": 5},
-        ],
+        "name": "Python",
+        "description": "Run Python scripts inside Nova's persistent sandbox terminal.",
+        "requires_config": False,
+        "config_fields": [],
     },
     runtime_capability_resolver=resolve_single_builtin_tool("code_execution"),
     skill_docs_provider=_skill_docs,
-    test_connection_handler="nova.plugins.python.service.test_judge0_access",
+    test_connection_handler="nova.plugins.python.service.test_exec_runner_access",
     python_path="nova.plugins.python",
     legacy_python_paths=("nova.plugins.python",),
     catalog_section="backend_capabilities",
     selection_mode="single_backend",
-    provisioning_sources=("deployment_default", "user_connection"),
-    show_in_add_flow=True,
-    add_label="Python backend",
+    provisioning_sources=("system_default",),
+    show_in_add_flow=False,
+    add_label="Python",
 )

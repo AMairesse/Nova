@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from django.conf import settings
@@ -8,10 +9,13 @@ from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
+from nova.exec_runner.service import exec_runner_is_configured
 from nova.llm.embeddings import resolve_embeddings_provider_for_values
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.plugins import get_internal_plugins, get_plugin, get_plugin_for_builtin_subtype
+
+logger = logging.getLogger(__name__)
 
 
 STANDARD_CAPABILITY_SUBTYPES = ("date", "memory", "browser", "webapp")
@@ -27,6 +31,7 @@ class CatalogBackendFamily:
     subtype: str
     default_backend: Tool | None
     custom_backends: list[Tool]
+    allow_custom_backends: bool
 
 
 def _plugin_metadata_for_subtype(subtype: str) -> dict:
@@ -48,7 +53,7 @@ def _default_backend_name(subtype: str) -> str:
     if subtype == "searxng":
         return "System - SearXNG"
     if subtype == "code_execution":
-        return "System - Code Execution"
+        return "System - Python"
     plugin = get_plugin("search" if subtype == "searxng" else "python")
     label = plugin.label if plugin is not None else subtype
     return f"Local Nova {label}"
@@ -243,32 +248,37 @@ def sync_search_system_backend() -> Tool | None:
     if tool is not None and not tool.agents.exists():
         tool.delete()
         return None
+    if tool is not None and tool.agents.exists():
+        logger.warning(
+            """WARNING: SEARXNG_SERVER_URL not set, but a system
+                       tool exists and is being used by at least one agent."""
+        )
     return tool
 
 
 def sync_python_system_backend() -> Tool | None:
-    judge0_url = settings.JUDGE0_SERVER_URL
     tool = _get_system_builtin_tool("code_execution")
 
-    if judge0_url:
+    if exec_runner_is_configured():
         if tool is None:
             tool = Tool.objects.create(
                 user=None,
                 name=_default_backend_name("code_execution"),
-                description="Default local Judge0 backend managed by Nova.",
+                description="Default local Python capability managed by Nova.",
                 tool_type=Tool.ToolType.BUILTIN,
                 tool_subtype="code_execution",
                 python_path=_builtin_python_path("code_execution"),
             )
-        _sync_default_credential(
-            tool,
-            config={"judge0_url": judge0_url},
-        )
         return tool
 
     if tool is not None and not tool.agents.exists():
         tool.delete()
         return None
+    if tool is not None and tool.agents.exists():
+        logger.warning(
+            """WARNING: exec-runner is not configured, but a system
+                       tool exists and is being used by at least one agent."""
+        )
     return tool
 
 
@@ -513,6 +523,7 @@ def build_tools_page_catalog(user, *, tools: list[Tool] | None = None) -> dict:
                     item for item in tools_by_subtype.get(subtype, [])
                     if item.user_id == user.id
                 ],
+                allow_custom_backends=bool(plugin.show_in_add_flow) if plugin is not None else False,
             )
         )
 

@@ -3,12 +3,29 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
-from functools import lru_cache
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 
 class NetworkPolicyError(ValueError):
     """Raised when an agent-provided URL targets a non-public network."""
+
+
+@dataclass(slots=True, frozen=True)
+class ResolvedHostPort:
+    hostname: str
+    ip: str
+    port: int
+
+
+@dataclass(slots=True, frozen=True)
+class ResolvedHttpTarget:
+    url: str
+    scheme: str
+    hostname: str
+    ip: str
+    port: int
+    path_with_query: str
 
 
 _OBVIOUSLY_LOCAL_HOSTS = {
@@ -68,7 +85,6 @@ def _reject_obviously_local_hostname(hostname: str) -> None:
         )
 
 
-@lru_cache(maxsize=512)
 def _resolve_host_addresses(hostname: str, port: int) -> tuple[ipaddress._BaseAddress, ...]:
     addresses: list[ipaddress._BaseAddress] = []
     try:
@@ -90,12 +106,16 @@ def _resolve_host_addresses(hostname: str, port: int) -> tuple[ipaddress._BaseAd
     return tuple(addresses)
 
 
-def _assert_public_host(hostname: str, port: int) -> None:
-    host = str(hostname or "").strip().lower().rstrip(".")
-    _reject_obviously_local_hostname(host)
+def _resolve_public_host_port(hostname: str, port: int) -> ResolvedHostPort:
+    host = str(hostname or "").strip().rstrip(".")
+    lowered_host = host.lower()
+    _reject_obviously_local_hostname(lowered_host)
+    validated_port = int(port or 0)
+    if validated_port <= 0:
+        raise NetworkPolicyError("A valid network port is required.")
 
     try:
-        literal_ip = ipaddress.ip_address(host)
+        literal_ip = ipaddress.ip_address(lowered_host)
     except ValueError:
         literal_ip = None
 
@@ -105,17 +125,19 @@ def _assert_public_host(hostname: str, port: int) -> None:
             raise NetworkPolicyError(
                 f"Access to local or private network targets is blocked for agent-provided URLs ({reason})."
             )
-        return
+        return ResolvedHostPort(hostname=host, ip=str(literal_ip), port=validated_port)
 
-    for address in _resolve_host_addresses(host, port):
+    addresses = _resolve_host_addresses(host, validated_port)
+    for address in addresses:
         reason = _classify_blocked_ip(address)
         if reason:
             raise NetworkPolicyError(
                 f"Access to local or private network targets is blocked for agent-provided URLs ({reason})."
             )
+    return ResolvedHostPort(hostname=host, ip=str(addresses[0]), port=validated_port)
 
 
-async def assert_public_http_url(url: str) -> str:
+async def assert_public_http_url(url: str) -> ResolvedHttpTarget:
     candidate = str(url or "").strip()
     parsed = urlsplit(candidate)
     if parsed.scheme not in {"http", "https"}:
@@ -123,5 +145,22 @@ async def assert_public_http_url(url: str) -> str:
     if not parsed.hostname:
         raise NetworkPolicyError("URL host is required.")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    await asyncio.to_thread(_assert_public_host, parsed.hostname, port)
-    return candidate
+    resolved = await asyncio.to_thread(_resolve_public_host_port, parsed.hostname, port)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return ResolvedHttpTarget(
+        url=candidate,
+        scheme=parsed.scheme,
+        hostname=resolved.hostname,
+        ip=resolved.ip,
+        port=resolved.port,
+        path_with_query=path,
+    )
+
+
+async def assert_public_host_port(hostname: str, port: int) -> ResolvedHostPort:
+    host = str(hostname or "").strip()
+    if not host:
+        raise NetworkPolicyError("URL host is required.")
+    return await asyncio.to_thread(_resolve_public_host_port, host, int(port or 0))

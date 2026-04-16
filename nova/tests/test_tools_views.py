@@ -32,12 +32,10 @@ class ToolsViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/accounts/login/", response["Location"])
 
-    @patch("user_settings.views.tool.check_and_create_judge0_tool")
-    @patch("user_settings.views.tool.check_and_create_searxng_tool")
+    @patch("user_settings.views.tool.ensure_capability_tooling")
     def test_list_partial_renders_fragment_and_bootstraps_system_tools(
         self,
-        mock_searxng,
-        mock_judge0,
+        mock_ensure_capability_tooling,
     ):
         create_tool(
             user=None,
@@ -57,12 +55,10 @@ class ToolsViewsTests(TestCase):
         self.assertContains(response, "Built-in capabilities")
         self.assertContains(response, "Capabilities with backends")
         self.assertContains(response, "Add connection")
-        mock_searxng.assert_called_once()
-        mock_judge0.assert_called_once()
+        mock_ensure_capability_tooling.assert_called_once()
 
-    @patch("user_settings.views.tool.check_and_create_judge0_tool")
-    @patch("user_settings.views.tool.check_and_create_searxng_tool")
-    def test_list_includes_user_and_system_tools(self, mock_searxng, mock_judge0):
+    @patch("user_settings.views.tool.ensure_capability_tooling")
+    def test_list_includes_user_and_system_tools(self, mock_ensure_capability_tooling):
         user_tool = create_tool(self.user, name="User Tool")
         system_tool = create_tool(
             user=None,
@@ -75,8 +71,7 @@ class ToolsViewsTests(TestCase):
         tools = response.context["tools"]
         self.assertIn(user_tool, tools)
         self.assertIn(system_tool, tools)
-        mock_searxng.assert_called_once()
-        mock_judge0.assert_called_once()
+        mock_ensure_capability_tooling.assert_called_once()
 
     def test_create_tool_requires_login(self):
         self.client.logout()
@@ -106,7 +101,7 @@ class ToolsViewsTests(TestCase):
     def test_create_search_backend_redirects_to_settings(self, mock_get_tool_type, mock_get_available):
         response = self.client.post(
             reverse("user_settings:tool-add"),
-            data={"connection_kind": "search", "name": "My Search", "is_active": True},
+            data={"connection_kind": "search", "name": "My Search"},
         )
         self.assertEqual(response.status_code, 302)
         tool = Tool.objects.get(user=self.user, tool_subtype="searxng")
@@ -119,7 +114,6 @@ class ToolsViewsTests(TestCase):
             data={
                 "connection_kind": "mail",
                 "name": "Work Mailbox",
-                "is_active": True,
             },
         )
 
@@ -141,7 +135,6 @@ class ToolsViewsTests(TestCase):
             data={
                 "connection_kind": "mail",
                 "name": "shared inbox",
-                "is_active": True,
             },
         )
 
@@ -174,9 +167,9 @@ class ToolsViewsTests(TestCase):
         self.assertIn("calendar", choices)
         self.assertIn("webdav", choices)
         self.assertIn("search", choices)
-        self.assertIn("python", choices)
         self.assertIn("mcp", choices)
         self.assertIn("api", choices)
+        self.assertNotIn("python", choices)
         self.assertNotIn("datetime", choices)
         self.assertNotIn("memory", choices)
         self.assertNotIn("browser", choices)
@@ -187,14 +180,14 @@ class ToolsViewsTests(TestCase):
         self.client.logout()
         response = self.client.post(
             reverse("user_settings:tool-edit", args=[tool.id]),
-            data={"name": "Attempt", "tool_type": tool.tool_type, "is_active": True},
+            data={"name": "Attempt", "tool_type": tool.tool_type},
         )
         self.assertEqual(response.status_code, 302)
 
         self.client.login(username="bob", password="testpass123")
         response = self.client.post(
             reverse("user_settings:tool-edit", args=[tool.id]),
-            data={"name": "Hacked", "tool_type": tool.tool_type, "is_active": True},
+            data={"name": "Hacked", "tool_type": tool.tool_type},
         )
         self.assertEqual(response.status_code, 404)
         tool.refresh_from_db()
@@ -216,7 +209,6 @@ class ToolsViewsTests(TestCase):
                 "tool_type": Tool.ToolType.API,
                 "endpoint": "https://api.example.com/v2",
                 "connection_mode": "none",
-                "is_active": True,
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -697,7 +689,7 @@ class ToolsViewsTests(TestCase):
         self.assertIn("boom", response.json()["message"])
         self.assertTrue(any("boom" in line for line in logs.output))
 
-    @patch("nova.plugins.python.service.test_judge0_access", new_callable=AsyncMock)
+    @patch("nova.plugins.python.service.test_exec_runner_access", new_callable=AsyncMock)
     def test_tool_test_connection_codegen(self, mock_test):
         mock_test.return_value = {"status": "success"}
         tool = create_tool(

@@ -26,7 +26,7 @@ class BootstrapSkillsTests(TestCase):
         )
         create_tool(
             self.user,
-            name="Judge0",
+            name="Python",
             tool_subtype="code_execution",
             python_path="nova.plugins.python",
         )
@@ -164,7 +164,8 @@ class BootstrapSkillsTests(TestCase):
         self.assertSetEqual(email_tool_ids, {work_mail.id, personal_mail.id})
         self.assertSetEqual(caldav_tool_ids, {work_calendar.id, personal_calendar.id})
         self.assertTrue(nova.agent_tools.filter(name="Internet Agent").exists())
-        self.assertTrue(nova.agent_tools.filter(name="Python Agent").exists())
+        self.assertTrue(nova.tools.filter(tool_subtype="code_execution").exists())
+        self.assertFalse(nova.agent_tools.filter(name="Python Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Code Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Calendar Agent").exists())
         self.assertFalse(nova.agent_tools.filter(name="Email Agent").exists())
@@ -174,9 +175,6 @@ class BootstrapSkillsTests(TestCase):
                 for note in summary.get("notes", [])
             )
         )
-        renamed_python_agent = AgentConfig.objects.get(user=self.user, name="Python Agent")
-        self.assertIn("Judge0", renamed_python_agent.system_prompt)
-        self.assertIn("isolated workspace", renamed_python_agent.tool_description)
 
     def test_bootstrap_does_not_create_calendar_or_email_tool_agents(self):
         self._create_email_tool("Work Mail", "work@example.com")
@@ -200,8 +198,11 @@ class BootstrapSkillsTests(TestCase):
         self.assertNotIn("Current date and time is", nova.system_prompt)
         self.assertNotIn("{today}", nova.system_prompt)
         self.assertIn("date/time capability", nova.system_prompt)
-        self.assertIn("Keep thread-scoped filesystem work", nova.system_prompt)
-        self.assertIn("Python Agent", nova.system_prompt)
+        self.assertIn("Keep thread-scoped filesystem organization", nova.system_prompt)
+        self.assertIn("Use `python` directly", nova.system_prompt)
+        self.assertIn("pip install --user <package>", nova.system_prompt)
+        self.assertIn("Do not delegate thread-scoped filesystem cleanup", nova.system_prompt)
+        self.assertNotIn("Python Agent", nova.system_prompt)
 
     def test_bootstrap_attaches_webapp_tool_to_nova(self):
         self._apply_provider_capabilities(self.provider, tools="pass")
@@ -311,7 +312,7 @@ class BootstrapSkillsTests(TestCase):
         skipped_names = {item.get("name") for item in summary.get("skipped_agents", [])}
         self.assertSetEqual(
             skipped_names,
-            {"Nova", "Internet Agent", "Python Agent", "Image Agent"},
+            {"Nova", "Internet Agent", "Image Agent"},
         )
 
     def test_bootstrap_reuses_existing_image_agent_without_reassigning_provider(self):

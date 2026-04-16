@@ -72,8 +72,8 @@ Backend-backed capabilities:
   - deployment default when SearXNG is enabled in Docker
   - optional custom backends per user
 - `Python`
-  - deployment default when Judge0 is enabled in Docker
-  - optional custom backends per user
+  - deployment default when the optional `exec-runner` module is enabled
+  - exposes Nova's persistent sandbox terminal to agents without extra per-user setup
 
 Connections you add explicitly:
 
@@ -89,6 +89,8 @@ Notes:
 - email, calendar, WebDAV, MCP, and API connections can be configured multiple times for one user
 - `Search` and `Python` are selected per agent as one backend each
 - MCP connections can use managed OAuth when the server requires it
+
+If `exec-runner` is not enabled, the default Python backend is simply unavailable and agents keep working without it.
 
 ### MCP Authentication
 
@@ -123,7 +125,6 @@ Default setup usually works well with:
 
 - one main agent: `Nova`
 - one internet-oriented sub-agent: `Internet Agent`
-- one coding-oriented sub-agent: `Python Agent`
 - optionally one media/image sub-agent if you use a dedicated image-capable provider
 
 ### Main Agent
@@ -134,6 +135,7 @@ Suggested attached capabilities:
 - `Memory`
 - `WebApp`
 - `Search` when a backend is available
+- `Python` when a backend is available
 - one or more `Email`
 - one or more `CalDAV`
 - optional `WebDAV`
@@ -143,7 +145,6 @@ Suggested attached capabilities:
 Suggested delegated sub-agents:
 
 - `Internet Agent`
-- `Python Agent`
 
 ### Internet Agent
 
@@ -158,17 +159,6 @@ Use it for:
 - web search
 - browsing
 - source gathering
-
-### Python Agent
-
-Suggested attached capabilities:
-
-- `Python` when a backend is available
-
-Use it for:
-
-- data processing
-- sandboxed Python/code execution
 
 ## 4. What the Runtime Exposes
 

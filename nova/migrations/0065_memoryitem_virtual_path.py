@@ -20,6 +20,8 @@ def backfill_memory_virtual_paths(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    atomic = False
+
     dependencies = [
         ("nova", "0064_agentconfig_runtime_engine_agentthreadsession"),
     ]

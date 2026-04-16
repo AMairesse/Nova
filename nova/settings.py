@@ -302,8 +302,11 @@ MEMORY_EMBEDDINGS_API_KEY = os.getenv('MEMORY_EMBEDDINGS_API_KEY', None)
 SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)
 SEARNGX_NUM_RESULTS = os.getenv('SEARNGX_NUM_RESULTS', None)
 
-# Get info about a judge0 server if configured
-JUDGE0_SERVER_URL = os.getenv('JUDGE0_SERVER_URL', None)
+# Nova exec runner (sandbox terminal)
+EXEC_RUNNER_ENABLED = os.getenv('EXEC_RUNNER_ENABLED', 'False').lower() == 'true'
+EXEC_RUNNER_BASE_URL = os.getenv('EXEC_RUNNER_BASE_URL', '')
+EXEC_RUNNER_SHARED_TOKEN = os.getenv('EXEC_RUNNER_SHARED_TOKEN', '')
+EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS = int(os.getenv('EXEC_RUNNER_REQUEST_TIMEOUT_SECONDS', '120'))
 
 # Web Push notifications (disabled by default)
 WEBPUSH_ENABLED = os.getenv('WEBPUSH_ENABLED', 'False').lower() == 'true'

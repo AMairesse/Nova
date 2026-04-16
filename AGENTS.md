@@ -22,6 +22,7 @@ Primary code areas:
 - Multi-tenancy: all user data is user-scoped in models and queries.
 - Secrets: API keys are encrypted at rest.
 - Files: stored in MinIO under user/thread-scoped paths.
+- Optional sandbox terminal: `exec-runner` can provide the deployment-default Python/code backend and warm sandbox sessions when enabled in Docker.
 - Provider runtime is provider-aware:
   - main orchestration stays in `nova/runtime/`
   - provider-specific behavior lives in `nova/providers/`
@@ -132,6 +133,7 @@ python manage.py test --settings nova.settings_test
 
 ## 9) Recommended Reference Docs
 
+- `docker/README.md` for Docker stack selection and optional modules such as `exec-runner`.
 - `README-dev.md` for development structure.
 - `README-agents.md` for functional agent setup.
 - `README.md` for product-level capabilities and quickstart.

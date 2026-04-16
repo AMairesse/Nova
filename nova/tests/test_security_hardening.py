@@ -47,9 +47,34 @@ class _FailingChromium:
         raise RuntimeError(f"launch failed: {kwargs}")
 
 
+class _CapturingChromium:
+    def __init__(self):
+        self.launch_calls = []
+        self.page = AsyncMock()
+        self.context = AsyncMock()
+        self.context.route = AsyncMock()
+        self.context.new_page = AsyncMock(return_value=self.page)
+        self.browser = AsyncMock()
+        self.browser.new_context = AsyncMock(return_value=self.context)
+        self.browser.close = AsyncMock()
+        self.browser.is_connected = lambda: True
+
+    async def launch(self, **kwargs):
+        self.launch_calls.append(kwargs)
+        return self.browser
+
+
 class _FakePlaywright:
     def __init__(self):
         self.chromium = _FailingChromium()
+
+    async def stop(self):
+        return None
+
+
+class _CapturingPlaywright:
+    def __init__(self):
+        self.chromium = _CapturingChromium()
 
     async def stop(self):
         return None
@@ -76,9 +101,23 @@ class NetworkPolicyTests(SimpleTestCase):
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
         ):
-            url = async_to_sync(assert_public_http_url)("https://example.com/resource")
+            target = async_to_sync(assert_public_http_url)("https://example.com/resource")
 
-        self.assertEqual(url, "https://example.com/resource")
+        self.assertEqual(target.url, "https://example.com/resource")
+        self.assertEqual(target.hostname, "example.com")
+        self.assertEqual(target.ip, "93.184.216.34")
+
+    def test_resolved_target_keeps_original_hostname_while_binding_public_ip(self):
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ):
+            target = async_to_sync(assert_public_http_url)("https://Example.COM:8443/resource?q=1")
+
+        self.assertEqual(target.hostname, "example.com")
+        self.assertEqual(target.ip, "93.184.216.34")
+        self.assertEqual(target.port, 8443)
+        self.assertEqual(target.path_with_query, "/resource?q=1")
 
     def test_download_revalidates_redirect_targets(self):
         requests: list[str] = []
@@ -112,7 +151,10 @@ class NetworkPolicyTests(SimpleTestCase):
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
-        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=AsyncMock(proxy_url="http://127.0.0.1:43123"),
+        ):
             with self.assertRaises(NetworkPolicyError):
                 async_to_sync(download_http_file)("https://example.com/redirect")
 
@@ -144,7 +186,10 @@ class NetworkPolicyTests(SimpleTestCase):
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
-        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=AsyncMock(proxy_url="http://127.0.0.1:43123"),
+        ):
             payload = async_to_sync(download_http_file)("https://example.com/file.txt")
 
         self.assertEqual(payload["content"], b"hello")
@@ -173,6 +218,29 @@ class BrowserSecurityTests(SimpleTestCase):
                 async_to_sync(session._ensure_page)()
 
         self.assertIn("securely", str(cm.exception).lower())
+
+    def test_browser_uses_local_safe_proxy_for_navigation(self):
+        session = BrowserSession()
+        playwright = _CapturingPlaywright()
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
+
+        with patch(
+            "nova.web.browser_service.async_playwright",
+            return_value=_FakePlaywrightManager(playwright),
+        ), patch(
+            "nova.web.browser_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
+            async_to_sync(session._ensure_page)()
+            async_to_sync(session.close)()
+
+        fake_proxy.start.assert_awaited_once()
+        fake_proxy.close.assert_awaited_once()
+        self.assertEqual(
+            playwright.chromium.launch_calls[0]["proxy"],
+            {"server": "http://127.0.0.1:43123"},
+        )
 
 
 class DjangoSecuritySettingsTests(SimpleTestCase):

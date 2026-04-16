@@ -1,0 +1,5 @@
+services:
+  exec-runner:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile

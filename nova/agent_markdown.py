@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 import posixpath
 import re
 import xml.etree.ElementTree as etree
@@ -38,7 +39,13 @@ class ResolvedMarkdownTarget:
 
     @property
     def is_image(self) -> bool:
-        return str(self.mime_type or "").strip().lower().startswith("image/")
+        normalized_mime = str(self.mime_type or "").strip().lower()
+        if normalized_mime.startswith("image/"):
+            return True
+        if normalized_mime and normalized_mime != "application/octet-stream":
+            return False
+        guessed_mime, _ = mimetypes.guess_type(self.path)
+        return str(guessed_mime or "").strip().lower().startswith("image/")
 
 
 def _normalize_vfs_target(target: str | None) -> str | None:

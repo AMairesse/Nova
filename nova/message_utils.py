@@ -7,6 +7,7 @@ from nova.file_utils import (
     build_message_attachment_path,
 )
 from nova.message_attachments import (
+    build_explicit_message_attachment_query,
     build_message_attachment_manifest_from_user_file,
     build_attachment_label,
     detect_attachment_kind,
@@ -15,6 +16,7 @@ from nova.message_attachments import (
     get_message_attachment_max_document_size_bytes,
     get_message_attachment_max_files,
     get_message_attachment_max_image_size_bytes,
+    is_explicit_message_attachment_file,
     normalize_message_attachments,
 )
 from nova.models.UserFile import UserFile
@@ -100,10 +102,9 @@ def _build_attachment_manifests_for_uploaded_files(message, created_files: list[
         user_file.id: user_file
         for user_file in UserFile.objects.filter(
             id__in=file_ids,
-            source_message=message,
             thread=message.thread,
             user=message.user,
-        )
+        ).filter(build_explicit_message_attachment_query(message.id))
     }
 
     attachments = []
@@ -145,7 +146,14 @@ def annotate_user_message(message) -> None:
     if prefetched_files is not None:
         try:
             ordered_files = sorted(
-                prefetched_files,
+                [
+                    user_file
+                    for user_file in prefetched_files
+                    if is_explicit_message_attachment_file(
+                        user_file,
+                        source_message_id=getattr(message, "id", None),
+                    )
+                ],
                 key=lambda user_file: (
                     getattr(user_file, "created_at", None),
                     int(getattr(user_file, "id", 0) or 0),
@@ -164,7 +172,7 @@ def annotate_user_message(message) -> None:
                 attachment_manifests = [
                     build_message_attachment_manifest_from_user_file(user_file)
                     for user_file in related_files.filter(
-                        scope=UserFile.Scope.MESSAGE_ATTACHMENT
+                        build_explicit_message_attachment_query(getattr(message, "id", None))
                     ).order_by("created_at", "id")
                 ]
             except Exception:

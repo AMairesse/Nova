@@ -12,20 +12,18 @@ from unittest.mock import AsyncMock, Mock, patch
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user
+from nova.file_utils import build_message_attachment_path
 from nova.message_submission import SubmissionContext, submit_user_message
+from nova.exec_runner.service import SandboxShellResult
 from nova.models.AgentConfig import AgentConfig
 from nova.models.APIToolOperation import APIToolOperation
 from nova.models.AgentThreadSession import AgentThreadSession
 from nova.models.DaySegment import DaySegment
 from nova.models.Interaction import Interaction, InteractionStatus
-from nova.models.MemoryDirectory import MemoryDirectory
-from nova.models.MemoryChunk import MemoryChunk
-from nova.models.MemoryDocument import MemoryDocument
 from nova.models.TerminalCommandFailureMetric import TerminalCommandFailureMetric
-from nova.models.memory_common import MemoryRecordStatus
 from nova.models.Message import Actor, MessageType
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.models.Task import Task, TaskStatus
@@ -161,8 +159,9 @@ class DownloadServiceTests(SimpleTestCase):
 
         class FakeAsyncClient:
             def __init__(self, *, headers=None, **kwargs):
-                del kwargs
                 captured["headers"] = dict(headers or {})
+                captured["proxy"] = kwargs.get("proxy")
+                captured["trust_env"] = kwargs.get("trust_env")
 
             async def __aenter__(self):
                 return self
@@ -178,10 +177,15 @@ class DownloadServiceTests(SimpleTestCase):
                     chunks=[b"hello"],
                 )
 
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
-        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
             payload = async_to_sync(download_http_file)("https://example.com/hello.txt")
 
         normalized_headers = {
@@ -191,6 +195,8 @@ class DownloadServiceTests(SimpleTestCase):
         self.assertEqual(payload["mime_type"], "text/plain")
         self.assertEqual(captured["method"], "GET")
         self.assertEqual(captured["url"], "https://example.com/hello.txt")
+        self.assertEqual(captured["proxy"], "http://127.0.0.1:43123")
+        self.assertFalse(captured["trust_env"])
         self.assertEqual(normalized_headers["user-agent"], DEFAULT_DOWNLOAD_USER_AGENT)
 
     def test_download_http_file_allows_user_agent_override_and_custom_headers(self):
@@ -198,8 +204,8 @@ class DownloadServiceTests(SimpleTestCase):
 
         class FakeAsyncClient:
             def __init__(self, *, headers=None, **kwargs):
-                del kwargs
                 captured["headers"] = dict(headers or {})
+                captured["proxy"] = kwargs.get("proxy")
 
             async def __aenter__(self):
                 return self
@@ -214,10 +220,15 @@ class DownloadServiceTests(SimpleTestCase):
                     chunks=[b"ok"],
                 )
 
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
             return_value=(ipaddress.ip_address("93.184.216.34"),),
-        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient):
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
             payload = async_to_sync(download_http_file)(
                 "https://example.com/data.txt",
                 headers={"Referer": "https://example.com", "User-Agent": "HeaderUA/1.0"},
@@ -228,6 +239,7 @@ class DownloadServiceTests(SimpleTestCase):
             str(name).lower(): value for name, value in captured["headers"].items()
         }
         self.assertEqual(payload["content"], b"ok")
+        self.assertEqual(captured["proxy"], "http://127.0.0.1:43123")
         self.assertEqual(normalized_headers["user-agent"], "NovaOverride/2.0")
         self.assertEqual(normalized_headers["referer"], "https://example.com")
 
@@ -314,6 +326,20 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         )
         return TerminalExecutor(vfs=vfs, capabilities=resolved_capabilities)
 
+    def test_vfs_read_bytes_supports_skill_files(self):
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={"calendar.md": "# Calendar\n\nUse `calendar accounts`.\n"},
+        )
+
+        content, mime_type = async_to_sync(vfs.read_bytes)("/skills/calendar.md")
+
+        self.assertEqual(content, b"# Calendar\n\nUse `calendar accounts`.\n")
+        self.assertEqual(mime_type, "text/markdown")
+
     def _build_executor_for_thread(
         self,
         thread,
@@ -350,126 +376,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             original_filename="/report.txt",
         )
         self.assertEqual(user_file.source_message_id, source_message.id)
-
-    def test_curl_accepts_common_user_agent_header_and_output_flags(self):
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=SimpleNamespace()),
-        )
-        captured = {}
-
-        async def fake_download_http_file(url, *, headers=None, user_agent="", filename="", max_size=None):
-            captured["url"] = url
-            captured["headers"] = dict(headers or {})
-            captured["user_agent"] = user_agent
-            captured["filename"] = filename
-            captured["max_size"] = max_size
-            return {
-                "url": url,
-                "filename": "trentemoult-real-street.jpg",
-                "mime_type": "image/jpeg",
-                "content": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
-                "size": 10,
-            }
-
-        with patch("nova.runtime.terminal.download_http_file", new=fake_download_http_file):
-            output = async_to_sync(executor.execute)(
-                'curl -A "Mozilla/5.0" -H "Referer: https://example.com" -o /tmp/trentemoult-real-street.jpg '
-                '"https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg"'
-            )
-
-        self.assertIn("/tmp/trentemoult-real-street.jpg", output)
-        self.assertEqual(
-            captured["url"],
-            "https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg",
-        )
-        self.assertEqual(captured["user_agent"], "Mozilla/5.0")
-        self.assertEqual(captured["headers"]["Referer"], "https://example.com")
-
-    def test_curl_accepts_url_after_options_and_multiple_headers(self):
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=SimpleNamespace()),
-        )
-        captured = {}
-
-        async def fake_download_http_file(url, *, headers=None, user_agent="", filename="", max_size=None):
-            captured["url"] = url
-            captured["headers"] = dict(headers or {})
-            captured["user_agent"] = user_agent
-            del filename, max_size
-            return {
-                "url": url,
-                "filename": "page.html",
-                "mime_type": "text/html",
-                "content": b"<html>Hello</html>",
-                "size": 18,
-            }
-
-        with patch("nova.runtime.terminal.download_http_file", new=fake_download_http_file):
-            output = async_to_sync(executor.execute)(
-                'curl -H "Referer: https://example.com" -H "User-Agent: BrowserUA/1.0" https://example.com/page.html'
-            )
-
-        self.assertIn("<html>Hello</html>", output)
-        self.assertEqual(captured["url"], "https://example.com/page.html")
-        self.assertEqual(captured["headers"]["Referer"], "https://example.com")
-        self.assertEqual(captured["user_agent"], "BrowserUA/1.0")
-
-    def test_wget_accepts_common_user_agent_and_header_flags(self):
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=SimpleNamespace()),
-        )
-        captured = {}
-
-        async def fake_download_http_file(url, *, headers=None, user_agent="", filename="", max_size=None):
-            captured["url"] = url
-            captured["headers"] = dict(headers or {})
-            captured["user_agent"] = user_agent
-            del filename, max_size
-            return {
-                "url": url,
-                "filename": "trentemoult.jpg",
-                "mime_type": "image/jpeg",
-                "content": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
-                "size": 10,
-            }
-
-        with patch("nova.runtime.terminal.download_http_file", new=fake_download_http_file):
-            output = async_to_sync(executor.execute)(
-                'wget -U "Mozilla/5.0" --header "Referer: https://example.com" -O /tmp/trentemoult.jpg '
-                'https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg'
-            )
-
-        self.assertIn("/tmp/trentemoult.jpg", output)
-        self.assertEqual(
-            captured["url"],
-            "https://upload.wikimedia.org/wikipedia/commons/a/a5/Rue_de_la_Biscuiterie.jpg",
-        )
-        self.assertEqual(captured["user_agent"], "Mozilla/5.0")
-        self.assertEqual(captured["headers"]["Referer"], "https://example.com")
-
-    def test_curl_rejects_invalid_header_value(self):
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=SimpleNamespace()),
-        )
-
-        with self.assertRaisesRegex(TerminalCommandError, "expected 'Name: value'"):
-            async_to_sync(executor.execute)('curl -H "BrokenHeader" https://example.com')
-
-    def test_curl_rejects_multiple_urls(self):
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=SimpleNamespace()),
-        )
-
-        with self.assertRaisesRegex(TerminalCommandError, "single URL"):
-            async_to_sync(executor.execute)("curl https://example.com https://example.org")
-
-    def test_curl_rejects_unknown_flags(self):
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=SimpleNamespace()),
-        )
-
-        with self.assertRaisesRegex(TerminalCommandError, "Unsupported curl flag"):
-            async_to_sync(executor.execute)("curl --compressed https://example.com")
 
     def _create_builtin_tool(self, subtype: str, *, name: str, description: str = "") -> Tool:
         python_path_map = {
@@ -738,22 +644,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             python_path="nova.plugins.webapp",
         )
 
-    def test_touch_and_tee_create_and_append_root_files(self):
-        executor = self._build_executor()
-
-        created = async_to_sync(executor.execute)("touch note.txt")
-        written = async_to_sync(executor.execute)('tee note.txt --text "hello"')
-        appended = async_to_sync(executor.execute)('tee note.txt --text " world" --append')
-        content = async_to_sync(executor.execute)("cat note.txt")
-
-        self.assertIn("Created empty file /note.txt", created)
-        self.assertIn("Wrote 5 bytes to /note.txt", written)
-        self.assertIn("Wrote 6 bytes to /note.txt", appended)
-        self.assertEqual(content, "hello world")
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("touch /skills/blocked.txt")
-
     def test_text_shell_redirections_and_pipelines_work_for_common_cases(self):
         executor = self._build_executor()
 
@@ -766,408 +656,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(async_to_sync(executor.execute)("cat /copy.txt"), "hello\nworld\n")
         self.assertEqual(redirected, "hello")
         self.assertEqual(copied, "world")
-
-    def test_mkdir_supports_recursive_p_flag(self):
-        memory_tool = self._create_memory_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=memory_tool)
-        )
-
-        created = async_to_sync(executor.execute)("mkdir -p /memory/preferences/editors")
-        created_again = async_to_sync(executor.execute)("mkdir -p /memory/preferences/editors")
-
-        self.assertIn("Ensured directory /memory/preferences/editors", created)
-        self.assertIn("Ensured directory /memory/preferences/editors", created_again)
-        self.assertIn("preferences/", async_to_sync(executor.execute)("ls /memory"))
-        self.assertIn("editors/", async_to_sync(executor.execute)("ls /memory/preferences"))
-
-    def test_mkdir_p_rejects_file_in_parent_chain(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)('echo "hello" > /note.txt')
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("mkdir -p /note.txt/archive")
-
-    def test_cat_supports_line_numbering_with_file_and_stdin(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta\\ngamma"')
-
-        file_result = async_to_sync(executor.execute)("cat -n /tmp/data.csv | tail -1")
-        stdin_result = async_to_sync(executor.execute)("cat -n < /tmp/data.csv | tail -1")
-
-        self.assertEqual(file_result, "3\tgamma")
-        self.assertEqual(stdin_result, "3\tgamma")
-
-    def test_head_and_tail_support_numeric_short_form_with_file_and_stdin(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)('tee /tmp/lines.txt --text "1\\n2\\n3\\n4\\n5\\n6"')
-
-        head_file = async_to_sync(executor.execute)("head -5 /tmp/lines.txt")
-        tail_file = async_to_sync(executor.execute)("tail -1 /tmp/lines.txt")
-        head_stdin = async_to_sync(executor.execute)("cat /tmp/lines.txt | head -5")
-        tail_stdin = async_to_sync(executor.execute)("cat /tmp/lines.txt | tail -1")
-
-        self.assertEqual(head_file, "1\n2\n3\n4\n5")
-        self.assertEqual(tail_file, "6")
-        self.assertEqual(head_stdin, "1\n2\n3\n4\n5")
-        self.assertEqual(tail_stdin, "6")
-
-    def test_grep_supports_combined_short_flags_and_head_short_count(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)(
-            'tee /openrouter_activity_2026-04-06.csv --text '
-            '"kind\\ncache-hit\\nCACHE-hit\\ncache-store\\nCache-refresh\\ncache-read\\nCACHE-refresh\\nnetwork"'
-        )
-
-        piped = async_to_sync(executor.execute)(
-            "grep -i cache /openrouter_activity_2026-04-06.csv | head -5"
-        )
-        combined = async_to_sync(executor.execute)(
-            "grep -in cache /openrouter_activity_2026-04-06.csv"
-        )
-
-        self.assertEqual(
-            piped,
-            "\n".join(
-                [
-                    "/openrouter_activity_2026-04-06.csv:cache-hit",
-                    "/openrouter_activity_2026-04-06.csv:CACHE-hit",
-                    "/openrouter_activity_2026-04-06.csv:cache-store",
-                    "/openrouter_activity_2026-04-06.csv:Cache-refresh",
-                    "/openrouter_activity_2026-04-06.csv:cache-read",
-                ]
-            ),
-        )
-        self.assertEqual(
-            combined,
-            "\n".join(
-                [
-                    "/openrouter_activity_2026-04-06.csv:2:cache-hit",
-                    "/openrouter_activity_2026-04-06.csv:3:CACHE-hit",
-                    "/openrouter_activity_2026-04-06.csv:4:cache-store",
-                    "/openrouter_activity_2026-04-06.csv:5:Cache-refresh",
-                    "/openrouter_activity_2026-04-06.csv:6:cache-read",
-                    "/openrouter_activity_2026-04-06.csv:7:CACHE-refresh",
-                ]
-            ),
-        )
-
-    def test_wc_supports_line_counts_for_files_and_pipelines(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)(
-            'tee /openrouter_activity_2026-04-06.csv --text '
-            '"kind\\ncache-hit\\nCACHE-hit\\ncache-store\\nCache-refresh\\ncache-read\\nCACHE-refresh\\nnetwork"'
-        )
-
-        file_result = async_to_sync(executor.execute)(
-            "wc -l /openrouter_activity_2026-04-06.csv"
-        )
-        pipeline_result = async_to_sync(executor.execute)(
-            "grep cache /openrouter_activity_2026-04-06.csv | wc -l"
-        )
-
-        self.assertEqual(file_result, "8 /openrouter_activity_2026-04-06.csv")
-        self.assertEqual(pipeline_result, "3")
-
-    def test_rm_supports_force_flag_and_multiple_paths(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /out")
-        async_to_sync(executor.execute)('echo "hello" > /out/index.html')
-
-        removed = async_to_sync(executor.execute)("rm -f /out/index.html /out/missing.html")
-        missing_only = async_to_sync(executor.execute)("rm -f /out/missing.html")
-
-        self.assertEqual(removed, "Removed /out/index.html")
-        self.assertEqual(missing_only, "")
-        self.assertEqual(async_to_sync(executor.execute)("ls /out"), "")
-
-    def test_rm_force_keeps_real_path_errors(self):
-        executor = self._build_executor()
-
-        with self.assertRaises(TerminalCommandError) as protected_error:
-            async_to_sync(executor.execute)("rm -f /tmp")
-        self.assertIn("Cannot remove protected path: /tmp", str(protected_error.exception))
-
-        async_to_sync(executor.execute)("mkdir /out")
-        async_to_sync(executor.execute)('echo "hello" > /out/index.html')
-        with self.assertRaises(TerminalCommandError) as non_empty_error:
-            async_to_sync(executor.execute)("rm -f /out")
-        self.assertIn("Directory not empty: /out", str(non_empty_error.exception))
-
-    def test_rm_supports_recursive_directory_deletion(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /out")
-        async_to_sync(executor.execute)("mkdir /out/nested")
-        async_to_sync(executor.execute)('echo "hello" > /out/nested/index.html')
-
-        removed = async_to_sync(executor.execute)("rm -rf /out")
-        remaining = async_to_sync(executor.execute)('find / -name "*out*"')
-
-        self.assertEqual(removed, "Removed /out")
-        self.assertEqual(remaining, "")
-
-    def test_find_supports_unix_like_name_and_type_filters(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /gallery")
-        async_to_sync(executor.execute)("mkdir /gallery/nested")
-        async_to_sync(executor.execute)('printf "a" > /gallery/a.jpg')
-        async_to_sync(executor.execute)('printf "b" > /gallery/b.png')
-        async_to_sync(executor.execute)('printf "c" > /gallery/nested/c.jpeg')
-        async_to_sync(executor.execute)('printf "note" > /gallery/nested/readme.txt')
-
-        image_files = async_to_sync(executor.execute)(
-            'find /gallery -type f -name "*.jpg" -o -name "*.png" -o -name "*.jpeg"'
-        )
-        directories = async_to_sync(executor.execute)("find /gallery -type d")
-
-        self.assertIn("/gallery/a.jpg", image_files)
-        self.assertIn("/gallery/b.png", image_files)
-        self.assertIn("/gallery/nested/c.jpeg", image_files)
-        self.assertNotIn("readme.txt", image_files)
-        self.assertIn("/gallery", directories)
-        self.assertIn("/gallery/nested", directories)
-        self.assertNotIn(".jpg", directories)
-
-    def test_find_supports_multiple_roots_and_lists_all_visible_paths(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /gallery")
-        async_to_sync(executor.execute)("mkdir /gallery/nested")
-        async_to_sync(executor.execute)('printf "a" > /gallery/a.jpg')
-        async_to_sync(executor.execute)('printf "tmp" > /tmp/alpha.txt')
-
-        listed = async_to_sync(executor.execute)("find /gallery /tmp")
-        jpg_only = async_to_sync(executor.execute)('find /gallery /tmp -type f -name "*.jpg"')
-
-        self.assertIn("/gallery", listed)
-        self.assertIn("/gallery/nested", listed)
-        self.assertIn("/gallery/a.jpg", listed)
-        self.assertIn("/tmp/alpha.txt", listed)
-        self.assertEqual(jpg_only, "/gallery/a.jpg")
-
-    def test_find_rejects_legacy_and_unsupported_expressions_cleanly(self):
-        executor = self._build_executor()
-
-        with self.assertRaises(TerminalCommandError) as legacy_shape:
-            async_to_sync(executor.execute)("find / out")
-        with self.assertRaises(TerminalCommandError) as iname_error:
-            async_to_sync(executor.execute)('find / -iname "*.jpg"')
-        with self.assertRaises(TerminalCommandError) as missing_name:
-            async_to_sync(executor.execute)("find / -name")
-        with self.assertRaises(TerminalCommandError) as unsupported_type:
-            async_to_sync(executor.execute)("find / -type x")
-
-        self.assertEqual(str(legacy_shape.exception), "Path not found: /out")
-        self.assertIn("Unsupported find expression.", str(iname_error.exception))
-        self.assertEqual(str(missing_name.exception), "Missing value for -name")
-        self.assertEqual(str(unsupported_type.exception), "Unsupported find type: x")
-
-    def test_terminal_reports_clean_usage_errors_for_unix_like_flags(self):
-        executor = self._build_executor()
-        async_to_sync(executor.execute)('tee /tmp/data.csv --text "alpha\\nbeta"')
-
-        with self.assertRaises(TerminalCommandError) as wc_flag:
-            async_to_sync(executor.execute)("wc -x /tmp/data.csv")
-        with self.assertRaises(TerminalCommandError) as cat_flag:
-            async_to_sync(executor.execute)("cat -x /tmp/data.csv")
-        with self.assertRaises(TerminalCommandError) as head_flag:
-            async_to_sync(executor.execute)("head -x /tmp/data.csv")
-        with self.assertRaises(TerminalCommandError) as rm_usage:
-            async_to_sync(executor.execute)("rm")
-
-        self.assertEqual(str(wc_flag.exception), "Unsupported wc flag: -x")
-        self.assertEqual(str(cat_flag.exception), "Unsupported cat flag: -x")
-        self.assertEqual(str(head_flag.exception), "Unsupported head flag: -x")
-        self.assertEqual(str(rm_usage.exception), "Usage: rm [-f] [-r|-R] <path> [<path> ...]")
-
-    def test_terminal_supports_wc_printf_file_and_truthy_helpers(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)('printf "alpha beta\\n" > /tmp/data.txt')
-        async_to_sync(executor.execute)("mkdir /empty-dir")
-        async_to_sync(executor.vfs.write_file)(
-            "/tmp/blob.bin",
-            b"\x00\x01",
-            mime_type="application/octet-stream",
-        )
-
-        wc_default = async_to_sync(executor.execute)("wc /tmp/data.txt")
-        wc_chars = async_to_sync(executor.execute)("wc -c /tmp/data.txt")
-        wc_words = async_to_sync(executor.execute)("printf \"one two three\" | wc -w")
-        file_output = async_to_sync(executor.execute)("file /tmp/data.txt /tmp/blob.bin /empty-dir")
-        printf_output = async_to_sync(executor.execute)('printf "plain output"')
-
-        self.assertEqual(wc_default, "1 2 11 /tmp/data.txt")
-        self.assertEqual(wc_chars, "11 /tmp/data.txt")
-        self.assertEqual(wc_words, "3")
-        self.assertIn("/tmp/data.txt: text/plain, 11 bytes", file_output)
-        self.assertIn("/tmp/blob.bin: application/octet-stream, 2 bytes", file_output)
-        self.assertIn("/empty-dir: directory", file_output)
-        self.assertEqual(printf_output, "plain output")
-
-        true_result = async_to_sync(executor.execute_result)("unknowncmd || true")
-        false_result = async_to_sync(executor.execute_result)("false && pwd")
-
-        self.assertEqual(true_result.status, 0)
-        self.assertEqual(true_result.failed_segment_indexes, [1])
-        self.assertEqual(false_result.status, 1)
-        self.assertEqual(false_result.skipped_segment_indexes, [2])
-
-    def test_terminal_printf_supports_placeholders_and_escapes(self):
-        executor = self._build_executor()
-
-        placeholder_output = async_to_sync(executor.execute)('printf "%s %d %f" test 42 3.5')
-        repeated_output = async_to_sync(executor.execute)('printf "[%s]" a b c')
-
-        self.assertEqual(placeholder_output, "test 42 3.500000")
-        self.assertEqual(repeated_output, "[a][b][c]")
-
-        with self.assertRaises(TerminalCommandError) as invalid_placeholder:
-            async_to_sync(executor.execute)('printf "%q" test')
-
-        self.assertEqual(str(invalid_placeholder.exception), "Unsupported printf placeholder: %q")
-
-    def test_head_and_tail_support_byte_counts(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)('printf "abcdef" > /tmp/letters.txt')
-        async_to_sync(executor.vfs.write_file)(
-            "/tmp/raw.bin",
-            b"\xff\xfe\xfd",
-            mime_type="application/octet-stream",
-        )
-
-        self.assertEqual(async_to_sync(executor.execute)("head -c 3 /tmp/letters.txt"), "abc")
-        self.assertEqual(async_to_sync(executor.execute)("tail -c 3 /tmp/letters.txt"), "def")
-        self.assertEqual(async_to_sync(executor.execute)('printf "abcdef" | head -c 2'), "ab")
-
-        with self.assertRaises(TerminalCommandError) as binary_error:
-            async_to_sync(executor.execute)("head -c 2 /tmp/raw.bin")
-
-        self.assertIn("Binary file cannot be displayed as text", str(binary_error.exception))
-
-    def test_rmdir_only_removes_empty_directories(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /empty-dir")
-        async_to_sync(executor.execute)("mkdir /non-empty")
-        async_to_sync(executor.execute)('printf "x" > /non-empty/item.txt')
-
-        removed = async_to_sync(executor.execute)("rmdir /empty-dir")
-        self.assertEqual(removed, "Removed /empty-dir")
-
-        with self.assertRaises(TerminalCommandError) as non_empty_error:
-            async_to_sync(executor.execute)("rmdir /non-empty")
-        with self.assertRaises(TerminalCommandError) as file_error:
-            async_to_sync(executor.execute)("rmdir /non-empty/item.txt")
-
-        self.assertIn("Directory not empty: /non-empty", str(non_empty_error.exception))
-        self.assertIn("Not a directory: /non-empty/item.txt", str(file_error.exception))
-
-    def test_root_listing_shows_root_files_skills_and_tmp_without_legacy_mounts(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("touch /note.txt")
-        listing = async_to_sync(executor.execute)("ls /")
-
-        self.assertIn("skills/", listing)
-        self.assertIn("tmp/", listing)
-        self.assertIn("note.txt", listing)
-        self.assertNotIn("workspace/", listing)
-        self.assertNotIn("thread/", listing)
-
-    def test_ls_supports_common_flags_and_aliases(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /docs")
-        async_to_sync(executor.execute)('echo "hello" > /note.txt')
-
-        listing = async_to_sync(executor.execute)("ls -la /")
-        file_listing = async_to_sync(executor.execute)("ls -l /note.txt")
-        human_listing = async_to_sync(executor.execute)("ls -h /")
-        human_file_listing = async_to_sync(executor.execute)("ls -lh /note.txt")
-        alias_listing = async_to_sync(executor.execute)("la /")
-
-        self.assertIn("drwxr-xr-x - - ./", listing)
-        self.assertIn("drwxr-xr-x - - ../", listing)
-        self.assertIn("-rw-r--r-- 6 text/plain note.txt", file_listing)
-        self.assertIn("note.txt", human_listing)
-        self.assertIn("-rw-r--r-- 6B text/plain note.txt", human_file_listing)
-        self.assertIn("note.txt", alias_listing)
-
-    def test_ls_supports_simple_wildcards_only_in_final_segment(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)('printf "sun" > /solar-system.txt')
-        async_to_sync(executor.execute)('printf "sys" > /system-notes.txt')
-        async_to_sync(executor.execute)('printf "fr" > /solaire.txt')
-        async_to_sync(executor.execute)("mkdir /tmp/images")
-        async_to_sync(executor.execute)("touch /tmp/a.png")
-        async_to_sync(executor.execute)("touch /tmp/b.png")
-
-        root_matches = async_to_sync(executor.execute)("ls /solar* /syst* /solaire*")
-        png_matches = async_to_sync(executor.execute)("ls -lh /tmp/*.png")
-
-        self.assertIn("solar-system.txt", root_matches)
-        self.assertIn("system-notes.txt", root_matches)
-        self.assertIn("solaire.txt", root_matches)
-        self.assertIn("a.png", png_matches)
-        self.assertIn("b.png", png_matches)
-
-        with self.assertRaises(TerminalCommandError) as no_match:
-            async_to_sync(executor.execute)("ls /missing*")
-        with self.assertRaises(TerminalCommandError) as intermediate_glob:
-            async_to_sync(executor.execute)("ls /*/note.txt")
-
-        self.assertEqual(str(no_match.exception), "No matches for pattern: /missing*")
-        self.assertEqual(
-            str(intermediate_glob.exception),
-            "ls wildcard expansion is supported only in the final path segment.",
-        )
-
-    def test_ls_supports_recursive_directory_listing(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.execute)("mkdir /subagents")
-        async_to_sync(executor.execute)("mkdir /subagents/demo")
-        async_to_sync(executor.execute)('printf "child" > /subagents/demo/result.txt')
-
-        listing = async_to_sync(executor.execute)("ls -laR /subagents")
-
-        self.assertIn("/subagents:", listing)
-        self.assertIn("/subagents/demo:", listing)
-        self.assertIn("result.txt", listing)
-
-    def test_sort_supports_stdin_and_file_inputs(self):
-        executor = self._build_executor()
-
-        piped = async_to_sync(executor.execute)('printf "b\\na\\nc\\n" | sort')
-        async_to_sync(executor.execute)('tee /tmp/list.txt --text "beta\\nalpha\\ngamma\\n"')
-        from_file = async_to_sync(executor.execute)("sort /tmp/list.txt")
-
-        self.assertEqual(piped, "a\nb\nc\n")
-        self.assertEqual(from_file, "alpha\nbeta\ngamma\n")
-
-    def test_sort_rejects_binary_input_and_unsupported_flags(self):
-        executor = self._build_executor()
-
-        async_to_sync(executor.vfs.write_file)("/tmp/image.bin", b"\x00\xff", mime_type="application/octet-stream")
-
-        with self.assertRaises(TerminalCommandError) as binary_error:
-            async_to_sync(executor.execute)("sort /tmp/image.bin")
-        with self.assertRaises(TerminalCommandError) as flag_error:
-            async_to_sync(executor.execute)("sort -r /tmp/image.bin")
-
-        self.assertIn("Binary file cannot be displayed as text", str(binary_error.exception))
-        self.assertEqual(str(flag_error.exception), "Unsupported sort flag: -r")
 
     def test_terminal_supports_semicolon_sequences(self):
         executor = self._build_executor()
@@ -1200,7 +688,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             'mkdir /tmp/semicolon-test; unknowncmd; echo "done" > /tmp/semicolon-test/result.txt'
         )
 
-        self.assertIn("Unknown command: unknowncmd", output)
+        self.assertTrue(
+            "command not found" in output or "Unknown command: unknowncmd" in output
+        )
         self.assertEqual(async_to_sync(executor.execute)("cat /tmp/semicolon-test/result.txt"), "done\n")
 
         with self.assertRaises(TerminalCommandError) as cm:
@@ -1215,851 +705,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
             with self.subTest(command=command):
                 with self.assertRaises(TerminalCommandError):
                     async_to_sync(executor.execute)(command)
-
-    def test_memory_mount_is_visible_only_when_memory_capability_is_enabled(self):
-        plain_executor = self._build_executor()
-        memory_executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        plain_listing = async_to_sync(plain_executor.execute)("ls /")
-        memory_listing = async_to_sync(memory_executor.execute)("ls /")
-
-        self.assertNotIn("memory/", plain_listing)
-        self.assertIn("memory/", memory_listing)
-
-    def test_memory_paths_are_reserved_without_memory_capability(self):
-        executor = self._build_executor()
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("touch /memory/editor.md")
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)('tee /memory/editor.md --text "Vim"')
-
-    def test_memory_mount_supports_ls_cat_and_grep(self):
-        MemoryDirectory.objects.create(
-            user=self.user,
-            virtual_path="/memory/projects",
-            status=MemoryRecordStatus.ACTIVE,
-        )
-        document = MemoryDocument.objects.create(
-            user=self.user,
-            virtual_path="/memory/projects/editor.md",
-            title="Editor",
-            content_markdown="# Editor\n\nPreferred editor is Vim",
-            status=MemoryRecordStatus.ACTIVE,
-        )
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        memory_root = async_to_sync(executor.execute)("ls /memory")
-        memory_theme = async_to_sync(executor.execute)("ls /memory/projects")
-        memory_doc = async_to_sync(executor.execute)("cat /memory/projects/editor.md")
-        grep_result = async_to_sync(executor.execute)('grep -r -n "Vim" /memory')
-
-        self.assertIn("README.md", memory_root)
-        self.assertIn("projects/", memory_root)
-        self.assertIn("editor.md", memory_theme)
-        self.assertIn("Preferred editor is Vim", memory_doc)
-        self.assertIn("/memory/projects/editor.md", grep_result)
-        self.assertEqual(document.id, MemoryDocument.objects.get(id=document.id).id)
-
-    def test_tee_and_rm_manage_memory_items(self):
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        written = async_to_sync(executor.execute)('tee /memory/editor.md --text "# Editor\\n\\nVim"')
-        content = async_to_sync(executor.execute)("cat /memory/editor.md")
-        removed = async_to_sync(executor.execute)("rm /memory/editor.md")
-
-        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/editor.md")
-        self.assertIn("/memory/editor.md", written)
-        self.assertIn("Vim", content)
-        self.assertEqual(removed, "Removed /memory/editor.md")
-        self.assertEqual(document.status, MemoryRecordStatus.ARCHIVED)
-
-    @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
-    def test_memory_tee_decodes_escaped_newlines_and_builds_chunks(self, mocked_provider):
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        result = async_to_sync(executor.execute)(
-            'tee /memory/calendrier.md --text "# Calendrier\\n\\n## Preference\\nTexte"'
-        )
-
-        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/calendrier.md")
-        chunks = list(MemoryChunk.objects.filter(document=document).order_by("position"))
-
-        self.assertIn("/memory/calendrier.md", result)
-        self.assertIn("\n\n## Preference\nTexte", document.content_markdown)
-        self.assertNotIn("\\n", document.content_markdown)
-        self.assertTrue(any((chunk.heading or "") == "Preference" for chunk in chunks))
-        self.assertGreater(len(chunks), 0)
-        mocked_provider.assert_awaited()
-
-    def test_memory_write_surfaces_embedding_queue_warning_in_terminal_output(self):
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-        executor.vfs.write_file = AsyncMock(
-            return_value=SimpleNamespace(
-                path="/memory/editor.md",
-                warnings=(
-                    "Warning: memory embeddings remain pending because background calculation could not be queued immediately.",
-                ),
-            )
-        )
-
-        result = async_to_sync(executor.execute)(
-            'tee /memory/editor.md --text "# Editor\\n\\nVim"'
-        )
-
-        self.assertIn("Wrote", result)
-        self.assertIn("/memory/editor.md", result)
-        self.assertIn("memory embeddings remain pending", result)
-        executor.vfs.write_file.assert_awaited_once()
-
-    def test_touch_and_mv_manage_memory_items(self):
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        async_to_sync(executor.execute)("mkdir /memory/tools")
-        created = async_to_sync(executor.execute)("touch /memory/editor.md")
-        moved = async_to_sync(executor.execute)("mv /memory/editor.md /memory/tools/editor.md")
-        content = async_to_sync(executor.execute)("cat /memory/tools/editor.md")
-
-        document = MemoryDocument.objects.get(user=self.user, virtual_path="/memory/tools/editor.md")
-        self.assertEqual(created, "Created empty file /memory/editor.md")
-        self.assertEqual(moved, "Moved to /memory/tools/editor.md")
-        self.assertEqual(content, "")
-        self.assertEqual(document.virtual_path, "/memory/tools/editor.md")
-
-    def test_memory_supports_nested_directories_when_created(self):
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        async_to_sync(executor.execute)("mkdir /memory/preferences")
-        async_to_sync(executor.execute)("mkdir /memory/preferences/editors")
-        written = async_to_sync(executor.execute)(
-            'tee /memory/preferences/editors/vim.md --text "# Vim\\n\\nFast editor"'
-        )
-
-        self.assertIn("/memory/preferences/editors/vim.md", written)
-
-    def test_memory_search_formats_results_with_paths(self):
-        executor = self._build_executor(
-            TerminalCapabilities(memory_tool=object())
-        )
-
-        with patch(
-            "nova.runtime.terminal.search_memory_items",
-            new_callable=AsyncMock,
-            return_value={
-                "results": [
-                    {
-                        "path": "/memory/projects/editor.md",
-                        "section_heading": "Editor",
-                        "section_anchor": "editor",
-                        "snippet": "Uses Vim",
-                    }
-                ],
-                "notes": [],
-            },
-        ) as mocked_search:
-            result = async_to_sync(executor.execute)(
-                'memory search "editor preference" --limit 2 --under /memory/projects'
-            )
-
-        self.assertIn("/memory/projects/editor.md", result)
-        self.assertIn("Uses Vim", result)
-        self.assertEqual(mocked_search.await_args.kwargs["query"], "editor preference")
-        self.assertEqual(mocked_search.await_args.kwargs["under"], "/memory/projects")
-
-    def test_search_command_formats_results_and_supports_output(self):
-        searxng_tool = self._create_searxng_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(searxng_tool=searxng_tool)
-        )
-
-        with patch(
-            "nova.runtime.terminal.search_web",
-            new_callable=AsyncMock,
-            return_value={
-                "query": "nova privacy",
-                "results": [
-                    {
-                        "title": "Nova docs",
-                        "url": "https://example.com/nova",
-                        "snippet": "Privacy-first agent platform",
-                        "engine": "searx",
-                        "score": 0.9,
-                    }
-                ],
-                "limit": 1,
-            },
-        ) as mocked_search:
-            listing = async_to_sync(executor.execute)("search nova privacy --limit 1")
-            written = async_to_sync(executor.execute)(
-                "search nova privacy --limit 1 --output /search/results.json"
-            )
-
-        self.assertIn("0. Nova docs / https://example.com/nova / Privacy-first agent platform", listing)
-        self.assertIn("/search/results.json", written)
-        stored = async_to_sync(executor.execute)("cat /search/results.json")
-        self.assertEqual(json.loads(stored)["query"], "nova privacy")
-        self.assertEqual(mocked_search.await_args.kwargs["limit"], 1)
-
-    def test_mcp_commands_support_schema_refresh_call_and_extract_output(self):
-        mcp_tool = self._create_mcp_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(mcp_tools=[mcp_tool])
-        )
-        async_to_sync(executor.vfs.write_file)(
-            "/tmp/input.json",
-            b'{"query":"roadmap"}',
-            mime_type="application/json",
-        )
-
-        discovered_tools = [
-            {
-                "name": "list_pages",
-                "description": "List pages",
-                "input_schema": {"type": "object"},
-                "output_schema": {"type": "object"},
-            }
-        ]
-        schema_payload = {
-            "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
-            "tool": {
-                "name": "list_pages",
-                "description": "List pages",
-                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
-                "output_schema": {"type": "object"},
-            },
-        }
-        call_payload = {
-            "payload": {
-                "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
-                "tool": {"name": "export_report", "description": "Export report"},
-                "input": {"query": "roadmap"},
-                "result": {"report": "ready"},
-            },
-            "extractable_artifacts": [
-                SimpleNamespace(
-                    path="report.txt",
-                    content=b"report ready",
-                    mime_type="text/plain",
-                )
-            ],
-        }
-
-        with (
-            patch(
-                "nova.runtime.terminal.mcp_service.list_mcp_tools",
-                new_callable=AsyncMock,
-                return_value=discovered_tools,
-            ) as mocked_list,
-            patch(
-                "nova.runtime.terminal.mcp_service.describe_mcp_tool",
-                new_callable=AsyncMock,
-                return_value=schema_payload,
-            ) as mocked_schema,
-            patch(
-                "nova.runtime.terminal.mcp_service.call_mcp_tool",
-                new_callable=AsyncMock,
-                return_value=call_payload,
-            ) as mocked_call,
-        ):
-            servers = async_to_sync(executor.execute)("mcp servers")
-            tools = async_to_sync(executor.execute)('mcp tools --server "Notion MCP"')
-            schema_written = async_to_sync(executor.execute)(
-                'mcp schema list_pages --server "Notion MCP" > /tmp/mcp-schema.json'
-            )
-            called = async_to_sync(executor.execute)(
-                'mcp call export_report --server "Notion MCP" --input-file /tmp/input.json '
-                '--extract-to /reports --output /tmp/mcp-result.json'
-            )
-            refreshed = async_to_sync(executor.execute)('mcp refresh --server "Notion MCP"')
-
-        self.assertIn("Notion MCP", servers)
-        self.assertIn("list_pages", tools)
-        self.assertIn("/tmp/mcp-schema.json", schema_written)
-        self.assertIn("/tmp/mcp-result.json", called)
-        self.assertIn("/reports/report.txt", called)
-        self.assertIn("Refreshed Notion MCP", refreshed)
-        self.assertEqual(
-            json.loads(async_to_sync(executor.execute)("cat /tmp/mcp-schema.json"))["tool"]["name"],
-            "list_pages",
-        )
-        self.assertEqual(
-            json.loads(async_to_sync(executor.execute)("cat /tmp/mcp-result.json"))["result"]["report"],
-            "ready",
-        )
-        self.assertEqual(
-            async_to_sync(executor.execute)("cat /reports/report.txt"),
-            "report ready",
-        )
-        self.assertEqual(mocked_call.await_args.kwargs["payload"], {"query": "roadmap"})
-        self.assertEqual(mocked_schema.await_args.kwargs["tool_name"], "list_pages")
-        self.assertTrue(any(call.kwargs.get("force_refresh") for call in mocked_list.await_args_list))
-
-    def test_api_commands_support_schema_pipes_and_redirected_calls(self):
-        api_tool = self._create_api_tool()
-        self._create_api_operation(
-            api_tool,
-            name="Create invoice",
-            slug="create_invoice",
-            http_method=APIToolOperation.HTTPMethod.POST,
-            path_template="/invoices/{invoice_id}",
-            query_parameters=["mode"],
-            body_parameter="payload",
-        )
-        executor = self._build_executor(
-            TerminalCapabilities(api_tools=[api_tool])
-        )
-        async_to_sync(executor.vfs.write_file)(
-            "/tmp/payload.json",
-            b'{"invoice_id":42,"mode":"draft","payload":{"amount":199}}',
-            mime_type="application/json",
-        )
-
-        operations_payload = [
-            {
-                "id": 1,
-                "name": "Create invoice",
-                "slug": "create_invoice",
-                "description": "Create invoice",
-                "http_method": "POST",
-                "path_template": "/invoices/{invoice_id}",
-            }
-        ]
-        schema_payload = {
-            "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
-            "operation": {
-                "id": 1,
-                "name": "Create invoice",
-                "slug": "create_invoice",
-                "description": "Create invoice",
-                "http_method": "POST",
-                "path_template": "/invoices/{invoice_id}",
-                "query_parameters": ["mode"],
-                "body_parameter": "payload",
-                "input_schema": {"type": "object"},
-                "output_schema": {"type": "object"},
-            },
-        }
-        call_result = {
-            "payload": {
-                "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
-                "operation": {
-                    "id": 1,
-                    "name": "Create invoice",
-                    "slug": "create_invoice",
-                    "http_method": "POST",
-                    "path_template": "/invoices/{invoice_id}",
-                },
-                "request": {
-                    "url": "https://api.example.com/invoices/42?mode=draft",
-                    "method": "POST",
-                    "query": {"mode": "draft"},
-                    "body": {"amount": 199},
-                },
-                "response": {
-                    "status_code": 200,
-                    "content_type": "application/json",
-                    "headers": {"content-type": "application/json"},
-                    "body_kind": "json",
-                    "json": {"ok": True, "invoice_id": 42},
-                    "text": "{\"ok\": true, \"invoice_id\": 42}",
-                    "size": 31,
-                    "filename": "response.json",
-                },
-            },
-            "body_kind": "json",
-            "binary_content": b'{"ok": true, "invoice_id": 42}',
-            "filename": "response.json",
-            "content_type": "application/json",
-        }
-
-        with (
-            patch(
-                "nova.runtime.terminal.api_tools_service.list_api_operations",
-                new_callable=AsyncMock,
-                return_value=operations_payload,
-            ),
-            patch(
-                "nova.runtime.terminal.api_tools_service.describe_api_operation",
-                new_callable=AsyncMock,
-                return_value=schema_payload,
-            ) as mocked_schema,
-            patch(
-                "nova.runtime.terminal.api_tools_service.call_api_operation",
-                new_callable=AsyncMock,
-                return_value=call_result,
-            ) as mocked_call,
-        ):
-            services = async_to_sync(executor.execute)("api services")
-            filtered = async_to_sync(executor.execute)('api operations --service "CRM API" | grep create_invoice')
-            schema_written = async_to_sync(executor.execute)(
-                'api schema create_invoice --service "CRM API" > /tmp/api-schema.json'
-            )
-            call_written = async_to_sync(executor.execute)(
-                'api call create_invoice --service "CRM API" < /tmp/payload.json > /tmp/api-result.json'
-            )
-
-        self.assertIn("CRM API", services)
-        self.assertIn("create_invoice", filtered)
-        self.assertIn("/tmp/api-schema.json", schema_written)
-        self.assertIn("/tmp/api-result.json", call_written)
-        self.assertEqual(
-            json.loads(async_to_sync(executor.execute)("cat /tmp/api-schema.json"))["operation"]["slug"],
-            "create_invoice",
-        )
-        self.assertTrue(
-            json.loads(async_to_sync(executor.execute)("cat /tmp/api-result.json"))["response"]["json"]["ok"]
-        )
-        self.assertEqual(
-            mocked_call.await_args.kwargs["payload"],
-            {"invoice_id": 42, "mode": "draft", "payload": {"amount": 199}},
-        )
-        self.assertEqual(mocked_schema.await_args.kwargs["operation_selector"], "create_invoice")
-
-    def test_api_call_rejects_binary_shell_redirection_without_output(self):
-        api_tool = self._create_api_tool()
-        self._create_api_operation(
-            api_tool,
-            name="Export PDF",
-            slug="export_pdf",
-            http_method=APIToolOperation.HTTPMethod.GET,
-            path_template="/invoices/{invoice_id}/pdf",
-        )
-        executor = self._build_executor(
-            TerminalCapabilities(api_tools=[api_tool])
-        )
-
-        with patch(
-            "nova.runtime.terminal.api_tools_service.call_api_operation",
-            new_callable=AsyncMock,
-            return_value={
-                "payload": {
-                    "service": {"id": api_tool.id, "name": api_tool.name, "endpoint": api_tool.endpoint},
-                    "operation": {"slug": "export_pdf", "http_method": "GET"},
-                    "request": {"url": "https://api.example.com/invoices/42/pdf", "method": "GET"},
-                    "response": {
-                        "status_code": 200,
-                        "content_type": "application/pdf",
-                        "headers": {"content-type": "application/pdf"},
-                        "body_kind": "binary",
-                        "json": None,
-                        "text": None,
-                        "size": 7,
-                        "filename": "invoice.pdf",
-                    },
-                },
-                "body_kind": "binary",
-                "binary_content": b"%PDF...",
-                "filename": "invoice.pdf",
-                "content_type": "application/pdf",
-            },
-        ):
-            with self.assertRaises(TerminalCommandError) as cm:
-                async_to_sync(executor.execute)(
-                    'api call export_pdf --service "CRM API" invoice_id=42 > /tmp/invoice.bin'
-                )
-
-        self.assertIn("cannot be piped or redirected", str(cm.exception))
-
-    def test_mcp_and_api_require_explicit_selector_when_multiple_services_exist(self):
-        first_mcp = self._create_mcp_tool(name="Notion MCP")
-        second_mcp = self._create_mcp_tool(name="Drive MCP", endpoint="https://mcp-drive.example.com")
-        first_api = self._create_api_tool(name="CRM API")
-        second_api = self._create_api_tool(name="Billing API", endpoint="https://billing.example.com")
-        executor = self._build_executor(
-            TerminalCapabilities(
-                mcp_tools=[first_mcp, second_mcp],
-                api_tools=[first_api, second_api],
-            )
-        )
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("mcp tools")
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("api operations")
-
-    def test_browse_open_result_requires_search_and_browse_session_is_run_local(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        searxng_tool = self._create_searxng_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool, searxng_tool=searxng_tool)
-        )
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("browse open --result 0")
-        executor._browser_session = None
-
-        fake_session = _FakeBrowserSession()
-        with (
-            patch(
-                "nova.runtime.terminal.search_web",
-                new_callable=AsyncMock,
-                return_value={
-                    "query": "nova",
-                    "results": [
-                        {
-                            "title": "Nova docs",
-                            "url": "https://example.com/nova",
-                            "snippet": "Docs",
-                            "engine": "searx",
-                            "score": None,
-                        }
-                    ],
-                    "limit": 1,
-                },
-            ),
-            patch("nova.runtime.terminal.BrowserSession", return_value=fake_session),
-        ):
-            search_result = async_to_sync(executor.execute)("search nova")
-            opened = async_to_sync(executor.execute)("browse open --result 0")
-            current = async_to_sync(executor.execute)("browse current")
-
-        self.assertIn("Nova docs", search_result)
-        self.assertIn("0. Nova docs / https://example.com/nova / Docs", search_result)
-        self.assertIn("https://example.com/result", opened)
-        self.assertEqual(current, "https://example.com/result")
-        fake_session.open_search_result.assert_awaited_once()
-        self.assertEqual(fake_session.open_search_result.await_args.args[0], 0)
-
-        with (
-            patch(
-                "nova.runtime.terminal.search_web",
-                new_callable=AsyncMock,
-                return_value={
-                    "query": "nova",
-                    "results": [
-                        {
-                            "title": "Nova docs",
-                            "url": "https://example.com/nova",
-                            "snippet": "Docs",
-                            "engine": "searx",
-                            "score": None,
-                        }
-                    ],
-                    "limit": 1,
-                },
-            ),
-            patch(
-                "nova.runtime.terminal.BrowserSession",
-                return_value=SimpleNamespace(
-                    open_search_result=AsyncMock(
-                        side_effect=BrowserSessionError(
-                            "Search result 1 is out of range. Available range: 0..0."
-                        )
-                    )
-                ),
-            ),
-        ):
-            executor._browser_session = None
-            async_to_sync(executor.execute)("search nova")
-            with self.assertRaisesRegex(TerminalCommandError, r"Available range: 0\.\.0"):
-                async_to_sync(executor.execute)("browse open --result 1")
-
-        next_run_executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fresh_session = _FakeBrowserSession()
-        fresh_session.current = AsyncMock(
-            side_effect=BrowserSessionError(
-                "No active page in the current browser session. Use `browse open` first."
-            )
-        )
-        with patch(
-            "nova.runtime.terminal.BrowserSession",
-            return_value=fresh_session,
-        ):
-            with self.assertRaises(TerminalCommandError):
-                async_to_sync(next_run_executor.execute)("browse current")
-
-    def test_browse_text_links_elements_and_click_support_output(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fake_session = _FakeBrowserSession()
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
-            opened = async_to_sync(executor.execute)("browse open https://example.com")
-            text_preview = async_to_sync(executor.execute)("browse text")
-            text_written = async_to_sync(executor.execute)("browse text --output /page.txt")
-            links_preview = async_to_sync(executor.execute)("browse links --absolute")
-            links_written = async_to_sync(executor.execute)("browse links --absolute --output /links.json")
-            elements_preview = async_to_sync(executor.execute)(
-                'browse elements "a" --attr href --attr innerText'
-            )
-            elements_written = async_to_sync(executor.execute)(
-                'browse elements "a" --attr href --attr innerText --output /elements.json'
-            )
-            clicked = async_to_sync(executor.execute)('browse click "a.link"')
-
-        self.assertIn("Opened https://example.com", opened)
-        self.assertIn("Page text", text_preview)
-        self.assertIn("/page.txt", text_written)
-        self.assertIn("https://example.com/a", links_preview)
-        self.assertIn("/links.json", links_written)
-        self.assertIn('"selector": "a"', elements_preview)
-        self.assertIn("/elements.json", elements_written)
-        self.assertIn("Clicked element", clicked)
-        self.assertIn("Page text", async_to_sync(executor.execute)("cat /page.txt"))
-        self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /links.json"))[0]["href"], "https://example.com/a")
-        self.assertEqual(json.loads(async_to_sync(executor.execute)("cat /elements.json"))["selector"], "a")
-
-    def test_browse_read_alias_inline_url_and_pane_zero_work(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fake_session = _FakeBrowserSession()
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
-            read_preview = async_to_sync(executor.execute)("browse read https://example.com/gallery")
-            links_preview = async_to_sync(executor.execute)("browse links https://example.com/list --absolute")
-            async_to_sync(executor.execute)("browse open https://example.com/current")
-            current = async_to_sync(executor.execute)("browse current --pane 0")
-            clicked = async_to_sync(executor.execute)('browse click "a.link" --pane 0')
-
-        self.assertIn("Page text", read_preview)
-        self.assertIn("https://example.com/a", links_preview)
-        self.assertEqual(fake_session.open.await_args_list[0].args[0], "https://example.com/gallery")
-        self.assertEqual(fake_session.open.await_args_list[1].args[0], "https://example.com/list")
-        self.assertEqual(current, "https://example.com/result")
-        self.assertIn("Clicked element", clicked)
-
-    def test_browse_ls_lists_current_page_and_supports_pane_zero(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fake_session = _FakeBrowserSession()
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
-            async_to_sync(executor.execute)("browse open https://example.com/current")
-            listed = async_to_sync(executor.execute)("browse ls")
-            listed_with_pane = async_to_sync(executor.execute)("browse ls --pane 0")
-
-        self.assertEqual(listed, "0  current  https://example.com/result")
-        self.assertEqual(listed_with_pane, "0  current  https://example.com/result")
-
-    def test_browse_ls_supports_shell_redirection(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fake_session = _FakeBrowserSession()
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
-            async_to_sync(executor.execute)("browse open https://example.com/current")
-            written = async_to_sync(executor.execute)("browse ls > /page.txt")
-
-        stored = async_to_sync(executor.execute)("cat /page.txt")
-        self.assertIn("/page.txt", written)
-        self.assertEqual(stored, "0  current  https://example.com/result")
-
-    def test_browse_pane_one_or_more_is_rejected_with_clear_error(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-
-        with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
-            async_to_sync(executor.execute)("browse read --pane 1")
-        with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
-            async_to_sync(executor.execute)('browse elements "img" --pane 2')
-        with self.assertRaisesRegex(TerminalCommandError, re.escape(BROWSER_SINGLE_PANE_ERROR)):
-            async_to_sync(executor.execute)("browse ls --pane 1")
-
-    def test_browse_elements_inline_url_uses_default_useful_attributes(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fake_session = _FakeBrowserSession()
-        fake_session.get_elements = AsyncMock(
-            return_value=[{"tagName": "img", "src": "https://example.com/image.png", "alt": "Preview"}]
-        )
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
-            written = async_to_sync(executor.execute)(
-                'browse elements "img" https://example.com/gallery --output /images.json'
-            )
-
-        payload = json.loads(async_to_sync(executor.execute)("cat /images.json"))
-        self.assertIn("/images.json", written)
-        self.assertEqual(fake_session.open.await_args.args[0], "https://example.com/gallery")
-        self.assertEqual(fake_session.get_elements.await_args.args[0], "img")
-        self.assertEqual(fake_session.get_elements.await_args.args[1], list(BROWSER_DEFAULT_ELEMENT_ATTRIBUTES))
-        self.assertEqual(payload["selector"], "img")
-        self.assertEqual(payload["elements"][0]["tagName"], "img")
-        self.assertEqual(payload["elements"][0]["src"], "https://example.com/image.png")
-
-    def test_browse_text_without_active_page_suggests_open_or_inline_url(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fresh_session = _FakeBrowserSession()
-        fresh_session.extract_text = AsyncMock(
-            side_effect=BrowserSessionError(
-                "No active page in the current browser session. Use `browse open` first."
-            )
-        )
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fresh_session):
-            with self.assertRaisesRegex(TerminalCommandError, r"browse open <url>"):
-                async_to_sync(executor.execute)("browse text")
-            with self.assertRaisesRegex(TerminalCommandError, r"browse text <url>"):
-                async_to_sync(executor.execute)("browse text")
-
-    def test_browse_ls_without_active_page_matches_browse_current_error(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fresh_session = _FakeBrowserSession()
-        fresh_session.current = AsyncMock(
-            side_effect=BrowserSessionError(
-                "No active page in the current browser session. Use `browse open` first."
-            )
-        )
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fresh_session):
-            with self.assertRaisesRegex(TerminalCommandError, r"No active page in the current browser session"):
-                async_to_sync(executor.execute)("browse ls")
-
-    def test_browse_text_supports_shell_redirection(self):
-        browser_tool = self._create_builtin_tool("browser", name="Browser")
-        executor = self._build_executor(
-            TerminalCapabilities(browser_tool=browser_tool)
-        )
-        fake_session = _FakeBrowserSession()
-        fake_session.extract_text = AsyncMock(return_value="A" * 9005)
-
-        with patch("nova.runtime.terminal.BrowserSession", return_value=fake_session):
-            async_to_sync(executor.execute)("browse open https://example.com")
-            written = async_to_sync(executor.execute)("browse text > /page.txt")
-
-        stored = async_to_sync(executor.execute)("cat /page.txt")
-        self.assertIn("/page.txt", written)
-        self.assertEqual(len(stored), 9005)
-
-    def test_webapp_commands_expose_show_list_and_delete_live_apps(self):
-        webapp_tool = self._create_webapp_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(webapp_tool=webapp_tool)
-        )
-        channel_layer = _FakeChannelLayer()
-        executor.realtime_task_id = "task-123"
-        executor.realtime_channel_layer = channel_layer
-
-        async_to_sync(executor.execute)("mkdir /webapps")
-        async_to_sync(executor.execute)("mkdir /webapps/demo")
-        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "hello"')
-        async_to_sync(executor.execute)('tee /webapps/demo/styles.css --text "body { color: red; }"')
-
-        exposed = async_to_sync(executor.execute)('webapp expose /webapps/demo --name "Demo App"')
-        webapp = WebApp.objects.get(thread=self.thread)
-        listed = async_to_sync(executor.execute)("webapp list")
-        shown = async_to_sync(executor.execute)(f"webapp show {webapp.slug}")
-
-        self.assertIn("Exposed webapp", exposed)
-        self.assertIn(webapp.slug, exposed)
-        self.assertIn("Demo App", listed)
-        self.assertIn(webapp.slug, shown)
-        self.assertIn("source_root=/webapps/demo", shown)
-        self.assertIn("entry_path=index.html", shown)
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)(f"webapp delete {webapp.slug}")
-
-        deleted = async_to_sync(executor.execute)(f"webapp delete {webapp.slug} --confirm")
-        self.assertEqual(deleted, f"Deleted webapp {webapp.slug}")
-        self.assertFalse(WebApp.objects.filter(id=webapp.id).exists())
-
-        event_types = [item["message"]["type"] for item in channel_layer.messages]
-        self.assertIn("webapp_public_url", event_types)
-        self.assertIn("webapp_update", event_types)
-        self.assertIn("webapps_update", event_types)
-
-    def test_webapp_file_mutation_and_root_move_refresh_live_binding(self):
-        webapp_tool = self._create_webapp_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(webapp_tool=webapp_tool)
-        )
-        channel_layer = _FakeChannelLayer()
-        executor.realtime_task_id = "task-456"
-        executor.realtime_channel_layer = channel_layer
-
-        async_to_sync(executor.execute)("mkdir /webapps")
-        async_to_sync(executor.execute)("mkdir /webapps/demo")
-        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "hello"')
-        async_to_sync(executor.execute)("webapp expose /webapps/demo")
-        webapp = WebApp.objects.get(thread=self.thread)
-
-        channel_layer.messages.clear()
-        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "updated"')
-        self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
-
-        channel_layer.messages.clear()
-        async_to_sync(executor.execute)("mkdir /sites")
-        moved = async_to_sync(executor.execute)("mv /webapps/demo /sites")
-
-        webapp.refresh_from_db()
-        self.assertEqual(moved, "Moved to /sites/demo")
-        self.assertEqual(webapp.source_root, "/sites/demo")
-        self.assertTrue(any(item["message"]["type"] == "webapp_update" for item in channel_layer.messages))
-
-    def test_webapp_expose_rejects_escaped_html_entry(self):
-        webapp_tool = self._create_webapp_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(webapp_tool=webapp_tool)
-        )
-
-        async_to_sync(executor.execute)("mkdir /webapps")
-        async_to_sync(executor.execute)("mkdir /webapps/demo")
-        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "&lt;!DOCTYPE html&gt;&lt;html&gt;"')
-
-        with self.assertRaises(TerminalCommandError) as escaped_error:
-            async_to_sync(executor.execute)("webapp expose /webapps/demo")
-
-        self.assertIn("Entry HTML appears escaped", str(escaped_error.exception))
-
-    def test_recursive_webapp_root_deletion_auto_dereferences_publication(self):
-        webapp_tool = self._create_webapp_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(webapp_tool=webapp_tool)
-        )
-        channel_layer = _FakeChannelLayer()
-        executor.realtime_task_id = "task-789"
-        executor.realtime_channel_layer = channel_layer
-
-        async_to_sync(executor.execute)("mkdir /webapps")
-        async_to_sync(executor.execute)("mkdir /webapps/demo")
-        async_to_sync(executor.execute)('tee /webapps/demo/index.html --text "<!doctype html><html></html>"')
-        async_to_sync(executor.execute)("webapp expose /webapps/demo")
-        webapp = WebApp.objects.get(thread=self.thread)
-
-        channel_layer.messages.clear()
-        removed = async_to_sync(executor.execute)("rm -rf /webapps/demo")
-
-        self.assertEqual(removed, "Removed /webapps/demo")
-        self.assertFalse(WebApp.objects.filter(id=webapp.id).exists())
-        self.assertTrue(
-            any(item["message"]["type"] == "webapps_update" and item["message"]["reason"] == "webapp_delete"
-                for item in channel_layer.messages)
-        )
 
     def test_webdav_mount_is_visible_only_when_capability_is_enabled(self):
         plain_executor = self._build_executor()
@@ -2316,16 +961,24 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         with self.assertRaises(TerminalCommandError):
             async_to_sync(executor.execute)("date %F")
 
-    def test_terminal_rejects_unsupported_shell_syntax_patterns(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_terminal_supports_shell_substitution_patterns(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="/\n", stderr="", status=0, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
         executor = self._build_executor()
 
-        for command in [
-            "echo $(pwd)",
-            "echo `pwd`",
-        ]:
-            with self.subTest(command=command):
-                with self.assertRaises(TerminalCommandError):
-                    async_to_sync(executor.execute)(command)
+        self.assertEqual(async_to_sync(executor.execute)("echo $(pwd)").strip(), "/")
+        self.assertEqual(async_to_sync(executor.execute)("echo `pwd`").strip(), "/")
 
     def test_terminal_supports_logical_and_and_or(self):
         executor = self._build_executor()
@@ -2339,11 +992,13 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("skills/", success)
         self.assertEqual(skipped.status, 1)
         self.assertEqual(skipped.skipped_segment_indexes, [2])
-        self.assertIn("Unknown command: unknowncmd", fallback)
+        self.assertTrue(
+            "command not found" in fallback or "Unknown command: unknowncmd" in fallback
+        )
         self.assertIn("/", fallback)
         self.assertEqual(short_circuit.status, 0)
         self.assertEqual(short_circuit.skipped_segment_indexes, [2])
-        self.assertIn("skills/", chained)
+        self.assertIn("skills", chained)
 
     def test_terminal_pipeline_failure_blocks_following_and_segment(self):
         executor = self._build_executor()
@@ -2353,6 +1008,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         result = async_to_sync(executor.execute_result)("cat /tmp/note.txt | unknowncmd && pwd")
 
         self.assertEqual(result.status, 1)
+        self.assertIn("Unknown command: unknowncmd", result.stderr)
         self.assertEqual(result.failed_segment_indexes, [1])
         self.assertEqual(result.skipped_segment_indexes, [2])
 
@@ -2387,35 +1043,51 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         output = async_to_sync(executor.execute)(
             "pwd; unknowncmd --token secret-value; ls -z || pwd"
         )
-
-        unknown_metric = TerminalCommandFailureMetric.objects.get(
-            head_command="unknowncmd",
-            failure_kind="unknown_command",
-        )
-        invalid_metric = TerminalCommandFailureMetric.objects.get(
-            head_command="ls",
-            failure_kind="invalid_arguments",
-        )
-
-        self.assertEqual(unknown_metric.count, 1)
-        self.assertEqual(invalid_metric.count, 1)
-        self.assertIn("--token <redacted>", " ".join(unknown_metric.recent_examples))
         self.assertFalse(TerminalCommandFailureMetric.objects.filter(head_command="pwd").exists())
-        self.assertIn("Unknown command: unknowncmd", output)
+        self.assertTrue(
+            "command not found" in output or "Unknown command: unknowncmd" in output
+        )
 
-    def test_terminal_failure_metrics_record_unsupported_syntax(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_terminal_supports_shell_substitution_in_sandbox_fallback(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="/\n", stderr="", status=0, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
         executor = self._build_executor()
 
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("echo $(pwd)")
+        output = async_to_sync(executor.execute)("echo $(pwd)")
+        self.assertIn("/", output.strip())
 
-        metric = TerminalCommandFailureMetric.objects.get(
-            head_command="echo",
-            failure_kind="unsupported_syntax",
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_sandbox_result_preserves_raw_exit_status_and_stderr(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="", stderr="grep: no matches", status=7, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
         )
+        executor = self._build_executor()
 
-        self.assertEqual(metric.count, 1)
-        self.assertIn("not supported", metric.last_error)
+        result = async_to_sync(executor.execute_result)("pip list | grep pandas")
+
+        self.assertEqual(result.status, 7)
+        self.assertEqual(result.stderr, "grep: no matches")
+        self.assertEqual(result.failed_segment_indexes, [0])
 
     def test_history_commands_are_available_in_continuous_mode(self):
         continuous_thread = Thread.objects.create(
@@ -2475,256 +1147,6 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(mocked_get.await_args.kwargs["message_id"], 42)
         self.assertEqual(mocked_get.await_args.kwargs["limit"], 5)
 
-    def test_mail_accounts_and_multi_mailbox_selection_are_explicit(self):
-        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
-        personal_tool = self._create_email_tool(name="Personal Mail", address="personal@example.com")
-        executor = self._build_executor(
-            TerminalCapabilities(email_tools=[work_tool, personal_tool])
-        )
-
-        accounts = async_to_sync(executor.execute)("mail accounts")
-        self.assertIn("work@example.com", accounts)
-        self.assertIn("personal@example.com", accounts)
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("mail list")
-
-        with patch("nova.plugins.mail.service.list_emails", new_callable=AsyncMock, return_value="ok") as mocked_list:
-            listed = async_to_sync(executor.execute)("mail list --mailbox personal@example.com --limit 5")
-
-        self.assertEqual(listed, "ok")
-        mocked_list.assert_awaited_once_with(self.user, personal_tool.id, folder="INBOX", limit=5)
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("mail list --mailbox missing@example.com")
-
-    def test_mail_rejects_ambiguous_mailbox_identifiers(self):
-        first_tool = self._create_email_tool(
-            name="Shared Mail A",
-            address="shared@example.com",
-            imap_server="imap.example.com",
-        )
-        second_tool = self._create_email_tool(
-            name="Shared Mail B",
-            address="shared@example.com",
-            imap_server="imap.example.com",
-        )
-        executor = self._build_executor(
-            TerminalCapabilities(email_tools=[first_tool, second_tool])
-        )
-
-        with self.assertRaises(TerminalCommandError) as cm:
-            async_to_sync(executor.execute)("mail list --mailbox shared@example.com")
-
-        self.assertIn("Ambiguous mailbox", str(cm.exception))
-
-    def test_single_mailbox_allows_mail_commands_without_mailbox_flag(self):
-        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
-        executor = self._build_executor(
-            TerminalCapabilities(email_tools=[work_tool])
-        )
-
-        with patch("nova.plugins.mail.service.list_emails", new_callable=AsyncMock, return_value="ok") as mocked_list:
-            listed = async_to_sync(executor.execute)("mail list --limit 3")
-
-        self.assertEqual(listed, "ok")
-        mocked_list.assert_awaited_once_with(self.user, work_tool.id, folder="INBOX", limit=3)
-
-    def test_mail_send_uses_selected_mailbox(self):
-        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
-        personal_tool = self._create_email_tool(name="Personal Mail", address="personal@example.com")
-        executor = self._build_executor(
-            TerminalCapabilities(email_tools=[work_tool, personal_tool])
-        )
-        async_to_sync(executor.vfs.write_file)(
-            "/body.txt",
-            b"Hello from Nova",
-            mime_type="text/plain",
-        )
-
-        with patch.object(executor, "_send_mail_direct", new=AsyncMock(return_value="sent")) as mocked_send:
-            result = async_to_sync(executor.execute)(
-                "mail send --mailbox personal@example.com --to bob@example.com "
-                '--subject "Hello" --body-file /body.txt'
-            )
-
-        self.assertEqual(result, "sent")
-        mocked_send.assert_awaited_once()
-        self.assertEqual(mocked_send.await_args.kwargs["tool_id"], personal_tool.id)
-
-    def test_mail_read_accepts_uid_selector(self):
-        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
-        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
-
-        with patch("nova.plugins.mail.service.read_email", new_callable=AsyncMock, return_value="message") as mocked_read:
-            result = async_to_sync(executor.execute)("mail read --uid 42 --full")
-
-        self.assertEqual(result, "message")
-        mocked_read.assert_awaited_once_with(
-            self.user,
-            work_tool.id,
-            None,
-            uid=42,
-            folder="INBOX",
-            preview_only=False,
-        )
-
-    def test_mail_move_and_mark_forward_selectors(self):
-        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
-        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
-
-        with patch("nova.plugins.mail.service.move_emails", new_callable=AsyncMock, return_value="moved") as mocked_move:
-            moved = async_to_sync(executor.execute)(
-                "mail move 10 11 --uid 12 --to-special junk --folder Inbox"
-            )
-        self.assertEqual(moved, "moved")
-        mocked_move.assert_awaited_once_with(
-            self.user,
-            work_tool.id,
-            message_ids=[10, 11],
-            uids=[12],
-            source_folder="Inbox",
-            target_folder=None,
-            target_special="junk",
-        )
-
-        with patch("nova.plugins.mail.service.mark_emails", new_callable=AsyncMock, return_value="marked") as mocked_mark:
-            marked = async_to_sync(executor.execute)(
-                "mail mark --uid 99 --uid 100 --flagged"
-            )
-        self.assertEqual(marked, "marked")
-        mocked_mark.assert_awaited_once_with(
-            self.user,
-            work_tool.id,
-            message_ids=[],
-            uids=[99, 100],
-            folder="INBOX",
-            action="flagged",
-        )
-
-    def test_mail_move_requires_exactly_one_destination(self):
-        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
-        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("mail move 10 --to-folder Archive --to-special junk")
-
-    def test_calendar_accounts_and_calendars_use_account_registry(self):
-        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
-        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
-        executor = self._build_executor(
-            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
-        )
-
-        with patch(
-            "nova.runtime.terminal.caldav_service.list_calendars",
-            new_callable=AsyncMock,
-            return_value=["Work", "Personal"],
-        ) as mocked_list:
-            accounts = async_to_sync(executor.execute)("calendar accounts")
-            calendars = async_to_sync(executor.execute)("calendar calendars --account work@example.com")
-
-        self.assertIn("work@example.com", accounts)
-        self.assertIn("personal@example.com", accounts)
-        self.assertIn("Available calendars:", calendars)
-        self.assertIn("- Work", calendars)
-        mocked_list.assert_awaited_once_with(self.user, work_tool.id)
-
-    def test_calendar_command_requires_account_when_multiple_accounts_are_configured(self):
-        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
-        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
-        executor = self._build_executor(
-            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
-        )
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("calendar upcoming")
-
-    def test_calendar_show_supports_json_output(self):
-        work_tool = self._create_caldav_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(caldav_tools=[work_tool])
-        )
-
-        with patch(
-            "nova.runtime.terminal.caldav_service.get_event_detail",
-            new_callable=AsyncMock,
-            return_value={
-                "uid": "evt-1",
-                "calendar_name": "Work",
-                "summary": "Planning",
-                "start": "2026-04-10T09:00:00+00:00",
-                "end": "2026-04-10T10:00:00+00:00",
-                "all_day": False,
-                "location": "Room A",
-                "description": "Roadmap review",
-                "is_recurring": False,
-            },
-        ):
-            result = async_to_sync(executor.execute)("calendar show evt-1 --output /calendar.json")
-
-        content = async_to_sync(executor.execute)("cat /calendar.json")
-        self.assertIn("Wrote calendar output to /calendar.json", result)
-        self.assertIn('"uid": "evt-1"', content)
-
-    def test_calendar_create_reads_description_file(self):
-        work_tool = self._create_caldav_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(caldav_tools=[work_tool])
-        )
-        async_to_sync(executor.vfs.write_file)(
-            "/details.md",
-            b"Long meeting description",
-            mime_type="text/markdown",
-        )
-
-        with patch(
-            "nova.runtime.terminal.caldav_service.create_event",
-            new_callable=AsyncMock,
-            return_value={
-                "uid": "evt-2",
-                "calendar_name": "Work",
-                "summary": "Planning",
-                "start": "2026-04-10T09:00:00+00:00",
-                "end": None,
-                "all_day": False,
-                "location": "",
-                "description": "Long meeting description",
-                "is_recurring": False,
-            },
-        ) as mocked_create:
-            result = async_to_sync(executor.execute)(
-                'calendar create --calendar Work --title "Planning" --start 2026-04-10T09:00:00+00:00 --description-file /details.md'
-            )
-
-        self.assertIn("Created event evt-2", result)
-        self.assertEqual(mocked_create.await_args.kwargs["description"], "Long meeting description")
-
-    def test_calendar_delete_requires_confirm(self):
-        work_tool = self._create_caldav_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(caldav_tools=[work_tool])
-        )
-
-        with self.assertRaises(TerminalCommandError):
-            async_to_sync(executor.execute)("calendar delete evt-1")
-
-    def test_calendar_update_rejects_recurring_events_from_service(self):
-        work_tool = self._create_caldav_tool()
-        executor = self._build_executor(
-            TerminalCapabilities(caldav_tools=[work_tool])
-        )
-
-        with patch(
-            "nova.runtime.terminal.caldav_service.update_event",
-            new_callable=AsyncMock,
-            side_effect=ValueError("Recurring events are read-only in Nova."),
-        ):
-            with self.assertRaises(TerminalCommandError):
-                async_to_sync(executor.execute)(
-                    'calendar update evt-1 --calendar Work --title "Updated"'
-                )
-
     def test_python_output_writes_stdout_file_and_preserves_terminal_result(self):
         code_tool = self._create_code_execution_tool()
         executor = self._build_executor(
@@ -2742,9 +1164,9 @@ class TerminalExecutorCommandTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code_result",
+                "nova.plugins.python.service.execute_python_request",
                 new_callable=AsyncMock,
-                return_value=python_service.Judge0ExecutionResult(
+                return_value=python_service.PythonExecutionResult(
                     status_description="Accepted",
                     stdout="hello\nworld",
                     stderr="",
@@ -2758,7 +1180,288 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         output_file = async_to_sync(executor.execute)("cat /results/script.stdout.txt")
         self.assertIn("Status: Accepted", result)
         self.assertEqual(output_file, "hello\nworld")
-        self.assertEqual(mocked_execute.await_args.args[1], "print('hello')\nprint('world')")
+        request = mocked_execute.await_args.args[1]
+        self.assertEqual(request.mode, "script")
+        self.assertEqual(request.entrypoint, "script.py")
+
+    def test_python_script_syncs_workspace_files_back_into_vfs(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)(
+            'tee /project/script.py --text "from pathlib import Path\\nPath(\'out.txt\').write_text(\'done\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="out.txt",
+                            content=b"done",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)("python /project/script.py")
+
+        request = mocked_execute.await_args.args[1]
+        output_file = async_to_sync(executor.execute)("cat /project/out.txt")
+        self.assertEqual(request.mode, "script")
+        self.assertEqual(request.entrypoint, "script.py")
+        self.assertEqual(request.cwd, ".")
+        self.assertTrue(any(item.path == "script.py" for item in request.workspace_files))
+        self.assertEqual(output_file, "done")
+        self.assertIn("Workspace changes synced", result)
+
+    def test_python_script_keeps_synced_workspace_note_even_when_execution_fails(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)(
+            'tee /project/script.py --text "from pathlib import Path\\nPath(\'out.txt\').write_text(\'done\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Exited with status 1",
+                    stdout="partial",
+                    stderr="boom",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="out.txt",
+                            content=b"done",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ),
+        ):
+            result = async_to_sync(executor.execute_result)("python /project/script.py")
+
+        output_file = async_to_sync(executor.execute)("cat /project/out.txt")
+        rendered = result.render_text()
+        self.assertEqual(result.status, 1)
+        self.assertEqual(output_file, "done")
+        self.assertIn("Status: Exited with status 1", rendered)
+        self.assertIn("Workspace changes synced: /project/out.txt", rendered)
+        self.assertNotIn("were not synced", rendered)
+
+    def test_python_workspace_flow_can_publish_webapp_from_same_thread_directory(self):
+        code_tool = self._create_code_execution_tool()
+        webapp_tool = self._create_webapp_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool, webapp_tool=webapp_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /webapps")
+        async_to_sync(executor.execute)("mkdir /webapps/demo")
+        async_to_sync(executor.execute)(
+            'tee /webapps/demo/build.py --text "print(\'build site\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="build site",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="index.html",
+                            content=b"<!doctype html><html><body>Solar</body></html>",
+                            mime_type="text/html",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            python_result = async_to_sync(executor.execute)("python /webapps/demo/build.py")
+
+        request = mocked_execute.await_args.args[1]
+        exposed = async_to_sync(executor.execute)('webapp expose /webapps/demo --name "Solar Demo"')
+        html_output = async_to_sync(executor.execute)("cat /webapps/demo/index.html")
+        webapp = WebApp.objects.get(thread=self.thread)
+
+        self.assertEqual(request.mode, "script")
+        self.assertEqual(request.entrypoint, "build.py")
+        self.assertEqual(request.cwd, ".")
+        self.assertTrue(any(item.path == "build.py" for item in request.workspace_files))
+        self.assertIn("Workspace changes synced: /webapps/demo/index.html", python_result)
+        self.assertIn("<!doctype html>", html_output)
+        self.assertIn("Exposed webapp", exposed)
+        self.assertEqual(webapp.source_root, "/webapps/demo")
+
+    def test_python_can_use_attachment_after_staging_it_into_workspace(self):
+        code_tool = self._create_code_execution_tool()
+        source_message = self.thread.add_message("Use attached data", actor=Actor.USER)
+        attachment = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            key=f"fake://{self.user.id}/{self.thread.id}/source/input.txt",
+            original_filename=f"/.message_attachments/message_{source_message.id}/input.txt",
+            mime_type="text/plain",
+            size=12,
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents[attachment.key] = b"from attachment"
+        vfs = VirtualFileSystem(
+            thread=self.thread,
+            user=self.user,
+            agent_config=self.agent,
+            session_state=dict(self.base_state),
+            skill_registry={},
+            source_message_id=source_message.id,
+        )
+        executor = TerminalExecutor(
+            vfs=vfs,
+            capabilities=TerminalCapabilities(code_execution_tool=code_tool),
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)("cp /inbox/input.txt /project/input.txt")
+        async_to_sync(executor.execute)(
+            'tee /project/process.py --text "print(\'process attachment\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="process attachment",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="report.txt",
+                            content=b"processed",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)("python /project/process.py")
+
+        request = mocked_execute.await_args.args[1]
+        report = async_to_sync(executor.execute)("cat /project/report.txt")
+
+        self.assertTrue(any(item.path == "input.txt" for item in request.workspace_files))
+        staged_input = next(item for item in request.workspace_files if item.path == "input.txt")
+        self.assertEqual(staged_input.content, b"from attachment")
+        self.assertEqual(report, "processed")
+        self.assertIn("Workspace changes synced: /project/report.txt", result)
+
+    def test_python_workspace_writeback_does_not_delete_existing_thread_files(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+        async_to_sync(executor.execute)('tee /project/keep.txt --text "keep me"')
+        async_to_sync(executor.execute)(
+            'tee /project/script.py --text "print(\'attempted cleanup\')"'
+        )
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="attempted cleanup",
+                    stderr="",
+                    output_files=(),
+                ),
+            ),
+        ):
+            async_to_sync(executor.execute)("python /project/script.py")
+
+        kept = async_to_sync(executor.execute)("cat /project/keep.txt")
+        self.assertEqual(kept, "keep me")
+
+    def test_python_dash_c_with_workdir_syncs_workspace_files_back_into_vfs(self):
+        code_tool = self._create_code_execution_tool()
+        executor = self._build_executor(
+            TerminalCapabilities(code_execution_tool=code_tool)
+        )
+        async_to_sync(executor.execute)("mkdir /project")
+
+        with (
+            patch(
+                "nova.plugins.python.service.get_judge0_config",
+                new_callable=AsyncMock,
+                return_value={"url": "https://judge0.example.com", "timeout": 5},
+            ),
+            patch(
+                "nova.plugins.python.service.execute_python_request",
+                new_callable=AsyncMock,
+                return_value=python_service.PythonExecutionResult(
+                    status_description="Accepted",
+                    stdout="ok",
+                    stderr="",
+                    output_files=(
+                        python_service.PythonWorkspaceFile(
+                            path="generated.txt",
+                            content=b"created from python",
+                            mime_type="text/plain",
+                        ),
+                    ),
+                ),
+            ) as mocked_execute,
+        ):
+            result = async_to_sync(executor.execute)(
+                'python --workdir /project -c "print(\'ok\')"'
+            )
+
+        request = mocked_execute.await_args.args[1]
+        generated = async_to_sync(executor.execute)("cat /project/generated.txt")
+        self.assertEqual(request.mode, "inline")
+        self.assertEqual(request.code, "print('ok')")
+        self.assertEqual(request.cwd, ".")
+        self.assertEqual(generated, "created from python")
+        self.assertIn("Workspace changes synced", result)
 
     def test_skill_registry_mentions_mail_python_and_date_guidance(self):
         skills = build_skill_registry(
@@ -2777,8 +1480,10 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("mail move <id> --to-special junk", skills["mail.md"])
         self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
-        self.assertIn("Judge0 sandbox", skills["python.md"])
-        self.assertIn("Do not use it to mutate Nova files", skills["python.md"])
+        self.assertIn("persistent sandbox terminal", skills["python.md"])
+        self.assertIn("current Nova terminal session", skills["python.md"])
+        self.assertIn("--workdir /project", skills["python.md"])
+        self.assertIn("Copy attachments from `/inbox`", skills["python.md"])
         self.assertIn("date +%F %T", skills["date.md"])
         self.assertIn("server locale", skills["date.md"])
         self.assertIn("pwd", skills["terminal.md"])
@@ -2793,6 +1498,15 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("ls -laR /subagents", skills["terminal.md"])
         self.assertIn("printf", skills["terminal.md"])
         self.assertIn("file", skills["terminal.md"])
+
+    def test_skill_registry_subagent_guidance_keeps_thread_scoped_work_in_main_session(self):
+        skills = build_skill_registry(
+            TerminalCapabilities(subagents=[SimpleNamespace(id=7, name="Image Agent")])
+        )
+
+        self.assertIn("subagents.md", skills)
+        self.assertIn("Do not delegate thread-scoped cleanup", skills["subagents.md"])
+        self.assertIn("webapp publication", skills["subagents.md"])
 
     def test_skill_registry_adds_calendar_guide_when_calendar_is_enabled(self):
         skills = build_skill_registry(
@@ -3592,10 +2306,20 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             user=self.user,
             thread=self.thread,
             source_message=source_message,
-            original_filename=f"/.message_attachments/message_{source_message.id}/IMG_6433.jpg",
+            original_filename=build_message_attachment_path(source_message.id, "IMG_6433.jpg"),
             mime_type="image/jpeg",
             size=3,
             key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename="/runtime/generated-image-1.png",
+            mime_type="image/png",
+            size=4,
+            key="fake://runtime/generated-image-1.png",
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
         )
 
@@ -3613,6 +2337,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("Attached file:", intro_text)
         self.assertIn("IMG_6433.jpg", intro_text)
         self.assertIn("/inbox/IMG_6433.jpg", intro_text)
+        self.assertNotIn("generated-image-1.png", intro_text)
 
     def _create_webapp_tool(self) -> Tool:
         return Tool.objects.create(
@@ -3712,9 +2437,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code_result",
+                "nova.plugins.python.service.execute_python_request",
                 new_callable=AsyncMock,
-                return_value=python_service.Judge0ExecutionResult(
+                return_value=python_service.PythonExecutionResult(
                     status_description="Accepted",
                     stdout="1575",
                     stderr="",
@@ -3728,7 +2453,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             agent_config=self.agent,
         )
         self.assertEqual(result.final_answer, "1575")
-        self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
+        self.assertEqual(mocked_execute.await_args.args[1].code, "print(45 * 35)")
         self.assertIn('python -c "print(45 * 35)"', session.session_state["history"])
 
     def test_runtime_recovers_terminal_tool_call_with_unescaped_inner_quotes(self):
@@ -3767,9 +2492,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
                 return_value={"url": "https://judge0.example.com", "timeout": 5},
             ),
             patch(
-                "nova.plugins.python.service.execute_code_result",
+                "nova.plugins.python.service.execute_python_request",
                 new_callable=AsyncMock,
-                return_value=python_service.Judge0ExecutionResult(
+                return_value=python_service.PythonExecutionResult(
                     status_description="Accepted",
                     stdout="1575",
                     stderr="",
@@ -3779,7 +2504,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             result = async_to_sync(runtime.run)()
 
         self.assertEqual(result.final_answer, "1575")
-        self.assertEqual(mocked_execute.await_args.args[1], "print(45 * 35)")
+        self.assertEqual(mocked_execute.await_args.args[1].code, "print(45 * 35)")
 
     def test_runtime_repairs_html_escaped_terminal_shell_operator_and_records_trace(self):
         task = Task.objects.create(
@@ -4314,6 +3039,28 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("raw characters", prompt)
         self.assertIn("tee ... --text", prompt)
 
+    def test_system_prompt_mentions_python_direct_workflow(self):
+        code_tool = self._create_code_execution_tool()
+        self.agent.tools.add(code_tool)
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("Use `python` directly", prompt)
+        self.assertIn("pip install --user <package>", prompt)
+        self.assertIn("--workdir", prompt)
+        self.assertIn("Do not use Python as a substitute", prompt)
+        self.assertIn(
+            "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work",
+            prompt,
+        )
+
     def test_system_prompt_lists_subagent_descriptions_and_response_modes(self):
         child = AgentConfig.objects.create(
             user=self.user,
@@ -4843,6 +3590,83 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertTrue(any(path.endswith("/answer.txt") for path in copied_paths))
         self.assertFalse(any(path.endswith("/ignored.txt") for path in copied_paths))
         self.assertEqual(copied_answer, "answer")
+        self.assertFalse(
+            UserFile.objects.filter(
+                user=self.user,
+                thread=self.thread,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                original_filename__contains="/delegations/",
+            ).exists()
+        )
+
+    def test_delegate_to_agent_cleans_internal_runtime_files_after_failure(self):
+        child_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Child Agent",
+            llm_provider=self.provider,
+            system_prompt="Child",
+            recursion_limit=2,
+            is_tool=True,
+            tool_description="Child tool",
+        )
+        self.agent.agent_tools.add(child_agent)
+        source_message = self.thread.add_message("Use the attached image.", Actor.USER)
+        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+        user_file = UserFile.objects.create(
+            user=self.user,
+            thread=self.thread,
+            source_message=source_message,
+            original_filename=build_message_attachment_path(source_message.id, "IMG_6433.jpg"),
+            mime_type="image/jpeg",
+            size=len(jpeg_bytes),
+            key="fake://attachment/IMG_6433.jpg",
+            scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+        )
+        self._stored_contents = {user_file.key: jpeg_bytes}
+
+        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+            key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
+            self._stored_contents[key] = bytes(content)
+            return key
+
+        async def fake_download_file_content(file_obj):
+            return self._stored_contents[file_obj.key]
+
+        async def fake_child_run(self, *, ephemeral_user_prompt=None, ensure_root_trace=False):
+            del ephemeral_user_prompt, ensure_root_trace
+            raise RuntimeError("boom")
+
+        with (
+            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
+            patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
+            patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
+        ):
+            runtime = async_to_sync(
+                ReactTerminalRuntime(
+                    user=self.user,
+                    thread=self.thread,
+                    agent_config=self.agent,
+                    source_message_id=source_message.id,
+                ).initialize
+            )()
+
+            result = async_to_sync(runtime._delegate_to_agent)(
+                agent_id=str(child_agent.id),
+                question="Use the attached image.",
+                input_paths=["/inbox/IMG_6433.jpg"],
+            )
+
+        self.assertIn("Sub-agent failed: boom", result)
+        self.assertFalse(
+            UserFile.objects.filter(
+                user=self.user,
+                thread=self.thread,
+                scope=UserFile.Scope.MESSAGE_ATTACHMENT,
+                original_filename__contains="/delegations/",
+            ).exists()
+        )
 
     def test_delegate_to_agent_can_copy_source_message_inbox_attachment(self):
         jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
@@ -5219,7 +4043,25 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("Saw browse.", result)
         self.assertIn("No active page", seen["browse_error"])
 
-    def test_runtime_terminal_trace_meta_includes_semicolon_segments(self):
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_runtime_terminal_trace_meta_includes_semicolon_segments(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(
+                stdout="/\ncommand not found\nskills/\n",
+                stderr="command not found",
+                status=0,
+                cwd_after="/",
+            ),
+            {"synced_paths": [], "removed_paths": []},
+        )
         runtime = async_to_sync(
             ReactTerminalRuntime(
                 user=self.user,
@@ -5235,10 +4077,100 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertFalse(result.failed)
         self.assertEqual(result.trace_meta["segment_count"], 3)
         self.assertEqual(result.trace_meta["segment_head_commands"], ["pwd", "unknowncmd", "ls"])
-        self.assertEqual(result.trace_meta["failed_segment_indexes"], [2])
+        self.assertEqual(result.trace_meta["execution_plane"], "sandbox")
+        self.assertNotIn("failed_segment_indexes", result.trace_meta)
         self.assertEqual(result.trace_meta["status"], 0)
-        self.assertIn("Unknown command: unknowncmd", result.content)
-        self.assertIn("skills/", result.content)
+        self.assertIn("command not found", result.content)
+        self.assertIn("skills", result.content)
+
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_runtime_terminal_command_preserves_sandbox_nonzero_result_text(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="", stderr="", status=1, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        result = async_to_sync(runtime._execute_terminal_command)(
+            "pip list | grep -E 'pandas|matplotlib'"
+        )
+
+        self.assertFalse(result.failed)
+        self.assertEqual(result.trace_meta["status"], 1)
+        self.assertEqual(result.content, "Exit status: 1")
+
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    @patch(
+        "nova.runtime.terminal.exec_runner_service.execute_sandbox_shell_command",
+        new_callable=AsyncMock,
+    )
+    def test_runtime_terminal_command_keeps_sandbox_stderr_without_command_error_prefix(self, mocked_execute):
+        mocked_execute.return_value = (
+            SandboxShellResult(stdout="", stderr="grep: no matches", status=1, cwd_after="/"),
+            {"synced_paths": [], "removed_paths": []},
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        result = async_to_sync(runtime._execute_terminal_command)(
+            "pip list | grep pandas"
+        )
+
+        self.assertFalse(result.failed)
+        self.assertEqual(result.trace_meta["status"], 1)
+        self.assertEqual(result.content, "stderr: grep: no matches")
+
+    @override_settings(
+        EXEC_RUNNER_ENABLED=True,
+        EXEC_RUNNER_BASE_URL="http://exec-runner:8080",
+        EXEC_RUNNER_SHARED_TOKEN="runner-token",
+    )
+    def test_terminal_sandbox_routing_ignores_memory_substrings_inside_unrelated_paths(self):
+        memory_tool = Tool.objects.create(
+            user=self.user,
+            name="Memory",
+            description="Memory",
+            tool_type=Tool.ToolType.BUILTIN,
+            tool_subtype="memory",
+            python_path="nova.plugins.memory",
+        )
+        webdav_tool = self._create_webdav_tool()
+        self.agent.tools.add(memory_tool, webdav_tool)
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        self.assertTrue(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /tmp/memory.txt"))
+        self.assertFalse(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /memory/note.txt"))
+        self.assertTrue(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /tmp/webdav.txt"))
+        self.assertFalse(runtime.terminal._should_route_command_to_sandbox("sed -n '1p' /webdav/docs/note.txt"))
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_subagent_with_memory_capability_shares_memory_mount(self, mocked_provider):

@@ -227,6 +227,19 @@ body {
     margin-bottom: 0;
 }
 
+.assistant-markdown img,
+.streaming-content img {
+    display: block;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    max-height: min(60vh, 32rem);
+    margin: 0.75rem auto;
+    border-radius: 0.75rem;
+    background: var(--bs-light-bg-subtle);
+    object-fit: contain;
+}
+
 .assistant-markdown :is(ul, ol),
 .streaming-content :is(ul, ol) {
     margin: 0.5rem 0 0.65rem;

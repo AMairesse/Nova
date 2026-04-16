@@ -9,7 +9,6 @@ from django.db.models import Q
 
 from nova.continuous.context_builder import get_live_continuous_message_ids
 from nova.file_utils import (
-    MESSAGE_ATTACHMENT_STORAGE_PREFIX,
     batch_upload_files,
     download_file_content,
     upload_file_to_minio,
@@ -20,6 +19,7 @@ from nova.message_attachments import (
     build_attachment_label,
     build_message_attachment_history_paths,
     build_message_attachment_inbox_paths,
+    is_explicit_message_attachment_file,
 )
 from nova.memory.service import (
     MEMORY_ROOT,
@@ -289,11 +289,6 @@ class VirtualFileSystem:
             return normalized
         return None
 
-    @staticmethod
-    def _is_canonical_message_attachment_storage_path(path: str) -> bool:
-        normalized = str(path or "").strip()
-        return normalized.startswith(f"{MESSAGE_ATTACHMENT_STORAGE_PREFIX}/message_")
-
     def _load_history_message_ids_sync(self) -> list[int]:
         if not self._has_source_message_history():
             return []
@@ -336,9 +331,10 @@ class VirtualFileSystem:
         original_path = str(user_file.original_filename or "").strip()
         if (
             self._has_source_message_inbox()
-            and user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
-            and getattr(user_file, "source_message_id", None) == self.source_message_id
-            and self._is_canonical_message_attachment_storage_path(original_path)
+            and is_explicit_message_attachment_file(
+                user_file,
+                source_message_id=self.source_message_id,
+            )
         ):
             file_id = getattr(user_file, "id", None)
             if file_id is not None and source_message_aliases and file_id in source_message_aliases:
@@ -346,7 +342,7 @@ class VirtualFileSystem:
             return self.build_source_message_inbox_path(user_file)
         if (
             self._has_source_message_history()
-            and user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
+            and is_explicit_message_attachment_file(user_file)
         ):
             file_id = getattr(user_file, "id", None)
             if file_id is not None and history_aliases and file_id in history_aliases:
@@ -396,10 +392,9 @@ class VirtualFileSystem:
                 user_file
                 for user_file in user_files
                 if (
-                    user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
-                    and getattr(user_file, "source_message_id", None) == self.source_message_id
-                    and self._is_canonical_message_attachment_storage_path(
-                        getattr(user_file, "original_filename", "")
+                    is_explicit_message_attachment_file(
+                        user_file,
+                        source_message_id=self.source_message_id,
                     )
                 )
             ])
@@ -410,11 +405,8 @@ class VirtualFileSystem:
                 user_file
                 for user_file in user_files
                 if (
-                    user_file.scope == UserFile.Scope.MESSAGE_ATTACHMENT
-                    and getattr(user_file, "source_message_id", None) in history_message_ids_set
-                    and self._is_canonical_message_attachment_storage_path(
-                        getattr(user_file, "original_filename", "")
-                    )
+                    getattr(user_file, "source_message_id", None) in history_message_ids_set
+                    and is_explicit_message_attachment_file(user_file)
                 )
             ])
         by_path: dict[str, VFSFile] = {}
@@ -639,6 +631,11 @@ class VirtualFileSystem:
 
     async def read_bytes(self, path: str) -> tuple[bytes, str]:
         normalized = normalize_vfs_path(path, cwd=self.cwd)
+        if normalized.startswith("/skills/"):
+            skill_name = posixpath.basename(normalized)
+            if skill_name not in self.skill_registry:
+                raise VFSError(f"Skill file not found: {normalized}")
+            return self.skill_registry[skill_name].encode("utf-8"), "text/markdown"
         if self._is_memory_enabled_path(normalized):
             try:
                 entry = await read_memory_document(user=self.user, path=normalized)

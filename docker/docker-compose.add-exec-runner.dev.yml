@@ -1,0 +1,17 @@
+services:
+  exec-runner:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    command: >
+      python -m nova.exec_runner.server
+    volumes:
+      - ../nova:/app/nova
+      - ../user_settings:/app/user_settings
+      - ../manage.py:/app/manage.py
+      - ../requirements.txt:/app/requirements.txt
+      - /var/run/docker.sock:/var/run/docker.sock
+      - exec_runner_state:/var/lib/nova-exec-runner
+    ports:
+      - "8081:8080"
+      - "8091:8091"

@@ -30,19 +30,22 @@ dependencies = [
     "httpx",
     "icalendar",
     "IMAPClient",
+    "jsonschema",
     "Markdown",
+    "mcp",
     "mistralai>=2.3.1,<3",
     "ollama",
     "openai",
     "pgvector",
     "playwright",
-    "psycopg",
-    "psycopg_pool",
+    "psycopg[binary]",
     "pypdf",
     "python-dotenv",
     "python_magic",
     "pywebpush",
     "redis",
+    "starlette",
+    "uvicorn",
     "whitenoise",
 ]
 license = {text = "MIT"}
@@ -56,11 +59,14 @@ authors = [
 
 [tool.deptry]
 # Ignore packages used via Django INSTALLED_APPS or other string references
+# `psycopg` is required indirectly by Django's PostgreSQL stack and pgvector
+# imports/migrations, even though Nova does not import it directly.
 per_rule_ignores = {DEP002 = [
     "beautifulsoup4",
     "crispy-bootstrap5",
     "channels-redis",
     "daphne",
+    "psycopg",
     "whitenoise",
 ]}
 package_module_name_map = {crispy-bootstrap5 = "crispy_bootstrap5", channels-redis = "channels_redis"}

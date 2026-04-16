@@ -76,10 +76,13 @@ Capabilities with backends:
 - `Search`
 - `Python`
 
-These can use:
+Current backend availability:
 
-- a deployment-default backend provided by Nova
-- one or more custom user backends
+- `Search`
+  - a deployment-default backend when SearXNG is enabled
+  - one or more custom user backends
+- `Python`
+  - a deployment-default backend when `exec-runner` is enabled
 
 Each agent selects at most one backend per family.
 
