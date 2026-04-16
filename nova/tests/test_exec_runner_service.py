@@ -27,6 +27,7 @@ from nova.exec_runner import service as exec_runner_service
 from nova.exec_runner.shared import (
     ExecSessionSelector,
     PYTHON_WORKSPACE_SITECUSTOMIZE_SOURCE,
+    RUNNER_INTERNAL_DIRNAME,
     SandboxShellResult,
     rewrite_output_paths_from_workspace,
     rewrite_shell_command_for_workspace,
@@ -274,6 +275,25 @@ class DockerExecRunnerBackendTests(SimpleTestCase):
             b"sync-bundle",
         )
         backend._docker_exec.assert_awaited_once()
+
+    def test_sync_bundle_unlocks_and_replaces_projected_roots_before_extracting(self):
+        backend = self._build_backend()
+        backend._write_bytes_into_container = AsyncMock()
+        backend._docker_exec = AsyncMock()
+        session = self._build_session()
+
+        asyncio.run(backend._sync_bundle_into_session(session, b"sync-bundle"))
+
+        await_args = backend._docker_exec.await_args
+        assert await_args is not None
+        script = str(await_args.args[1])
+        self.assertIn(f'for root in "{WORKSPACE_ROOT_IN_CONTAINER / "skills"}"', script)
+        self.assertIn(f'"{WORKSPACE_ROOT_IN_CONTAINER / "inbox"}"', script)
+        self.assertIn(f'"{WORKSPACE_ROOT_IN_CONTAINER / "history"}"', script)
+        self.assertIn('chmod -R u+w "$root" || true', script)
+        self.assertIn('rm -rf "$root"', script)
+        self.assertIn(f'! -name "{RUNNER_INTERNAL_DIRNAME}"', script)
+        self.assertIn('! -name "skills" ! -name "inbox" ! -name "history"', script)
 
     def test_create_container_includes_no_new_privileges_when_enabled(self):
         backend = self._build_backend(sandbox_no_new_privileges=True)
