@@ -7,7 +7,7 @@ def _skill_docs(_capabilities, _thread_mode):
     return {
         "terminal.md": """# Terminal
 
-The main action surface is the persistent Nova terminal.
+The main action surface is the persistent terminal.
 
 Start by checking `pwd`, `ls /`, and `ls /skills` when you need orientation.
 

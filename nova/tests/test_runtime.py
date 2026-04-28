@@ -1481,7 +1481,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("persistent sandbox terminal", skills["python.md"])
-        self.assertIn("current Nova terminal session", skills["python.md"])
+        self.assertIn("current terminal session", skills["python.md"])
         self.assertIn("--workdir /project", skills["python.md"])
         self.assertIn("Copy attachments from `/inbox`", skills["python.md"])
         self.assertIn("date +%F %T", skills["date.md"])
@@ -1935,13 +1935,43 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
+        automatic_prompt = prompt.split("\n\nAgent instructions:", 1)[0]
 
         self.assertIn("[label](/path/file.ext)", prompt)
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
         self.assertIn("/history", prompt)
-        self.assertIn("Files uploaded in the thread Files panel", prompt)
+        self.assertIn("Files uploaded in the Files panel", prompt)
+        self.assertIn("Agent instructions:\nBe concise.", prompt)
+        self.assertNotIn("You are", automatic_prompt)
+        self.assertNotIn("Nova", automatic_prompt)
+        self.assertNotIn("Markdown", automatic_prompt)
         self.assertNotIn("React Terminal", prompt)
+
+    def test_toolless_system_prompt_omits_terminal_instructions(self):
+        self._apply_provider_capabilities(self.provider, tools="unsupported")
+        tooless_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Toolless Agent",
+            llm_provider=self.provider,
+            system_prompt="",
+            recursion_limit=4,
+        )
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=tooless_agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("Tool use is unavailable", prompt)
+        self.assertIn("Do not call terminal, delegate_to_agent, or ask_user.", prompt)
+        self.assertNotIn("Filesystem layout:", prompt)
+        self.assertNotIn("Enabled command families", prompt)
+        self.assertNotIn("Agent instructions:", prompt)
 
     def test_delegate_tool_description_is_neutral(self):
         runtime = async_to_sync(
@@ -2907,16 +2937,13 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("touch", prompt)
-        self.assertIn("tee", prompt)
-        self.assertIn("Text pipelines", prompt)
-        self.assertIn("not a full shell", prompt)
-        self.assertIn("`find`", prompt)
-        self.assertIn("`sort`", prompt)
-        self.assertIn("`ls -R`", prompt)
+        self.assertIn("Runtime instructions:", prompt)
+        self.assertIn("The main action surface is the `terminal` tool.", prompt)
+        self.assertIn("Use shell-like commands for terminal work.", prompt)
+        self.assertIn("Inspect `/skills`", prompt)
         self.assertIn("Use `date` for current date/time queries.", prompt)
         self.assertIn("--mailbox <email>", prompt)
-        self.assertIn("Files uploaded in the thread Files panel are persistent thread files available under `/`.", prompt)
+        self.assertIn("Files uploaded in the Files panel are persistent thread files under `/`.", prompt)
         self.assertIn("inspect `/` first", prompt)
         self.assertIn("- /: persistent files for this thread, including files added from the Files panel", prompt)
         self.assertNotIn("/thread", prompt)
@@ -2936,10 +2963,10 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("Files attached to the current user message are available under `/inbox`", prompt)
-        self.assertIn("older live-message attachments are available under `/history`", prompt)
+        self.assertIn("Current-message attachments are under `/inbox`", prompt)
+        self.assertIn("older live-message attachments are under `/history`", prompt)
         self.assertIn("inspect `/` first", prompt)
-        self.assertIn("only fall back to `/inbox` or `/history`", prompt)
+        self.assertIn("Only fall back to those mounts", prompt)
 
     def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
         memory_tool = Tool.objects.create(
@@ -3016,7 +3043,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         prompt = runtime.build_system_prompt()
         self.assertIn("search", prompt)
         self.assertIn("browse", prompt)
-        self.assertIn("do not persist", prompt)
+        self.assertIn("current run only", prompt)
         self.assertIn("curl", prompt)
         self.assertIn("wget", prompt)
 
@@ -3052,12 +3079,11 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("Use `python` directly", prompt)
+        self.assertIn("Use `python` inside", prompt)
         self.assertIn("pip install --user <package>", prompt)
         self.assertIn("--workdir", prompt)
-        self.assertIn("Do not use Python as a substitute", prompt)
         self.assertIn(
-            "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work",
+            "Keep thread-scoped file organization, cleanup, and webapp lifecycle work",
             prompt,
         )
 
@@ -3176,7 +3202,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("continuous thread", prompt)
+        self.assertIn("Continuous threads", prompt)
         self.assertIn("history search", prompt)
         self.assertIn("history get", prompt)
 

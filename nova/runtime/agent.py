@@ -49,6 +49,7 @@ from .sessions import (
     update_agent_thread_session,
 )
 from .skills_registry import build_skill_registry
+from .system_prompt import build_runtime_system_prompt
 from .terminal import TerminalCommandError, TerminalExecutor
 from .terminal_metrics import classify_terminal_failure, normalize_head_command
 from .vfs import VirtualFileSystem
@@ -271,187 +272,14 @@ class ReactTerminalRuntime:
         return self
 
     def build_system_prompt(self) -> str:
-        families = list(self.capabilities.enabled_command_families())
-        if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
-            families.append("history")
-        subagents = ", ".join(
-            self._format_subagent_prompt_entry(subagent)
-            for subagent in self.capabilities.subagents
-        ) or "none"
-        extra_guidance: list[str] = [
-            "The Nova terminal keeps a persistent sandboxed shell workspace for this thread. "
-            "Pure shell and workspace commands run there, while sensitive Nova capabilities stay host-mediated. "
-            "Use normal shell commands for file editing, builds, and package installs such as `pip install --user <package>`, and keep using Nova commands "
-            "for things like web search, mail, memory, webapps, and other product capabilities.",
-            "Text pipelines work with `|`. Use `touch` or `tee` to create files, and use shell-like helpers such as "
-            "`find`, `sort`, and `ls -R` when they fit. The Nova terminal is shell-like, but it is not a full shell.",
-        ]
-        if not self.tools_enabled:
-            extra_guidance.append(
-                "Tool use is unavailable for the selected provider/model in this run. "
-                "Answer directly from conversation context without using terminal commands, delegation, or ask_user."
-            )
-        if getattr(self.thread, "mode", None) == Thread.Mode.CONTINUOUS:
-            extra_guidance.append(
-                "This is a continuous thread: the loaded context may contain prior-day summaries "
-                "and only a recent raw-message window. When you need older evidence, use "
-                "`history search` first and `history get` second."
-            )
-        if self.capabilities.has_date_time:
-            extra_guidance.append(
-                "Use `date` for current date/time queries."
-            )
-        if self.capabilities.has_memory:
-            extra_guidance.append(
-                "Use `/memory` for user-scoped durable memory stored as free-form Markdown files. "
-                "You may create directories there, but none are imposed by default. "
-                "Use `grep` for lexical matching and `memory search` for hybrid lexical plus semantic retrieval."
-            )
-        if self.capabilities.has_python:
-            extra_guidance.append(
-                "Use `python` directly inside the persistent sandbox terminal for computation, data processing, "
-                "scripts, and package-backed workflows. If an import is missing, install the dependency in the sandbox "
-                "with `pip install --user <package>` and retry. Use `python --workdir /project -c \"...\"` "
-                "when inline code needs to sync a workspace folder. Do not use Python as a substitute for normal Nova "
-                "terminal commands such as cleanup, moves, or `webapp expose`; keep final cleanup, file organization, "
-                "and `webapp expose` in the Nova terminal workflow rather than delegating them elsewhere."
-            )
-        extra_guidance.append(
-            "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work in the "
-            "main terminal session. Use sub-agents only for focused specialist work; the main agent "
-            "must integrate outputs and own the final thread files."
+        return build_runtime_system_prompt(
+            capabilities=self.capabilities,
+            thread_mode=getattr(self.thread, "mode", None),
+            tools_enabled=self.tools_enabled,
+            allow_ask_user=self.allow_ask_user,
+            source_message_id=self.source_message_id,
+            agent_instructions=getattr(self.agent_config, "system_prompt", ""),
         )
-        if self.capabilities.has_calendar:
-            calendar_guidance = (
-                "Use `calendar` commands for CalDAV accounts and events. "
-                "Use `calendar accounts` first when account selection is unclear."
-            )
-            if self.capabilities.has_multiple_calendar_accounts:
-                calendar_guidance += " When several accounts exist, pass `--account <selector>` explicitly."
-            calendar_guidance += (
-                " Recurring events are readable, but create/update/delete only support non-recurring events."
-            )
-            extra_guidance.append(calendar_guidance)
-        if self.capabilities.has_search:
-            search_guidance = "Use `search` for web discovery."
-            if self.capabilities.has_web:
-                search_guidance += (
-                    " It returns search results only and caches them for this run so "
-                    "you can open one with `browse open --result N` using 0-based indexes."
-                )
-            extra_guidance.append(search_guidance)
-        if self.capabilities.has_web:
-            extra_guidance.append(
-                "Use `browse` for interactive page reading within the current run only. Browser state and cached "
-                "search results do not persist across later thread messages. Write outputs to the VFS with `--output` "
-                "when you need to keep them. Use `curl` or `wget` for direct HTTP(S) downloads."
-            )
-        if self.capabilities.has_webdav:
-            extra_guidance.append(
-                "Use `/webdav` as a remote filesystem mount. Reuse normal file commands there and expect "
-                "permissions to depend on the configured WebDAV tool flags."
-            )
-        if self.capabilities.has_webapp:
-            extra_guidance.append(
-                "Build static webapps directly in the persistent filesystem, then publish them with "
-                "`webapp expose <source_dir>`. Published webapps stay live: editing the source files updates "
-                "the served app without a separate publish step. When writing HTML/CSS/JS files, use raw "
-                "characters rather than HTML entities and prefer `tee ... --text` for long markup."
-            )
-        extra_guidance.append(
-            "Files uploaded in the thread Files panel are persistent thread files available under `/`. "
-            "If the user refers to a file without giving a path, inspect `/` first with commands like "
-            "`ls /` or `find / -name ...`. Use `/inbox` only for files attached to the current user message "
-            "and `/history` only for attachments from earlier live messages."
-        )
-        if self.source_message_id is not None:
-            extra_guidance.append(
-                "Files attached to the current user message are available under `/inbox` when present, and "
-                "older live-message attachments are available under `/history`. If the user mentions a file "
-                "without giving a path, inspect `/` first and only fall back to `/inbox` or `/history` when "
-                "the request clearly points to current or earlier chat attachments. Only claim to have used "
-                "a reference file if you can read it there or pass it explicitly to a sub-agent."
-            )
-        extra_guidance.append(
-            "You may reference existing thread files by absolute VFS path in Markdown: "
-            "`[label](/path/file.ext)` creates a link, and `![alt](/path/image.png)` displays an image inline."
-        )
-        if self.allow_ask_user:
-            extra_guidance.append(
-                "Use `ask_user` only when a missing user detail truly blocks progress. "
-                "Ask one combined clarification question at a time."
-            )
-        if self.capabilities.has_mcp:
-            extra_guidance.append(
-                "Use `mcp tools` and `mcp schema` to inspect remote MCP capabilities before calling them. "
-                "For complex inputs, prepare JSON in the filesystem and pass it with `--input-file` or stdin. "
-                "Persist machine-readable results with `--output`, `--extract-to`, or shell redirection."
-            )
-        if self.capabilities.has_api:
-            extra_guidance.append(
-                "Use `api operations` and `api schema` to inspect configured custom API operations before calling them. "
-                "For complex payloads, prepare JSON in the filesystem and pass it with `--input-file` or stdin. "
-                "Persist structured results with `--output` or shell redirection."
-            )
-        if self.capabilities.has_multiple_mailboxes:
-            extra_guidance.append(
-                "When using mail commands, always pass `--mailbox <email>` to choose the mailbox explicitly."
-            )
-        filesystem_lines = [
-            "- /: persistent files for this thread, including files added from the Files panel",
-            "- /inbox: files attached to the current user message, when present",
-            "- /history: files attached to earlier live messages in this conversation",
-            "- /skills: readonly recipes",
-            "- /tmp: scratch files hidden from the normal file sidebar",
-            "- /subagents/<subagent-slug>-<run-id>/: files returned by delegated sub-agents",
-        ]
-        if self.capabilities.has_memory:
-            filesystem_lines.insert(2, "- /memory: shared user-scoped long-term memory")
-        if self.capabilities.has_webdav:
-            filesystem_lines.insert(2, "- /webdav: remote WebDAV mounts configured for this agent")
-        surface_line = (
-            "Your main action surface is the `terminal` tool.\n"
-            if self.tools_enabled
-            else "This run is operating without tools.\n"
-        )
-        ask_user_line = (
-            "Use shell-like commands for terminal work; use `ask_user` only for genuine blocking clarifications.\n"
-            if self.tools_enabled and self.allow_ask_user
-            else "Answer directly in natural language and do not attempt to call tools.\n"
-        )
-        base_prompt = (
-            "You are Nova running in the Nova terminal.\n"
-            f"{surface_line}"
-            f"{ask_user_line}"
-            "The terminal session is persistent for this agent and thread.\n"
-            "Filesystem layout:\n"
-            f"{'\n'.join(filesystem_lines)}\n"
-            "When you need guidance, inspect /skills with `ls /skills` and `cat /skills/<file>.md`.\n"
-            "If the current working directory matters and you are unsure, run `pwd` first.\n"
-            f"Enabled command families: {', '.join(families)}.\n"
-            f"Configured sub-agents: {subagents}.\n"
-            "Use `delegate_to_agent` only for configured sub-agents. "
-            "Pass either the sub-agent id, its exact name, or the composite selector shown above.\n"
-            f"{' '.join(extra_guidance)}\n"
-        )
-        custom_prompt = str(getattr(self.agent_config, "system_prompt", "") or "").strip()
-        if custom_prompt:
-            base_prompt += f"\nAgent-specific instructions:\n{custom_prompt}\n"
-        return base_prompt
-
-    @staticmethod
-    def _format_subagent_prompt_entry(subagent) -> str:
-        label = f"{subagent.id}:{subagent.name}"
-        details: list[str] = []
-        description = str(getattr(subagent, "tool_description", "") or "").strip().rstrip(".")
-        if description:
-            details.append(description)
-        response_mode = str(getattr(subagent, "default_response_mode", "") or "").strip().lower()
-        if response_mode:
-            details.append(f"{response_mode} output")
-        if not details:
-            return label
-        return f"{label} [{'; '.join(details)}]"
 
     def _build_history_summary_message(self, session_state: dict[str, Any]) -> dict[str, str] | None:
         summary_markdown = str(session_state.get(SESSION_KEY_HISTORY_SUMMARY) or "").strip()
@@ -580,7 +408,7 @@ class ReactTerminalRuntime:
                 "type": "function",
                 "function": {
                     "name": "terminal",
-                    "description": "Execute one shell-like command inside the persistent Nova terminal session.",
+                    "description": "Execute one shell-like command inside the persistent terminal session.",
                     "parameters": {
                         "type": "object",
                         "properties": {

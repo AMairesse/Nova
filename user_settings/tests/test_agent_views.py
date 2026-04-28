@@ -111,14 +111,20 @@ class AgentViewsTest(BaseTestCase):
             provider_ids,
         )
 
-    def test_create_form_explains_system_prompt_is_literal(self):
+    def test_create_form_explains_system_prompt_and_runtime_preview(self):
         self._create_provider()
 
         response = self.client.get(reverse("user_settings:agent-add"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Literal prompt text.")
-        self.assertContains(response, "not injected automatically")
+        self.assertContains(response, "Automatic runtime instructions")
+        self.assertContains(response, "Runtime instructions:")
+        self.assertContains(response, "Agent identity, style, language")
+        self.assertContains(response, "Technical runtime instructions are added automatically")
+        self.assertContains(response, "Advanced summarization")
+        self.assertContains(response, "<details class=\"mb-3 border rounded p-3\">", html=False)
+        self.assertContains(response, "<details class=\"mt-4 border rounded p-3\">", html=False)
+        self.assertNotContains(response, "Summarization Settings")
 
     def test_edit_form_warns_when_provider_has_no_tools_but_agent_depends_on_them(self):
         provider = self._create_provider(

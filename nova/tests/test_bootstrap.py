@@ -163,6 +163,7 @@ class BootstrapSkillsTests(TestCase):
 
         self.assertSetEqual(email_tool_ids, {work_mail.id, personal_mail.id})
         self.assertSetEqual(caldav_tool_ids, {work_calendar.id, personal_calendar.id})
+        self.assertEqual(nova.system_prompt, "Existing Nova prompt")
         self.assertTrue(nova.agent_tools.filter(name="Internet Agent").exists())
         self.assertTrue(nova.tools.filter(tool_subtype="code_execution").exists())
         self.assertFalse(nova.agent_tools.filter(name="Python Agent").exists())
@@ -197,11 +198,14 @@ class BootstrapSkillsTests(TestCase):
         nova = AgentConfig.objects.get(user=self.user, name="Nova")
         self.assertNotIn("Current date and time is", nova.system_prompt)
         self.assertNotIn("{today}", nova.system_prompt)
-        self.assertIn("date/time capability", nova.system_prompt)
-        self.assertIn("Keep thread-scoped filesystem organization", nova.system_prompt)
-        self.assertIn("Use `python` directly", nova.system_prompt)
-        self.assertIn("pip install --user <package>", nova.system_prompt)
-        self.assertIn("Do not delegate thread-scoped filesystem cleanup", nova.system_prompt)
+        self.assertIn("user's language", nova.system_prompt)
+        self.assertIn("Markdown", nova.system_prompt)
+        self.assertIn("available capabilities", nova.system_prompt)
+        self.assertIn("do not invent files", nova.system_prompt)
+        self.assertNotIn("date/time capability", nova.system_prompt)
+        self.assertNotIn("Use `python` directly", nova.system_prompt)
+        self.assertNotIn("pip install --user <package>", nova.system_prompt)
+        self.assertNotIn("webapp publication", nova.system_prompt)
         self.assertNotIn("Python Agent", nova.system_prompt)
 
     def test_bootstrap_attaches_webapp_tool_to_nova(self):
