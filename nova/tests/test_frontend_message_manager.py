@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
+from nova.file_utils import build_message_attachment_path
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
@@ -202,7 +203,7 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             thread=thread,
             source_message=message,
             key=f"users/{self.user.id}/threads/{thread.id}/{filename}",
-            original_filename=filename,
+            original_filename=build_message_attachment_path(message.id, filename),
             mime_type="image/jpeg",
             size=2048,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
