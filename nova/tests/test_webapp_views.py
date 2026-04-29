@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from nova.models.Thread import Thread
@@ -183,19 +183,57 @@ class WebAppViewsTests(TestCase):
         self.assertIn("<h1>Main</h1>", root_response.content.decode("utf-8"))
         self.assertEqual(asset_response.status_code, 200)
         self.assertIn("application/javascript", asset_response["Content-Type"])
+        csp = root_response["Content-Security-Policy"]
+        self.assertIn("sandbox", csp)
+        self.assertNotIn("allow-same-origin", csp)
+        self.assertIn("connect-src 'none'", csp)
+        self.assertIn("frame-ancestors 'self'", csp)
+        self.assertNotIn("X-Frame-Options", root_response.headers)
+
+    def test_preview_iframe_does_not_allow_same_origin(self):
+        app = self._create_live_webapp(name="Sandboxed preview", source_root="/webapps/sandboxed")
+
+        response = self.client.get(reverse("preview_webapp", args=[self.thread.id, app.slug]))
+        html = response.content.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('sandbox="allow-scripts"', html)
+        self.assertNotIn("allow-same-origin", html)
+
+    @override_settings(WEBAPP_PUBLIC_ORIGIN="https://apps.example.com")
+    def test_webapp_public_origin_changes_generated_url(self):
+        app = self._create_live_webapp(name="Dedicated origin", source_root="/webapps/dedicated")
+
         self.assertEqual(
-            root_response["Content-Security-Policy"],
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "font-src 'self' data:; "
-            "connect-src 'self'; "
-            "object-src 'none'; "
-            "base-uri 'none'; "
-            "frame-ancestors 'self'; "
-            "form-action 'self';",
+            compute_webapp_public_url(app.slug),
+            f"https://apps.example.com/apps/{app.slug}/",
         )
+
+    @override_settings(WEBAPP_PUBLIC_ORIGIN="https://apps.example.com")
+    def test_main_origin_redirects_owned_webapp_to_public_origin(self):
+        app = self._create_live_webapp(name="Redirected app", source_root="/webapps/redirected")
+
+        response = self.client.get(reverse("serve_webapp_root", args=[app.slug]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], f"https://apps.example.com/apps/{app.slug}/")
+
+    @override_settings(WEBAPP_PUBLIC_ORIGIN="https://apps.example.com", ALLOWED_HOSTS=["testserver", "apps.example.com"])
+    def test_public_origin_serves_by_capability_slug_without_login_cookie(self):
+        app = self._create_live_webapp(name="Public app", source_root="/webapps/public")
+        self.client.logout()
+
+        response = self.client.get(
+            reverse("serve_webapp_root", args=[app.slug]),
+            HTTP_HOST="apps.example.com",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<h1>App</h1>", response.content.decode("utf-8"))
+        csp = response["Content-Security-Policy"]
+        self.assertIn("sandbox", csp)
+        self.assertNotIn("allow-same-origin", csp)
+        self.assertIn("connect-src 'self'", csp)
 
     def test_serve_webapp_returns_404_when_entry_file_disappears(self):
         app = self._create_live_webapp(name="Broken app", source_root="/webapps/broken")

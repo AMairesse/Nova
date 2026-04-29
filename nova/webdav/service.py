@@ -13,6 +13,7 @@ from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.Tool import Tool, ToolCredential
+from nova.web.network_policy import assert_allowed_egress_url
 
 WEBDAV_NS = {"d": "DAV:"}
 WEBDAV_VFS_ROOT = "/webdav"
@@ -129,13 +130,16 @@ async def webdav_request(
 ) -> tuple[int, str]:
     full_path = join_webdav_paths(config["root_path"], path)
     url = build_webdav_url(config["server_url"], full_path)
+    await assert_allowed_egress_url(url)
 
     request_headers = dict(headers or {})
+    if request_headers.get("Destination"):
+        await assert_allowed_egress_url(str(request_headers["Destination"]))
     auth = aiohttp.BasicAuth(config["username"], config["password"])
     timeout = aiohttp.ClientTimeout(total=config["timeout"])
 
     async with aiohttp.ClientSession(auth=auth, timeout=timeout) as session:
-        async with session.request(method, url, headers=request_headers, data=data) as response:
+        async with session.request(method, url, headers=request_headers, data=data, allow_redirects=False) as response:
             text = await response.text()
             allowed = expected_statuses or {200, 201, 204, 207}
             if response.status not in allowed:
@@ -159,13 +163,16 @@ async def webdav_request_binary(
 ) -> tuple[int, bytes, dict[str, str]]:
     full_path = join_webdav_paths(config["root_path"], path)
     url = build_webdav_url(config["server_url"], full_path)
+    await assert_allowed_egress_url(url)
 
     request_headers = dict(headers or {})
+    if request_headers.get("Destination"):
+        await assert_allowed_egress_url(str(request_headers["Destination"]))
     auth = aiohttp.BasicAuth(config["username"], config["password"])
     timeout = aiohttp.ClientTimeout(total=config["timeout"])
 
     async with aiohttp.ClientSession(auth=auth, timeout=timeout) as session:
-        async with session.request(method, url, headers=request_headers, data=data) as response:
+        async with session.request(method, url, headers=request_headers, data=data, allow_redirects=False) as response:
             body = await response.read()
             allowed = expected_statuses or {200, 201, 204, 207}
             if response.status not in allowed:

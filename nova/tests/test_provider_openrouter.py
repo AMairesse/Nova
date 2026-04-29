@@ -174,20 +174,17 @@ class OpenRouterProviderTests(SimpleTestCase):
         self.assertEqual(snapshot["limits"]["context_tokens"], 128000)
         self.assertEqual(snapshot["limits"]["max_completion_tokens"], 4096)
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
     def test_fetch_openrouter_model_metadata_returns_match_by_canonical_slug(
         self,
-        mocked_client_class,
+        mocked_request,
     ):
-        configure_async_client(
-            mocked_client_class,
-            get_response=ResponseStub(
-                payload={
-                    "data": [
-                        {"id": "openai/gpt-4.1-mini", "canonical_slug": "gpt-4.1-mini"}
-                    ]
-                }
-            ),
+        mocked_request.return_value = ResponseStub(
+            payload={
+                "data": [
+                    {"id": "openai/gpt-4.1-mini", "canonical_slug": "gpt-4.1-mini"}
+                ]
+            }
         )
 
         payload = async_to_sync(fetch_openrouter_model_metadata)(
@@ -202,32 +199,29 @@ class OpenRouterProviderTests(SimpleTestCase):
         with self.assertRaises(OpenRouterMetadataAuthError):
             async_to_sync(fetch_openrouter_model_metadata)("", "model", None)
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
     def test_fetch_openrouter_model_metadata_maps_timeout_and_http_errors(
         self,
-        mocked_client_class,
+        mocked_request,
     ):
         for error in [
             httpx.TimeoutException("timeout"),
             httpx.HTTPError("boom"),
         ]:
             with self.subTest(error=type(error).__name__):
-                configure_async_client(
-                    mocked_client_class,
-                    get_error=error,
-                )
+                mocked_request.side_effect = error
                 with self.assertRaises(OpenRouterMetadataTransientError):
                     async_to_sync(fetch_openrouter_model_metadata)(
                         "secret",
                         "model",
                         None,
                     )
-                mocked_client_class.reset_mock()
+                mocked_request.reset_mock()
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
     def test_fetch_openrouter_model_metadata_maps_response_errors(
         self,
-        mocked_client_class,
+        mocked_request,
     ):
         cases = [
             (
@@ -254,26 +248,23 @@ class OpenRouterProviderTests(SimpleTestCase):
 
         for response, expected_error in cases:
             with self.subTest(error=expected_error.__name__, status=response.status_code):
-                configure_async_client(mocked_client_class, get_response=response)
+                mocked_request.return_value = response
                 with self.assertRaises(expected_error):
                     async_to_sync(fetch_openrouter_model_metadata)(
                         "secret",
                         "missing-model",
                         None,
                     )
-                mocked_client_class.reset_mock()
+                mocked_request.reset_mock()
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
-    def test_fetch_openrouter_model_catalog_returns_only_dict_items(self, mocked_client_class):
-        configure_async_client(
-            mocked_client_class,
-            get_response=ResponseStub(
-                payload=[
-                    {"id": "model-a"},
-                    "skip-me",
-                    {"id": "model-b"},
-                ]
-            ),
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
+    def test_fetch_openrouter_model_catalog_returns_only_dict_items(self, mocked_request):
+        mocked_request.return_value = ResponseStub(
+            payload=[
+                {"id": "model-a"},
+                "skip-me",
+                {"id": "model-b"},
+            ]
         )
 
         payload = async_to_sync(fetch_openrouter_model_catalog)(
@@ -287,8 +278,8 @@ class OpenRouterProviderTests(SimpleTestCase):
         with self.assertRaises(OpenRouterMetadataAuthError):
             async_to_sync(fetch_openrouter_model_catalog)("", None)
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
-    def test_fetch_openrouter_model_catalog_maps_errors(self, mocked_client_class):
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
+    def test_fetch_openrouter_model_catalog_maps_errors(self, mocked_request):
         cases = [
             (
                 {"get_error": httpx.TimeoutException("timeout")},
@@ -319,10 +310,13 @@ class OpenRouterProviderTests(SimpleTestCase):
 
         for kwargs, expected_error in cases:
             with self.subTest(error=expected_error.__name__, kwargs=kwargs):
-                configure_async_client(mocked_client_class, **kwargs)
+                mocked_request.side_effect = kwargs.get("get_error")
+                if "get_response" in kwargs:
+                    mocked_request.return_value = kwargs["get_response"]
                 with self.assertRaises(expected_error):
                     async_to_sync(fetch_openrouter_model_catalog)("secret", None)
-                mocked_client_class.reset_mock()
+                mocked_request.reset_mock()
+                mocked_request.side_effect = None
 
     @patch("nova.providers.openrouter.complete_openai_compatible_chat", new_callable=AsyncMock)
     def test_adapter_complete_chat_uses_normalized_base_url(self, mocked_complete_chat):
@@ -469,27 +463,25 @@ class OpenRouterProviderTests(SimpleTestCase):
         self.assertEqual(payload["modalities"], ["text", "audio"])
         self.assertEqual(payload["audio"], {"voice": "alloy", "format": "mp3"})
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
-    def test_adapter_invoke_native_posts_payload_and_returns_json(self, mocked_client_class):
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
+    def test_adapter_invoke_native_posts_payload_and_returns_json(self, mocked_request):
         adapter = OpenRouterProviderAdapter()
         provider = self._provider(base_url="https://openrouter.ai/api")
         adapter.build_native_request = AsyncMock(return_value={"prompt": "payload"})
-        mocked_client = configure_async_client(
-            mocked_client_class,
-            post_response=ResponseStub(payload={"choices": []}),
-        )
+        mocked_request.return_value = ResponseStub(payload={"choices": []})
 
         payload = async_to_sync(adapter.invoke_native)(provider, {"prompt": "ignored"})
 
         self.assertEqual(payload, {"choices": []})
         adapter.build_native_request.assert_awaited_once()
-        mocked_client.post.assert_awaited_once_with(
-            "https://openrouter.ai/api/v1/chat/completions",
-            json={"prompt": "payload"},
+        self.assertEqual(
+            mocked_request.await_args.args[:2],
+            ("POST", "https://openrouter.ai/api/v1/chat/completions"),
         )
+        self.assertEqual(mocked_request.await_args.kwargs["json"], {"prompt": "payload"})
 
-    @patch("nova.providers.openrouter.httpx.AsyncClient")
-    def test_adapter_invoke_native_maps_error_responses(self, mocked_client_class):
+    @patch("nova.providers.openrouter.safe_http_request", new_callable=AsyncMock)
+    def test_adapter_invoke_native_maps_error_responses(self, mocked_request):
         adapter = OpenRouterProviderAdapter()
         provider = self._provider()
         adapter.build_native_request = AsyncMock(return_value={"payload": "ok"})
@@ -511,13 +503,10 @@ class OpenRouterProviderTests(SimpleTestCase):
 
         for response, expected_error in cases:
             with self.subTest(error=expected_error.__name__, status=response.status_code):
-                configure_async_client(
-                    mocked_client_class,
-                    post_response=response,
-                )
+                mocked_request.return_value = response
                 with self.assertRaises(expected_error):
                     async_to_sync(adapter.invoke_native)(provider, {"prompt": "ignored"})
-                mocked_client_class.reset_mock()
+                mocked_request.reset_mock()
 
     def test_extract_image_payload_supports_multiple_shapes(self):
         adapter = OpenRouterProviderAdapter()

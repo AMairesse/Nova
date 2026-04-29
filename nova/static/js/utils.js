@@ -40,10 +40,15 @@
 
     // CSRF-safe fetch wrapper
     csrfFetch: async function (url, options = {}) {
-      const token = document.querySelector('[name=csrfmiddlewaretoken]');
+      const token = document.querySelector('[name=csrfmiddlewaretoken]')?.value
+        || document.cookie
+          .split(';')
+          .map((item) => item.trim())
+          .find((item) => item.startsWith('csrftoken='))
+          ?.slice('csrftoken='.length);
       if (token) {
         options.headers = options.headers || {};
-        options.headers['X-CSRFToken'] = token.value;
+        options.headers['X-CSRFToken'] = decodeURIComponent(token);
       }
       return fetch(url, options);
     },

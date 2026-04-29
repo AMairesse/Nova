@@ -107,6 +107,10 @@ Agents can publish live static apps from normal files:
 - run `webapp expose <source_dir>`
 - Nova serves the app under `/apps/<slug>/`
 
+In production, configure `WEBAPP_PUBLIC_ORIGIN` to serve these apps from a separate origin. Webapp URLs are capability-style slugs: anyone with the slug can open the published app, but the app is sandboxed away from the authenticated Nova origin.
+
+Tenant-configured outbound integrations are subject to a shared egress policy. Private/internal targets are blocked by default unless an administrator explicitly allows them with `NOVA_EGRESS_ALLOWLIST`.
+
 ## API
 
 Nova exposes a minimal authenticated API:
@@ -178,3 +182,4 @@ Nova is released under the MIT License. See [LICENSE](LICENSE).
 - No superuser: ensure `DJANGO_SUPERUSER_*` is set in `docker/.env`
 - Optional service missing in UI: check `COMPOSE_FILE` and related env vars
 - Ollama connectivity: use `host.docker.internal` on Docker Desktop or your host IP on Linux
+- Internal integration blocked: add an explicit admin entry to `NOVA_EGRESS_ALLOWLIST` instead of relying on user-provided private URLs

@@ -8,9 +8,13 @@ from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
 
+from nova.web.network_policy import assert_allowed_egress_url_sync
+
 
 def create_openai_compatible_client(*, api_key: str | None, base_url: str | None) -> AsyncOpenAI:
     """Build an AsyncOpenAI client with Nova's common defaults."""
+    if base_url:
+        assert_allowed_egress_url_sync(base_url)
     return AsyncOpenAI(
         api_key=str(api_key or "nova"),
         base_url=base_url,

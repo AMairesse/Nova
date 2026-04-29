@@ -190,6 +190,19 @@ Core settings:
 
 For production deployments behind a real domain, `ALLOWED_HOSTS` must include the public hostname and `CSRF_TRUSTED_ORIGINS` must include the matching `https://` origin. If those stay on `localhost`, managed OAuth callback URLs and WebSocket streaming will not work correctly.
 
+Webapp isolation:
+
+- `WEBAPP_PUBLIC_ORIGIN`: optional dedicated origin for published user webapps, for example `https://apps.example.com`
+
+In production, using a separate webapp origin is strongly recommended. Add both the main Nova hostname and the webapp hostname to `ALLOWED_HOSTS`; keep `CSRF_TRUSTED_ORIGINS` focused on the authenticated Nova origin.
+
+Outbound egress policy:
+
+- `NOVA_EGRESS_ALLOWLIST`: comma-separated admin allowlist for tenant-configured integrations that legitimately target internal hosts, wildcard hostnames, IPs, or CIDR ranges
+- `NOVA_EGRESS_ALLOW_PRIVATE_IN_DEBUG`: local-development escape hatch for private egress targets; keep it `False` in production
+
+By default, Nova blocks tenant-configured outbound targets that resolve to loopback, private, link-local, multicast, reserved, cloud metadata, carrier-grade NAT, single-label, `.local`, `.internal`, or `localhost` destinations.
+
 Optional module settings:
 
 - SearXNG: `SEARXNG_SECRET`

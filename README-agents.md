@@ -208,6 +208,9 @@ Workflow:
 3. keep editing those same files
 
 The published app stays linked to the source directory.
+Published webapps are slug-based capability URLs. Production deployments should
+serve them from `WEBAPP_PUBLIC_ORIGIN`; Nova also applies sandbox defenses so the
+app does not run as the authenticated Nova origin.
 
 ## 7. Continuous Mode
 

@@ -223,3 +223,17 @@ The live webapp workflow is:
 1. create/edit files in the normal workspace
 2. publish with `webapp expose <source_dir>`
 3. keep editing the same source files; the published app updates live
+
+Published webapps are served with a sandbox CSP and iframe sandbox that omit
+`allow-same-origin`. In production, set `WEBAPP_PUBLIC_ORIGIN` so user-authored
+HTML/JS runs on a dedicated origin rather than the authenticated Nova origin.
+
+## Outbound Network Policy
+
+Tenant-controlled outbound URLs and host/port pairs should go through
+`nova/web/network_policy.py` and, for HTTP, `nova/web/safe_http.py`.
+
+The default policy blocks local/private/internal destinations and revalidates
+redirects. Use `NOVA_EGRESS_ALLOWLIST` for admin-approved internal integrations;
+do not add connector-specific SSRF filters unless the shared policy cannot
+represent the protocol.

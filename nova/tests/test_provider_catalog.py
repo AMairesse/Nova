@@ -120,8 +120,8 @@ class ProviderCatalogTests(SimpleTestCase):
         self.assertEqual(payload[1]["state"]["loaded"], False)
         self.assertEqual(len(payload), 2)
 
-    @patch("nova.providers.lmstudio.httpx.AsyncClient")
-    def test_fetch_lmstudio_models_accepts_models_payload_shape(self, mocked_client_class):
+    @patch("nova.providers.lmstudio.safe_http_request", new_callable=AsyncMock)
+    def test_fetch_lmstudio_models_accepts_models_payload_shape(self, mocked_request):
         mocked_response = Mock()
         mocked_response.status_code = 200
         mocked_response.json.return_value = {
@@ -132,10 +132,7 @@ class ProviderCatalogTests(SimpleTestCase):
                 {"key": "model-b", "type": "llm"},
             ],
         }
-        mocked_client = AsyncMock()
-        mocked_client.get.return_value = mocked_response
-        mocked_client_class.return_value.__aenter__.return_value = mocked_client
-        mocked_client_class.return_value.__aexit__.return_value = False
+        mocked_request.return_value = mocked_response
 
         payload = async_to_sync(fetch_lmstudio_models)("http://localhost:1234")
 

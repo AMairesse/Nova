@@ -12,6 +12,7 @@ from nova.providers.openai_compatible import (
     normalize_openai_compatible_multimodal_content,
     stream_openai_compatible_chat,
 )
+from nova.web.safe_http import safe_http_request
 
 
 LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1"
@@ -49,8 +50,11 @@ def get_lmstudio_model_identifier(model_metadata: dict) -> str:
 
 async def fetch_lmstudio_models(base_url: str | None) -> list[dict]:
     timeout = httpx.Timeout(20.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(get_lmstudio_models_url(base_url))
+    response = await safe_http_request(
+        "GET",
+        get_lmstudio_models_url(base_url),
+        timeout=timeout,
+    )
 
     if response.status_code >= 400:
         raise RuntimeError(f"LM Studio models request failed with HTTP {response.status_code}.")

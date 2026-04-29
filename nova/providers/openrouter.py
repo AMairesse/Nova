@@ -19,6 +19,7 @@ from nova.providers.openai_compatible import (
     normalize_openai_compatible_multimodal_content,
     stream_openai_compatible_chat,
 )
+from nova.web.safe_http import safe_http_request
 
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_ALLOWED_PATHS = {"", "/", "/api", "/api/", "/api/v1", "/api/v1/"}
@@ -311,15 +312,19 @@ async def fetch_openrouter_model_metadata(api_key: str, model: str, base_url: st
     headers = {"Authorization": f"Bearer {api_key}"}
     timeout = httpx.Timeout(20.0, connect=10.0)
 
-    async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
-        try:
-            response = await client.get(get_openrouter_models_url(base_url))
-        except httpx.TimeoutException as exc:
-            raise OpenRouterMetadataTransientError("OpenRouter model catalog request timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise OpenRouterMetadataTransientError(
-                f"OpenRouter model catalog request failed: {exc}"
-            ) from exc
+    try:
+        response = await safe_http_request(
+            "GET",
+            get_openrouter_models_url(base_url),
+            headers=headers,
+            timeout=timeout,
+        )
+    except httpx.TimeoutException as exc:
+        raise OpenRouterMetadataTransientError("OpenRouter model catalog request timed out.") from exc
+    except httpx.HTTPError as exc:
+        raise OpenRouterMetadataTransientError(
+            f"OpenRouter model catalog request failed: {exc}"
+        ) from exc
 
     if response.status_code in {401, 403}:
         raise OpenRouterMetadataAuthError(
@@ -357,15 +362,19 @@ async def fetch_openrouter_model_catalog(api_key: str, base_url: str | None) -> 
     headers = {"Authorization": f"Bearer {api_key}"}
     timeout = httpx.Timeout(20.0, connect=10.0)
 
-    async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
-        try:
-            response = await client.get(get_openrouter_models_url(base_url))
-        except httpx.TimeoutException as exc:
-            raise OpenRouterMetadataTransientError("OpenRouter model catalog request timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise OpenRouterMetadataTransientError(
-                f"OpenRouter model catalog request failed: {exc}"
-            ) from exc
+    try:
+        response = await safe_http_request(
+            "GET",
+            get_openrouter_models_url(base_url),
+            headers=headers,
+            timeout=timeout,
+        )
+    except httpx.TimeoutException as exc:
+        raise OpenRouterMetadataTransientError("OpenRouter model catalog request timed out.") from exc
+    except httpx.HTTPError as exc:
+        raise OpenRouterMetadataTransientError(
+            f"OpenRouter model catalog request failed: {exc}"
+        ) from exc
 
     if response.status_code in {401, 403}:
         raise OpenRouterMetadataAuthError(
@@ -539,11 +548,13 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             "Content-Type": "application/json",
         }
         timeout = httpx.Timeout(60.0, connect=10.0)
-        async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
-            response = await client.post(
-                f"{get_openrouter_base_url(provider.base_url).rstrip('/')}/chat/completions",
-                json=payload,
-            )
+        response = await safe_http_request(
+            "POST",
+            f"{get_openrouter_base_url(provider.base_url).rstrip('/')}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
 
         if response.status_code in {401, 403}:
             raise OpenRouterMetadataAuthError("OpenRouter request failed: invalid API key or unauthorized access.")

@@ -11,6 +11,7 @@ from django.test import SimpleTestCase
 import httpx
 
 from nova.mcp.client import MCPClient
+from nova.web.network_policy import NetworkPolicyError
 
 
 class MCPClientTests(SimpleTestCase):
@@ -20,6 +21,9 @@ class MCPClientTests(SimpleTestCase):
         is deterministic and isolated between tests.
         """
         cache.clear()
+        self.policy_patcher = patch("nova.mcp.client.assert_allowed_egress_url_sync")
+        self.policy_patcher.start()
+        self.addCleanup(self.policy_patcher.stop)
 
     # ------------- helpers -----------------
 
@@ -336,3 +340,9 @@ class MCPClientTests(SimpleTestCase):
 
         token_mock.assert_awaited_once()
         transport_mock.assert_called_once_with(token="managed-token")
+
+
+class MCPClientNetworkPolicyTests(SimpleTestCase):
+    def test_blocks_private_endpoint_before_transport_creation(self):
+        with self.assertRaises(NetworkPolicyError):
+            MCPClient(endpoint="http://127.0.0.1:8080")

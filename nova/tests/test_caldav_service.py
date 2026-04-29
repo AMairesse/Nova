@@ -11,6 +11,7 @@ from icalendar import Event as ICalEvent
 
 from nova.caldav import service as caldav_service
 from nova.tests.factories import create_tool, create_tool_credential, create_user
+from nova.web.network_policy import NetworkPolicyError
 
 
 class _FakeCalendarResource:
@@ -70,6 +71,21 @@ class CaldavServiceTests(TestCase):
 
     def _build_client(self, *calendars):
         return SimpleNamespace(principal=lambda: SimpleNamespace(calendars=lambda: list(calendars)))
+
+    def test_private_caldav_url_is_blocked_before_client_creation(self):
+        credential = self.tool.credentials.get(user=self.user)
+        credential.config = {
+            "caldav_url": "http://127.0.0.1:8080/caldav",
+            "username": "alice@example.com",
+            "password": "secret",
+        }
+        credential.save()
+
+        with patch("nova.caldav.service.caldav.DAVClient") as mocked_client:
+            with self.assertRaises(NetworkPolicyError):
+                caldav_service._get_caldav_client_sync(self.user, self.tool.id)
+
+        mocked_client.assert_not_called()
 
     def test_list_events_normalizes_recurring_entries(self):
         component = ICalEvent()

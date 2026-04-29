@@ -41,6 +41,19 @@ if DEBUG and ENABLE_DEBUGPY and not USING_TEST_SETTINGS and 'test' not in sys.ar
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
 
+def _env_csv(name: str) -> list[str]:
+    return [
+        item.strip()
+        for item in os.getenv(name, "").split(",")
+        if item.strip()
+    ]
+
+
+WEBAPP_PUBLIC_ORIGIN = os.getenv("WEBAPP_PUBLIC_ORIGIN", "").strip().rstrip("/")
+NOVA_EGRESS_ALLOWLIST = _env_csv("NOVA_EGRESS_ALLOWLIST")
+NOVA_EGRESS_ALLOW_PRIVATE_IN_DEBUG = os.getenv("NOVA_EGRESS_ALLOW_PRIVATE_IN_DEBUG", "False").lower() == "true"
+
+
 # Application definition
 
 INSTALLED_APPS = [

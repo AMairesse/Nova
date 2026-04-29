@@ -21,6 +21,7 @@ from django.db import transaction
 
 from nova.models.EmbeddingsSystemState import EmbeddingsSystemState
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
+from nova.web.safe_http import safe_http_request
 
 
 logger = logging.getLogger(__name__)
@@ -338,11 +339,17 @@ async def compute_embedding(
         "input": text,
     }
 
-    async with httpx.AsyncClient(base_url=provider.base_url, timeout=30.0, headers=headers) as client:
-        path = "/embeddings" if provider.base_url.rstrip("/").endswith("/v1") else ""
-        resp = await client.post(path, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    path = "/embeddings" if provider.base_url.rstrip("/").endswith("/v1") else ""
+    url = f"{provider.base_url.rstrip('/')}{path}"
+    resp = await safe_http_request(
+        "POST",
+        url,
+        headers=headers,
+        json=payload,
+        timeout=httpx.Timeout(30.0),
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     embedding = data.get("data", [{}])[0].get("embedding")
     if not embedding:

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import ipaddress
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from asgiref.sync import async_to_sync
 from django.conf import settings
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import DEFAULT_DOWNLOAD_USER_AGENT, download_http_file
-from nova.web.network_policy import NetworkPolicyError, assert_public_http_url
+from nova.web.network_policy import NetworkPolicyError, assert_allowed_egress_host_port, assert_public_http_url
+from nova.web.safe_http import safe_http_request
 
 
 class _FakeDownloadStreamResponse:
@@ -85,6 +88,21 @@ class NetworkPolicyTests(SimpleTestCase):
         with self.assertRaises(NetworkPolicyError):
             async_to_sync(assert_public_http_url)("http://localhost/admin")
 
+    def test_blocks_private_link_local_metadata_and_single_label_hosts(self):
+        blocked_urls = [
+            "http://10.0.0.1/admin",
+            "http://192.168.1.10/admin",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://100.100.100.200/latest/meta-data/",
+            "http://service:8080/",
+            "http://example.local/",
+            "http://example.internal/",
+        ]
+        for url in blocked_urls:
+            with self.subTest(url=url):
+                with self.assertRaises(NetworkPolicyError):
+                    async_to_sync(assert_public_http_url)(url)
+
     def test_blocks_mixed_dns_results_when_one_ip_is_private(self):
         with patch(
             "nova.web.network_policy._resolve_host_addresses",
@@ -106,6 +124,71 @@ class NetworkPolicyTests(SimpleTestCase):
         self.assertEqual(target.url, "https://example.com/resource")
         self.assertEqual(target.hostname, "example.com")
         self.assertEqual(target.ip, "93.184.216.34")
+
+    @override_settings(NOVA_EGRESS_ALLOWLIST=["10.0.0.0/8", "*.internal"])
+    def test_admin_allowlist_allows_private_cidr_and_internal_hostname(self):
+        literal = async_to_sync(assert_public_http_url)("http://10.2.3.4/status")
+        self.assertEqual(literal.ip, "10.2.3.4")
+
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("10.0.0.7"),),
+        ):
+            target = async_to_sync(assert_public_http_url)("https://api.internal/status")
+
+        self.assertEqual(target.hostname, "api.internal")
+        self.assertEqual(target.ip, "10.0.0.7")
+
+    def test_host_port_policy_blocks_private_mail_targets(self):
+        with self.assertRaises(NetworkPolicyError):
+            async_to_sync(assert_allowed_egress_host_port)("127.0.0.1", 993)
+
+    def test_imap_client_blocks_private_host_before_connect(self):
+        from nova.plugins.mail.service import build_imap_client
+
+        credential = SimpleNamespace(
+            config={
+                "imap_server": "127.0.0.1",
+                "imap_port": 993,
+                "username": "user",
+                "password": "secret",
+                "use_ssl": True,
+            }
+        )
+        with patch("nova.plugins.mail.service.imapclient.IMAPClient") as mocked_client:
+            with self.assertRaises(NetworkPolicyError):
+                build_imap_client(credential)
+
+        mocked_client.assert_not_called()
+
+    def test_webdav_request_blocks_private_url_before_session(self):
+        from nova.webdav.service import webdav_request
+
+        config = {
+            "server_url": "http://127.0.0.1:8080/dav",
+            "root_path": "/",
+            "username": "user",
+            "password": "secret",
+            "timeout": 5,
+        }
+        with patch("nova.webdav.service.aiohttp.ClientSession") as mocked_session:
+            with self.assertRaises(NetworkPolicyError):
+                async_to_sync(webdav_request)(config, "PROPFIND", "/")
+
+        mocked_session.assert_not_called()
+
+    def test_custom_embeddings_provider_blocks_private_url(self):
+        from nova.llm.embeddings import EmbeddingsProvider, compute_embedding
+
+        provider = EmbeddingsProvider(
+            provider_type="custom",
+            base_url="http://127.0.0.1:11434/v1",
+            model="embed-local",
+            api_key="",
+        )
+
+        with self.assertRaises(NetworkPolicyError):
+            async_to_sync(compute_embedding)("hello", provider_override=provider)
 
     def test_resolved_target_keeps_original_hostname_while_binding_public_ip(self):
         with patch(
@@ -157,6 +240,37 @@ class NetworkPolicyTests(SimpleTestCase):
         ):
             with self.assertRaises(NetworkPolicyError):
                 async_to_sync(download_http_file)("https://example.com/redirect")
+
+        self.assertEqual(requests, ["GET https://example.com/redirect"])
+
+    def test_safe_http_request_revalidates_redirect_targets(self):
+        requests: list[str] = []
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                del kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def request(self, method, url, **kwargs):
+                del kwargs
+                requests.append(f"{method} {url}")
+                return httpx.Response(
+                    302,
+                    headers={"location": "http://127.0.0.1/private"},
+                    request=httpx.Request(method, url),
+                )
+
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.safe_http.httpx.AsyncClient", new=FakeAsyncClient):
+            with self.assertRaises(NetworkPolicyError):
+                async_to_sync(safe_http_request)("GET", "https://example.com/redirect")
 
         self.assertEqual(requests, ["GET https://example.com/redirect"])
 

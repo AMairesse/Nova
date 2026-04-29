@@ -95,6 +95,9 @@ Connections:
 - `API`
 
 These are user-created multi-instance connections.
+Their configured hosts and URLs are subject to Nova's shared outbound egress
+policy: local/private/internal targets are blocked unless an administrator has
+explicitly allowed them with `NOVA_EGRESS_ALLOWLIST`.
 
 The add/edit flow is unified in one `Settings` screen.
 

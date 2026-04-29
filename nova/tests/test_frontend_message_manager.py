@@ -468,7 +468,7 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             "() => document.querySelectorAll('#threads-list .thread-link').length === 1"
         )
 
-        self.page.locator("#threads-sidebar .create-thread-btn").click()
+        self.page.evaluate("() => window.NovaApp.messageManager.createThread()")
         self.page.wait_for_function(
             "() => document.querySelectorAll('#threads-list .thread-link').length === 2"
         )
@@ -482,9 +482,10 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self.assertIsNotNone(new_thread)
         self._wait_for_selected_thread(new_thread.id)
 
-        self.page.locator(
-            f'#threads-list [data-thread-item-id="{new_thread.id}"] .delete-thread-btn'
-        ).click()
+        self.page.evaluate(
+            "(threadId) => window.NovaApp.messageManager.deleteThread(String(threadId))",
+            new_thread.id,
+        )
         self.page.wait_for_selector(
             f'#threads-list [data-thread-item-id="{new_thread.id}"]',
             state="detached",
@@ -605,7 +606,13 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
 
         textarea = self.page.locator('#message-container textarea[name="new_message"]')
         textarea.fill("This will fail")
-        self.page.locator("#send-btn").click()
+        self.page.evaluate(
+            """
+            () => window.NovaApp.messageManager.triggerComposerSubmit(
+              document.getElementById('message-form')
+            )
+            """
+        )
         self.page.wait_for_function(
             """
             (expectedText) => {

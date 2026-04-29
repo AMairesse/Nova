@@ -287,14 +287,19 @@ def compute_external_base() -> str | None:
 
 def compute_webapp_public_url(slug: str) -> str:
     """
-    Compute a robust public URL for a WebApp using compute_external_base().
+    Compute a robust public URL for a WebApp.
 
     Preference order:
-    1. External base (CSRF_TRUSTED_ORIGINS / ALLOWED_HOSTS heuristic)
-    2. Fallback to relative path: /apps/<slug>/
+    1. Dedicated WebApp origin when configured
+    2. External base (CSRF_TRUSTED_ORIGINS / ALLOWED_HOSTS heuristic)
+    3. Fallback to relative path: /apps/<slug>/
 
     Always returns a URL ending with "/apps/<slug>/".
     """
+    webapp_origin = str(getattr(settings, "WEBAPP_PUBLIC_ORIGIN", "") or "").strip().rstrip("/")
+    if webapp_origin:
+        return f"{webapp_origin}/apps/{slug}/"
+
     base = compute_external_base()
 
     # Fallback: relative URL only

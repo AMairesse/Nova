@@ -8,6 +8,7 @@ from asgiref.sync import sync_to_async
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.Tool import Tool, ToolCredential
+from nova.web.safe_http import safe_http_request
 
 SEARXNG_MAX_RESULTS = 10
 SEARCH_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
@@ -75,20 +76,20 @@ async def search_web(tool: Tool, query: str, *, limit: int | None = None) -> dic
     config = await get_searxng_config(tool)
     effective_limit = max(1, min(int(limit or config["num_results"]), SEARXNG_MAX_RESULTS))
 
-    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT, follow_redirects=True) as client:
-        response = await client.get(
-            config["endpoint"],
-            params={
-                "q": str(query or ""),
-                "format": "json",
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
+    response = await safe_http_request(
+        "GET",
+        config["endpoint"],
+        timeout=SEARCH_TIMEOUT,
+        params={
+            "q": str(query or ""),
+            "format": "json",
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
 
     return {
         "query": str(query or ""),
         "results": _normalize_search_results(payload, limit=effective_limit),
         "limit": effective_limit,
     }
-

@@ -112,7 +112,6 @@ class MCPOAuthServiceTests(TestCase):
         }
         self.credential.save()
         response = httpx.Response(200, request=httpx.Request("POST", "https://auth.example.com/token"), content=b"{}")
-        fake_client = _FakeAsyncClient(response)
         token_response = SimpleNamespace(
             access_token="access-123",
             refresh_token="refresh-123",
@@ -120,7 +119,7 @@ class MCPOAuthServiceTests(TestCase):
             expires_in=3600,
             scope="search",
         )
-        with patch("nova.mcp.oauth_service.httpx.AsyncClient", return_value=fake_client), patch(
+        with patch("nova.mcp.oauth_service.safe_http_request", new=AsyncMock(return_value=response)), patch(
             "nova.mcp.oauth_service.handle_token_response_scopes",
             new=AsyncMock(return_value=token_response),
         ):
@@ -150,7 +149,6 @@ class MCPOAuthServiceTests(TestCase):
         self.credential.client_id = "client-123"
         self.credential.save()
         response = httpx.Response(200, request=httpx.Request("POST", "https://auth.example.com/token"), content=b"{}")
-        fake_client = _FakeAsyncClient(response)
         token_response = SimpleNamespace(
             access_token="fresh-token",
             refresh_token="fresh-refresh",
@@ -158,7 +156,7 @@ class MCPOAuthServiceTests(TestCase):
             expires_in=3600,
             scope="search",
         )
-        with patch("nova.mcp.oauth_service.httpx.AsyncClient", return_value=fake_client), patch(
+        with patch("nova.mcp.oauth_service.safe_http_request", new=AsyncMock(return_value=response)), patch(
             "nova.mcp.oauth_service.handle_token_response_scopes",
             new=AsyncMock(return_value=token_response),
         ):
@@ -189,8 +187,7 @@ class MCPOAuthServiceTests(TestCase):
             request=httpx.Request("POST", "https://auth.example.com/token"),
             content=b'{"error":"invalid_grant"}',
         )
-        fake_client = _FakeAsyncClient(response)
-        with patch("nova.mcp.oauth_service.httpx.AsyncClient", return_value=fake_client):
+        with patch("nova.mcp.oauth_service.safe_http_request", new=AsyncMock(return_value=response)):
             with self.assertRaises(oauth_service.MCPReconnectRequired):
                 async_to_sync(oauth_service.get_valid_mcp_access_token)(
                     tool=self.tool,

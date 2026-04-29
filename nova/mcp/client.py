@@ -21,6 +21,7 @@ from nova.mcp.oauth_service import (
     MCPReconnectRequired,
     get_valid_mcp_access_token,
 )
+from nova.web.network_policy import assert_allowed_egress_url_sync
 
 ALLOWED_TYPES = (str, int, float, bool, type(None))
 
@@ -37,6 +38,7 @@ class MCPClient:
         user_id: Optional[int] = None,  # Provided by caller for cache keys
     ):
         self.endpoint = normalize_url(endpoint)
+        assert_allowed_egress_url_sync(self.endpoint)
         self.credential = credential
         self.transport_type = transport_type
         self.user_id = user_id
