@@ -13,9 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlparse
-
-import httpx
+from urllib.parse import urlsplit
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
@@ -28,6 +26,7 @@ from nova.agent_execution import (
     resolve_effective_response_mode,
 )
 from nova.file_utils import download_file_content
+from nova.web.download_service import download_http_file
 from nova.continuous.context_builder import load_continuous_context
 from nova.models.Message import Actor, Message, MessageType
 from nova.models.Thread import Thread
@@ -1359,14 +1358,11 @@ class ReactTerminalRuntime:
         if normalized.startswith("data:"):
             return self._decode_data_url(normalized)
 
-        parsed_url = urlparse(normalized)
+        parsed_url = urlsplit(normalized)
         if parsed_url.scheme in {"http", "https"}:
-            timeout = httpx.Timeout(60.0, connect=10.0)
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                response = await client.get(normalized)
-                response.raise_for_status()
-            mime_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip()
-            return bytes(response.content), (mime_type or default_mime_type)
+            downloaded = await download_http_file(normalized)
+            mime_type = str(downloaded.get("mime_type") or "").split(";", 1)[0].strip()
+            return bytes(downloaded.get("content") or b""), (mime_type or default_mime_type)
 
         return self._decode_base64_payload(normalized), default_mime_type
 

@@ -53,12 +53,17 @@
             <a href="{% url 'user_settings:agent-edit' agent.pk %}?from=agents"
                class="btn btn-sm btn-outline-primary me-1"><i class="bi bi-pencil"></i>{% trans "Edit" %}</a>
             {% if not agent.is_tool %}
-              <a href="{% url 'user_settings:make_default_agent' agent.pk %}?from=agents"
-                class="btn btn-sm btn-outline-secondary me-1{% if agent.id == default_agent_id %} disabled{% endif %}"
-                {% if agent.id == default_agent_id %} aria-disabled="true" tabindex="-1"{% endif %}>
-                <i class="bi bi-check2-circle"></i>
-                {% trans "Make default" %}
-              </a>
+              <form method="post"
+                    action="{% url 'user_settings:make_default_agent' agent.pk %}?from=agents"
+                    class="d-inline">
+                {% csrf_token %}
+                <button type="submit"
+                        class="btn btn-sm btn-outline-secondary me-1"
+                        {% if agent.id == default_agent_id %}disabled aria-disabled="true"{% endif %}>
+                  <i class="bi bi-check2-circle"></i>
+                  {% trans "Make default" %}
+                </button>
+              </form>
             {% endif %}
             <a href="{% url 'user_settings:agent-delete' agent.pk %}?from=agents"
                class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i>{% trans "Delete" %}</a>

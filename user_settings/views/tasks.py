@@ -2,6 +2,8 @@
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.http import require_POST
 from django.db.models import Q
 from django.forms import ModelForm
 from django.http import JsonResponse
@@ -463,6 +465,8 @@ def task_delete(request, pk):
 
 
 @login_required
+@csrf_protect
+@require_POST
 def task_toggle_active(request, pk):
     """Toggle active status of an agent task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
@@ -479,6 +483,8 @@ def task_toggle_active(request, pk):
 
 
 @login_required
+@csrf_protect
+@require_POST
 def task_run_now(request, pk):
     """Manually trigger a task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)
@@ -495,6 +501,8 @@ def task_run_now(request, pk):
 
 
 @login_required
+@csrf_protect
+@require_POST
 def task_clear_error(request, pk):
     """Clear the last error field of a task definition."""
     task = get_object_or_404(TaskDefinition, pk=pk, user=request.user)

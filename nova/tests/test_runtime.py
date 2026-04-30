@@ -4,7 +4,6 @@ import base64
 import html
 import ipaddress
 import json
-import re
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -49,8 +48,6 @@ from nova.runtime.task_executor import (
     ReactTerminalTaskExecutor,
 )
 from nova.runtime.terminal import (
-    BROWSER_DEFAULT_ELEMENT_ATTRIBUTES,
-    BROWSER_SINGLE_PANE_ERROR,
     TerminalCommandError,
     TerminalExecutor,
 )
@@ -59,8 +56,8 @@ from nova.tasks.tasks import build_source_message_prompt
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 from nova.thread_titles import build_default_thread_subject
-from nova.web.browser_service import BrowserSessionError
 from nova.web.download_service import DEFAULT_DOWNLOAD_USER_AGENT, download_http_file
+from nova.web.network_policy import NetworkPolicyError
 
 
 class _FakeChannelLayer:
@@ -242,6 +239,36 @@ class DownloadServiceTests(SimpleTestCase):
         self.assertEqual(captured["proxy"], "http://127.0.0.1:43123")
         self.assertEqual(normalized_headers["user-agent"], "NovaOverride/2.0")
         self.assertEqual(normalized_headers["referer"], "https://example.com")
+
+    def test_download_http_file_enforces_max_size(self):
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                del kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, method, url):
+                del method, url
+                return _FakeDownloadStreamResponse(
+                    headers={"content-type": "image/png"},
+                    chunks=[b"abc", b"def"],
+                )
+
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
+            with self.assertRaisesMessage(ValueError, "exceeds"):
+                async_to_sync(download_http_file)("https://example.com/image.png", max_size=5)
 
 
 class TerminalExecutorTests(TestCase):
@@ -3282,6 +3309,52 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("`/generated/poster.png`", result.final_answer)
         self.assertTrue(generated_content.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(generated_mime, "image/png")
+
+    def test_native_binary_http_output_uses_safe_download_service(self):
+        async def fake_download_http_file(url, **kwargs):
+            del kwargs
+            self.assertEqual(url, "https://example.com/generated.png")
+            return {
+                "content": b"png-bytes",
+                "mime_type": "image/png",
+            }
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        with patch("nova.runtime.agent.download_http_file", new=fake_download_http_file):
+            content, mime_type = async_to_sync(runtime._resolve_binary_output_payload)(
+                "https://example.com/generated.png",
+                default_mime_type="application/octet-stream",
+            )
+
+        self.assertEqual(content, b"png-bytes")
+        self.assertEqual(mime_type, "image/png")
+
+    def test_native_binary_http_output_propagates_network_policy_errors(self):
+        async def fake_download_http_file(url, **kwargs):
+            del url, kwargs
+            raise NetworkPolicyError("blocked private target")
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        with patch("nova.runtime.agent.download_http_file", new=fake_download_http_file):
+            with self.assertRaises(NetworkPolicyError):
+                async_to_sync(runtime._resolve_binary_output_payload)(
+                    "http://127.0.0.1/private.png",
+                    default_mime_type="image/png",
+                )
 
     @patch("nova.runtime.provider_client.ProviderClient.invoke_native_completion", new_callable=AsyncMock)
     def test_native_image_response_uses_explicit_markdown_generated_path(self, mocked_native_completion):

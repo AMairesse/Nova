@@ -220,6 +220,15 @@ class UserSettingsTasksViewsTests(TestCase):
         task.refresh_from_db()
         self.assertFalse(task.is_active)
 
+    def test_task_toggle_active_rejects_get_without_side_effects(self):
+        task = self._create_agent_cron_task(name="Do not toggle by get", is_active=True)
+
+        response = self.client.get(reverse("user_settings:task_toggle_active", args=[task.id]))
+
+        self.assertEqual(response.status_code, 405)
+        task.refresh_from_db()
+        self.assertTrue(task.is_active)
+
     def test_task_toggle_active_rejects_maintenance(self):
         task = self._create_maintenance_task(name="Do not toggle")
         response = self.client.post(reverse("user_settings:task_toggle_active", args=[task.id]))
@@ -286,6 +295,15 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         mocked_maintenance.assert_called_once_with(maintenance_task.id)
 
+    @patch("user_settings.views.tasks.run_task_definition_cron.delay")
+    def test_task_run_now_rejects_get_without_dispatch(self, mocked_cron):
+        task = self._create_agent_cron_task(name="Do not run by get")
+
+        response = self.client.get(reverse("user_settings:task_run_now", args=[task.id]))
+
+        self.assertEqual(response.status_code, 405)
+        mocked_cron.assert_not_called()
+
     def test_task_clear_error_resets_last_error(self):
         task = self._create_agent_cron_task(name="Clear error")
         task.last_error = "Previous failure"
@@ -296,6 +314,36 @@ class UserSettingsTasksViewsTests(TestCase):
 
         task.refresh_from_db()
         self.assertIsNone(task.last_error)
+
+    def test_task_clear_error_rejects_get_without_side_effects(self):
+        task = self._create_agent_cron_task(name="Do not clear by get")
+        task.last_error = "Previous failure"
+        task.save(update_fields=["last_error", "updated_at"])
+
+        response = self.client.get(reverse("user_settings:task_clear_error", args=[task.id]))
+
+        self.assertEqual(response.status_code, 405)
+        task.refresh_from_db()
+        self.assertEqual(task.last_error, "Previous failure")
+
+    def test_tasks_list_renders_mutating_actions_as_post_forms(self):
+        active_task = self._create_agent_cron_task(name="Active form", is_active=True)
+        inactive_task = self._create_agent_cron_task(name="Inactive form", is_active=False)
+        inactive_task.last_error = "Previous failure"
+        inactive_task.save(update_fields=["last_error", "updated_at"])
+
+        response = self.client.get(reverse("user_settings:tasks"))
+
+        self.assertEqual(response.status_code, 200)
+        run_now_url = reverse("user_settings:task_run_now", args=[active_task.id])
+        toggle_url = reverse("user_settings:task_toggle_active", args=[active_task.id])
+        clear_error_url = reverse("user_settings:task_clear_error", args=[inactive_task.id])
+        self.assertContains(response, f'action="{run_now_url}"')
+        self.assertContains(response, f'action="{toggle_url}"')
+        self.assertContains(response, f'action="{clear_error_url}"')
+        self.assertContains(response, 'method="post"')
+        self.assertContains(response, "csrfmiddlewaretoken")
+        self.assertContains(response, "return confirm(")
 
     def test_task_cron_preview_handles_missing_invalid_and_valid(self):
         missing = self.client.get(reverse("user_settings:task_cron_preview"))

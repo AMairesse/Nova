@@ -62,6 +62,18 @@ class AgentViewsTest(BaseTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "user_settings/fragments/agent_table.html")
 
+    def test_list_view_renders_make_default_as_post_form(self):
+        provider = self._create_provider()
+        agent = create_agent(self.user, provider=provider, name="Primary Agent")
+
+        response = self.client.get(reverse("user_settings:agents"))
+
+        self.assertEqual(response.status_code, 200)
+        make_default_url = reverse("user_settings:make_default_agent", args=[agent.id])
+        self.assertContains(response, f'action="{make_default_url}?from=agents"')
+        self.assertContains(response, 'method="post"')
+        self.assertContains(response, "csrfmiddlewaretoken")
+
     def test_list_view_orders_agents_by_name(self):
         provider = self._create_provider()
         create_agent(self.user, provider=provider, name="Beta")
@@ -365,7 +377,7 @@ class AgentViewsTest(BaseTestCase):
         profile.default_agent = agent_primary
         profile.save()
 
-        response = self.client.get(
+        response = self.client.post(
             reverse("user_settings:make_default_agent", args=[agent_secondary.pk])
         )
 
@@ -373,12 +385,28 @@ class AgentViewsTest(BaseTestCase):
         profile.refresh_from_db()
         self.assertEqual(profile.default_agent_id, agent_secondary.id)
 
+    def test_make_default_agent_rejects_get_without_side_effects(self):
+        provider = self._create_provider()
+        agent_primary = create_agent(self.user, provider=provider)
+        agent_secondary = create_agent(self.user, provider=provider, name="Secondary")
+        profile = UserProfile.objects.get(user=self.user)
+        profile.default_agent = agent_primary
+        profile.save()
+
+        response = self.client.get(
+            reverse("user_settings:make_default_agent", args=[agent_secondary.pk])
+        )
+
+        self.assertEqual(response.status_code, 405)
+        profile.refresh_from_db()
+        self.assertEqual(profile.default_agent_id, agent_primary.id)
+
     def test_make_default_agent_rejects_non_owner(self):
         other_user = create_user("otheruser")
         provider = create_provider(other_user)
         other_agent = create_agent(other_user, provider=provider)
 
-        response = self.client.get(
+        response = self.client.post(
             reverse("user_settings:make_default_agent", args=[other_agent.pk])
         )
 
