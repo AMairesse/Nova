@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.providers import list_provider_models
 from nova.providers.lmstudio import fetch_lmstudio_models
+from nova.providers.openai_compatible import OPENAI_COMPATIBLE_LOCAL_HOSTS
 
 
 class ProviderCatalogTests(SimpleTestCase):
@@ -138,6 +139,14 @@ class ProviderCatalogTests(SimpleTestCase):
 
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["key"], "model-a")
+        self.assertEqual(
+            mocked_request.await_args.args[:2],
+            ("GET", "http://localhost:1234/api/v1/models"),
+        )
+        self.assertEqual(
+            mocked_request.await_args.kwargs["allowed_private_hosts"],
+            OPENAI_COMPATIBLE_LOCAL_HOSTS,
+        )
 
     def test_manual_provider_types_return_empty_catalog(self):
         payload = async_to_sync(list_provider_models)(

@@ -294,6 +294,13 @@
                     console.warn('Failed to refresh thread lists after deletion:', refreshError);
                     window.ResponsiveManager?.syncThreadLists?.();
                 }
+                document.querySelectorAll(
+                    '[data-thread-item-id]'
+                ).forEach((threadElement) => {
+                    if (`${threadElement.dataset.threadItemId || ''}` === `${threadId}`) {
+                        threadElement.remove();
+                    }
+                });
 
                 const firstThread = document.querySelector(
                     '#threads-list .thread-link'

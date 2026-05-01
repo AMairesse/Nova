@@ -8,9 +8,10 @@ from typing import Any
 import ollama
 
 from nova.providers.base import BaseProviderAdapter, ProviderDefaults
-from nova.web.network_policy import assert_allowed_egress_url_sync
+from nova.web.network_policy import LOCAL_DEVELOPMENT_HOSTS, assert_allowed_egress_url_sync
 
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
+OLLAMA_ALLOWED_PRIVATE_HOSTS = (*LOCAL_DEVELOPMENT_HOSTS, "ollama")
 
 
 def _normalize_ollama_usage(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -126,7 +127,10 @@ class OllamaProviderAdapter(BaseProviderAdapter):
 
     async def complete_chat(self, provider, *, messages, tools=None):
         host = provider.base_url or OLLAMA_DEFAULT_BASE_URL
-        assert_allowed_egress_url_sync(host)
+        assert_allowed_egress_url_sync(
+            host,
+            allowed_private_hosts=OLLAMA_ALLOWED_PRIVATE_HOSTS,
+        )
         client = ollama.AsyncClient(host=host)
         response = await client.chat(
             model=provider.model,
@@ -141,10 +145,13 @@ class OllamaProviderAdapter(BaseProviderAdapter):
         if tools:
             raise NotImplementedError(
                 "Native streaming with tool calls is not implemented for Ollama."
-            )
+        )
 
         host = provider.base_url or OLLAMA_DEFAULT_BASE_URL
-        assert_allowed_egress_url_sync(host)
+        assert_allowed_egress_url_sync(
+            host,
+            allowed_private_hosts=OLLAMA_ALLOWED_PRIVATE_HOSTS,
+        )
         client = ollama.AsyncClient(host=host)
         stream = await client.chat(
             model=provider.model,

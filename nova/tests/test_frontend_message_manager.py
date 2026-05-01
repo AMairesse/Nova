@@ -606,22 +606,24 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
 
         textarea = self.page.locator('#message-container textarea[name="new_message"]')
         textarea.fill("This will fail")
-        self.page.evaluate(
+        posted_message = self.page.evaluate(
             """
-            () => window.NovaApp.messageManager.triggerComposerSubmit(
-              document.getElementById('message-form')
-            )
-            """
-        )
-        self.page.wait_for_function(
-            """
-            (expectedText) => {
-              return Array.from(document.querySelectorAll('#messages-list .user-message-text'))
-                .some((element) => element.textContent.includes(expectedText));
+            async () => {
+              const form = document.getElementById('message-form');
+              const manager = window.NovaApp.messageManager;
+              const posted = new Promise((resolve) => {
+                document.addEventListener(
+                  'nova:message-posted',
+                  (event) => resolve(event.detail?.message || null),
+                  { once: true }
+                );
+              });
+              await manager.triggerComposerSubmit(form);
+              return posted;
             }
-            """,
-            arg="This will fail",
+            """
         )
+        self.assertIn("This will fail", posted_message["text"])
 
         task = Task.objects.get()
         self.page.wait_for_function(

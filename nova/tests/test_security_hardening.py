@@ -11,7 +11,12 @@ from django.test import SimpleTestCase, override_settings
 
 from nova.web.browser_service import BrowserSession, BrowserSessionError
 from nova.web.download_service import DEFAULT_DOWNLOAD_USER_AGENT, download_http_file
-from nova.web.network_policy import NetworkPolicyError, assert_allowed_egress_host_port, assert_public_http_url
+from nova.web.network_policy import (
+    LOCAL_DEVELOPMENT_HOSTS,
+    NetworkPolicyError,
+    assert_allowed_egress_host_port,
+    assert_public_http_url,
+)
 from nova.web.safe_http import safe_http_request
 
 
@@ -124,6 +129,18 @@ class NetworkPolicyTests(SimpleTestCase):
         self.assertEqual(target.url, "https://example.com/resource")
         self.assertEqual(target.hostname, "example.com")
         self.assertEqual(target.ip, "93.184.216.34")
+
+    def test_allows_explicit_local_development_hosts_only_when_requested(self):
+        with self.assertRaises(NetworkPolicyError):
+            async_to_sync(assert_public_http_url)("http://localhost:1234/v1")
+
+        target = async_to_sync(assert_public_http_url)(
+            "http://localhost:1234/v1",
+            allowed_private_hosts=LOCAL_DEVELOPMENT_HOSTS,
+        )
+
+        self.assertEqual(target.hostname, "localhost")
+        self.assertEqual(target.port, 1234)
 
     @override_settings(NOVA_EGRESS_ALLOWLIST=["10.0.0.0/8", "*.internal"])
     def test_admin_allowlist_allows_private_cidr_and_internal_hostname(self):
@@ -273,6 +290,104 @@ class NetworkPolicyTests(SimpleTestCase):
                 async_to_sync(safe_http_request)("GET", "https://example.com/redirect")
 
         self.assertEqual(requests, ["GET https://example.com/redirect"])
+
+    def test_safe_http_request_strips_credentials_on_cross_origin_redirect(self):
+        requests: list[dict] = []
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                del kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def request(self, method, url, **kwargs):
+                requests.append(
+                    {
+                        "method": method,
+                        "url": url,
+                        "headers": dict(httpx.Headers(kwargs.get("headers") or {})),
+                        "cookies": kwargs.get("cookies"),
+                        "auth": kwargs.get("auth"),
+                    }
+                )
+                if len(requests) == 1:
+                    return httpx.Response(
+                        302,
+                        headers={"location": "https://other.example.net/final"},
+                        request=httpx.Request(method, url),
+                    )
+                return httpx.Response(200, request=httpx.Request(method, url))
+
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.safe_http.httpx.AsyncClient", new=FakeAsyncClient):
+            async_to_sync(safe_http_request)(
+                "GET",
+                "https://api.example.com/start",
+                headers={
+                    "Authorization": "Bearer secret",
+                    "X-Api-Key": "api-secret",
+                    "Cookie": "session=secret",
+                    "Accept": "application/json",
+                },
+                cookies={"sessionid": "secret"},
+                auth=("user", "password"),
+            )
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[1]["url"], "https://other.example.net/final")
+        self.assertEqual(requests[1]["headers"], {"accept": "application/json"})
+        self.assertIsNone(requests[1]["cookies"])
+        self.assertIsNone(requests[1]["auth"])
+
+    def test_safe_http_request_keeps_credentials_on_same_origin_redirect(self):
+        requests: list[dict] = []
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                del kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def request(self, method, url, **kwargs):
+                requests.append(
+                    {
+                        "url": url,
+                        "headers": dict(httpx.Headers(kwargs.get("headers") or {})),
+                        "cookies": kwargs.get("cookies"),
+                    }
+                )
+                if len(requests) == 1:
+                    return httpx.Response(
+                        302,
+                        headers={"location": "/final"},
+                        request=httpx.Request(method, url),
+                    )
+                return httpx.Response(200, request=httpx.Request(method, url))
+
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.safe_http.httpx.AsyncClient", new=FakeAsyncClient):
+            async_to_sync(safe_http_request)(
+                "GET",
+                "https://api.example.com/start",
+                headers={"Authorization": "Bearer secret"},
+                cookies={"sessionid": "secret"},
+            )
+
+        self.assertEqual(requests[1]["url"], "https://api.example.com/final")
+        self.assertEqual(requests[1]["headers"]["authorization"], "Bearer secret")
+        self.assertEqual(requests[1]["cookies"], {"sessionid": "secret"})
 
     def test_download_keeps_default_user_agent_for_public_url(self):
         captured_headers = {}

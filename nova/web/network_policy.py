@@ -52,6 +52,14 @@ _CLOUD_METADATA_IPS = {
 }
 _CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 _MAX_REDIRECTS = 5
+LOCAL_DEVELOPMENT_HOSTS = (
+    "localhost",
+    "localhost.localdomain",
+    "127.0.0.1",
+    "::1",
+    "host.docker.internal",
+    "docker.internal",
+)
 
 
 def max_redirects() -> int:
@@ -122,6 +130,26 @@ def _host_matches_allowlist(hostname: str) -> bool:
     return False
 
 
+def _host_matches_allowed_private_host(hostname: str, allowed_private_hosts: tuple[str, ...]) -> bool:
+    host = _normalize_host_for_policy(hostname)
+    for raw_entry in tuple(allowed_private_hosts or ()):
+        entry = str(raw_entry or "").strip().lower().rstrip(".")
+        if "://" in entry:
+            entry = (urlsplit(entry).hostname or "").lower().rstrip(".")
+        if not entry:
+            continue
+        if entry.startswith("*."):
+            suffix = entry[1:]
+            if host.endswith(suffix) and host != entry[2:]:
+                return True
+        elif "*" in entry:
+            if fnmatch.fnmatch(host, entry):
+                return True
+        elif host == entry:
+            return True
+    return False
+
+
 def _ip_matches_allowlist(address: ipaddress._BaseAddress) -> bool:
     for raw_entry in _normalized_allowlist():
         entry = raw_entry
@@ -148,9 +176,13 @@ def _is_single_label_hostname(hostname: str) -> bool:
         return "." not in hostname
 
 
-def _reject_obviously_local_hostname(hostname: str) -> None:
+def _reject_obviously_local_hostname(hostname: str, *, allowed_private_hosts: tuple[str, ...] = ()) -> None:
     host = _normalize_host_for_policy(hostname)
-    if _host_matches_allowlist(host) or _debug_private_egress_allowed():
+    if (
+        _host_matches_allowlist(host)
+        or _host_matches_allowed_private_host(host, tuple(allowed_private_hosts or ()))
+        or _debug_private_egress_allowed()
+    ):
         return
     if host in _OBVIOUSLY_LOCAL_HOSTS or any(host.endswith(suffix) for suffix in _LOCAL_HOST_SUFFIXES):
         raise NetworkPolicyError(
@@ -183,10 +215,16 @@ def _resolve_host_addresses(hostname: str, port: int) -> tuple[ipaddress._BaseAd
     return tuple(addresses)
 
 
-def _resolve_allowed_host_port(hostname: str, port: int) -> ResolvedHostPort:
+def _resolve_allowed_host_port(
+    hostname: str,
+    port: int,
+    *,
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHostPort:
     host = str(hostname or "").strip().rstrip(".")
     lowered_host = _normalize_host_for_policy(host)
-    _reject_obviously_local_hostname(lowered_host)
+    private_host_allowed = _host_matches_allowed_private_host(lowered_host, tuple(allowed_private_hosts or ()))
+    _reject_obviously_local_hostname(lowered_host, allowed_private_hosts=tuple(allowed_private_hosts or ()))
     validated_port = int(port or 0)
     if validated_port <= 0:
         raise NetworkPolicyError("A valid network port is required.")
@@ -201,7 +239,12 @@ def _resolve_allowed_host_port(hostname: str, port: int) -> ResolvedHostPort:
 
     if literal_ip is not None:
         reason = _classify_blocked_ip(literal_ip)
-        if reason and not (host_allowlisted or _ip_matches_allowlist(literal_ip) or debug_private_allowed):
+        if reason and not (
+            host_allowlisted
+            or private_host_allowed
+            or _ip_matches_allowlist(literal_ip)
+            or debug_private_allowed
+        ):
             raise NetworkPolicyError(
                 f"Access to local or private network targets is blocked for agent-provided URLs ({reason})."
             )
@@ -210,14 +253,24 @@ def _resolve_allowed_host_port(hostname: str, port: int) -> ResolvedHostPort:
     addresses = _resolve_host_addresses(host, validated_port)
     for address in addresses:
         reason = _classify_blocked_ip(address)
-        if reason and not (host_allowlisted or _ip_matches_allowlist(address) or debug_private_allowed):
+        if reason and not (
+            host_allowlisted
+            or private_host_allowed
+            or _ip_matches_allowlist(address)
+            or debug_private_allowed
+        ):
             raise NetworkPolicyError(
                 f"Access to local or private network targets is blocked for agent-provided URLs ({reason})."
             )
     return ResolvedHostPort(hostname=host, ip=str(addresses[0]), port=validated_port)
 
 
-def assert_allowed_egress_url_sync(url: str, *, schemes: set[str] | tuple[str, ...] = ("http", "https")) -> ResolvedHttpTarget:
+def assert_allowed_egress_url_sync(
+    url: str,
+    *,
+    schemes: set[str] | tuple[str, ...] = ("http", "https"),
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHttpTarget:
     candidate = str(url or "").strip()
     parsed = urlsplit(candidate)
     allowed_schemes = set(schemes)
@@ -230,7 +283,11 @@ def assert_allowed_egress_url_sync(url: str, *, schemes: set[str] | tuple[str, .
     except ValueError as exc:
         raise NetworkPolicyError("A valid network port is required.") from exc
     port = parsed_port or (443 if parsed.scheme == "https" else 80)
-    resolved = _resolve_allowed_host_port(parsed.hostname, port)
+    resolved = _resolve_allowed_host_port(
+        parsed.hostname,
+        port,
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
@@ -244,27 +301,72 @@ def assert_allowed_egress_url_sync(url: str, *, schemes: set[str] | tuple[str, .
     )
 
 
-async def assert_allowed_egress_url(url: str, *, schemes: set[str] | tuple[str, ...] = ("http", "https")) -> ResolvedHttpTarget:
-    return await asyncio.to_thread(assert_allowed_egress_url_sync, url, schemes=schemes)
+async def assert_allowed_egress_url(
+    url: str,
+    *,
+    schemes: set[str] | tuple[str, ...] = ("http", "https"),
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHttpTarget:
+    return await asyncio.to_thread(
+        assert_allowed_egress_url_sync,
+        url,
+        schemes=schemes,
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
 
 
-def assert_allowed_egress_host_port_sync(hostname: str, port: int) -> ResolvedHostPort:
+def assert_allowed_egress_host_port_sync(
+    hostname: str,
+    port: int,
+    *,
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHostPort:
     host = str(hostname or "").strip()
     if not host:
         raise NetworkPolicyError("URL host is required.")
-    return _resolve_allowed_host_port(host, int(port or 0))
+    return _resolve_allowed_host_port(
+        host,
+        int(port or 0),
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
 
 
-async def assert_allowed_egress_host_port(hostname: str, port: int) -> ResolvedHostPort:
-    return await asyncio.to_thread(assert_allowed_egress_host_port_sync, hostname, int(port or 0))
+async def assert_allowed_egress_host_port(
+    hostname: str,
+    port: int,
+    *,
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHostPort:
+    return await asyncio.to_thread(
+        assert_allowed_egress_host_port_sync,
+        hostname,
+        int(port or 0),
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
 
 
-async def assert_public_http_url(url: str) -> ResolvedHttpTarget:
-    return await assert_allowed_egress_url(url)
+async def assert_public_http_url(
+    url: str,
+    *,
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHttpTarget:
+    return await assert_allowed_egress_url(
+        url,
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
 
 
-async def assert_public_host_port(hostname: str, port: int) -> ResolvedHostPort:
+async def assert_public_host_port(
+    hostname: str,
+    port: int,
+    *,
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> ResolvedHostPort:
     host = str(hostname or "").strip()
     if not host:
         raise NetworkPolicyError("URL host is required.")
-    return await assert_allowed_egress_host_port(host, int(port or 0))
+    return await assert_allowed_egress_host_port(
+        host,
+        int(port or 0),
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )

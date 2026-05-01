@@ -8,8 +8,13 @@ from django.test import SimpleTestCase
 
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.providers.ollama import OllamaProviderAdapter
-from nova.providers.openai_compatible import stream_openai_compatible_chat
+from nova.providers.openai_compatible import (
+    OPENAI_COMPATIBLE_LOCAL_HOSTS,
+    create_openai_compatible_client,
+    stream_openai_compatible_chat,
+)
 from nova.providers.openrouter import OpenRouterProviderAdapter
+from nova.web.network_policy import NetworkPolicyError
 
 
 class _FakeAsyncStream:
@@ -123,6 +128,23 @@ class ProviderStreamingTests(SimpleTestCase):
         self.assertTrue(response["streamed"])
         self.assertEqual(response["streaming_mode"], "native")
         self.assertEqual(response["total_tokens"], 14)
+
+    def test_openai_compatible_client_blocks_private_base_url_by_default(self):
+        with self.assertRaises(NetworkPolicyError):
+            create_openai_compatible_client(
+                api_key="dummy-secret",
+                base_url="http://localhost:1234/v1",
+            )
+
+    def test_openai_compatible_client_allows_explicit_local_provider_hosts(self):
+        with patch("nova.providers.openai_compatible.AsyncOpenAI") as mocked_client:
+            create_openai_compatible_client(
+                api_key="dummy-secret",
+                base_url="http://localhost:1234/v1",
+                allowed_private_hosts=OPENAI_COMPATIBLE_LOCAL_HOSTS,
+            )
+
+        mocked_client.assert_called_once()
 
     def test_openrouter_stream_chat_uses_normalized_base_url(self):
         adapter = OpenRouterProviderAdapter()
