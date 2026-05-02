@@ -16,6 +16,7 @@ from nova.web.network_policy import (
     NetworkPolicyError,
     assert_allowed_egress_host_port,
     assert_public_http_url,
+    build_allowed_private_hosts,
 )
 from nova.web.safe_http import safe_http_request
 
@@ -141,6 +142,15 @@ class NetworkPolicyTests(SimpleTestCase):
 
         self.assertEqual(target.hostname, "localhost")
         self.assertEqual(target.port, 1234)
+
+    def test_build_allowed_private_hosts_normalizes_and_deduplicates_sources(self):
+        allowed_hosts = build_allowed_private_hosts(
+            urls=("http://host.docker.internal:1234/v1", "http://host.docker.internal:4321"),
+            hostnames=("ollama", "OLLAMA", ""),
+            include_local_development_hosts=False,
+        )
+
+        self.assertEqual(allowed_hosts, ("ollama", "host.docker.internal"))
 
     @override_settings(NOVA_EGRESS_ALLOWLIST=["10.0.0.0/8", "*.internal"])
     def test_admin_allowlist_allows_private_cidr_and_internal_hostname(self):

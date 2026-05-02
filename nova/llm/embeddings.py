@@ -21,6 +21,10 @@ from django.db import transaction
 
 from nova.models.EmbeddingsSystemState import EmbeddingsSystemState
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
+from nova.web.network_policy import (
+    LOCAL_DEVELOPMENT_HOSTS,
+    build_allowed_private_hosts,
+)
 from nova.web.safe_http import safe_http_request
 
 
@@ -35,6 +39,7 @@ class EmbeddingsProvider:
     base_url: str
     model: str
     api_key: str | None = None
+    allowed_private_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,7 @@ def get_custom_http_provider(
     base_url: str | None,
     model: str | None,
     api_key: str | None,
+    allowed_private_hosts: tuple[str, ...] = (),
 ) -> Optional[EmbeddingsProvider]:
     """Build a custom HTTP embeddings provider from raw values."""
 
@@ -77,6 +83,7 @@ def get_custom_http_provider(
         base_url=normalized_base_url,
         model=(model or "").strip(),
         api_key=api_key or None,
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
     )
 
 
@@ -87,6 +94,9 @@ def get_system_embeddings_provider() -> Optional[EmbeddingsProvider]:
         base_url=getattr(settings, "MEMORY_EMBEDDINGS_URL", None),
         model=getattr(settings, "MEMORY_EMBEDDINGS_MODEL", None),
         api_key=getattr(settings, "MEMORY_EMBEDDINGS_API_KEY", None),
+        allowed_private_hosts=build_allowed_private_hosts(
+            urls=(getattr(settings, "MEMORY_EMBEDDINGS_URL", None),),
+        ),
     )
 
 
@@ -204,6 +214,7 @@ def resolve_embeddings_provider_for_values(
         base_url=base_url,
         model=model,
         api_key=api_key,
+        allowed_private_hosts=LOCAL_DEVELOPMENT_HOSTS,
     )
 
     if source == MemoryEmbeddingsSource.CUSTOM:
@@ -271,6 +282,7 @@ async def aget_resolved_embeddings_provider(*, user_id: int | None = None) -> Re
         base_url=base_url,
         model=model,
         api_key=api_key,
+        allowed_private_hosts=LOCAL_DEVELOPMENT_HOSTS,
     )
 
     if source == MemoryEmbeddingsSource.CUSTOM:
@@ -347,6 +359,7 @@ async def compute_embedding(
         headers=headers,
         json=payload,
         timeout=httpx.Timeout(30.0),
+        allowed_private_hosts=tuple(provider.allowed_private_hosts or ()),
     )
     resp.raise_for_status()
     data = resp.json()

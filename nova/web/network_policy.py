@@ -104,6 +104,50 @@ def _normalize_host_for_policy(hostname: str) -> str:
     return host
 
 
+def extract_hostname_for_policy(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+
+    hostname = candidate
+    if "://" in candidate:
+        try:
+            hostname = urlsplit(candidate).hostname or ""
+        except ValueError:
+            return None
+
+    try:
+        return _normalize_host_for_policy(hostname)
+    except NetworkPolicyError:
+        return None
+
+
+def build_allowed_private_hosts(
+    *,
+    urls: tuple[str | None, ...] = (),
+    hostnames: tuple[str | None, ...] = (),
+    include_local_development_hosts: bool = False,
+) -> tuple[str, ...]:
+    allowed_hosts: list[str] = []
+
+    def _append(hostname: str | None) -> None:
+        normalized = extract_hostname_for_policy(hostname)
+        if normalized and normalized not in allowed_hosts:
+            allowed_hosts.append(normalized)
+
+    if include_local_development_hosts:
+        for hostname in LOCAL_DEVELOPMENT_HOSTS:
+            _append(hostname)
+
+    for hostname in tuple(hostnames or ()):
+        _append(hostname)
+
+    for url in tuple(urls or ()):
+        _append(url)
+
+    return tuple(allowed_hosts)
+
+
 def _host_matches_allowlist(hostname: str) -> bool:
     host = _normalize_host_for_policy(hostname)
     for raw_entry in _normalized_allowlist():

@@ -110,6 +110,7 @@ Agents can publish live static apps from normal files:
 In production, configure `WEBAPP_PUBLIC_ORIGIN` to serve these apps from a separate origin. Webapp URLs are capability-style slugs: anyone with the slug can open the published app, but the app is sandboxed away from the authenticated Nova origin.
 
 Tenant-configured outbound integrations are subject to a shared egress policy. Private/internal targets are blocked by default unless an administrator explicitly allows them with `NOVA_EGRESS_ALLOWLIST`.
+Local LLM and embeddings endpoints keep working with Nova's built-in local allowances: user-configured custom embeddings support `localhost`, `127.0.0.1`, `::1`, `host.docker.internal`, and `docker.internal`, while admin-configured system providers can also target explicit internal Docker Compose hostnames such as `llamacpp-embeddings`.
 
 ## API
 
@@ -182,4 +183,5 @@ Nova is released under the MIT License. See [LICENSE](LICENSE).
 - No superuser: ensure `DJANGO_SUPERUSER_*` is set in `docker/.env`
 - Optional service missing in UI: check `COMPOSE_FILE` and related env vars
 - Ollama connectivity: use `host.docker.internal` on Docker Desktop or your host IP on Linux
+- LM Studio embeddings connectivity: use `host.docker.internal` on Docker Desktop or your host IP on Linux for custom user endpoints; use the system embeddings provider for Docker Compose-only hostnames such as `llamacpp-embeddings`
 - Internal integration blocked: add an explicit admin entry to `NOVA_EGRESS_ALLOWLIST` instead of relying on user-provided private URLs

@@ -4,9 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from nova.models.Provider import LLMProvider, ProviderType
+from nova.providers.llama_cpp import LlamaCppProviderAdapter
 from nova.providers.ollama import OllamaProviderAdapter
 from nova.providers.openai_compatible import (
     OPENAI_COMPATIBLE_LOCAL_HOSTS,
@@ -191,3 +192,51 @@ class ProviderStreamingTests(SimpleTestCase):
                 tools=[{"type": "function", "function": {"name": "echo"}}],
                 on_content_delta=None,
             )
+
+    @override_settings(OLLAMA_SERVER_URL="http://custom-ollama:11434")
+    def test_ollama_adapter_allows_admin_configured_private_hostname(self):
+        adapter = OllamaProviderAdapter()
+        provider = self._provider(
+            provider_type=ProviderType.OLLAMA,
+            model="nova",
+            base_url="http://custom-ollama:11434",
+            api_key="",
+        )
+        fake_client = SimpleNamespace(chat=AsyncMock(return_value=SimpleNamespace(model_dump=lambda **_: {"message": {}})))
+
+        with patch("nova.providers.ollama.assert_allowed_egress_url_sync") as mocked_assert, patch(
+            "nova.providers.ollama.ollama.AsyncClient",
+            return_value=fake_client,
+        ):
+            async_to_sync(adapter.complete_chat)(
+                provider,
+                messages=[{"role": "user", "content": "Hello"}],
+                tools=None,
+            )
+
+        self.assertIn("custom-ollama", mocked_assert.call_args.kwargs["allowed_private_hosts"])
+        self.assertIn("ollama", mocked_assert.call_args.kwargs["allowed_private_hosts"])
+
+    @override_settings(LLAMA_CPP_SERVER_URL="http://custom-llm:8080/v1")
+    def test_llama_cpp_adapter_forwards_admin_configured_private_hostname(self):
+        adapter = LlamaCppProviderAdapter()
+        provider = self._provider(
+            provider_type=ProviderType.LLAMA_CPP,
+            model="qwen/qwen3-8B-GGUF",
+            base_url="http://custom-llm:8080/v1",
+        )
+
+        with patch(
+            "nova.providers.llama_cpp.complete_openai_compatible_chat",
+            new_callable=AsyncMock,
+            return_value={"content": "ok", "tool_calls": []},
+        ) as mocked_complete:
+            async_to_sync(adapter.complete_chat)(
+                provider,
+                messages=[{"role": "user", "content": "Hello"}],
+                tools=None,
+            )
+
+        allowed_private_hosts = mocked_complete.await_args.kwargs["allowed_private_hosts"]
+        self.assertIn("custom-llm", allowed_private_hosts)
+        self.assertIn("llamacpp", allowed_private_hosts)

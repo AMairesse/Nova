@@ -8,7 +8,10 @@ from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
 
-from nova.web.network_policy import LOCAL_DEVELOPMENT_HOSTS, assert_allowed_egress_url_sync
+from nova.web.network_policy import (
+    LOCAL_DEVELOPMENT_HOSTS,
+    assert_allowed_egress_url_sync,
+)
 
 OPENAI_COMPATIBLE_LOCAL_HOSTS = LOCAL_DEVELOPMENT_HOSTS
 

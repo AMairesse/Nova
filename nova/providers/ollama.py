@@ -6,12 +6,23 @@ import json
 from typing import Any
 
 import ollama
+from django.conf import settings
 
 from nova.providers.base import BaseProviderAdapter, ProviderDefaults
-from nova.web.network_policy import LOCAL_DEVELOPMENT_HOSTS, assert_allowed_egress_url_sync
+from nova.web.network_policy import (
+    assert_allowed_egress_url_sync,
+    build_allowed_private_hosts,
+)
 
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
-OLLAMA_ALLOWED_PRIVATE_HOSTS = (*LOCAL_DEVELOPMENT_HOSTS, "ollama")
+
+
+def get_ollama_allowed_private_hosts() -> tuple[str, ...]:
+    return build_allowed_private_hosts(
+        urls=(getattr(settings, "OLLAMA_SERVER_URL", None),),
+        hostnames=("ollama",),
+        include_local_development_hosts=True,
+    )
 
 
 def _normalize_ollama_usage(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -129,7 +140,7 @@ class OllamaProviderAdapter(BaseProviderAdapter):
         host = provider.base_url or OLLAMA_DEFAULT_BASE_URL
         assert_allowed_egress_url_sync(
             host,
-            allowed_private_hosts=OLLAMA_ALLOWED_PRIVATE_HOSTS,
+            allowed_private_hosts=get_ollama_allowed_private_hosts(),
         )
         client = ollama.AsyncClient(host=host)
         response = await client.chat(
@@ -150,7 +161,7 @@ class OllamaProviderAdapter(BaseProviderAdapter):
         host = provider.base_url or OLLAMA_DEFAULT_BASE_URL
         assert_allowed_egress_url_sync(
             host,
-            allowed_private_hosts=OLLAMA_ALLOWED_PRIVATE_HOSTS,
+            allowed_private_hosts=get_ollama_allowed_private_hosts(),
         )
         client = ollama.AsyncClient(host=host)
         stream = await client.chat(
