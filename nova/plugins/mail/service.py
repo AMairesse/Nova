@@ -24,6 +24,7 @@ from nova.plugins.shared.multi_instance import (
     format_invalid_instance_message,
     normalize_instance_key,
 )
+from nova.web.network_policy import assert_allowed_egress_host_port_sync
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ def build_imap_client(credential):
     if not all([imap_server, username, password]):
         raise ValueError(_("Incomplete IMAP configuration: missing server, username, or password"))
 
+    assert_allowed_egress_host_port_sync(imap_server, int(imap_port or 0))
     client = imapclient.IMAPClient(
         imap_server,
         port=imap_port,
@@ -105,6 +107,7 @@ def build_smtp_client(credential):
     if not all([smtp_server, username, password]):
         raise ValueError(_("Incomplete SMTP configuration: missing server, username, or password"))
 
+    assert_allowed_egress_host_port_sync(smtp_server, int(smtp_port or 0))
     if smtp_use_tls:
         server = smtplib.SMTP(smtp_server, smtp_port, timeout=EMAIL_CLIENT_TIMEOUT)
         server.starttls()

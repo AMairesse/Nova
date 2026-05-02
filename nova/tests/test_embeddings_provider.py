@@ -1,16 +1,19 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
 from nova.llm.embeddings import (
+    EmbeddingsProvider,
     aget_embeddings_provider,
+    compute_embedding,
     get_embeddings_provider,
     get_resolved_embeddings_provider,
 )
 from nova.models.EmbeddingsSystemState import EmbeddingsSystemState
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
+from nova.web.network_policy import LOCAL_DEVELOPMENT_HOSTS
 
 
 User = get_user_model()
@@ -71,6 +74,8 @@ class EmbeddingsProviderResolutionTests(TestCase):
         self.assertEqual(async_provider.model, "user-model")
         self.assertEqual(sync_provider.api_key, "secret-key")
         self.assertEqual(async_provider.api_key, "secret-key")
+        self.assertEqual(sync_provider.allowed_private_hosts, LOCAL_DEVELOPMENT_HOSTS)
+        self.assertEqual(async_provider.allowed_private_hosts, LOCAL_DEVELOPMENT_HOSTS)
 
     @override_settings(
         LLAMA_CPP_SERVER_URL="http://llamacpp:8080/v1",
@@ -105,6 +110,28 @@ class EmbeddingsProviderResolutionTests(TestCase):
         self.assertEqual(async_provider.model, "system-model")
         self.assertEqual(sync_provider.api_key, "env-key")
         self.assertEqual(async_provider.api_key, "env-key")
+        self.assertEqual(sync_provider.allowed_private_hosts, ("system-embed",))
+        self.assertEqual(async_provider.allowed_private_hosts, ("system-embed",))
+
+    @override_settings(
+        MEMORY_EMBEDDINGS_URL="http://llamacpp-embeddings:8080/v1",
+        MEMORY_EMBEDDINGS_MODEL="system-model",
+    )
+    def test_system_source_allows_explicit_internal_compose_hostname(self):
+        provider = get_embeddings_provider(user_id=self.user.id)
+
+        self.assertIsNotNone(provider)
+        self.assertEqual(provider.allowed_private_hosts, ("llamacpp-embeddings",))
+
+    @override_settings(
+        MEMORY_EMBEDDINGS_URL="http://custom-embed.internal:8080/v1",
+        MEMORY_EMBEDDINGS_MODEL="system-model",
+    )
+    def test_system_source_allows_exact_admin_configured_private_hostname(self):
+        provider = get_embeddings_provider(user_id=self.user.id)
+
+        self.assertIsNotNone(provider)
+        self.assertEqual(provider.allowed_private_hosts, ("custom-embed.internal",))
 
     @override_settings(
         LLAMA_CPP_SERVER_URL="http://llamacpp:8080/v1",
@@ -295,3 +322,26 @@ class EmbeddingsSystemBackfillTests(TestCase):
         state.refresh_from_db()
         self.assertEqual(state.updated_at, initial_updated_at)
         mocked_select_for_update.assert_not_called()
+
+
+class EmbeddingRequestPolicyTests(TestCase):
+    @patch("nova.llm.embeddings.safe_http_request")
+    def test_compute_embedding_forwards_allowed_private_hosts(self, mocked_request):
+        mocked_response = Mock()
+        mocked_response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        mocked_response.raise_for_status.return_value = None
+        mocked_request.return_value = mocked_response
+        provider = EmbeddingsProvider(
+            provider_type="custom_http",
+            base_url="http://host.docker.internal:1234/v1",
+            model="text-embedding-model",
+            allowed_private_hosts=LOCAL_DEVELOPMENT_HOSTS,
+        )
+
+        vector = async_to_sync(compute_embedding)("hello", provider_override=provider)
+
+        self.assertEqual(len(vector), 1024)
+        self.assertEqual(
+            mocked_request.await_args.kwargs["allowed_private_hosts"],
+            LOCAL_DEVELOPMENT_HOSTS,
+        )

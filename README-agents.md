@@ -38,6 +38,8 @@ Recommended rule:
 | Base URL | `http://host.docker.internal:1234/v1` |
 | Max context tokens | `50000` |
 
+For Docker Desktop, `host.docker.internal` is the recommended local bridge for LM Studio and local embeddings. On Linux, use the host IP instead. Docker Compose-only internal hostnames should be configured as deployment-level system providers rather than per-user custom embeddings endpoints.
+
 ### Example Remote Provider
 
 | Field | Value |
@@ -208,6 +210,9 @@ Workflow:
 3. keep editing those same files
 
 The published app stays linked to the source directory.
+Published webapps are slug-based capability URLs. Production deployments should
+serve them from `WEBAPP_PUBLIC_ORIGIN`; Nova also applies sandbox defenses so the
+app does not run as the authenticated Nova origin.
 
 ## 7. Continuous Mode
 

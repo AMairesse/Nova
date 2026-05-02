@@ -4,7 +4,6 @@ import base64
 import html
 import ipaddress
 import json
-import re
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -49,8 +48,6 @@ from nova.runtime.task_executor import (
     ReactTerminalTaskExecutor,
 )
 from nova.runtime.terminal import (
-    BROWSER_DEFAULT_ELEMENT_ATTRIBUTES,
-    BROWSER_SINGLE_PANE_ERROR,
     TerminalCommandError,
     TerminalExecutor,
 )
@@ -59,8 +56,8 @@ from nova.tasks.tasks import build_source_message_prompt
 from nova.tasks.execution_trace import TaskExecutionTraceHandler
 from nova.tasks.TaskProgressHandler import TaskProgressHandler
 from nova.thread_titles import build_default_thread_subject
-from nova.web.browser_service import BrowserSessionError
 from nova.web.download_service import DEFAULT_DOWNLOAD_USER_AGENT, download_http_file
+from nova.web.network_policy import NetworkPolicyError
 
 
 class _FakeChannelLayer:
@@ -242,6 +239,36 @@ class DownloadServiceTests(SimpleTestCase):
         self.assertEqual(captured["proxy"], "http://127.0.0.1:43123")
         self.assertEqual(normalized_headers["user-agent"], "NovaOverride/2.0")
         self.assertEqual(normalized_headers["referer"], "https://example.com")
+
+    def test_download_http_file_enforces_max_size(self):
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                del kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, method, url):
+                del method, url
+                return _FakeDownloadStreamResponse(
+                    headers={"content-type": "image/png"},
+                    chunks=[b"abc", b"def"],
+                )
+
+        fake_proxy = AsyncMock()
+        fake_proxy.proxy_url = "http://127.0.0.1:43123"
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("93.184.216.34"),),
+        ), patch("nova.web.download_service.httpx.AsyncClient", new=FakeAsyncClient), patch(
+            "nova.web.download_service.SafeHttpProxyServer",
+            return_value=fake_proxy,
+        ):
+            with self.assertRaisesMessage(ValueError, "exceeds"):
+                async_to_sync(download_http_file)("https://example.com/image.png", max_size=5)
 
 
 class TerminalExecutorTests(TestCase):
@@ -1481,7 +1508,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--uid", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("persistent sandbox terminal", skills["python.md"])
-        self.assertIn("current Nova terminal session", skills["python.md"])
+        self.assertIn("current terminal session", skills["python.md"])
         self.assertIn("--workdir /project", skills["python.md"])
         self.assertIn("Copy attachments from `/inbox`", skills["python.md"])
         self.assertIn("date +%F %T", skills["date.md"])
@@ -1935,13 +1962,43 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
+        automatic_prompt = prompt.split("\n\nAgent instructions:", 1)[0]
 
         self.assertIn("[label](/path/file.ext)", prompt)
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
         self.assertIn("/history", prompt)
-        self.assertIn("Files uploaded in the thread Files panel", prompt)
+        self.assertIn("Files uploaded in the Files panel", prompt)
+        self.assertIn("Agent instructions:\nBe concise.", prompt)
+        self.assertNotIn("You are", automatic_prompt)
+        self.assertNotIn("Nova", automatic_prompt)
+        self.assertNotIn("Markdown", automatic_prompt)
         self.assertNotIn("React Terminal", prompt)
+
+    def test_toolless_system_prompt_omits_terminal_instructions(self):
+        self._apply_provider_capabilities(self.provider, tools="unsupported")
+        tooless_agent = AgentConfig.objects.create(
+            user=self.user,
+            name="Toolless Agent",
+            llm_provider=self.provider,
+            system_prompt="",
+            recursion_limit=4,
+        )
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=tooless_agent,
+            ).initialize
+        )()
+
+        prompt = runtime.build_system_prompt()
+        self.assertIn("Tool use is unavailable", prompt)
+        self.assertIn("Do not call terminal, delegate_to_agent, or ask_user.", prompt)
+        self.assertNotIn("Filesystem layout:", prompt)
+        self.assertNotIn("Enabled command families", prompt)
+        self.assertNotIn("Agent instructions:", prompt)
 
     def test_delegate_tool_description_is_neutral(self):
         runtime = async_to_sync(
@@ -2907,16 +2964,13 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("touch", prompt)
-        self.assertIn("tee", prompt)
-        self.assertIn("Text pipelines", prompt)
-        self.assertIn("not a full shell", prompt)
-        self.assertIn("`find`", prompt)
-        self.assertIn("`sort`", prompt)
-        self.assertIn("`ls -R`", prompt)
+        self.assertIn("Runtime instructions:", prompt)
+        self.assertIn("The main action surface is the `terminal` tool.", prompt)
+        self.assertIn("Use shell-like commands for terminal work.", prompt)
+        self.assertIn("Inspect `/skills`", prompt)
         self.assertIn("Use `date` for current date/time queries.", prompt)
         self.assertIn("--mailbox <email>", prompt)
-        self.assertIn("Files uploaded in the thread Files panel are persistent thread files available under `/`.", prompt)
+        self.assertIn("Files uploaded in the Files panel are persistent thread files under `/`.", prompt)
         self.assertIn("inspect `/` first", prompt)
         self.assertIn("- /: persistent files for this thread, including files added from the Files panel", prompt)
         self.assertNotIn("/thread", prompt)
@@ -2936,10 +2990,10 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("Files attached to the current user message are available under `/inbox`", prompt)
-        self.assertIn("older live-message attachments are available under `/history`", prompt)
+        self.assertIn("Current-message attachments are under `/inbox`", prompt)
+        self.assertIn("older live-message attachments are under `/history`", prompt)
         self.assertIn("inspect `/` first", prompt)
-        self.assertIn("only fall back to `/inbox` or `/history`", prompt)
+        self.assertIn("Only fall back to those mounts", prompt)
 
     def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
         memory_tool = Tool.objects.create(
@@ -3016,7 +3070,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         prompt = runtime.build_system_prompt()
         self.assertIn("search", prompt)
         self.assertIn("browse", prompt)
-        self.assertIn("do not persist", prompt)
+        self.assertIn("current run only", prompt)
         self.assertIn("curl", prompt)
         self.assertIn("wget", prompt)
 
@@ -3052,12 +3106,11 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("Use `python` directly", prompt)
+        self.assertIn("Use `python` inside", prompt)
         self.assertIn("pip install --user <package>", prompt)
         self.assertIn("--workdir", prompt)
-        self.assertIn("Do not use Python as a substitute", prompt)
         self.assertIn(
-            "Keep thread-scoped filesystem organization, cleanup, and webapp lifecycle work",
+            "Keep thread-scoped file organization, cleanup, and webapp lifecycle work",
             prompt,
         )
 
@@ -3176,7 +3229,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("continuous thread", prompt)
+        self.assertIn("Continuous threads", prompt)
         self.assertIn("history search", prompt)
         self.assertIn("history get", prompt)
 
@@ -3256,6 +3309,52 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("`/generated/poster.png`", result.final_answer)
         self.assertTrue(generated_content.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(generated_mime, "image/png")
+
+    def test_native_binary_http_output_uses_safe_download_service(self):
+        async def fake_download_http_file(url, **kwargs):
+            del kwargs
+            self.assertEqual(url, "https://example.com/generated.png")
+            return {
+                "content": b"png-bytes",
+                "mime_type": "image/png",
+            }
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        with patch("nova.runtime.agent.download_http_file", new=fake_download_http_file):
+            content, mime_type = async_to_sync(runtime._resolve_binary_output_payload)(
+                "https://example.com/generated.png",
+                default_mime_type="application/octet-stream",
+            )
+
+        self.assertEqual(content, b"png-bytes")
+        self.assertEqual(mime_type, "image/png")
+
+    def test_native_binary_http_output_propagates_network_policy_errors(self):
+        async def fake_download_http_file(url, **kwargs):
+            del url, kwargs
+            raise NetworkPolicyError("blocked private target")
+
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+            ).initialize
+        )()
+
+        with patch("nova.runtime.agent.download_http_file", new=fake_download_http_file):
+            with self.assertRaises(NetworkPolicyError):
+                async_to_sync(runtime._resolve_binary_output_payload)(
+                    "http://127.0.0.1/private.png",
+                    default_mime_type="image/png",
+                )
 
     @patch("nova.runtime.provider_client.ProviderClient.invoke_native_completion", new_callable=AsyncMock)
     def test_native_image_response_uses_explicit_markdown_generated_path(self, mocked_native_completion):

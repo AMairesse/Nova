@@ -81,12 +81,7 @@ class APIToolServiceTests(TestCase):
             json={"ok": True, "invoice_id": 42},
             request=request,
         )
-        client = AsyncMock()
-        client.__aenter__.return_value = client
-        client.__aexit__.return_value = False
-        client.request = AsyncMock(return_value=response)
-
-        with patch("nova.api_tools.service.httpx.AsyncClient", return_value=client):
+        with patch("nova.api_tools.service.safe_http_request", new=AsyncMock(return_value=response)) as mocked_request:
             result = async_to_sync(call_api_operation)(
                 tool=self.tool,
                 user=self.user,
@@ -101,19 +96,19 @@ class APIToolServiceTests(TestCase):
         self.assertEqual(result["body_kind"], "json")
         self.assertTrue(result["payload"]["response"]["json"]["ok"])
         self.assertEqual(
-            client.request.await_args.args[:2],
+            mocked_request.await_args.args[:2],
             ("POST", "https://api.example.com/invoices/42"),
         )
         self.assertEqual(
-            client.request.await_args.kwargs["params"],
+            mocked_request.await_args.kwargs["params"],
             {"mode": "draft"},
         )
         self.assertEqual(
-            client.request.await_args.kwargs["json"],
+            mocked_request.await_args.kwargs["json"],
             {"amount": 199},
         )
         self.assertEqual(
-            client.request.await_args.kwargs["headers"]["X-API-Key"],
+            mocked_request.await_args.kwargs["headers"]["X-API-Key"],
             "secret-api-key",
         )
 
@@ -131,6 +126,24 @@ class APIToolServiceTests(TestCase):
             )
 
         self.assertIn("Unknown input fields", str(cm.exception))
+
+    def test_call_api_operation_blocks_private_endpoint_before_network(self):
+        self.tool.endpoint = "http://127.0.0.1:8000"
+        self.tool.save(update_fields=["endpoint"])
+
+        with self.assertRaises(APIServiceError) as cm:
+            async_to_sync(call_api_operation)(
+                tool=self.tool,
+                user=self.user,
+                operation_selector="create_invoice",
+                payload={
+                    "invoice_id": 42,
+                    "mode": "draft",
+                    "payload": {"amount": 199},
+                },
+            )
+
+        self.assertIn("blocked by network policy", str(cm.exception))
 
     def test_call_api_operation_redacts_sensitive_request_and_response_fields(self):
         ToolCredential.objects.filter(user=self.user, tool=self.tool).update(
@@ -153,12 +166,7 @@ class APIToolServiceTests(TestCase):
             json={"ok": True, "echo": "secret-api-key"},
             request=request,
         )
-        client = AsyncMock()
-        client.__aenter__.return_value = client
-        client.__aexit__.return_value = False
-        client.request = AsyncMock(return_value=response)
-
-        with patch("nova.api_tools.service.httpx.AsyncClient", return_value=client):
+        with patch("nova.api_tools.service.safe_http_request", new=AsyncMock(return_value=response)):
             result = async_to_sync(call_api_operation)(
                 tool=self.tool,
                 user=self.user,
@@ -208,12 +216,7 @@ class APIToolServiceTests(TestCase):
             json={"ok": True},
             request=request,
         )
-        client = AsyncMock()
-        client.__aenter__.return_value = client
-        client.__aexit__.return_value = False
-        client.request = AsyncMock(return_value=response)
-
-        with patch("nova.api_tools.service.httpx.AsyncClient", return_value=client):
+        with patch("nova.api_tools.service.safe_http_request", new=AsyncMock(return_value=response)) as mocked_request:
             result = async_to_sync(call_api_operation)(
                 tool=self.tool,
                 user=self.user,
@@ -223,6 +226,6 @@ class APIToolServiceTests(TestCase):
 
         self.assertEqual(result["payload"]["response"]["json"]["ok"], True)
         self.assertEqual(
-            client.request.await_args.args[:2],
+            mocked_request.await_args.args[:2],
             ("GET", "https://api.example.com/https://attacker.tld/steal"),
         )

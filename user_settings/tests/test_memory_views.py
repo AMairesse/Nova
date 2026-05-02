@@ -13,6 +13,7 @@ from nova.models.MemoryDocument import MemoryDocument
 from nova.models.memory_common import MemoryRecordStatus
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.plugins.catalog import build_tools_page_catalog
+from nova.web.network_policy import LOCAL_DEVELOPMENT_HOSTS, NetworkPolicyError
 from user_settings.views.memory import MemorySettingsView
 
 
@@ -272,6 +273,8 @@ class MemorySettingsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertEqual(response.headers.get("HX-Refresh"), "true")
+        provider_override = mocked_compute_embedding.await_args.kwargs["provider_override"]
+        self.assertEqual(provider_override.allowed_private_hosts, LOCAL_DEVELOPMENT_HOSTS)
 
     def test_test_embeddings_warns_when_disabled(self):
         response = self.client.post(
@@ -321,6 +324,26 @@ class MemorySettingsViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Embeddings test failed: boom", self._messages(response))
+
+    @patch("user_settings.views.memory.compute_embedding", new_callable=AsyncMock)
+    def test_test_embeddings_private_network_error_includes_guidance(self, mocked_compute_embedding):
+        mocked_compute_embedding.side_effect = NetworkPolicyError("Access blocked")
+
+        response = self.client.post(
+            self.url,
+            self._payload(
+                source=MemoryEmbeddingsSource.CUSTOM,
+                url="http://service:8080/v1",
+                model="embed-small",
+                action="test_embeddings",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        message = self._messages(response)[0]
+        self.assertIn("Embeddings test failed: Access blocked", message)
+        self.assertIn("host.docker.internal", message)
+        self.assertIn("system embeddings provider", message)
 
     def test_invalid_form_renders_errors(self):
         response = self.client.post(

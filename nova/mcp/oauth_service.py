@@ -29,6 +29,7 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAu
 
 from nova.models.Tool import Tool, ToolCredential
 from nova.utils import normalize_url
+from nova.web.safe_http import safe_http_request, safe_http_send
 
 logger = logging.getLogger(__name__)
 
@@ -197,55 +198,54 @@ async def _mark_reconnect_required(
 async def _discover_oauth_metadata(*, endpoint: str) -> tuple[dict[str, Any], OAuthMetadata, str | None]:
     normalized_endpoint = normalize_url(endpoint)
     timeout = httpx.Timeout(10.0, read=10.0)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-        probe_response = await client.get(normalized_endpoint)
-        if probe_response.status_code not in (401, 403):
-            probe_response = await client.post(normalized_endpoint, json={})
-        if probe_response.status_code not in (401, 403):
-            raise MCPOAuthError(
-                "The MCP server did not request OAuth authentication during the connection test."
-            )
-
-        resource_metadata_hint = extract_resource_metadata_from_www_auth(probe_response)
-        selected_resource_metadata_url: str | None = None
-        protected_resource_metadata = None
-        for url in build_protected_resource_metadata_discovery_urls(resource_metadata_hint, normalized_endpoint):
-            response = await client.get(url)
-            protected_resource_metadata = await handle_protected_resource_response(response)
-            if protected_resource_metadata is not None:
-                selected_resource_metadata_url = url
-                break
-        if protected_resource_metadata is None:
-            raise MCPOAuthError("Could not discover protected resource metadata for this MCP server.")
-
-        auth_server_url = str(protected_resource_metadata.authorization_servers[0])
-        oauth_metadata = None
-        for url in build_oauth_authorization_server_metadata_discovery_urls(auth_server_url, normalized_endpoint):
-            response = await client.get(url)
-            ok, oauth_metadata = await handle_auth_metadata_response(response)
-            if not ok:
-                break
-            if oauth_metadata is not None:
-                break
-        if oauth_metadata is None:
-            raise MCPOAuthError("Could not discover the OAuth authorization server metadata.")
-
-        scope = get_client_metadata_scopes(
-            extract_scope_from_www_auth(probe_response),
-            protected_resource_metadata,
-            oauth_metadata,
+    probe_response = await safe_http_request("GET", normalized_endpoint, timeout=timeout)
+    if probe_response.status_code not in (401, 403):
+        probe_response = await safe_http_request("POST", normalized_endpoint, json={}, timeout=timeout)
+    if probe_response.status_code not in (401, 403):
+        raise MCPOAuthError(
+            "The MCP server did not request OAuth authentication during the connection test."
         )
-        return (
-            {
-                "resource_metadata_url": selected_resource_metadata_url,
-                "auth_server_url": auth_server_url,
-                "authorization_endpoint": str(oauth_metadata.authorization_endpoint or ""),
-                "token_endpoint": str(oauth_metadata.token_endpoint or ""),
-                "registration_endpoint": str(oauth_metadata.registration_endpoint or ""),
-            },
-            oauth_metadata,
-            scope,
-        )
+
+    resource_metadata_hint = extract_resource_metadata_from_www_auth(probe_response)
+    selected_resource_metadata_url: str | None = None
+    protected_resource_metadata = None
+    for url in build_protected_resource_metadata_discovery_urls(resource_metadata_hint, normalized_endpoint):
+        response = await safe_http_request("GET", url, timeout=timeout)
+        protected_resource_metadata = await handle_protected_resource_response(response)
+        if protected_resource_metadata is not None:
+            selected_resource_metadata_url = url
+            break
+    if protected_resource_metadata is None:
+        raise MCPOAuthError("Could not discover protected resource metadata for this MCP server.")
+
+    auth_server_url = str(protected_resource_metadata.authorization_servers[0])
+    oauth_metadata = None
+    for url in build_oauth_authorization_server_metadata_discovery_urls(auth_server_url, normalized_endpoint):
+        response = await safe_http_request("GET", url, timeout=timeout)
+        ok, oauth_metadata = await handle_auth_metadata_response(response)
+        if not ok:
+            break
+        if oauth_metadata is not None:
+            break
+    if oauth_metadata is None:
+        raise MCPOAuthError("Could not discover the OAuth authorization server metadata.")
+
+    scope = get_client_metadata_scopes(
+        extract_scope_from_www_auth(probe_response),
+        protected_resource_metadata,
+        oauth_metadata,
+    )
+    return (
+        {
+            "resource_metadata_url": selected_resource_metadata_url,
+            "auth_server_url": auth_server_url,
+            "authorization_endpoint": str(oauth_metadata.authorization_endpoint or ""),
+            "token_endpoint": str(oauth_metadata.token_endpoint or ""),
+            "registration_endpoint": str(oauth_metadata.registration_endpoint or ""),
+        },
+        oauth_metadata,
+        scope,
+    )
 
 
 async def _ensure_client_registration(
@@ -283,8 +283,7 @@ async def _ensure_client_registration(
         ),
     )
     timeout = httpx.Timeout(10.0, read=10.0)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-        response = await client.send(registration_request)
+    response = await safe_http_send(registration_request, timeout=timeout)
     client_info = await handle_registration_response(response)
     credential.client_id = client_info.client_id
     credential.client_secret = client_info.client_secret
@@ -402,8 +401,13 @@ async def complete_mcp_oauth_flow(
     }
     data, headers = _prepare_token_auth(client_info=client_info, data=data, headers=headers)
     timeout = httpx.Timeout(10.0, read=10.0)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-        response = await client.post(token_endpoint, data=data, headers=headers)
+    response = await safe_http_request(
+        "POST",
+        token_endpoint,
+        data=data,
+        headers=headers,
+        timeout=timeout,
+    )
     if response.status_code != 200:
         body = await response.aread()
         detail = body.decode("utf-8", errors="replace")
@@ -469,8 +473,13 @@ async def get_valid_mcp_access_token(
     data, headers = _prepare_token_auth(client_info=client_info, data=data, headers=headers)
     timeout = httpx.Timeout(10.0, read=10.0)
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-            response = await client.post(token_endpoint, data=data, headers=headers)
+        response = await safe_http_request(
+            "POST",
+            token_endpoint,
+            data=data,
+            headers=headers,
+            timeout=timeout,
+        )
         if response.status_code != 200:
             body = await response.aread()
             detail = body.decode("utf-8", errors="replace")

@@ -22,6 +22,8 @@ from nova.security.redaction import (
     redact_url,
 )
 from nova.web.download_service import infer_download_filename
+from nova.web.network_policy import NetworkPolicyError
+from nova.web.safe_http import safe_http_request
 
 logger = logging.getLogger(__name__)
 
@@ -302,11 +304,17 @@ async def call_api_operation(
         request_kwargs["json"] = body
 
     try:
-        async with httpx.AsyncClient(timeout=API_CALL_TIMEOUT, follow_redirects=True) as client:
-            response = await client.request(operation.http_method, url, **request_kwargs)
-            response.raise_for_status()
+        response = await safe_http_request(
+            operation.http_method,
+            url,
+            timeout=API_CALL_TIMEOUT,
+            **request_kwargs,
+        )
+        response.raise_for_status()
     except JSONSchemaValidationError as exc:
         raise APIServiceError(f"Input validation failed: {exc.message}") from exc
+    except NetworkPolicyError as exc:
+        raise APIServiceError(f"API endpoint blocked by network policy: {exc}") from exc
     except httpx.HTTPStatusError as exc:
         detail = str(exc.response.text or "").strip()
         if detail:

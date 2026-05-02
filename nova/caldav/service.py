@@ -19,6 +19,7 @@ from nova.plugins.shared.multi_instance import (
     format_invalid_instance_message,
     normalize_instance_key,
 )
+from nova.web.network_policy import assert_allowed_egress_url_sync
 
 logger = logging.getLogger(__name__)
 EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
@@ -107,6 +108,7 @@ def _get_caldav_client_sync(user, tool_id: int):
     if not all([caldav_url, username, password]):
         raise ValueError(_("Incomplete CalDav configuration: missing URL, username, or password"))
 
+    assert_allowed_egress_url_sync(caldav_url)
     client = caldav.DAVClient(
         url=caldav_url,
         username=username,

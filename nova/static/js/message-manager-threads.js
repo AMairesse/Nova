@@ -280,14 +280,12 @@
                 if (!response.ok || data.status !== 'OK') {
                     throw new Error(data.message || gettext('Failed to delete thread.'));
                 }
-                const escapedThreadId = window.CSS?.escape
-                    ? window.CSS.escape(`${threadId}`)
-                    : `${threadId}`.replace(/"/g, '\\"');
-
                 document.querySelectorAll(
-                    `[data-thread-item-id="${escapedThreadId}"]`
+                    '[data-thread-item-id]'
                 ).forEach((threadElement) => {
-                    threadElement.remove();
+                    if (`${threadElement.dataset.threadItemId || ''}` === `${threadId}`) {
+                        threadElement.remove();
+                    }
                 });
 
                 try {
@@ -296,6 +294,13 @@
                     console.warn('Failed to refresh thread lists after deletion:', refreshError);
                     window.ResponsiveManager?.syncThreadLists?.();
                 }
+                document.querySelectorAll(
+                    '[data-thread-item-id]'
+                ).forEach((threadElement) => {
+                    if (`${threadElement.dataset.threadItemId || ''}` === `${threadId}`) {
+                        threadElement.remove();
+                    }
+                });
 
                 const firstThread = document.querySelector(
                     '#threads-list .thread-link'

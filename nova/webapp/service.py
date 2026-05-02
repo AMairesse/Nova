@@ -144,6 +144,10 @@ def _get_webapp_sync(user, slug: str, *, thread=None) -> WebApp | None:
     return query.first()
 
 
+def _get_public_webapp_sync(slug: str) -> WebApp | None:
+    return WebApp.objects.filter(slug=slug).first()
+
+
 def _path_impacts_webapp(webapp: WebApp, path: str) -> bool:
     source_root = str(webapp.source_root or "").strip()
     normalized = posixpath.normpath(str(path or "").strip() or "/")
@@ -405,8 +409,7 @@ async def delete_webapp(
     return {"slug": slug, "status": "deleted"}
 
 
-def get_live_file_for_webapp(*, user, slug: str, requested_path: str | None = None) -> LiveWebAppFile | None:
-    webapp = _get_webapp_sync(user, slug)
+def _get_live_file_for_webapp_record(webapp: WebApp | None, requested_path: str | None = None) -> LiveWebAppFile | None:
     if webapp is None:
         return None
 
@@ -435,6 +438,14 @@ def get_live_file_for_webapp(*, user, slug: str, requested_path: str | None = No
         relative_path=relative_path,
         mime_type=_guess_public_mime(user_file, relative_path),
     )
+
+
+def get_live_file_for_webapp(*, user, slug: str, requested_path: str | None = None) -> LiveWebAppFile | None:
+    return _get_live_file_for_webapp_record(_get_webapp_sync(user, slug), requested_path)
+
+
+def get_live_file_for_public_webapp(*, slug: str, requested_path: str | None = None) -> LiveWebAppFile | None:
+    return _get_live_file_for_webapp_record(_get_public_webapp_sync(slug), requested_path)
 
 
 async def maybe_touch_impacted_webapps(

@@ -123,6 +123,7 @@ newer dynamic upstream configuration.
   - Starts llama.cpp server and exposes a system provider in Nova.
 - `docker-compose.add-llamacpp-embeddings.yml`
   - Starts llama.cpp embeddings server for memory embeddings.
+  - Keeps `MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1` as a supported internal Docker Compose endpoint.
 - `docker-compose.add-pgadmin.yml`
   - Adds pgAdmin on port `5050`.
 
@@ -189,6 +190,20 @@ Core settings:
 - `HOST_PORT`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`
 
 For production deployments behind a real domain, `ALLOWED_HOSTS` must include the public hostname and `CSRF_TRUSTED_ORIGINS` must include the matching `https://` origin. If those stay on `localhost`, managed OAuth callback URLs and WebSocket streaming will not work correctly.
+
+Webapp isolation:
+
+- `WEBAPP_PUBLIC_ORIGIN`: optional dedicated origin for published user webapps, for example `https://apps.example.com`
+
+In production, using a separate webapp origin is strongly recommended. Add both the main Nova hostname and the webapp hostname to `ALLOWED_HOSTS`; keep `CSRF_TRUSTED_ORIGINS` focused on the authenticated Nova origin.
+
+Outbound egress policy:
+
+- `NOVA_EGRESS_ALLOWLIST`: comma-separated admin allowlist for tenant-configured integrations that legitimately target internal hosts, wildcard hostnames, IPs, or CIDR ranges
+- `NOVA_EGRESS_ALLOW_PRIVATE_IN_DEBUG`: local-development escape hatch for private egress targets; keep it `False` in production
+
+By default, Nova blocks tenant-configured outbound targets that resolve to loopback, private, link-local, multicast, reserved, cloud metadata, carrier-grade NAT, single-label, `.local`, `.internal`, or `localhost` destinations.
+Built-in local model flows remain supported: user-configured custom embeddings may target `localhost`, `127.0.0.1`, `::1`, `host.docker.internal`, or `docker.internal`, while admin-configured system URLs such as `OLLAMA_SERVER_URL`, `LLAMA_CPP_SERVER_URL`, and `MEMORY_EMBEDDINGS_URL` may also point to explicit internal Docker Compose hostnames.
 
 Optional module settings:
 

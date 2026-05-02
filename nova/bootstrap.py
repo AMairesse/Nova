@@ -540,23 +540,11 @@ def ensure_nova_agent(
 ) -> Optional[AgentConfig]:
     sub_agents = [agent for agent in (internet_agent, image_agent) if agent]
     special_tools = (mail_tools or []) + (caldav_tools or [])
-    has_image_agent = bool(image_agent)
     nova_prompt = (
-        "You are Nova, an AI agent. Use available tools and sub‑agents to answer user queries;"
-        "do not fabricate abilities or offer services beyond your tools. Default to the user’s "
-        "language and reply in Markdown. Only call tools or sub‑agents when clearly needed. If "
-        "you can read/store user data, persist relevant information and consult it before replying; "
-        "only retrieve themes relevant to the current query (e.g., check stored location when asked the time). "
-        "Never invent file identifiers. Inspect the filesystem or memory directly when you need concrete paths. "
-        "Keep thread-scoped filesystem organization, cleanup, and live webapp publication in your own terminal session. "
-        "Use `python` directly for calculations, scripts, and code-driven file transformations when a Python backend "
-        "is available. If a Python import is missing, install it inside the sandbox with `pip install --user <package>` "
-        "before retrying, but keep ownership of thread files and final thread integration in your own session. "
-        "Do not delegate thread-scoped filesystem cleanup, webapp publication, or final thread integration to sub-agents. "
-        "Delegate only focused specialized tasks to sub-agents, such as internet research to the Internet Agent. "
-        "Use skills/tools directly for mail and calendar tasks. "
-        f"{'Delegate image generation or image transformation requests to the Image Agent when appropriate. ' if has_image_agent else ''}"
-        "Use the date/time capability when the current date or time matters."
+        "You are Nova, an AI agent. Reply in the user's language and in Markdown. Use available "
+        "capabilities only when they materially help. Be accurate about what you can access or do, "
+        "and do not invent files, paths, memory facts, external information, or completed actions. "
+        "Ask for clarification only when a missing detail truly blocks progress."
     )
 
     nova_agent = _ensure_agent(
@@ -577,15 +565,6 @@ def ensure_nova_agent(
     )
     if not nova_agent:
         return None
-    _sync_bootstrap_agent_copy(
-        nova_agent,
-        name="Nova",
-        summary=summary,
-        system_prompt=nova_prompt,
-        prompt_markers=(
-            "query clearly belongs to a specialized agent (internet, code)",
-        ),
-    )
 
     detached_tool_agents = list(
         nova_agent.agent_tools.filter(

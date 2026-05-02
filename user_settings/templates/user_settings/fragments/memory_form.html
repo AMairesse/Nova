@@ -71,6 +71,10 @@
       <div
         class="{% if selected_embeddings_source != 'custom' %}d-none{% endif %}"
         data-memory-custom-fields>
+        <div class="alert alert-light border small">
+          {% trans "Custom local endpoints are supported only for localhost, 127.0.0.1, ::1, host.docker.internal, and docker.internal." %}
+          {% trans "If your embeddings engine is reachable only through an internal Docker Compose hostname, configure it as the system embeddings provider instead." %}
+        </div>
         {{ form.memory_embeddings_url|as_crispy_field }}
         {{ form.memory_embeddings_model|as_crispy_field }}
         {{ form.memory_embeddings_api_key|as_crispy_field }}

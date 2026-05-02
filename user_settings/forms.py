@@ -25,9 +25,12 @@ from nova.plugins.catalog import (
     get_user_creatable_connection_choices,
     resolve_connection_kind,
 )
+from nova.plugins.registry import resolve_active_plugins
 from nova.providers import get_provider_defaults
 from nova.models.Tool import Tool, ToolCredential
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
+from nova.runtime.capabilities import TerminalCapabilities
+from nova.runtime.system_prompt import build_automatic_runtime_instructions
 from user_settings.mixins import SecretPreserveMixin
 
 
@@ -275,9 +278,10 @@ class AgentForm(forms.ModelForm):
         self.fields["max_summary_length"].required = False
         self.fields["summary_model"].required = False
         self.fields["system_prompt"].help_text = _(
-            "Literal prompt text. The current date/time is not injected automatically; "
-            "agents should use the date capability when they need it."
+            "Agent identity, style, language, behavioral preferences, and domain instructions. "
+            "Technical runtime instructions are added automatically and shown above."
         )
+        self.automatic_runtime_prompt = self._build_automatic_runtime_prompt_preview()
 
         # Crispy-forms helper
         #
@@ -314,16 +318,6 @@ class AgentForm(forms.ModelForm):
                 "connection_tools",
             ),
             "agent_tools",
-            Div(
-                Field("auto_summarize"),
-                Field("token_threshold"),
-                Field("preserve_recent"),
-                Field("strategy"),
-                Field("max_summary_length"),
-                Field("summary_model"),
-                css_class="mt-4 p-3 border rounded",
-                css_id="summarization-settings",
-            ),
         )
         self.provider_tool_warning = self._compute_provider_tool_warning()
         self.provider_capability_map = self._build_provider_capability_map()
@@ -414,16 +408,20 @@ class AgentForm(forms.ModelForm):
                 if len(values) > 1:
                     return values
             return self.data.get(field_name)
-        if field_name == "tools" and self.instance.pk:
-            return list(self.instance.tools.values_list("pk", flat=True))
+        if field_name == "tools":
+            if self.instance.pk:
+                return list(self.instance.tools.values_list("pk", flat=True))
+            return []
         if field_name == "standard_capabilities":
             return self.initial.get(field_name) or []
         if field_name in {"search_backend", "python_backend"}:
             return self.initial.get(field_name) or ""
         if field_name == "connection_tools":
             return self.initial.get(field_name) or []
-        if field_name == "agent_tools" and self.instance.pk:
-            return list(self.instance.agent_tools.values_list("pk", flat=True))
+        if field_name == "agent_tools":
+            if self.instance.pk:
+                return list(self.instance.agent_tools.values_list("pk", flat=True))
+            return []
         return self.initial.get(field_name) or getattr(self.instance, field_name, None)
 
     def _has_selected_tool_dependencies(self) -> bool:
@@ -442,6 +440,55 @@ class AgentForm(forms.ModelForm):
         if self.instance.pk:
             return self.instance.has_explicit_tool_dependencies()
         return False
+
+    def _selected_values(self, field_name: str) -> list[str]:
+        value = self._bound_or_initial_value(field_name)
+        if value is None:
+            return []
+        if hasattr(value, "values_list"):
+            return [str(item) for item in value.values_list("pk", flat=True)]
+        if isinstance(value, (list, tuple, set)):
+            values = value
+        else:
+            values = [value]
+        normalized: list[str] = []
+        for item in values:
+            raw = getattr(item, "pk", item)
+            text = str(raw or "").strip()
+            if text:
+                normalized.append(text)
+        return normalized
+
+    def _selected_int_ids(self, field_names: tuple[str, ...]) -> set[int]:
+        selected_ids: set[int] = set()
+        for field_name in field_names:
+            for raw_value in self._selected_values(field_name):
+                try:
+                    selected_ids.add(int(raw_value))
+                except (TypeError, ValueError):
+                    continue
+        return selected_ids
+
+    def _build_automatic_runtime_prompt_preview(self) -> str:
+        selected_tool_ids = self._selected_int_ids(
+            (
+                "tools",
+                "standard_capabilities",
+                "search_backend",
+                "python_backend",
+                "connection_tools",
+            )
+        )
+        selected_agent_ids = self._selected_int_ids(("agent_tools",))
+        selected_tools = list(self.fields["tools"].queryset.filter(pk__in=selected_tool_ids))
+        selected_subagents = list(self.fields["agent_tools"].queryset.filter(pk__in=selected_agent_ids))
+        plugins = resolve_active_plugins(tools=selected_tools, subagents=selected_subagents)
+        capabilities = TerminalCapabilities(plugins=plugins, subagents=selected_subagents)
+        return build_automatic_runtime_instructions(
+            capabilities=capabilities,
+            tools_enabled=True,
+            allow_ask_user=True,
+        )
 
     def _build_provider_capability_map(self) -> dict[str, dict[str, str]]:
         provider_queryset = self.fields["llm_provider"].queryset

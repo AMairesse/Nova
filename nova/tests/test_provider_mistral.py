@@ -151,8 +151,9 @@ class MistralProviderTests(SimpleTestCase):
         self.assertEqual(snapshot["operations"]["tools"], "unsupported")
         self.assertEqual(snapshot["operations"]["vision"], "pass")
 
+    @patch("nova.providers.mistral.assert_allowed_egress_url_sync")
     @patch("nova.providers.mistral.Mistral")
-    def test_adapter_stream_chat_returns_native_streaming_payload(self, mocked_mistral):
+    def test_adapter_stream_chat_returns_native_streaming_payload(self, mocked_mistral, _mocked_policy):
         client = Mock()
         client.chat.stream_async = AsyncMock(
             return_value=_FakeAsyncStream(
@@ -192,43 +193,37 @@ class MistralProviderTests(SimpleTestCase):
         self.assertEqual(response["streaming_mode"], "native")
         self.assertEqual(response["total_tokens"], 11)
 
-    @patch("nova.providers.mistral.httpx.AsyncClient")
-    def test_fetch_mistral_model_catalog_accepts_data_payload_shape(self, mocked_client_class):
-        mocked_response = Mock()
-        mocked_response.status_code = 200
-        mocked_response.json.return_value = {
+    @patch("nova.providers.mistral.safe_http_request", new_callable=AsyncMock)
+    def test_fetch_mistral_model_catalog_accepts_data_payload_shape(self, mocked_request):
+        mocked_request.return_value = ResponseStub(
+            payload={
             "object": "list",
             "data": [
                 {"id": "mistral-small-latest", "capabilities": {"completion_chat": True}},
                 {"id": "mistral-large-latest", "capabilities": {"completion_chat": True}},
             ],
-        }
-        mocked_client = AsyncMock()
-        mocked_client.get.return_value = mocked_response
-        mocked_client_class.return_value.__aenter__.return_value = mocked_client
-        mocked_client_class.return_value.__aexit__.return_value = False
+            }
+        )
 
         payload = async_to_sync(fetch_mistral_model_catalog)("dummy-secret", None)
 
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["id"], "mistral-small-latest")
 
-    @patch("nova.providers.mistral.httpx.AsyncClient")
-    def test_fetch_mistral_model_catalog_maps_timeout_and_http_errors(self, mocked_client_class):
+    @patch("nova.providers.mistral.safe_http_request", new_callable=AsyncMock)
+    def test_fetch_mistral_model_catalog_maps_timeout_and_http_errors(self, mocked_request):
         for error in [
             httpx.TimeoutException("timeout"),
             httpx.HTTPError("boom"),
         ]:
             with self.subTest(error=type(error).__name__):
-                mocked_client = AsyncMock()
-                mocked_client.get.side_effect = error
-                mocked_client_class.return_value.__aenter__.return_value = mocked_client
-                mocked_client_class.return_value.__aexit__.return_value = False
+                mocked_request.side_effect = error
 
                 with self.assertRaises(RuntimeError):
                     async_to_sync(fetch_mistral_model_catalog)("dummy-secret", None)
 
-                mocked_client_class.reset_mock()
+                mocked_request.reset_mock()
+                mocked_request.side_effect = None
 
     def test_fetch_mistral_model_catalog_requires_api_key(self):
         with self.assertRaises(RuntimeError):

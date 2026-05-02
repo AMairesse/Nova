@@ -18,6 +18,7 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.UserObjects import MemoryEmbeddingsSource, UserParameters
 from nova.tasks.conversation_embedding_tasks import rebuild_user_conversation_embeddings_task
 from nova.tasks.memory_rebuild_tasks import rebuild_user_memory_embeddings_task
+from nova.web.network_policy import LOCAL_DEVELOPMENT_HOSTS, NetworkPolicyError
 from user_settings.forms import UserMemoryEmbeddingsForm
 from user_settings.mixins import DashboardRedirectMixin
 
@@ -40,6 +41,7 @@ class MemorySettingsView(
     success_message = _("Memory settings updated successfully")
     dashboard_tab = "memory"
     success_url = reverse_lazy("user_settings:dashboard")
+    custom_local_hosts = ", ".join(LOCAL_DEVELOPMENT_HOSTS)
 
     def get_object(self, queryset=None):
         obj, _ = UserParameters.objects.get_or_create(user=self.request.user)
@@ -144,6 +146,19 @@ class MemorySettingsView(
             )
         return _("Embeddings are disabled for memory.")
 
+    def _private_network_guidance(self, selected_source: str) -> str:
+        supported_hosts = self.custom_local_hosts
+        if selected_source == MemoryEmbeddingsSource.CUSTOM:
+            return _(
+                "Custom local embeddings endpoints are limited to %(hosts)s. "
+                "For Docker Compose-only services or other private hosts, use the system embeddings provider "
+                "or ask an administrator to configure NOVA_EGRESS_ALLOWLIST."
+            ) % {"hosts": supported_hosts}
+        return _(
+            "If this system embeddings endpoint targets a private host, ask the administrator to configure "
+            "MEMORY_EMBEDDINGS_URL to that exact endpoint or use NOVA_EGRESS_ALLOWLIST when appropriate."
+        )
+
     def post(self, request, *args, **kwargs):
         if request.POST.get("action") == "cancel_reembed":
             request.session.pop("memory_embeddings_pending", None)
@@ -194,6 +209,7 @@ class MemorySettingsView(
                     base_url=values["memory_embeddings_url"],
                     model=values["memory_embeddings_model"],
                     api_key=values["memory_embeddings_api_key"],
+                    allowed_private_hosts=LOCAL_DEVELOPMENT_HOSTS,
                 )
             else:
                 provider = self._resolve_values(values).provider
@@ -215,6 +231,15 @@ class MemorySettingsView(
                         _("Embeddings OK: got %(dims)s dimensions from %(provider)s")
                         % {"dims": len(vec), "provider": provider.provider_type},
                     )
+            except NetworkPolicyError as e:
+                messages.error(
+                    request,
+                    _("Embeddings test failed: %(err)s %(guidance)s")
+                    % {
+                        "err": str(e),
+                        "guidance": self._private_network_guidance(selected_source),
+                    },
+                )
             except Exception as e:
                 messages.error(request, _("Embeddings test failed: %(err)s") % {"err": str(e)})
 

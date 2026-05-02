@@ -265,6 +265,7 @@ class PlaywrightLiveServerTestCase(StaticLiveServerTestCase):
         has_touch: bool = False,
         is_mobile: bool = False,
         extra_init_scripts: list[str] | None = None,
+        init_scripts: list[str] | None = None,
     ):
         self.context = self.browser.new_context(
             viewport=viewport or {"width": 1440, "height": 960},
@@ -272,7 +273,8 @@ class PlaywrightLiveServerTestCase(StaticLiveServerTestCase):
             is_mobile=is_mobile,
         )
         self.context.add_init_script(_FAKE_BROWSER_RUNTIME)
-        for script in extra_init_scripts or []:
+        scripts = list(extra_init_scripts or []) + list(init_scripts or [])
+        for script in scripts:
             self.context.add_init_script(script)
         self.page = self.context.new_page()
 

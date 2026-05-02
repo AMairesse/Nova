@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.providers import list_provider_models
 from nova.providers.lmstudio import fetch_lmstudio_models
+from nova.providers.openai_compatible import OPENAI_COMPATIBLE_LOCAL_HOSTS
 
 
 class ProviderCatalogTests(SimpleTestCase):
@@ -120,8 +121,8 @@ class ProviderCatalogTests(SimpleTestCase):
         self.assertEqual(payload[1]["state"]["loaded"], False)
         self.assertEqual(len(payload), 2)
 
-    @patch("nova.providers.lmstudio.httpx.AsyncClient")
-    def test_fetch_lmstudio_models_accepts_models_payload_shape(self, mocked_client_class):
+    @patch("nova.providers.lmstudio.safe_http_request", new_callable=AsyncMock)
+    def test_fetch_lmstudio_models_accepts_models_payload_shape(self, mocked_request):
         mocked_response = Mock()
         mocked_response.status_code = 200
         mocked_response.json.return_value = {
@@ -132,15 +133,20 @@ class ProviderCatalogTests(SimpleTestCase):
                 {"key": "model-b", "type": "llm"},
             ],
         }
-        mocked_client = AsyncMock()
-        mocked_client.get.return_value = mocked_response
-        mocked_client_class.return_value.__aenter__.return_value = mocked_client
-        mocked_client_class.return_value.__aexit__.return_value = False
+        mocked_request.return_value = mocked_response
 
         payload = async_to_sync(fetch_lmstudio_models)("http://localhost:1234")
 
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["key"], "model-a")
+        self.assertEqual(
+            mocked_request.await_args.args[:2],
+            ("GET", "http://localhost:1234/api/v1/models"),
+        )
+        self.assertEqual(
+            mocked_request.await_args.kwargs["allowed_private_hosts"],
+            OPENAI_COMPATIBLE_LOCAL_HOSTS,
+        )
 
     def test_manual_provider_types_return_empty_catalog(self):
         payload = async_to_sync(list_provider_models)(

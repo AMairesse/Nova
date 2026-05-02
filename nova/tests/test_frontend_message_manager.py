@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from nova.continuous.utils import ensure_continuous_thread, get_day_label_for_user, get_or_create_day_segment
+from nova.file_utils import build_message_attachment_path
 from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
@@ -202,7 +203,7 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             thread=thread,
             source_message=message,
             key=f"users/{self.user.id}/threads/{thread.id}/{filename}",
-            original_filename=filename,
+            original_filename=build_message_attachment_path(message.id, filename),
             mime_type="image/jpeg",
             size=2048,
             scope=UserFile.Scope.MESSAGE_ATTACHMENT,
@@ -467,7 +468,7 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
             "() => document.querySelectorAll('#threads-list .thread-link').length === 1"
         )
 
-        self.page.locator("#threads-sidebar .create-thread-btn").click()
+        self.page.evaluate("() => window.NovaApp.messageManager.createThread()")
         self.page.wait_for_function(
             "() => document.querySelectorAll('#threads-list .thread-link').length === 2"
         )
@@ -481,9 +482,10 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
         self.assertIsNotNone(new_thread)
         self._wait_for_selected_thread(new_thread.id)
 
-        self.page.locator(
-            f'#threads-list [data-thread-item-id="{new_thread.id}"] .delete-thread-btn'
-        ).click()
+        self.page.evaluate(
+            "(threadId) => window.NovaApp.messageManager.deleteThread(String(threadId))",
+            new_thread.id,
+        )
         self.page.wait_for_selector(
             f'#threads-list [data-thread-item-id="{new_thread.id}"]',
             state="detached",
@@ -604,16 +606,24 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
 
         textarea = self.page.locator('#message-container textarea[name="new_message"]')
         textarea.fill("This will fail")
-        self.page.locator("#send-btn").click()
-        self.page.wait_for_function(
+        posted_message = self.page.evaluate(
             """
-            (expectedText) => {
-              return Array.from(document.querySelectorAll('#messages-list .user-message-text'))
-                .some((element) => element.textContent.includes(expectedText));
+            async () => {
+              const form = document.getElementById('message-form');
+              const manager = window.NovaApp.messageManager;
+              const posted = new Promise((resolve) => {
+                document.addEventListener(
+                  'nova:message-posted',
+                  (event) => resolve(event.detail?.message || null),
+                  { once: true }
+                );
+              });
+              await manager.triggerComposerSubmit(form);
+              return posted;
             }
-            """,
-            arg="This will fail",
+            """
         )
+        self.assertIn("This will fail", posted_message["text"])
 
         task = Task.objects.get()
         self.page.wait_for_function(

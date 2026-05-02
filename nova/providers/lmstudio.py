@@ -8,10 +8,12 @@ import httpx
 
 from nova.providers.base import BaseProviderAdapter, ProviderDefaults
 from nova.providers.openai_compatible import (
+    OPENAI_COMPATIBLE_LOCAL_HOSTS,
     complete_openai_compatible_chat,
     normalize_openai_compatible_multimodal_content,
     stream_openai_compatible_chat,
 )
+from nova.web.safe_http import safe_http_request
 
 
 LMSTUDIO_DEFAULT_BASE_URL = "http://localhost:1234/v1"
@@ -49,8 +51,12 @@ def get_lmstudio_model_identifier(model_metadata: dict) -> str:
 
 async def fetch_lmstudio_models(base_url: str | None) -> list[dict]:
     timeout = httpx.Timeout(20.0, connect=5.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(get_lmstudio_models_url(base_url))
+    response = await safe_http_request(
+        "GET",
+        get_lmstudio_models_url(base_url),
+        timeout=timeout,
+        allowed_private_hosts=OPENAI_COMPATIBLE_LOCAL_HOSTS,
+    )
 
     if response.status_code >= 400:
         raise RuntimeError(f"LM Studio models request failed with HTTP {response.status_code}.")
@@ -135,6 +141,7 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
             messages=messages,
             tools=tools,
             normalize_content=self.normalize_multimodal_content,
+            allowed_private_hosts=OPENAI_COMPATIBLE_LOCAL_HOSTS,
         )
 
     async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
@@ -146,6 +153,7 @@ class LMStudioProviderAdapter(BaseProviderAdapter):
             tools=tools,
             normalize_content=self.normalize_multimodal_content,
             on_content_delta=on_content_delta,
+            allowed_private_hosts=OPENAI_COMPATIBLE_LOCAL_HOSTS,
         )
 
     def normalize_multimodal_content(self, content):

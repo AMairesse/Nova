@@ -22,21 +22,27 @@
         {{ form.provider_tool_warning }}
       {% endif %}
     </div>
+    <details class="mb-3 border rounded p-3">
+      <summary class="fw-semibold">{% trans "Automatic runtime instructions" %}</summary>
+      <p class="text-muted small mt-3 mb-2">
+        {% trans "These technical instructions are always added automatically. Some lines may vary at run time, such as continuous mode, current-message attachments, or tool-less execution." %}
+      </p>
+      <pre class="bg-light border rounded p-3 small mb-0" style="white-space: pre-wrap;">{{ form.automatic_runtime_prompt }}</pre>
+    </details>
     {% crispy form %}
 
-    {# Add header for summarization section if present #}
     {% if form.fields.auto_summarize %}
-      <script>
-        document.addEventListener('DOMContentLoaded', function() {
-          const summarizationDiv = document.getElementById('summarization-settings');
-          if (summarizationDiv) {
-            const header = document.createElement('h5');
-            header.className = 'mb-3';
-            header.textContent = '{% trans "Summarization Settings" %}';
-            summarizationDiv.insertBefore(header, summarizationDiv.firstChild);
-          }
-        });
-      </script>
+      <details class="mt-4 border rounded p-3">
+        <summary class="fw-semibold">{% trans "Advanced summarization" %}</summary>
+        <div class="mt-3">
+          {{ form.auto_summarize|as_crispy_field }}
+          {{ form.token_threshold|as_crispy_field }}
+          {{ form.preserve_recent|as_crispy_field }}
+          {{ form.strategy|as_crispy_field }}
+          {{ form.max_summary_length|as_crispy_field }}
+          {{ form.summary_model|as_crispy_field }}
+        </div>
+      </details>
     {% endif %}
 
     <div class="mt-4">

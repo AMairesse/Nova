@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from django.utils.translation import gettext_lazy as _
-
 from nova.plugins.base import InternalPluginDescriptor, resolve_single_builtin_tool
+
 
 def _skill_docs(_capabilities, _thread_mode):
     return {
@@ -11,7 +10,7 @@ def _skill_docs(_capabilities, _thread_mode):
 Python execution runs inside Nova's persistent sandbox terminal.
 
 Use it for computation, data processing, scripts, and code-driven file transformations.
-Python is meant to be used directly from the current Nova terminal session.
+Python is meant to be used directly from the current terminal session.
 When you want Python to work on Nova files, keep them in a dedicated workspace folder
 and run Python from there. The sandbox terminal syncs workspace changes back to the
 thread filesystem, but Python does not replace normal terminal commands for cleanup,

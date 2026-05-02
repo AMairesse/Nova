@@ -8,9 +8,26 @@ from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
 
+from nova.web.network_policy import (
+    LOCAL_DEVELOPMENT_HOSTS,
+    assert_allowed_egress_url_sync,
+)
 
-def create_openai_compatible_client(*, api_key: str | None, base_url: str | None) -> AsyncOpenAI:
+OPENAI_COMPATIBLE_LOCAL_HOSTS = LOCAL_DEVELOPMENT_HOSTS
+
+
+def create_openai_compatible_client(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+    allowed_private_hosts: tuple[str, ...] = (),
+) -> AsyncOpenAI:
     """Build an AsyncOpenAI client with Nova's common defaults."""
+    if base_url:
+        assert_allowed_egress_url_sync(
+            base_url,
+            allowed_private_hosts=tuple(allowed_private_hosts or ()),
+        )
     return AsyncOpenAI(
         api_key=str(api_key or "nova"),
         base_url=base_url,
@@ -266,8 +283,13 @@ async def complete_openai_compatible_chat(
     tools: list[dict[str, Any]] | None,
     normalize_content,
     extra_kwargs: dict[str, Any] | None = None,
+    allowed_private_hosts: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    client = create_openai_compatible_client(api_key=api_key, base_url=base_url)
+    client = create_openai_compatible_client(
+        api_key=api_key,
+        base_url=base_url,
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
     request_payload: dict[str, Any] = {
         "model": model,
         "messages": build_openai_compatible_messages(
@@ -295,8 +317,13 @@ async def stream_openai_compatible_chat(
     normalize_content,
     on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
+    allowed_private_hosts: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    client = create_openai_compatible_client(api_key=api_key, base_url=base_url)
+    client = create_openai_compatible_client(
+        api_key=api_key,
+        base_url=base_url,
+        allowed_private_hosts=tuple(allowed_private_hosts or ()),
+    )
     request_payload: dict[str, Any] = {
         "model": model,
         "messages": build_openai_compatible_messages(

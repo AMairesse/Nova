@@ -114,6 +114,7 @@ class AgentDeleteView(  # type: ignore[misc]
 
 @csrf_protect
 @login_required
+@require_POST
 def make_default_agent(request, agent_id):
     agent = get_object_or_404(AgentConfig, id=agent_id, user=request.user)
     if agent:

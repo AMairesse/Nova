@@ -6,10 +6,23 @@ import json
 from typing import Any
 
 import ollama
+from django.conf import settings
 
 from nova.providers.base import BaseProviderAdapter, ProviderDefaults
+from nova.web.network_policy import (
+    assert_allowed_egress_url_sync,
+    build_allowed_private_hosts,
+)
 
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
+
+
+def get_ollama_allowed_private_hosts() -> tuple[str, ...]:
+    return build_allowed_private_hosts(
+        urls=(getattr(settings, "OLLAMA_SERVER_URL", None),),
+        hostnames=("ollama",),
+        include_local_development_hosts=True,
+    )
 
 
 def _normalize_ollama_usage(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -124,7 +137,12 @@ class OllamaProviderAdapter(BaseProviderAdapter):
         )
 
     async def complete_chat(self, provider, *, messages, tools=None):
-        client = ollama.AsyncClient(host=provider.base_url or OLLAMA_DEFAULT_BASE_URL)
+        host = provider.base_url or OLLAMA_DEFAULT_BASE_URL
+        assert_allowed_egress_url_sync(
+            host,
+            allowed_private_hosts=get_ollama_allowed_private_hosts(),
+        )
+        client = ollama.AsyncClient(host=host)
         response = await client.chat(
             model=provider.model,
             messages=[_normalize_ollama_message(message) for message in list(messages or [])],
@@ -138,9 +156,14 @@ class OllamaProviderAdapter(BaseProviderAdapter):
         if tools:
             raise NotImplementedError(
                 "Native streaming with tool calls is not implemented for Ollama."
-            )
+        )
 
-        client = ollama.AsyncClient(host=provider.base_url or OLLAMA_DEFAULT_BASE_URL)
+        host = provider.base_url or OLLAMA_DEFAULT_BASE_URL
+        assert_allowed_egress_url_sync(
+            host,
+            allowed_private_hosts=get_ollama_allowed_private_hosts(),
+        )
+        client = ollama.AsyncClient(host=host)
         stream = await client.chat(
             model=provider.model,
             messages=[_normalize_ollama_message(message) for message in list(messages or [])],

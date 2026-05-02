@@ -14,6 +14,8 @@ from nova.providers.openai_compatible import (
     normalize_openai_compatible_multimodal_content,
     normalize_openai_completion_payload,
 )
+from nova.web.network_policy import assert_allowed_egress_url_sync
+from nova.web.safe_http import safe_http_request
 
 MISTRAL_DEFAULT_BASE_URL = "https://api.mistral.ai/v1"
 
@@ -174,13 +176,17 @@ async def fetch_mistral_model_catalog(api_key: str, base_url: str | None) -> lis
 
     headers = {"Authorization": f"Bearer {api_key}"}
     timeout = httpx.Timeout(20.0, connect=10.0)
-    async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
-        try:
-            response = await client.get(get_mistral_models_url(base_url))
-        except httpx.TimeoutException as exc:
-            raise RuntimeError("Mistral model catalog request timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"Mistral model catalog request failed: {exc}") from exc
+    try:
+        response = await safe_http_request(
+            "GET",
+            get_mistral_models_url(base_url),
+            headers=headers,
+            timeout=timeout,
+        )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError("Mistral model catalog request timed out.") from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Mistral model catalog request failed: {exc}") from exc
 
     if response.status_code in {401, 403}:
         raise RuntimeError(
@@ -321,6 +327,7 @@ class MistralProviderAdapter(BaseProviderAdapter):
         )
 
     async def complete_chat(self, provider, *, messages, tools=None):
+        assert_allowed_egress_url_sync(get_mistral_base_url(provider.base_url))
         client = Mistral(
             api_key=provider.api_key,
             server_url=get_mistral_base_url(provider.base_url),
@@ -341,6 +348,7 @@ class MistralProviderAdapter(BaseProviderAdapter):
         )
 
     async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
+        assert_allowed_egress_url_sync(get_mistral_base_url(provider.base_url))
         client = Mistral(
             api_key=provider.api_key,
             server_url=get_mistral_base_url(provider.base_url),
