@@ -8,6 +8,7 @@ from asgiref.sync import sync_to_async
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.Tool import Tool, ToolCredential
+from nova.web.network_policy import build_allowed_private_hosts
 from nova.web.safe_http import safe_http_request
 
 SEARXNG_MAX_RESULTS = 10
@@ -22,6 +23,12 @@ def _normalize_search_endpoint(host: str) -> str:
     if parsed.path.endswith("/search"):
         return raw
     return f"{raw}/search"
+
+
+def _allowed_private_hosts_for_searxng(tool: Tool, credential: ToolCredential, host: str) -> tuple[str, ...]:
+    if tool.user_id is None and credential.user_id is None:
+        return build_allowed_private_hosts(urls=(host,))
+    return ()
 
 
 async def get_searxng_config(tool: Tool) -> dict[str, Any]:
@@ -45,6 +52,7 @@ async def get_searxng_config(tool: Tool) -> dict[str, Any]:
     return {
         "endpoint": _normalize_search_endpoint(host),
         "num_results": max(1, min(configured_limit, SEARXNG_MAX_RESULTS)),
+        "allowed_private_hosts": _allowed_private_hosts_for_searxng(tool, credential, host),
     }
 
 
@@ -80,6 +88,7 @@ async def search_web(tool: Tool, query: str, *, limit: int | None = None) -> dic
         "GET",
         config["endpoint"],
         timeout=SEARCH_TIMEOUT,
+        allowed_private_hosts=tuple(config["allowed_private_hosts"]),
         params={
             "q": str(query or ""),
             "format": "json",

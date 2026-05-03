@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.Tool import Tool
@@ -17,6 +16,7 @@ async def test_searxng_access(tool: Tool) -> dict[str, Any]:
         "GET",
         config["endpoint"],
         timeout=SEARCH_TIMEOUT,
+        allowed_private_hosts=tuple(config["allowed_private_hosts"]),
         params={
             "q": "nova",
             "format": "json",

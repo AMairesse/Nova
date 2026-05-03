@@ -143,6 +143,20 @@ class NetworkPolicyTests(SimpleTestCase):
         self.assertEqual(target.hostname, "localhost")
         self.assertEqual(target.port, 1234)
 
+    def test_allows_explicit_single_label_private_hosts_when_requested(self):
+        with patch(
+            "nova.web.network_policy._resolve_host_addresses",
+            return_value=(ipaddress.ip_address("172.18.0.4"),),
+        ):
+            target = async_to_sync(assert_public_http_url)(
+                "http://searxng:8080/search",
+                allowed_private_hosts=("searxng",),
+            )
+
+        self.assertEqual(target.hostname, "searxng")
+        self.assertEqual(target.ip, "172.18.0.4")
+        self.assertEqual(target.port, 8080)
+
     def test_build_allowed_private_hosts_normalizes_and_deduplicates_sources(self):
         allowed_hosts = build_allowed_private_hosts(
             urls=("http://host.docker.internal:1234/v1", "http://host.docker.internal:4321"),
