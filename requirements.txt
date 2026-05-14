@@ -51,7 +51,7 @@ attrs==26.1.0
     #   referencing
     #   service-identity
     #   twisted
-authlib==1.7.0
+authlib==1.7.2
     # via fastmcp
 autobahn==25.12.2
     # via daphne
@@ -75,13 +75,13 @@ botocore==1.40.61
     #   boto3
     #   nova (pyproject.toml)
     #   s3transfer
-cachetools==7.0.6
+cachetools==7.1.1
     # via py-key-value-aio
 caio==0.9.25
     # via aiofile
 caldav==3.2.0
     # via nova (pyproject.toml)
-cbor2==6.0.1
+cbor2==6.1.0
     # via autobahn
 celery==5.6.3
     # via
@@ -130,7 +130,7 @@ cron-descriptor==1.4.5
     #   nova (pyproject.toml)
 croniter==6.2.2
     # via nova (pyproject.toml)
-cryptography==47.0.0
+cryptography==48.0.0
     # via
     #   authlib
     #   autobahn
@@ -142,7 +142,7 @@ cryptography==47.0.0
     #   pyopenssl
     #   pywebpush
     #   service-identity
-cyclopts==4.11.0
+cyclopts==4.12.0
     # via fastmcp
 daphne==4.2.1
     # via nova (pyproject.toml)
@@ -150,7 +150,7 @@ debugpy==1.8.20
     # via nova (pyproject.toml)
 distro==1.9.0
     # via openai
-django==6.0.4
+django==6.0.5
     # via
     #   channels
     #   crispy-bootstrap5
@@ -228,7 +228,7 @@ icalendar==7.1.0
     #   x-wr-timezone
 icalendar-searcher==1.0.5
     # via caldav
-idna==3.13
+idna==3.15
     # via
     #   anyio
     #   email-validator
@@ -258,9 +258,9 @@ jmespath==1.1.0
     #   aiobotocore
     #   boto3
     #   botocore
-joserfc==1.6.4
+joserfc==1.6.5
     # via authlib
-jsonpath-python==1.1.5
+jsonpath-python==1.1.6
     # via mistralai
 jsonref==1.1.0
     # via fastmcp
@@ -280,15 +280,15 @@ lxml==6.1.0
     # via caldav
 markdown==3.10.2
     # via nova (pyproject.toml)
-markdown-it-py==4.0.0
+markdown-it-py==4.2.0
     # via rich
-mcp==1.27.0
+mcp==1.27.1
     # via
     #   fastmcp
     #   nova (pyproject.toml)
 mdurl==0.1.2
     # via markdown-it-py
-mistralai==2.4.4
+mistralai==2.4.5
     # via nova (pyproject.toml)
 more-itertools==11.0.2
     # via
@@ -303,13 +303,13 @@ multidict==6.7.1
     #   aiobotocore
     #   aiohttp
     #   yarl
-niquests==3.18.7
+niquests==3.18.8
     # via caldav
 numpy==2.4.4
     # via pgvector
 ollama==0.6.2
     # via nova (pyproject.toml)
-openai==2.33.0
+openai==2.36.0
     # via nova (pyproject.toml)
 openapi-pydantic==0.5.1
     # via fastmcp
@@ -335,13 +335,13 @@ playwright==1.59.0
     # via nova (pyproject.toml)
 prompt-toolkit==3.0.52
     # via click-repl
-propcache==0.4.1
+propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
-psycopg[binary]==3.3.3
+psycopg[binary]==3.3.4
     # via nova (pyproject.toml)
-psycopg-binary==3.3.3
+psycopg-binary==3.3.4
     # via psycopg
 py-key-value-aio[filetree,keyring,memory]==0.4.4
     # via fastmcp
@@ -357,7 +357,7 @@ pyasn1-modules==0.4.2
     # via service-identity
 pycparser==3.0
     # via cffi
-pydantic[email]==2.13.3
+pydantic[email]==2.13.4
     # via
     #   fastmcp
     #   mcp
@@ -366,9 +366,9 @@ pydantic[email]==2.13.3
     #   openai
     #   openapi-pydantic
     #   pydantic-settings
-pydantic-core==2.46.3
+pydantic-core==2.46.4
     # via pydantic
-pydantic-settings==2.14.0
+pydantic-settings==2.14.1
     # via mcp
 pyee==13.0.1
     # via playwright
@@ -376,9 +376,9 @@ pygments==2.20.0
     # via rich
 pyjwt[crypto]==2.12.1
     # via mcp
-pyopenssl==26.1.0
+pyopenssl==26.2.0
     # via twisted
-pypdf==6.10.2
+pypdf==6.11.0
     # via nova (pyproject.toml)
 pyperclip==1.11.0
     # via fastmcp
@@ -401,7 +401,7 @@ python-dotenv==1.2.2
     #   pydantic-settings
 python-magic==0.4.27
     # via nova (pyproject.toml)
-python-multipart==0.0.27
+python-multipart==0.0.28
     # via mcp
 pywebpush==2.3.0
     # via nova (pyproject.toml)
@@ -410,7 +410,7 @@ pyyaml==6.0.3
     #   caldav
     #   fastmcp
     #   jsonschema-path
-qh3==1.7.4
+qh3==1.8.1
     # via urllib3-future
 recurring-ical-events==3.8.2
     # via
@@ -425,7 +425,7 @@ referencing==0.37.0
     #   jsonschema
     #   jsonschema-path
     #   jsonschema-specifications
-requests==2.33.1
+requests==2.34.1
     # via pywebpush
 rich==15.0.0
     # via
@@ -450,7 +450,7 @@ soupsieve==2.8.3
     # via beautifulsoup4
 sqlparse==0.5.5
     # via django
-sse-starlette==3.4.1
+sse-starlette==3.4.4
     # via mcp
 starlette==1.0.0
     # via
@@ -459,7 +459,7 @@ starlette==1.0.0
     #   sse-starlette
 tqdm==4.67.3
     # via openai
-twisted[tls]==25.5.0
+twisted[tls]==26.4.0
     # via daphne
 txaio==25.12.2
     # via autobahn
@@ -491,15 +491,15 @@ tzdata==2026.2
     #   x-wr-timezone
 tzlocal==5.3.1
     # via celery
-ujson==5.12.0
+ujson==5.12.1
     # via autobahn
-uncalled-for==0.3.1
+uncalled-for==0.3.2
     # via fastmcp
-urllib3==2.6.3
+urllib3==2.7.0
     # via
     #   botocore
     #   requests
-urllib3-future==2.19.913
+urllib3-future==2.20.904
     # via niquests
 uvicorn==0.46.0
     # via
@@ -511,11 +511,11 @@ vine==5.1.0
     #   amqp
     #   celery
     #   kombu
-wassima==2.0.6
+wassima==2.1.0
     # via niquests
 watchfiles==1.1.1
     # via fastmcp
-wcwidth==0.6.0
+wcwidth==0.7.0
     # via prompt-toolkit
 webencodings==0.5.1
     # via bleach
