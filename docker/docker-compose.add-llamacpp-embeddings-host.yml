@@ -1,0 +1,4 @@
+services:
+  llamacpp-embeddings:
+    ports:
+      - "${MEMORY_EMBEDDINGS_HOST_IP:-127.0.0.1}:${MEMORY_EMBEDDINGS_HOST_PORT:-9000}:8080"
