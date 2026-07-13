@@ -13,9 +13,10 @@ class OIDCAuthModeTests(TestCase):
         response = self.client.get("/accounts/login/")
         self.assertContains(response, 'name="password"')
         self.assertContains(response, "OpenID Connect")
+        self.assertContains(response, 'method="post"')
 
     @override_settings(NOVA_AUTH_MODE="oidc_only")
     def test_oidc_only_redirects_and_blocks_password_reset(self):
         response = self.client.get("/accounts/login/?next=/settings/")
-        self.assertRedirects(response, "/accounts/oidc/login/oidc/?next=%2Fsettings%2F", fetch_redirect_response=False)
+        self.assertRedirects(response, "/accounts/oidc/start/?next=%2Fsettings%2F", fetch_redirect_response=False)
         self.assertEqual(self.client.get("/accounts/password_reset/").status_code, 404)

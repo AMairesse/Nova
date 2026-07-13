@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block content %}
+<form id="oidc-start" method="post" action="{% url 'social:begin' 'oidc' %}">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <p>{% trans "Redirecting to OpenID Connect…" %}</p>
+  <button type="submit">{% trans "Continue" %}</button>
+</form>
+<script>document.getElementById("oidc-start").requestSubmit();</script>
+{% endblock %}

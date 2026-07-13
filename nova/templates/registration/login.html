@@ -74,11 +74,13 @@
         {% endif %}
 
         {% if auth_mode != 'local' %}
-        <div class="d-grid mt-3">
-          <a class="btn btn-outline-primary" href="{% url 'social:begin' 'oidc' %}{% if next %}?next={{ next|urlencode }}{% endif %}">
+        <form method="post" action="{% url 'social:begin' 'oidc' %}" class="d-grid mt-3">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ next }}">
+          <button type="submit" class="btn btn-outline-primary">
             {% trans "Sign in with OpenID Connect" %}
-          </a>
-        </div>
+          </button>
+        </form>
         {% endif %}
 
         {% if auth_mode != 'oidc_only' %}<div class="text-center mt-3">
