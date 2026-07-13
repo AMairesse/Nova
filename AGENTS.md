@@ -140,3 +140,17 @@ python manage.py test --settings nova.settings_test
 - `user_settings/README.md` for provider/agent settings UI behavior.
 - `plans/continuous_discussion.md` for continuous mode decisions.
 - `plans/memory.md` for memory system design context.
+
+## 10) Obsidian Collaboration
+
+Project: `Nova`.
+
+1. Use the `deep_obsidian` MCP. Do not read or write the vault filesystem directly.
+2. Read `_Agent/Contract.md` from the vault.
+3. Read:
+   - `_Agent/Contracts/Nova.md`
+   - `_Agent/Tasks/Nova.md`
+4. For project-scoped work, maintain a session note in `_Agent/Sessions/Nova/` when work produces durable context, decisions, artifacts, or follow-ups.
+5. Treat `Projets/Nova/` as human-owned. Do not impose structure there.
+6. Distill stable knowledge into `_Wiki/`.
+7. Ask before promoting content into human folders such as `Projets/`, `RFCs/`, or `Blog/`.

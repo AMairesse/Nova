@@ -12,7 +12,7 @@ aiofile==3.11.1
     # via py-key-value-aio
 aiofiles==25.1.0
     # via aioboto3
-aiohappyeyeballs==2.6.2
+aiohappyeyeballs==2.7.1
     # via aiohttp
 aiohttp==3.14.1
     # via
@@ -27,7 +27,7 @@ amqp==5.3.1
     # via kombu
 annotated-types==0.7.0
     # via pydantic
-anyio==4.14.0
+anyio==4.14.2
     # via
     #   httpx
     #   mcp
@@ -54,7 +54,7 @@ attrs==26.1.0
     #   twisted
 authlib==1.7.2
     # via fastmcp-slim
-autobahn==26.6.1
+autobahn==26.6.2
     # via daphne
 automat==25.4.16
     # via twisted
@@ -82,7 +82,7 @@ caio==0.9.25
     # via aiofile
 caldav==3.2.1
     # via nova (pyproject.toml)
-cbor2==6.1.2
+cbor2==6.1.3
     # via autobahn
 celery==5.6.3
     # via
@@ -93,7 +93,7 @@ certifi==2026.6.17
     #   httpcore
     #   httpx
     #   requests
-cffi==2.0.0
+cffi==2.1.0
     # via
     #   autobahn
     #   cryptography
@@ -103,11 +103,11 @@ channels==4.3.2
     #   nova (pyproject.toml)
 channels-redis==4.3.0
     # via nova (pyproject.toml)
-charset-normalizer==3.4.7
+charset-normalizer==3.4.9
     # via
     #   niquests
     #   requests
-click==8.4.1
+click==8.4.2
     # via
     #   celery
     #   click-didyoumean
@@ -129,7 +129,7 @@ cron-descriptor==1.4.5
     # via
     #   django-celery-beat
     #   nova (pyproject.toml)
-croniter==6.2.2
+croniter==6.2.4
     # via nova (pyproject.toml)
 cryptography==49.0.0
     # via
@@ -143,7 +143,7 @@ cryptography==49.0.0
     #   pyopenssl
     #   pywebpush
     #   service-identity
-cyclopts==4.18.0
+cyclopts==4.21.0
     # via fastmcp-slim
 daphne==4.2.2
     # via nova (pyproject.toml)
@@ -151,7 +151,7 @@ debugpy==1.8.21
     # via nova (pyproject.toml)
 distro==1.9.0
     # via openai
-django==6.0.6
+django==6.0.7
     # via
     #   channels
     #   crispy-bootstrap5
@@ -185,17 +185,17 @@ eval-type-backport==0.4.0
     # via mistralai
 exceptiongroup==1.3.1
     # via fastmcp-slim
-fastmcp==3.4.2
+fastmcp==3.4.4
     # via nova (pyproject.toml)
-fastmcp-slim[client,server]==3.4.2
+fastmcp-slim[client,server]==3.4.4
     # via fastmcp
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-greenlet==3.5.2
+greenlet==3.5.3
     # via playwright
-griffelib==2.0.2
+griffelib==2.1.0
     # via fastmcp-slim
 h11==0.16.0
     # via
@@ -220,7 +220,7 @@ hyperlink==21.0.0
     # via
     #   autobahn
     #   twisted
-icalendar==7.1.3
+icalendar==7.2.0
     # via
     #   caldav
     #   icalendar-searcher
@@ -252,14 +252,14 @@ jaraco-functools==4.5.0
     # via keyring
 jh2==5.0.13
     # via urllib3-future
-jiter==0.15.0
+jiter==0.16.0
     # via openai
 jmespath==1.1.0
     # via
     #   aiobotocore
     #   boto3
     #   botocore
-joserfc==1.7.1
+joserfc==1.7.3
     # via
     #   authlib
     #   fastmcp-slim
@@ -285,13 +285,13 @@ markdown==3.10.2
     # via nova (pyproject.toml)
 markdown-it-py==4.2.0
     # via rich
-mcp==1.28.0
+mcp==1.28.1
     # via
     #   fastmcp-slim
     #   nova (pyproject.toml)
 mdurl==0.1.2
     # via markdown-it-py
-mistralai==2.4.12
+mistralai==2.6.0
     # via nova (pyproject.toml)
 more-itertools==11.1.0
     # via
@@ -306,13 +306,11 @@ multidict==6.7.1
     #   aiobotocore
     #   aiohttp
     #   yarl
-niquests==3.19.1
+niquests==3.20.1
     # via caldav
-numpy==2.4.6
-    # via pgvector
 ollama==0.6.2
     # via nova (pyproject.toml)
-openai==2.43.0
+openai==2.45.0
     # via nova (pyproject.toml)
 openapi-pydantic==0.5.1
     # via fastmcp-slim
@@ -330,11 +328,11 @@ packaging==26.2
     #   kombu
 pathable==0.6.0
     # via jsonschema-path
-pgvector==0.4.2
+pgvector==0.5.0
     # via nova (pyproject.toml)
 platformdirs==4.10.0
     # via fastmcp-slim
-playwright==1.60.0
+playwright==1.61.0
     # via nova (pyproject.toml)
 prompt-toolkit==3.0.52
     # via click-repl
@@ -363,7 +361,7 @@ pydantic[email]==2.13.4
     #   pydantic-settings
 pydantic-core==2.46.4
     # via pydantic
-pydantic-settings==2.14.1
+pydantic-settings==2.14.2
     # via
     #   fastmcp-slim
     #   mcp
@@ -377,7 +375,7 @@ pyjwt[crypto]==2.13.0
     # via mcp
 pyopenssl==26.3.0
     # via twisted
-pypdf==6.13.3
+pypdf==6.14.2
     # via nova (pyproject.toml)
 pyperclip==1.11.0
     # via fastmcp-slim
@@ -411,13 +409,13 @@ pyyaml==6.0.3
     #   caldav
     #   fastmcp-slim
     #   jsonschema-path
-qh3==1.9.2
+qh3==1.9.4
     # via urllib3-future
 recurring-ical-events==3.8.2
     # via
     #   caldav
     #   icalendar-searcher
-redis==8.0.0
+redis==8.0.1
     # via
     #   channels-redis
     #   nova (pyproject.toml)
@@ -433,9 +431,9 @@ rich==15.0.0
     #   cyclopts
     #   fastmcp-slim
     #   rich-rst
-rich-rst==2.0.1
+rich-rst==2.1.0
     # via cyclopts
-rpds-py==2026.5.1
+rpds-py==2026.6.3
     # via
     #   jsonschema
     #   referencing
@@ -451,7 +449,7 @@ soupsieve==2.8.4
     # via beautifulsoup4
 sqlparse==0.5.5
     # via django
-sse-starlette==3.4.4
+sse-starlette==3.4.5
     # via mcp
 starlette==1.3.1
     # via
@@ -459,13 +457,13 @@ starlette==1.3.1
     #   mcp
     #   nova (pyproject.toml)
     #   sse-starlette
-tqdm==4.68.3
+tqdm==4.68.4
     # via openai
 twisted[tls]==26.4.0
     # via daphne
 txaio==26.6.1
     # via autobahn
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via
     #   beautifulsoup4
     #   fastmcp-slim
@@ -485,14 +483,14 @@ typing-inspection==0.4.2
     #   mistralai
     #   pydantic
     #   pydantic-settings
-tzdata==2026.2
+tzdata==2026.3
     # via
     #   django-celery-beat
     #   icalendar
     #   kombu
     #   recurring-ical-events
     #   x-wr-timezone
-tzlocal==5.4.3
+tzlocal==5.4.4
     # via celery
 ujson==5.13.0
     # via autobahn
@@ -502,9 +500,9 @@ urllib3==2.7.0
     # via
     #   botocore
     #   requests
-urllib3-future==2.21.902
+urllib3-future==2.22.901
     # via niquests
-uvicorn==0.49.0
+uvicorn==0.51.0
     # via
     #   fastmcp-slim
     #   mcp
@@ -514,15 +512,15 @@ vine==5.1.0
     #   amqp
     #   celery
     #   kombu
-wassima==2.1.1
+wassima==2.1.2
     # via niquests
 watchfiles==1.2.0
     # via fastmcp-slim
-wcwidth==0.8.1
+wcwidth==0.8.2
     # via prompt-toolkit
 webencodings==0.5.1
     # via bleach
-websockets==16.0
+websockets==16.1
     # via fastmcp-slim
 whitenoise==6.12.0
     # via nova (pyproject.toml)
