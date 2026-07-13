@@ -216,7 +216,7 @@ if NOVA_OIDC_ENABLED and not all([NOVA_OIDC_ISSUER, NOVA_OIDC_CLIENT_ID, NOVA_OI
     raise ValueError("NOVA_OIDC_ISSUER, NOVA_OIDC_CLIENT_ID, and NOVA_OIDC_CLIENT_SECRET are required when OIDC is enabled")
 
 AUTHENTICATION_BACKENDS = [
-    "social_core.backends.open_id_connect.OpenIdConnectAuth",
+    "nova.oidc.backends.AsyncOpenIdConnectAuth",
     "django.contrib.auth.backends.ModelBackend",
 ]
 SOCIAL_AUTH_OIDC_OIDC_ENDPOINT = NOVA_OIDC_ISSUER

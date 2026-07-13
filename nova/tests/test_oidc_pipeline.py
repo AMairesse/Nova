@@ -4,9 +4,23 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
 from social_core.exceptions import AuthForbidden
+from nova.oidc.backends import AsyncOpenIdConnectAuth
 
 from nova.models.OIDCIdentity import OIDCIdentity, OIDCIdentityLinkAudit
 from nova.oidc.pipeline import resolve_oidc_identity
+
+
+class AsyncOIDCBackendTests(TestCase):
+    async def test_async_auth_middleware_can_resolve_a_user(self):
+        backend = AsyncOpenIdConnectAuth(
+            strategy=SimpleNamespace(
+                get_user=lambda user_id: user_id,
+                request_data=lambda: {},
+                absolute_uri=lambda path: path,
+            )
+        )
+
+        self.assertEqual(await backend.aget_user("user-1"), "user-1")
 
 
 class OIDCPipelineTests(TestCase):
