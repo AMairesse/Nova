@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'social_django',
     'rest_framework',
     'rest_framework.authtoken',
     'encrypted_model_fields',
@@ -102,6 +103,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 "nova.context_processors.actor_enum",
                 "nova.context_processors.debug_mode",
+                "nova.context_processors.auth_mode",
             ],
         },
     },
@@ -194,6 +196,43 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGOUT_REDIRECT_URL = '/'
+
+# OIDC is deliberately settings-backed: client credentials must never be stored
+# in a SocialApp database record.
+NOVA_AUTH_MODE = os.getenv("NOVA_AUTH_MODE", "local").strip().lower()
+if NOVA_AUTH_MODE not in {"local", "both", "oidc_only"}:
+    raise ValueError("NOVA_AUTH_MODE must be local, both, or oidc_only")
+NOVA_OIDC_ISSUER = os.getenv("NOVA_OIDC_ISSUER", "").strip().rstrip("/")
+NOVA_OIDC_DISCOVERY_URL = os.getenv("NOVA_OIDC_DISCOVERY_URL", "").strip()
+NOVA_OIDC_CLIENT_ID = os.getenv("NOVA_OIDC_CLIENT_ID", "").strip()
+NOVA_OIDC_CLIENT_SECRET = os.getenv("NOVA_OIDC_CLIENT_SECRET", "")
+NOVA_OIDC_SCOPES = _env_csv("NOVA_OIDC_SCOPES") or ["openid", "profile"]
+NOVA_OIDC_AUTO_PROVISION = os.getenv("NOVA_OIDC_AUTO_PROVISION", "False").lower() == "true"
+NOVA_OIDC_LINK_EXISTING_USERS_BY_USERNAME = os.getenv("NOVA_OIDC_LINK_EXISTING_USERS_BY_USERNAME", "False").lower() == "true"
+NOVA_OIDC_REQUIRED_CLAIM = os.getenv("NOVA_OIDC_REQUIRED_CLAIM", "").strip()
+NOVA_OIDC_REQUIRED_VALUES = _env_csv("NOVA_OIDC_REQUIRED_VALUES")
+NOVA_OIDC_ENABLED = NOVA_AUTH_MODE in {"both", "oidc_only"}
+if NOVA_OIDC_ENABLED and not all([NOVA_OIDC_ISSUER, NOVA_OIDC_CLIENT_ID, NOVA_OIDC_CLIENT_SECRET]):
+    raise ValueError("NOVA_OIDC_ISSUER, NOVA_OIDC_CLIENT_ID, and NOVA_OIDC_CLIENT_SECRET are required when OIDC is enabled")
+
+AUTHENTICATION_BACKENDS = [
+    "social_core.backends.open_id_connect.OpenIdConnectAuth",
+    "django.contrib.auth.backends.ModelBackend",
+]
+SOCIAL_AUTH_OIDC_OIDC_ENDPOINT = NOVA_OIDC_ISSUER
+if NOVA_OIDC_DISCOVERY_URL:
+    _well_known_suffix = "/.well-known/openid-configuration"
+    SOCIAL_AUTH_OIDC_OIDC_ENDPOINT = NOVA_OIDC_DISCOVERY_URL.removesuffix(_well_known_suffix).rstrip("/")
+SOCIAL_AUTH_OIDC_KEY = NOVA_OIDC_CLIENT_ID
+SOCIAL_AUTH_OIDC_SECRET = NOVA_OIDC_CLIENT_SECRET
+SOCIAL_AUTH_OIDC_SCOPE = NOVA_OIDC_SCOPES
+SOCIAL_AUTH_OIDC_USE_PKCE = True
+SOCIAL_AUTH_PIPELINE = (
+    "social_core.pipeline.social_auth.social_details",
+    "social_core.pipeline.social_auth.social_uid",
+    "nova.oidc.pipeline.resolve_oidc_identity",
+    "social_core.pipeline.social_auth.associate_user",
+)
 
 # Encryption key
 FIELD_ENCRYPTION_KEY = os.environ.get('FIELD_ENCRYPTION_KEY', '')

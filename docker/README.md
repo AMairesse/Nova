@@ -189,6 +189,31 @@ Core settings:
 - `FIELD_ENCRYPTION_KEY`, `DJANGO_SECRET_KEY`
 - `HOST_PORT`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`
 
+OIDC (optional):
+
+- `NOVA_AUTH_MODE`: `local` (default), `both`, or `oidc_only`
+- `NOVA_OIDC_ISSUER`, optional `NOVA_OIDC_DISCOVERY_URL`, `NOVA_OIDC_CLIENT_ID`, `NOVA_OIDC_CLIENT_SECRET`
+- `NOVA_OIDC_SCOPES`, `NOVA_OIDC_AUTO_PROVISION`, `NOVA_OIDC_LINK_EXISTING_USERS_BY_USERNAME`
+- `NOVA_OIDC_REQUIRED_CLAIM`, `NOVA_OIDC_REQUIRED_VALUES`
+
+When OIDC is enabled, register `https://<nova-host>/accounts/oidc/complete/oidc/` as the callback URL with your OpenID Connect provider. Keep `NOVA_AUTH_MODE=both` while existing local users perform their first OIDC login; Nova then links their durable `(issuer, sub)` identity without moving any user data.
+
+Example migration configuration:
+
+```dotenv
+NOVA_AUTH_MODE=both
+NOVA_OIDC_ISSUER=https://id.example.com/application/o/nova
+NOVA_OIDC_CLIENT_ID=nova
+NOVA_OIDC_CLIENT_SECRET=stored-outside-the-repository
+NOVA_OIDC_SCOPES=openid,profile
+NOVA_OIDC_LINK_EXISTING_USERS_BY_USERNAME=True
+NOVA_OIDC_AUTO_PROVISION=False
+NOVA_OIDC_REQUIRED_CLAIM=groups
+NOVA_OIDC_REQUIRED_VALUES=nova-users
+```
+
+Use a discovery URL only when it differs from `<issuer>/.well-known/openid-configuration`. Scopes and required values are comma-separated. Test a known existing user in `both`, confirm the audit entry and retained Nova data, then switch to `oidc_only`. Roll back by returning to `both`; existing local credentials remain unchanged.
+
 For production deployments behind a real domain, `ALLOWED_HOSTS` must include the public hostname and `CSRF_TRUSTED_ORIGINS` must include the matching `https://` origin. If those stay on `localhost`, managed OAuth callback URLs and WebSocket streaming will not work correctly.
 
 Webapp isolation:

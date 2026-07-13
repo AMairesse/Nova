@@ -1,4 +1,7 @@
 from django.contrib import admin
+from django.conf import settings
+from django.shortcuts import redirect
+from django.urls import reverse
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 
@@ -22,6 +25,7 @@ from nova.models.TranscriptChunk import TranscriptChunk
 from nova.models.UserFile import UserFile
 from nova.models.UserObjects import UserParameters, UserProfile
 from nova.models.WebApp import WebApp
+from nova.models.OIDCIdentity import OIDCIdentity, OIDCIdentityLinkAudit
 
 
 admin.site.site_header = "Nova Admin"
@@ -323,6 +327,39 @@ class MessageAdmin(admin.ModelAdmin):
 
 admin.site.unregister(User)
 admin.site.register(User, UserAdmin)
+
+_default_admin_login = admin.site.login
+
+
+def oidc_aware_admin_login(request, extra_context=None):
+    if settings.NOVA_AUTH_MODE == "oidc_only":
+        return redirect(f"{reverse('social:begin', kwargs={'backend': 'oidc'})}?next={request.get_full_path()}")
+    return _default_admin_login(request, extra_context=extra_context)
+
+
+admin.site.login = oidc_aware_admin_login
+
+
+@admin.register(OIDCIdentity)
+class OIDCIdentityAdmin(admin.ModelAdmin):
+    list_display = ("issuer", "subject", "user", "created_at")
+    search_fields = ("issuer", "subject", "user__username")
+    readonly_fields = ("issuer", "subject", "user", "created_at")
+
+
+@admin.register(OIDCIdentityLinkAudit)
+class OIDCIdentityLinkAuditAdmin(admin.ModelAdmin):
+    list_display = ("identity", "user", "method", "preferred_username", "created_at")
+    readonly_fields = ("identity", "user", "method", "preferred_username", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(UserFile)

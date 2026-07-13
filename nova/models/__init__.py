@@ -18,3 +18,4 @@ from .PushSubscription import PushSubscription  # noqa: F401
 from .EmbeddingsSystemState import EmbeddingsSystemState  # noqa: F401
 from .AgentThreadSession import AgentThreadSession  # noqa: F401
 from .TerminalCommandFailureMetric import TerminalCommandFailureMetric  # noqa: F401
+from .OIDCIdentity import OIDCIdentity, OIDCIdentityLinkAudit  # noqa: F401

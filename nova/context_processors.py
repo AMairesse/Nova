@@ -16,3 +16,7 @@ def debug_mode(request):
     Make DEBUG setting available in templates for conditional logic
     """
     return {"debug": settings.DEBUG}
+
+
+def auth_mode(request):
+    return {"auth_mode": settings.NOVA_AUTH_MODE}

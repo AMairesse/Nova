@@ -26,6 +26,7 @@ dependencies = [
     "django_crispy_forms",
     "djangorestframework",
     "django-encrypted-model-fields",
+    "social-auth-app-django>=6.0,<7",
     "fastmcp",
     "httpx",
     "icalendar",
