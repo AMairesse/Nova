@@ -1,5 +1,6 @@
 # nova/urls.py
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.urls import include, path
 from django.views.i18n import JavaScriptCatalog
 from nova.views.thread_views import (
@@ -31,6 +32,7 @@ from nova.views.push_views import push_config, push_subscriptions
 from nova.views.security_views import csrf_token
 from nova.views.health import healthz
 from nova.views.webapp_views import serve_webapp, webapps_list, preview_webapp, delete_webapp
+from nova.views.auth_views import NovaLoginView, block_local_auth_in_oidc_only
 
 urlpatterns = [
     # Main views
@@ -55,7 +57,11 @@ urlpatterns = [
 
     # API
     path('api/', include('nova.api.urls')),
+    path("accounts/oidc/", include("social_django.urls", namespace="social")),
     # Authentication views
+    path("accounts/login/", NovaLoginView.as_view(), name="login"),
+    path("accounts/password_reset/", block_local_auth_in_oidc_only(auth_views.PasswordResetView.as_view()), name="password_reset"),
+    path("accounts/password_change/", block_local_auth_in_oidc_only(auth_views.PasswordChangeView.as_view()), name="password_change"),
     path("accounts/", include("django.contrib.auth.urls")),
     # Admin
     path('supernova-admin/', admin.site.urls),
