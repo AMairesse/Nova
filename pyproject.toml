@@ -26,6 +26,7 @@ dependencies = [
     "django_crispy_forms",
     "djangorestframework",
     "django-encrypted-model-fields",
+    "social-auth-app-django>=6.0,<7",
     "fastmcp",
     "httpx",
     "icalendar",
@@ -68,6 +69,7 @@ per_rule_ignores = {DEP002 = [
     "channels-redis",
     "daphne",
     "psycopg",
+    "social-auth-app-django",
     "whitenoise",
 ]}
 package_module_name_map = {crispy-bootstrap5 = "crispy_bootstrap5", channels-redis = "channels_redis"}
