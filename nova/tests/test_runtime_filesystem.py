@@ -233,6 +233,26 @@ class FilesystemCommandTests(TerminalExecutorCommandTestCase):
         self.assertIn("/gallery/nested/b.png", min_depth)
         self.assertNotIn("/gallery/A.JPG", min_depth)
 
+    def test_find_supports_reported_agent_recipes(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /tmp/cache")
+        async_to_sync(executor.execute)("mkdir /tmp/other")
+        async_to_sync(executor.execute)('printf "{}" > /tmp/data.json')
+        async_to_sync(executor.execute)("mkdir /vault")
+        async_to_sync(executor.execute)("mkdir /vault/nested")
+
+        json_files = async_to_sync(executor.execute)('find /tmp -type f -name "*.json"')
+        cache_dirs = async_to_sync(executor.execute)('find /tmp -maxdepth 2 -type d -iname "*cache*"')
+        vault_dirs = async_to_sync(executor.execute)('find / -maxdepth 3 -type d -iname "*vault*"')
+
+        self.assertEqual(json_files, "/tmp/data.json")
+        self.assertIn("/tmp/cache", cache_dirs)
+        self.assertNotIn("/tmp/other", cache_dirs)
+        self.assertIn("/vault", vault_dirs)
+        self.assertNotIn("/vault/nested", vault_dirs)
+        self.assertNotIn("/tmp", vault_dirs)
+
     def test_find_rejects_legacy_and_unsupported_expressions_cleanly(self):
         executor = self._build_executor()
 

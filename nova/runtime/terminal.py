@@ -44,6 +44,7 @@ from .terminal_metrics import (
     FAILURE_KIND_INVALID_ARGUMENTS,
     FAILURE_KIND_PARSE_ERROR,
     FAILURE_KIND_UNKNOWN_COMMAND,
+    FAILURE_KIND_UNSUPPORTED_FEATURE,
     FAILURE_KIND_UNSUPPORTED_SYNTAX,
     classify_terminal_failure,
     normalize_head_command,
@@ -289,6 +290,22 @@ class TerminalExecutor:
         "webapp",
         "wget",
     }
+    UNSUPPORTED_COMPOUND_COMMANDS = {
+        "for",
+        "while",
+        "until",
+        "if",
+        "case",
+        "select",
+        "function",
+        "do",
+        "done",
+        "then",
+        "fi",
+        "elif",
+        "else",
+        "esac",
+    }
     HOST_MEDIATED_COMMANDS = {
         "api",
         "browse",
@@ -355,6 +372,18 @@ class TerminalExecutor:
             )
             for root in (MEMORY_ROOT, WEBDAV_VFS_ROOT)
         )
+
+    def _reject_unsupported_compound_commands(self, raw: str) -> None:
+        heads = self._iter_shell_heads_for_routing(raw)
+        for head in heads:
+            normalized = str(head or "").strip().lower()
+            if normalized in self.UNSUPPORTED_COMPOUND_COMMANDS:
+                raise TerminalCommandError(
+                    f"Shell compound command `{normalized}` is not supported. "
+                    "Run simple commands sequentially with `;`, `&&`, `||`, or `|`, "
+                    "or use python. Loops, functions, and if/case are not executed.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_FEATURE,
+                )
 
     def _should_route_command_to_sandbox(self, raw: str) -> bool:
         if not exec_runner_service.exec_runner_is_configured():
@@ -1103,6 +1132,7 @@ class TerminalExecutor:
     async def execute_result(self, command: str) -> ShellExecutionResult:
         self.vfs.remember_command(command)
         try:
+            self._reject_unsupported_compound_commands(command)
             if self._should_route_command_to_sandbox(command):
                 self.last_execution_plane = "sandbox"
                 result = await self._execute_sandbox_result(command)

@@ -143,6 +143,34 @@ class IntegrationCommandTests(TerminalExecutorCommandTestCase):
         self.assertIn("ready", piped)
         self.assertEqual(mocked_call.await_args.kwargs["payload"], {"query": "roadmap"})
 
+    def test_mcp_call_accepts_json_stdin(self):
+        mcp_tool = self._create_mcp_tool()
+        executor = self._build_executor(TerminalCapabilities(mcp_tools=[mcp_tool]))
+        async_to_sync(executor.vfs.write_file)(
+            "/tmp/mcp-input.json",
+            b'{"query":"stdin-roadmap"}',
+            mime_type="application/json",
+        )
+        call_payload = {
+            "payload": {
+                "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
+                "tool": {"name": "export_report", "description": "Export report"},
+                "input": {"query": "stdin-roadmap"},
+                "result": {"report": "from-stdin"},
+            },
+            "extractable_artifacts": [],
+        }
+        with patch(
+            "nova.runtime.terminal.mcp_service.call_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=call_payload,
+        ) as mocked_call:
+            rendered = async_to_sync(executor.execute)(
+                'cat /tmp/mcp-input.json | mcp call export_report --server "Notion MCP"'
+            )
+        self.assertIn("from-stdin", rendered)
+        self.assertEqual(mocked_call.await_args.kwargs["payload"], {"query": "stdin-roadmap"})
+
     def test_api_commands_support_schema_pipes_and_redirected_calls(self):
         api_tool = self._create_api_tool()
         self._create_api_operation(

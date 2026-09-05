@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 FAILURE_KIND_UNKNOWN_COMMAND = "unknown_command"
 FAILURE_KIND_UNSUPPORTED_SYNTAX = "unsupported_syntax"
+FAILURE_KIND_UNSUPPORTED_FEATURE = "unsupported_feature"
 FAILURE_KIND_PARSE_ERROR = "parse_error"
 FAILURE_KIND_INVALID_ARGUMENTS = "invalid_arguments"
 FAILURE_KIND_CAPABILITY_DISABLED = "capability_disabled"
