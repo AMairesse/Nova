@@ -106,6 +106,43 @@ class IntegrationCommandTests(TerminalExecutorCommandTestCase):
         self.assertEqual(mocked_schema.await_args.kwargs["tool_name"], "list_pages")
         self.assertTrue(any(call.kwargs.get("force_refresh") for call in mocked_list.await_args_list))
 
+    def test_mcp_call_accepts_quoted_json_and_lists_artifacts_without_extract(self):
+        mcp_tool = self._create_mcp_tool()
+        executor = self._build_executor(TerminalCapabilities(mcp_tools=[mcp_tool]))
+        call_payload = {
+            "payload": {
+                "server": {"id": mcp_tool.id, "name": mcp_tool.name, "endpoint": mcp_tool.endpoint},
+                "tool": {"name": "export_report", "description": "Export report"},
+                "input": {"query": "roadmap"},
+                "result": {"report": "ready"},
+            },
+            "extractable_artifacts": [
+                SimpleNamespace(
+                    path="report.txt",
+                    content=b"report ready",
+                    mime_type="text/plain",
+                )
+            ],
+        }
+
+        with patch(
+            "nova.runtime.terminal.mcp_service.call_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=call_payload,
+        ) as mocked_call:
+            rendered = async_to_sync(executor.execute)(
+                "mcp call export_report --server \"Notion MCP\" '{\"query\":\"roadmap\"}'"
+            )
+            piped = async_to_sync(executor.execute)(
+                "mcp call export_report --server \"Notion MCP\" '{\"query\":\"roadmap\"}' | cat"
+            )
+
+        self.assertIn("ready", rendered)
+        self.assertIn("Artifacts available (not written)", rendered)
+        self.assertIn("report.txt", rendered)
+        self.assertIn("ready", piped)
+        self.assertEqual(mocked_call.await_args.kwargs["payload"], {"query": "roadmap"})
+
     def test_api_commands_support_schema_pipes_and_redirected_calls(self):
         api_tool = self._create_api_tool()
         self._create_api_operation(

@@ -684,6 +684,23 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertEqual(redirected, "hello")
         self.assertEqual(copied, "world")
 
+    def test_stderr_redirections_and_dev_null_work(self):
+        executor = self._build_executor()
+
+        discarded = async_to_sync(executor.execute_result)("unknowncmd 2>/dev/null || pwd")
+        captured = async_to_sync(executor.execute_result)("unknowncmd 2> /tmp/err.txt || true")
+        merged = async_to_sync(executor.execute_result)("unknowncmd 2>&1 || true")
+        both = async_to_sync(executor.execute)("pwd &> /tmp/both.txt")
+
+        self.assertEqual(discarded.status, 0)
+        self.assertEqual(discarded.stdout.strip(), "/")
+        self.assertEqual(captured.status, 0)
+        self.assertIn("Unknown command: unknowncmd", async_to_sync(executor.execute)("cat /tmp/err.txt"))
+        self.assertIn("Unknown command: unknowncmd", merged.stdout)
+        self.assertEqual(merged.stderr, "")
+        self.assertIn("/", async_to_sync(executor.execute)("cat /tmp/both.txt"))
+        self.assertIn("/tmp/both.txt", both)
+
     def test_terminal_supports_semicolon_sequences(self):
         executor = self._build_executor()
 
