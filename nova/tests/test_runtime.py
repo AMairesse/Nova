@@ -701,6 +701,30 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("/", async_to_sync(executor.execute)("cat /tmp/both.txt"))
         self.assertIn("/tmp/both.txt", both)
 
+    def test_post_restart_operator_matrix_and_compound_rejection(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)('echo alpha > /tmp/matrix.txt')
+        async_to_sync(executor.execute)('echo beta >> /tmp/matrix.txt')
+        piped = async_to_sync(executor.execute)("cat /tmp/matrix.txt | grep beta")
+        chained = async_to_sync(executor.execute_result)("false && echo no || echo yes")
+        sequenced = async_to_sync(executor.execute)("pwd; echo done")
+        stderr_ok = async_to_sync(executor.execute_result)("unknowncmd 2>/dev/null || echo recovered")
+
+        self.assertEqual(piped, "beta")
+        self.assertEqual(chained.status, 0)
+        self.assertIn("yes", chained.stdout)
+        self.assertNotIn("no", chained.stdout)
+        self.assertIn("done", sequenced)
+        self.assertEqual(stderr_ok.status, 0)
+        self.assertIn("recovered", stderr_ok.stdout)
+
+        with self.assertRaises(TerminalCommandError) as loop_error:
+            async_to_sync(executor.execute)("for x in a b; do printf '%s\\n' \"$x\"; done")
+        self.assertEqual(loop_error.exception.failure_kind, "unsupported_feature")
+        self.assertIn("for", str(loop_error.exception))
+        self.assertNotIn("anbn", str(loop_error.exception))
+
     def test_terminal_supports_semicolon_sequences(self):
         executor = self._build_executor()
 

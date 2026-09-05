@@ -63,7 +63,9 @@ def build_automatic_runtime_instructions(
     lines: list[str] = [
         "Runtime instructions:",
         "- The main action surface is the `terminal` tool.",
-        "- Use shell-like commands for terminal work.",
+        "- Use shell-like commands for terminal work. This is a documented subset, not bash: "
+        "redirections (`>`, `>>`, `2>`, `2>&1`, `&>`, `<`), pipes, `;`, `&&`, and `||` are supported. "
+        "Loops, functions, heredocs, and substitutions are rejected."
     ]
     if allow_ask_user:
         lines.append("- Use `ask_user` only for genuine blocking clarifications.")
