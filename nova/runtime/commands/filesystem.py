@@ -359,8 +359,33 @@ async def cmd_rm(executor: TerminalExecutor, args: list[str]) -> str:
     return "\n".join(removed_messages)
 
 
+def _find_depth(root: str, path: str) -> int:
+    root_n = str(root or "/").rstrip("/") or "/"
+    path_n = str(path or "/").rstrip("/") or "/"
+    if path_n == root_n:
+        return 0
+    if root_n == "/":
+        relative = path_n.lstrip("/")
+        return relative.count("/") + 1 if relative else 0
+    prefix = f"{root_n}/"
+    if not path_n.startswith(prefix):
+        return -1
+    relative = path_n[len(prefix) :]
+    return relative.count("/") + 1 if relative else 0
+
+
+def _find_glob_match(value: str, pattern: str, *, ignore_case: bool) -> bool:
+    if ignore_case:
+        return fnmatch(str(value).lower(), str(pattern).lower())
+    return fnmatch(str(value), str(pattern))
+
+
 async def cmd_find(executor: TerminalExecutor, args: list[str]) -> str:
-    usage = "find <path> [<path> ...] [-type f|d] [-name <glob> [-o -name <glob> ...]]"
+    usage = (
+        "find <path> [<path> ...] [-type f|d] [-maxdepth N] [-mindepth N] "
+        "[-name <glob> | -iname <glob> | -path <glob> | -ipath <glob>] "
+        "[-o <name-or-path-predicate> ...] [-print]"
+    )
     if not args:
         raise _terminal_command_error(
             f"Usage: {usage}",
@@ -386,34 +411,61 @@ async def cmd_find(executor: TerminalExecutor, args: list[str]) -> str:
         )
 
     desired_type: str | None = None
-    name_patterns: list[str] = []
+    max_depth: int | None = None
+    min_depth: int | None = None
+    matchers: list[tuple[str, str]] = []
     remaining = list(args[index:])
-    expect_name_after_or = False
+    expect_matcher_after_or = False
     clause_active = False
     cursor = 0
 
     def _unsupported_find_expression():
         return _terminal_command_error(
-            f"Unsupported find expression. Supported form: {usage}",
+            f"Unsupported find expression. Supported form: {usage}. "
+            "Parentheses, -exec, and -regex are not supported.",
             failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
         )
 
+    def _take_value(flag: str) -> str:
+        nonlocal cursor
+        if cursor + 1 >= len(remaining):
+            raise _terminal_command_error(
+                f"Missing value for {flag}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        value = str(remaining[cursor + 1] or "")
+        cursor += 2
+        return value
+
+    def _parse_depth(flag: str, raw_value: str) -> int:
+        try:
+            value = int(str(raw_value).strip())
+        except ValueError as exc:
+            raise _terminal_command_error(
+                f"Invalid {flag} value: {raw_value}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            ) from exc
+        if value < 0:
+            raise _terminal_command_error(
+                f"Invalid {flag} value: {raw_value}",
+                failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+            )
+        return value
+
     while cursor < len(remaining):
         token = str(remaining[cursor] or "").strip()
+        if token == "-print":
+            cursor += 1
+            continue
         if token == "-o":
             if not clause_active:
                 raise _unsupported_find_expression()
-            expect_name_after_or = True
+            expect_matcher_after_or = True
             clause_active = False
             cursor += 1
             continue
         if token == "-type":
-            if cursor + 1 >= len(remaining):
-                raise _terminal_command_error(
-                    f"Usage: {usage}",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            type_value = str(remaining[cursor + 1] or "").strip()
+            type_value = _take_value("-type")
             if type_value not in {"f", "d"}:
                 raise _terminal_command_error(
                     f"Unsupported find type: {type_value}",
@@ -422,50 +474,77 @@ async def cmd_find(executor: TerminalExecutor, args: list[str]) -> str:
             if desired_type is not None:
                 raise _unsupported_find_expression()
             desired_type = type_value
-            cursor += 2
             continue
-        if token == "-name":
-            if cursor + 1 >= len(remaining):
-                raise _terminal_command_error(
-                    "Missing value for -name",
-                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                )
-            if name_patterns and not expect_name_after_or:
+        if token in {"-maxdepth", "-mindepth"}:
+            depth_value = _parse_depth(token, _take_value(token))
+            if token == "-maxdepth":
+                if max_depth is not None:
+                    raise _unsupported_find_expression()
+                max_depth = depth_value
+            else:
+                if min_depth is not None:
+                    raise _unsupported_find_expression()
+                min_depth = depth_value
+            continue
+        if token in {"-name", "-iname", "-path", "-ipath"}:
+            if matchers and not expect_matcher_after_or:
                 raise _unsupported_find_expression()
-            name_patterns.append(str(remaining[cursor + 1] or ""))
+            pattern = _take_value(token)
+            matchers.append((token, pattern))
             clause_active = True
-            expect_name_after_or = False
-            cursor += 2
+            expect_matcher_after_or = False
             continue
         raise _unsupported_find_expression()
 
-    if expect_name_after_or:
+    if expect_matcher_after_or:
         raise _unsupported_find_expression()
 
-    collected: set[str] = set()
+    filtered: list[str] = []
+    seen: set[str] = set()
     for raw_root in roots:
         normalized_root = normalize_vfs_path(raw_root, cwd=executor.vfs.cwd)
         if not await executor.vfs.path_exists(normalized_root):
             raise _terminal_command_error(f"Path not found: {normalized_root}")
         try:
-            collected.update(await executor.vfs.find(normalized_root, ""))
+            collected = await executor.vfs.find(normalized_root, "")
         except VFSError as exc:
             raise _terminal_command_error(str(exc)) from exc
 
-    filtered: list[str] = []
-    for path in sorted(collected):
-        if name_patterns:
-            basename = posixpath.basename(path.rstrip("/")) or path
-            if not any(fnmatch(basename, pattern) for pattern in name_patterns):
+        for path in collected:
+            if path in seen:
                 continue
-        if desired_type is not None:
-            is_dir = await executor.vfs.is_dir(path)
-            if desired_type == "f" and is_dir:
+            depth = _find_depth(normalized_root, path)
+            if depth < 0:
                 continue
-            if desired_type == "d" and not is_dir:
+            if min_depth is not None and depth < min_depth:
                 continue
-        filtered.append(path)
-    return "\n".join(filtered)
+            if max_depth is not None and depth > max_depth:
+                continue
+            if matchers:
+                basename = posixpath.basename(path.rstrip("/")) or path
+                matched = False
+                for kind, pattern in matchers:
+                    if kind == "-name" and _find_glob_match(basename, pattern, ignore_case=False):
+                        matched = True
+                    elif kind == "-iname" and _find_glob_match(basename, pattern, ignore_case=True):
+                        matched = True
+                    elif kind == "-path" and _find_glob_match(path, pattern, ignore_case=False):
+                        matched = True
+                    elif kind == "-ipath" and _find_glob_match(path, pattern, ignore_case=True):
+                        matched = True
+                    if matched:
+                        break
+                if not matched:
+                    continue
+            if desired_type is not None:
+                is_dir = await executor.vfs.is_dir(path)
+                if desired_type == "f" and is_dir:
+                    continue
+                if desired_type == "d" and not is_dir:
+                    continue
+            seen.add(path)
+            filtered.append(path)
+    return "\n".join(sorted(filtered))
 
 
 def _sort_text_lines(content: str) -> str:

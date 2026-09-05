@@ -209,20 +209,44 @@ class FilesystemCommandTests(TerminalExecutorCommandTestCase):
         self.assertIn("/tmp/alpha.txt", listed)
         self.assertEqual(jpg_only, "/gallery/a.jpg")
 
+    def test_find_supports_iname_path_and_depth(self):
+        executor = self._build_executor()
+
+        async_to_sync(executor.execute)("mkdir /gallery")
+        async_to_sync(executor.execute)("mkdir /gallery/nested")
+        async_to_sync(executor.execute)('printf "a" > /gallery/A.JPG')
+        async_to_sync(executor.execute)('printf "b" > /gallery/nested/b.png')
+        async_to_sync(executor.execute)('printf "note" > /gallery/nested/readme.txt')
+
+        iname = async_to_sync(executor.execute)('find /gallery -type f -iname "*.jpg"')
+        path_match = async_to_sync(executor.execute)('find /gallery -path "/gallery/nested/*"')
+        max_depth = async_to_sync(executor.execute)("find /gallery -maxdepth 1")
+        min_depth = async_to_sync(executor.execute)("find /gallery -mindepth 2 -type f")
+
+        self.assertEqual(iname, "/gallery/A.JPG")
+        self.assertIn("/gallery/nested/b.png", path_match)
+        self.assertIn("/gallery/nested/readme.txt", path_match)
+        self.assertNotIn("/gallery/A.JPG", path_match)
+        self.assertIn("/gallery", max_depth)
+        self.assertIn("/gallery/A.JPG", max_depth)
+        self.assertNotIn("/gallery/nested/b.png", max_depth)
+        self.assertIn("/gallery/nested/b.png", min_depth)
+        self.assertNotIn("/gallery/A.JPG", min_depth)
+
     def test_find_rejects_legacy_and_unsupported_expressions_cleanly(self):
         executor = self._build_executor()
 
         with self.assertRaises(TerminalCommandError) as legacy_shape:
             async_to_sync(executor.execute)("find / out")
-        with self.assertRaises(TerminalCommandError) as iname_error:
-            async_to_sync(executor.execute)('find / -iname "*.jpg"')
+        with self.assertRaises(TerminalCommandError) as exec_error:
+            async_to_sync(executor.execute)("find / -regex '.*jpg'")
         with self.assertRaises(TerminalCommandError) as missing_name:
             async_to_sync(executor.execute)("find / -name")
         with self.assertRaises(TerminalCommandError) as unsupported_type:
             async_to_sync(executor.execute)("find / -type x")
 
         self.assertEqual(str(legacy_shape.exception), "Path not found: /out")
-        self.assertIn("Unsupported find expression.", str(iname_error.exception))
+        self.assertIn("Unsupported find expression.", str(exec_error.exception))
         self.assertEqual(str(missing_name.exception), "Missing value for -name")
         self.assertEqual(str(unsupported_type.exception), "Unsupported find type: x")
 

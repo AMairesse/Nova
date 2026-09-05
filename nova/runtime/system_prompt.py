@@ -144,7 +144,10 @@ def build_automatic_runtime_instructions(
         )
     if capabilities.has_mcp:
         lines.append(
-            "- Use `mcp tools` and `mcp schema` before remote MCP calls; persist machine-readable results with `--output`, `--extract-to`, or shell redirection."
+            "- Use `mcp tools` and `mcp schema` before remote MCP calls; "
+            "pass input as a quoted JSON object, key=value pairs, --input-file, or stdin. "
+            "JSON prints on stdout by default; use --extract-to to save returned files, "
+            "or `--output` / `>` to persist JSON."
         )
     if capabilities.has_api:
         lines.append(

@@ -75,6 +75,30 @@ BROWSER_SINGLE_PANE_ERROR = web_commands.BROWSER_SINGLE_PANE_ERROR
 BROWSER_DEFAULT_ELEMENT_ATTRIBUTES = web_commands.BROWSER_DEFAULT_ELEMENT_ATTRIBUTES
 
 
+NOVA_REDIR_MERGE_STDERR = "__NOVA_MERGE_STDERR__"
+NOVA_REDIR_STDERR = "__NOVA_STDERR__"
+NOVA_REDIR_STDERR_APPEND = "__NOVA_STDERR_APPEND__"
+NOVA_REDIR_BOTH = "__NOVA_BOTH__"
+_NULL_REDIRECT_PATH = "/dev/null"
+_SHELL_REDIRECT_TOKENS = {
+    "<",
+    ">",
+    ">>",
+    NOVA_REDIR_MERGE_STDERR,
+    NOVA_REDIR_STDERR,
+    NOVA_REDIR_STDERR_APPEND,
+    NOVA_REDIR_BOTH,
+}
+_SHELL_REDIRECTION_REWRITES = (
+    ("2>&1", f" {NOVA_REDIR_MERGE_STDERR} "),
+    ("2>>", f" {NOVA_REDIR_STDERR_APPEND} "),
+    ("2>", f" {NOVA_REDIR_STDERR} "),
+    ("&>", f" {NOVA_REDIR_BOTH} "),
+    ("1>>", " >> "),
+    ("1>", " > "),
+)
+
+
 @dataclass(slots=True, frozen=True)
 class ParsedShellCommand:
     raw: str
@@ -82,6 +106,9 @@ class ParsedShellCommand:
     input_path: str | None = None
     output_path: str | None = None
     output_append: bool = False
+    stderr_path: str | None = None
+    stderr_append: bool = False
+    merge_stderr: bool = False
     operator_before: str | None = None
 
 
@@ -433,22 +460,14 @@ class TerminalExecutor:
 
             if raw.startswith("<<<", index) or raw.startswith("<<", index):
                 raise TerminalCommandError(
-                    "Heredocs and << redirections are not supported.",
-                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
-                )
-            if raw.startswith("2>&1", index) or raw.startswith("2>>", index) or raw.startswith("2>", index):
-                raise TerminalCommandError(
-                    "stderr redirections are not supported.",
-                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
-                )
-            if raw.startswith("&>", index):
-                raise TerminalCommandError(
-                    "Combined stdout/stderr redirections are not supported.",
+                    "Heredocs and << redirections are not supported. "
+                    "Write the text to a file and use `< path`, or pass --text / JSON stdin.",
                     failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
                 )
             if raw.startswith("$(", index) or char == "`":
                 raise TerminalCommandError(
-                    "Shell substitutions are not supported.",
+                    "Shell substitutions are not supported. "
+                    "Call commands sequentially, or pipe stdout with `|`.",
                     failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
                 )
             index += 1
@@ -521,13 +540,60 @@ class TerminalExecutor:
         segments.append((operator_before, final_segment))
         return segments
 
+    @staticmethod
+    def _rewrite_shell_redirection_tokens(raw: str) -> str:
+        in_single = False
+        in_double = False
+        escaped = False
+        rewritten: list[str] = []
+        index = 0
+        while index < len(raw):
+            char = raw[index]
+            if escaped:
+                rewritten.append(char)
+                escaped = False
+                index += 1
+                continue
+            if char == "\\" and not in_single:
+                rewritten.append(char)
+                escaped = True
+                index += 1
+                continue
+            if char == "'" and not in_double:
+                in_single = not in_single
+                rewritten.append(char)
+                index += 1
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                rewritten.append(char)
+                index += 1
+                continue
+            if not in_single and not in_double:
+                matched = False
+                for source, replacement in _SHELL_REDIRECTION_REWRITES:
+                    if raw.startswith(source, index):
+                        rewritten.append(replacement)
+                        index += len(source)
+                        matched = True
+                        break
+                if matched:
+                    continue
+            rewritten.append(char)
+            index += 1
+        return "".join(rewritten)
+
     def _tokenize_shell(self, command: str) -> list[str]:
         raw = str(command or "").strip()
         if not raw:
             raise TerminalCommandError("Empty command.", failure_kind=FAILURE_KIND_PARSE_ERROR)
         self._validate_shell_operators(raw)
         try:
-            lexer = shlex.shlex(raw, posix=True, punctuation_chars="|<>")
+            lexer = shlex.shlex(
+                self._rewrite_shell_redirection_tokens(raw),
+                posix=True,
+                punctuation_chars="|<>",
+            )
             lexer.whitespace_split = True
             lexer.commenters = ""
             return list(lexer)
@@ -548,16 +614,33 @@ class TerminalExecutor:
         input_path: str | None = None
         output_path: str | None = None
         output_append = False
+        stderr_path: str | None = None
+        stderr_append = False
+        merge_stderr = False
+        seen_output_redirect = False
+
+        def _take_redirect_path(kind: str) -> str:
+            nonlocal index
+            index += 1
+            if index >= len(tokens) or tokens[index] == "|" or tokens[index] in _SHELL_REDIRECT_TOKENS:
+                raise TerminalCommandError(
+                    f"Missing path after {kind}",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            return tokens[index]
+
+        def _reject_pipe_after_output_redirect() -> None:
+            if seen_output_redirect:
+                raise TerminalCommandError(
+                    "Redirection must appear at the end of the command.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
 
         index = 0
         while index < len(tokens):
             token = tokens[index]
             if token == "|":
-                if output_path is not None:
-                    raise TerminalCommandError(
-                        "Output redirection must appear at the end of the command.",
-                        failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
-                    )
+                _reject_pipe_after_output_redirect()
                 if not current:
                     raise TerminalCommandError(
                         "Pipes require a command on both sides.",
@@ -568,12 +651,7 @@ class TerminalExecutor:
                 index += 1
                 continue
             if token == "<":
-                index += 1
-                if index >= len(tokens) or tokens[index] in {"|", "<", ">", ">>"}:
-                    raise TerminalCommandError(
-                        "Missing path after <",
-                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                    )
+                path = _take_redirect_path("<")
                 if pipeline:
                     raise TerminalCommandError(
                         "Input redirection is supported only for the first command in the pipeline.",
@@ -584,33 +662,67 @@ class TerminalExecutor:
                         "Only one input redirection is supported.",
                         failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                     )
-                input_path = tokens[index]
+                input_path = path
                 index += 1
                 continue
             if token in {">", ">>"}:
-                index += 1
-                if index >= len(tokens) or tokens[index] in {"|", "<", ">", ">>"}:
-                    raise TerminalCommandError(
-                        f"Missing path after {token}",
-                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
-                    )
+                seen_output_redirect = True
+                path = _take_redirect_path(token)
                 if output_path is not None:
                     raise TerminalCommandError(
                         "Only one output redirection is supported.",
                         failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                     )
-                output_path = tokens[index]
+                output_path = path
                 output_append = token == ">>"
-                if index != len(tokens) - 1:
+                index += 1
+                continue
+            if token == NOVA_REDIR_MERGE_STDERR:
+                seen_output_redirect = True
+                if stderr_path is not None:
                     raise TerminalCommandError(
-                        "Output redirection must appear at the end of the command.",
-                        failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                        "Cannot combine 2>&1 with 2> or 2>>.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
                     )
+                merge_stderr = True
+                index += 1
+                continue
+            if token in {NOVA_REDIR_STDERR, NOVA_REDIR_STDERR_APPEND}:
+                seen_output_redirect = True
+                kind = "2>>" if token == NOVA_REDIR_STDERR_APPEND else "2>"
+                if merge_stderr:
+                    raise TerminalCommandError(
+                        "Cannot combine 2>&1 with 2> or 2>>.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                if stderr_path is not None:
+                    raise TerminalCommandError(
+                        "Only one stderr redirection is supported.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                stderr_path = _take_redirect_path(kind)
+                stderr_append = token == NOVA_REDIR_STDERR_APPEND
+                index += 1
+                continue
+            if token == NOVA_REDIR_BOTH:
+                seen_output_redirect = True
+                if output_path is not None or stderr_path is not None or merge_stderr:
+                    raise TerminalCommandError(
+                        "Only one combined stdout/stderr redirection is supported.",
+                        failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                    )
+                output_path = _take_redirect_path("&>")
+                merge_stderr = True
                 index += 1
                 continue
             if token == "<<":
                 raise TerminalCommandError(
-                    "Heredocs are not supported.",
+                    "Heredocs are not supported. Write the text to a file and use `< path`.",
+                    failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
+                )
+            if seen_output_redirect:
+                raise TerminalCommandError(
+                    f"Redirection must appear at the end of the command. Unexpected token: {token}",
                     failure_kind=FAILURE_KIND_UNSUPPORTED_SYNTAX,
                 )
             current.append(token)
@@ -635,6 +747,9 @@ class TerminalExecutor:
             input_path=input_path,
             output_path=output_path,
             output_append=output_append,
+            stderr_path=stderr_path,
+            stderr_append=stderr_append,
+            merge_stderr=merge_stderr,
         )
 
     def _parse_shell_command(self, command: str) -> ParsedShellProgram:
@@ -649,6 +764,9 @@ class TerminalExecutor:
                 input_path=parsed_segment.input_path,
                 output_path=parsed_segment.output_path,
                 output_append=parsed_segment.output_append,
+                stderr_path=parsed_segment.stderr_path,
+                stderr_append=parsed_segment.stderr_append,
+                merge_stderr=parsed_segment.merge_stderr,
                 operator_before=operator_before,
             )
             for operator_before, segment in self._split_shell_segments(raw)
@@ -716,8 +834,16 @@ class TerminalExecutor:
         output = ""
         stderr_parts: list[str] = []
         display_text = ""
+        failed = False
+        failure_kind = ""
+        status_label = ""
         for index, tokens in enumerate(parsed.pipeline):
-            capture_output = index < len(parsed.pipeline) - 1 or parsed.output_path is not None
+            capture_output = (
+                index < len(parsed.pipeline) - 1
+                or parsed.output_path is not None
+                or parsed.stderr_path is not None
+                or parsed.merge_stderr
+            )
             stage_result = await self._execute_stage_result(
                 tokens,
                 stdin_text=stdin_text,
@@ -725,26 +851,25 @@ class TerminalExecutor:
             )
             if stage_result.stderr:
                 stderr_parts.append(stage_result.stderr)
-            if stage_result.status != 0:
-                return ShellSegmentResult(
-                    segment_index=segment_index,
-                    command=parsed.raw,
-                    head_command=head_command,
-                    stderr=self._merge_command_outputs(stderr_parts),
-                    status=1,
-                    failure_kind=stage_result.failure_kind or classify_terminal_failure(
-                        self._merge_command_outputs(stderr_parts)
-                    ),
-                    status_label=stage_result.status_label,
-                    display_text=stage_result.display_text,
-                )
             output = stage_result.stdout
             stdin_text = stage_result.stdout
             display_text = stage_result.display_text
+            if stage_result.status != 0:
+                failed = True
+                failure_kind = stage_result.failure_kind or classify_terminal_failure(
+                    self._merge_command_outputs(stderr_parts)
+                )
+                status_label = stage_result.status_label
+                break
+
+        stderr_text = self._merge_command_outputs(stderr_parts)
+        if parsed.merge_stderr:
+            output = self._merge_command_outputs([output, stderr_text])
+            stderr_text = ""
 
         if parsed.output_path is not None:
             try:
-                written = await self._write_shell_output(
+                written = await self._write_redirected_stream(
                     parsed.output_path,
                     output,
                     append=parsed.output_append,
@@ -752,28 +877,56 @@ class TerminalExecutor:
             except TerminalCommandError as exc:
                 message = str(exc)
                 if message:
-                    stderr_parts.append(message)
+                    stderr_text = self._merge_command_outputs([stderr_text, message])
                 return ShellSegmentResult(
                     segment_index=segment_index,
                     command=parsed.raw,
                     head_command=head_command,
-                    stderr=self._merge_command_outputs(stderr_parts),
+                    stderr=stderr_text,
                     status=1,
                     failure_kind=str(getattr(exc, "failure_kind", "") or classify_terminal_failure(message)),
                 )
-            output = self._format_write_result(
-                f"Wrote {len(output.encode('utf-8'))} bytes to {written.path}",
-                written,
-            )
-            display_text = output
+            if written is None:
+                if not failed:
+                    output = ""
+                    display_text = ""
+            elif not failed:
+                output = self._format_write_result(
+                    f"Wrote {len(output.encode('utf-8'))} bytes to {written.path}",
+                    written,
+                )
+                display_text = output
+
+        if parsed.stderr_path is not None:
+            try:
+                await self._write_redirected_stream(
+                    parsed.stderr_path,
+                    stderr_text,
+                    append=parsed.stderr_append,
+                )
+            except TerminalCommandError as exc:
+                message = str(exc)
+                return ShellSegmentResult(
+                    segment_index=segment_index,
+                    command=parsed.raw,
+                    head_command=head_command,
+                    stdout=output or "",
+                    stderr=message,
+                    status=1,
+                    failure_kind=str(getattr(exc, "failure_kind", "") or classify_terminal_failure(message)),
+                    display_text=display_text,
+                )
+            stderr_text = ""
 
         return ShellSegmentResult(
             segment_index=segment_index,
             command=parsed.raw,
             head_command=head_command,
             stdout=output or "",
-            stderr=self._merge_command_outputs(stderr_parts),
-            status=0,
+            stderr=stderr_text,
+            status=1 if failed else 0,
+            failure_kind=failure_kind if failed else "",
+            status_label=status_label,
             display_text=display_text,
         )
 
@@ -1387,6 +1540,14 @@ class TerminalExecutor:
 
     async def _cmd_printf(self, args: list[str]) -> str:
         return await filesystem_commands.cmd_printf(self, args)
+
+    def _is_null_redirect(self, raw_path: str) -> bool:
+        return normalize_vfs_path(raw_path, cwd=self.vfs.cwd) == _NULL_REDIRECT_PATH
+
+    async def _write_redirected_stream(self, raw_path: str, content: str, *, append: bool):
+        if self._is_null_redirect(raw_path):
+            return None
+        return await self._write_shell_output(raw_path, content, append=append)
 
     async def _write_shell_output(self, raw_path: str, content: str, *, append: bool):
         normalized = self._validate_text_write_path(raw_path)
@@ -2002,7 +2163,7 @@ class TerminalExecutor:
         for token in list(tokens or []):
             if "=" not in token:
                 raise TerminalCommandError(
-                    f"Invalid input token: {token}. Use key=value pairs, --input-file, or JSON stdin."
+                    f"Invalid input token: {token}. Use a quoted JSON object, key=value pairs, --input-file, or JSON stdin."
                 )
             key, raw_value = token.split("=", 1)
             key = str(key or "").strip()
@@ -2032,9 +2193,25 @@ class TerminalExecutor:
                 payload_text = await self.vfs.read_text(input_file)
             except VFSError as exc:
                 raise TerminalCommandError(str(exc)) from exc
-            return self._parse_json_text(payload_text, source_label=input_file), reduced
+            if reduced:
+                raise TerminalCommandError(
+                    "Cannot combine --input-file with extra JSON arguments.",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            return self._parse_json_text(payload_text, source_label=input_file), []
         if stdin_text is not None:
-            return self._parse_json_text(stdin_text, source_label="stdin"), reduced
+            if reduced:
+                raise TerminalCommandError(
+                    "Cannot combine JSON stdin with extra arguments. "
+                    "Use a quoted object, --input-file, or stdin alone.",
+                    failure_kind=FAILURE_KIND_INVALID_ARGUMENTS,
+                )
+            return self._parse_json_text(stdin_text, source_label="stdin"), []
+        if not reduced:
+            return {}, []
+        joined = " ".join(reduced).strip()
+        if joined.startswith("{") or joined.startswith("["):
+            return self._parse_json_text(joined, source_label="arguments"), []
         return self._parse_inline_key_values(reduced), []
 
     def _resolve_remote_tool(

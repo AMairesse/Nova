@@ -616,11 +616,6 @@ async def cmd_mcp(executor: TerminalExecutor, args: list[str], *, stdin_text: st
         except mcp_service.MCPServiceError as exc:
             raise _terminal_command_error(str(exc)) from exc
         artifacts = list(result.get("extractable_artifacts") or [])
-        if artifacts and not output_path and not extract_to:
-            raise _terminal_command_error(
-                "This MCP result includes extractable files or resources. Use --output or --extract-to."
-            )
-
         extracted_paths: list[str] = []
         if extract_to:
             try:
@@ -648,6 +643,15 @@ async def cmd_mcp(executor: TerminalExecutor, args: list[str], *, stdin_text: st
         rendered = executor._truncate_output(executor._render_mcp_call_interactive(result))
         if extracted_paths:
             rendered += "\nExtracted:\n" + "\n".join(f"- {path}" for path in extracted_paths)
+        elif artifacts:
+            names = []
+            for artifact in artifacts:
+                name = str(getattr(artifact, "path", "") or "").strip() or "artifact"
+                names.append(name)
+            rendered += (
+                "\nArtifacts available (not written). Re-run with --extract-to <dir> to save:\n"
+                + "\n".join(f"- {name}" for name in names)
+            )
         return rendered
 
     raise _terminal_command_error("Usage: mcp <servers|tools|schema|call|refresh> ...")
