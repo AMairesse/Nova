@@ -158,6 +158,34 @@ class MailServiceTests(TestCase):
         self.assertIn("Flags: \\Seen", result)
         self.assertIn("Everything is on track.", result)
 
+    def test_read_email_truncation_points_at_shell_full_flag(self):
+        body = "x" * 520
+        client = _FakeImapClient(
+            messages={
+                10: {
+                    "ENVELOPE": _envelope("Long update"),
+                    "UID": 10,
+                    "FLAGS": [b"\\Seen"],
+                    "BODY[]": _message_payload("Long update", body),
+                }
+            }
+        )
+
+        with patch("nova.plugins.mail.service.get_imap_client", new=AsyncMock(return_value=client)):
+            result = asyncio.run(
+                mail_service.read_email(
+                    self.user,
+                    self.tool.id,
+                    uid=10,
+                    folder="INBOX",
+                    preview_only=True,
+                )
+            )
+
+        self.assertIn("Content truncated", result)
+        self.assertIn("--full", result)
+        self.assertNotIn("preview_only", result)
+
     def test_list_mailboxes_exposes_special_use_and_flags(self):
         client = _FakeImapClient(
             mailboxes=[

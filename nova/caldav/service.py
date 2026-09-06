@@ -249,11 +249,11 @@ def resolve_calendar_account(
     if len(matches) > 1:
         requested = _to_text(account) or "<empty>"
         return None, (
-            f"Ambiguous calendar_account '{requested}'. Multiple CalDAV tools share this identifier. "
-            "Use a unique calendar_account value."
+            f"Ambiguous --account '{requested}'. Multiple CalDAV tools share this identifier. "
+            "Pass a unique --account selector."
         )
     return None, format_invalid_instance_message(
-        selector_name="calendar_account",
+        selector_name="--account",
         value=account,
         available_labels=selector_values,
     )

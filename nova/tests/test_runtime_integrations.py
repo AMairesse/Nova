@@ -448,6 +448,17 @@ class IntegrationCommandTests(TerminalExecutorCommandTestCase):
             preview_only=False,
         )
 
+    def test_mail_read_rejects_preview_only_python_kwarg_flag(self):
+        work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
+        executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
+
+        with self.assertRaises(TerminalCommandError) as cm:
+            async_to_sync(executor.execute)("mail read --uid 42 --preview-only=false")
+
+        message = str(cm.exception)
+        self.assertIn("--full", message)
+        self.assertNotIn("preview_only", message)
+
     def test_mail_move_and_mark_forward_selectors(self):
         work_tool = self._create_email_tool(name="Work Mail", address="work@example.com")
         executor = self._build_executor(TerminalCapabilities(email_tools=[work_tool]))
@@ -532,6 +543,20 @@ class IntegrationCommandTests(TerminalExecutorCommandTestCase):
 
         with self.assertRaises(TerminalCommandError):
             async_to_sync(executor.execute)("calendar upcoming")
+
+    def test_calendar_unknown_account_error_uses_shell_flag_name(self):
+        work_tool = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
+        personal_tool = self._create_caldav_tool(name="Personal Calendar", username="personal@example.com")
+        executor = self._build_executor(
+            TerminalCapabilities(caldav_tools=[work_tool, personal_tool])
+        )
+
+        with self.assertRaises(TerminalCommandError) as cm:
+            async_to_sync(executor.execute)("calendar calendars --account missing@example.com")
+
+        message = str(cm.exception)
+        self.assertIn("--account", message)
+        self.assertNotIn("calendar_account", message)
 
     def test_calendar_show_supports_json_output(self):
         work_tool = self._create_caldav_tool()
