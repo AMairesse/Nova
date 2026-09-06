@@ -17,7 +17,7 @@ Mail is accessed through shell-like commands:
 
 - `mail accounts`
 - `mail list`
-- `mail read <id>` or `mail read --uid <uid>`
+- `mail read <id> --full` or `mail read --uid <uid> --full` (omit `--full` for a 500-character preview)
 - `mail attachments <id>` or `mail attachments --uid <uid>`
 - `mail import <id> --attachment <part> --output /attachment.bin`
 - `mail folders --mailbox <email>`

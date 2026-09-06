@@ -1021,7 +1021,7 @@ msgstr ""
 msgid ""
 "\n"
 "\n"
-"[Content truncated. Use preview_only=False to read full email]"
+"[Content truncated. Re-run the same mail read command with --full.]"
 msgstr ""
 
 #: nova/tools/builtins/email.py:214

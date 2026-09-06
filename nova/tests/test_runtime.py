@@ -1547,6 +1547,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         self.assertIn("--mailbox <email>", skills["mail.md"])
         self.assertIn("mail move <id> --to-special junk", skills["mail.md"])
         self.assertIn("--uid", skills["mail.md"])
+        self.assertIn("mail read <id> --full", skills["mail.md"])
+        self.assertNotIn("preview_only", skills["mail.md"])
         self.assertIn("python --output", skills["python.md"])
         self.assertIn("persistent sandbox terminal", skills["python.md"])
         self.assertIn("current terminal session", skills["python.md"])

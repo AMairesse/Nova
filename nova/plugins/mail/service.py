@@ -497,7 +497,7 @@ async def read_email(
 
         if len(content) > 500:
             result += content[:500] + "..."
-            result += _("\n\n[Content truncated. Use preview_only=False to read full email]")
+            result += _("\n\n[Content truncated. Re-run the same mail read command with --full.]")
         else:
             result += content
         return result
