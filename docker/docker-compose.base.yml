@@ -50,7 +50,7 @@ services:
         condition: service_healthy
 
   minio: &base-minio
-    image: minio/minio
+    image: docker.io/pgsty/silo:latest
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -65,7 +65,7 @@ services:
       retries: 3
 
   minio-nova-init:  # One-shot init for Nova's MinIO setup
-    image: minio/mc
+    image: docker.io/pgsty/silo:latest
     depends_on:
       minio:
         condition: service_healthy  # Wait for MinIO
