@@ -316,7 +316,7 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         }
         self._stored_contents: dict[str, bytes] = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -324,8 +324,8 @@ class TerminalExecutorCommandTests(TransactionTestCase):
         async def fake_download_file_content(user_file):
             return self._stored_contents.get(user_file.key, b"")
 
-        self.upload_patcher = patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio)
-        self.vfs_upload_patcher = patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio)
+        self.upload_patcher = patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage)
+        self.vfs_upload_patcher = patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage)
         self.download_patcher = patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content)
         self.webapp_download_patcher = patch("nova.webapp.service.download_file_content", new=fake_download_file_content)
         self.delete_storage_patcher = patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock())
@@ -2113,15 +2113,15 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         async def fake_download_file_content(file_obj):
             return stored_contents[file_obj.key]
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             stored_contents[key] = bytes(content)
             return key
 
         with (
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
         ):
             runtime = async_to_sync(
@@ -2223,7 +2223,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         async def fake_download_file_content(file_obj):
             return self._stored_contents[file_obj.key]
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -2231,8 +2231,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         history_path = f"/history/message-{older_message.id}/IMG_1000.jpg"
         with (
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
         ):
             runtime = async_to_sync(
@@ -2624,7 +2624,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
         stored_contents: dict[str, bytes] = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             stored_contents[key] = bytes(content)
             return key
@@ -2633,9 +2633,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             return stored_contents[file_obj.key]
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.file_utils.download_file_content", new=fake_download_file_content),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.webapp.service.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
@@ -2695,7 +2695,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )
         stored_contents: dict[str, bytes] = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             stored_contents[key] = bytes(content)
             return key
@@ -2704,9 +2704,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             return stored_contents[file_obj.key]
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.file_utils.download_file_content", new=fake_download_file_content),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.webapp.service.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
@@ -3320,7 +3320,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         }
         self._stored_contents = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3329,8 +3329,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             return self._stored_contents.get(user_file.key, b"")
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
         ):
@@ -3440,7 +3440,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         }
         self._stored_contents = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3449,8 +3449,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             return self._stored_contents.get(user_file.key, b"")
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
         ):
@@ -3516,7 +3516,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         }
         self._stored_contents = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3525,8 +3525,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             return self._stored_contents.get(user_file.key, b"")
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
         ):
@@ -3600,7 +3600,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self._stored_contents = {user_file.key: jpeg_bytes}
         captured = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3625,8 +3625,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             }
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.runtime.agent.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
@@ -3680,7 +3680,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self._stored_contents: dict[str, bytes] = {}
         seen = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3701,8 +3701,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             )
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
             patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
@@ -3766,7 +3766,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )
         self._stored_contents = {user_file.key: jpeg_bytes}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3779,8 +3779,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             raise RuntimeError("boom")
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
             patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
@@ -3836,7 +3836,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self._stored_contents: dict[str, bytes] = {user_file.key: jpeg_bytes}
         seen = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3857,8 +3857,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             )
 
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
             patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),
@@ -3910,7 +3910,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self._stored_contents = {user_file.key: jpeg_bytes}
         seen = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -3932,8 +3932,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         history_path = f"/history/message-{older_message.id}/IMG_6433.jpg"
         with (
-            patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio),
-            patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio),
+            patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
+            patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage),
             patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content),
             patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock()),
             patch("nova.runtime.agent.ReactTerminalRuntime.run", new=fake_child_run),

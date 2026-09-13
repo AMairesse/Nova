@@ -14,7 +14,7 @@ from nova.utils import compute_external_base
 logger = logging.getLogger(__name__)
 
 
-# Model for user-uploaded files stored in MinIO
+# Model for user-uploaded files stored in S3-compatible object storage
 class UserFile(models.Model):
     class Scope(models.TextChoices):
         THREAD_SHARED = "thread_shared", "Thread shared"
@@ -105,7 +105,7 @@ class UserFile(models.Model):
             )
 
             # Optionally rewrite to external base when configured.
-            # If no external base is found, keep the MinIO URL as-is.
+            # If no external base is found, keep the object-storage URL as-is.
             external_base = compute_external_base()
             if external_base:
                 url = url.replace(settings.MINIO_ENDPOINT_URL.rstrip('/'), external_base.rstrip('/'))
@@ -129,10 +129,10 @@ class UserFile(models.Model):
             s3_client.delete_object(Bucket=settings.MINIO_BUCKET_NAME,
                                     Key=self.key)
         except ClientError as e:
-            logger.error(f"Error deleting from MinIO: {e}")
+            logger.error(f"Error deleting from object storage: {e}")
         self._storage_deleted = True
 
     def delete(self, *args, **kwargs):
-        """Delete from DB and MinIO."""
+        """Delete from the database and object storage."""
         self.delete_storage_object()
         super().delete(*args, **kwargs)

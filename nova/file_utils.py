@@ -41,9 +41,9 @@ def sanitize_user_path(raw: str) -> str:
     return '/' + '/'.join(parts)
 
 
-async def upload_file_to_minio(content: bytes, path: str, mime: str,
-                               thread: Thread, user) -> str:
-    """Async upload content to MinIO and return key."""
+async def upload_file_to_object_storage(content: bytes, path: str, mime: str,
+                                        thread: Thread, user) -> str:
+    """Upload content asynchronously to S3-compatible object storage."""
     safe_path = sanitize_user_path(path)  # e.g. "/dir/file.txt"
     key = f"users/{user.id}/threads/{thread.id}{safe_path}"
     session = aioboto3.Session()
@@ -78,12 +78,12 @@ async def upload_file_to_minio(content: bytes, path: str, mime: str,
                                            Key=key, Body=content, **extra_args)
             return key
         except Exception as e:  # Catch aioboto3 errors
-            logger.error(f"Error uploading to MinIO: {e}")
+            logger.error(f"Error uploading to object storage: {e}")
             raise
 
 
 async def download_file_content(user_file: UserFile) -> bytes:
-    """Download file bytes from MinIO."""
+    """Download file bytes from S3-compatible object storage."""
     session = aioboto3.Session()
     async with session.client(
         's3',
@@ -238,8 +238,8 @@ async def batch_upload_files(thread: Thread, user,
             if renamed_path != proposed_path:
                 logger.info(f"Auto-renamed {proposed_path} to {renamed_path}")
 
-            key = await upload_file_to_minio(content, renamed_path, mime,
-                                             thread, user)
+            key = await upload_file_to_object_storage(content, renamed_path, mime,
+                                                       thread, user)
 
             # Async-safe ORM create
             @sync_to_async

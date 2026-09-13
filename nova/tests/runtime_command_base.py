@@ -65,7 +65,7 @@ class TerminalExecutorCommandTestCase(TransactionTestCase):
         }
         self._stored_contents: dict[str, bytes] = {}
 
-        async def fake_upload_file_to_minio(content, path, mime, thread, user):
+        async def fake_upload_file_to_object_storage(content, path, mime, thread, user):
             key = f"fake://{user.id}/{thread.id}/{uuid.uuid4().hex}/{path.lstrip('/')}"
             self._stored_contents[key] = bytes(content)
             return key
@@ -73,8 +73,8 @@ class TerminalExecutorCommandTestCase(TransactionTestCase):
         async def fake_download_file_content(user_file):
             return self._stored_contents.get(user_file.key, b"")
 
-        self.upload_patcher = patch("nova.file_utils.upload_file_to_minio", new=fake_upload_file_to_minio)
-        self.vfs_upload_patcher = patch("nova.runtime.vfs.upload_file_to_minio", new=fake_upload_file_to_minio)
+        self.upload_patcher = patch("nova.file_utils.upload_file_to_object_storage", new=fake_upload_file_to_object_storage)
+        self.vfs_upload_patcher = patch("nova.runtime.vfs.upload_file_to_object_storage", new=fake_upload_file_to_object_storage)
         self.download_patcher = patch("nova.runtime.vfs.download_file_content", new=fake_download_file_content)
         self.webapp_download_patcher = patch("nova.webapp.service.download_file_content", new=fake_download_file_content)
         self.delete_storage_patcher = patch("nova.models.UserFile.UserFile.delete_storage_object", new=Mock())

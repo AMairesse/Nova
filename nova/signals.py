@@ -42,9 +42,9 @@ def cleanup_task_definition_periodic_task(sender, instance: TaskDefinition, **kw
 def cleanup_thread(sender, instance: Thread, **kwargs):
     """
     Delete all files associated with a thread before the thread is deleted.
-    This ensures MinIO files are properly cleaned up.
+    This ensures object-storage files are properly cleaned up.
     """
-    # ---------- 1. Minio cleanup ------------------------------
+    # ---------- 1. Object-storage cleanup ---------------------
     files_to_delete = instance.files.all()
     if files_to_delete.exists():
         file_count = files_to_delete.count()
@@ -56,7 +56,7 @@ def cleanup_thread(sender, instance: Thread, **kwargs):
         for file_obj in files_to_delete:
             try:
                 file_key = file_obj.key
-                file_obj.delete()  # This handles both DB and MinIO cleanup
+                file_obj.delete()  # This handles both DB and object-storage cleanup
                 logger.debug(f"Successfully deleted file {file_key}")
                 deleted_count += 1
             except Exception as e:
@@ -69,7 +69,7 @@ def cleanup_thread(sender, instance: Thread, **kwargs):
 
 @receiver(pre_delete, sender=UserFile)
 def cleanup_userfile_storage(sender, instance: UserFile, **kwargs):
-    """Ensure MinIO cleanup also happens on cascade/queryset deletion paths."""
+    """Ensure storage cleanup also happens on cascade/queryset deletion paths."""
     try:
         instance.delete_storage_object()
     except Exception as exc:
