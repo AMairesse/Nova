@@ -57,7 +57,7 @@ server {
         }
     }
 
-    # Proxy for MinIO API (S3-compatible)
+    # Proxy for Silo's S3-compatible API
     location /${MINIO_BUCKET_NAME}/ {
         proxy_pass http://minio:9000/${MINIO_BUCKET_NAME}/;
         proxy_pass_request_headers off;

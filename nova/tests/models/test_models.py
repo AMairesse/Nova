@@ -594,7 +594,7 @@ class UserFileModelsTest(BaseTestCase):
         user_file.expiration_date = timezone.now() - timedelta(days=1)
         user_file.save()
 
-        # Mock boto3.client to avoid actual MinIO connection
+        # Mock boto3.client to avoid an actual object-storage connection
         with patch('boto3.client') as mock_boto3_client:
             mock_s3_client = MagicMock()
             mock_boto3_client.return_value = mock_s3_client
@@ -619,7 +619,7 @@ class UserFileModelsTest(BaseTestCase):
     def test_user_file_get_download_url_valid(self):
         """
         Test UserFile download URL generation for valid (non-expired) files.
-        Ensures that presigned URLs are generated correctly with mocked MinIO.
+        Ensures that presigned URLs are generated correctly with mocked object storage.
         """
         user_file = UserFile.objects.create(
             user=self.user,

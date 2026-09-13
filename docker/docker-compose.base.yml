@@ -64,23 +64,23 @@ services:
       timeout: 20s
       retries: 3
 
-  minio-nova-init:  # One-shot init for Nova's MinIO setup
+  minio-nova-init:  # One-shot init for Nova's Silo setup
     image: docker.io/pgsty/silo:latest
     depends_on:
       minio:
-        condition: service_healthy  # Wait for MinIO
+        condition: service_healthy  # Wait for Silo
     entrypoint: /bin/sh
     command: |
       -c '
-      echo "Initializing MinIO for Nova...";
-      mc alias set myminio http://minio:9000 "${MINIO_ROOT_USER:-minioadmin}" "${MINIO_ROOT_PASSWORD:-minioadmin}";
+      echo "Initializing Silo for Nova...";
+      mc alias set silo http://minio:9000 "${MINIO_ROOT_USER:-minioadmin}" "${MINIO_ROOT_PASSWORD:-minioadmin}";
 
       # Create bucket if not exists
-      mc mb myminio/${MINIO_BUCKET_NAME:-nova-files} --ignore-existing || true;
+      mc mb silo/${MINIO_BUCKET_NAME:-nova-files} --ignore-existing || true;
 
       # Create user if not exists (check via list, add if missing)
-      if ! mc admin user info myminio ${MINIO_ACCESS_KEY:-nova_user} > /dev/null 2>&1; then
-        mc admin user add myminio ${MINIO_ACCESS_KEY:-nova_user} ${MINIO_SECRET_KEY} || true;
+      if ! mc admin user info silo ${MINIO_ACCESS_KEY:-nova_user} > /dev/null 2>&1; then
+        mc admin user add silo ${MINIO_ACCESS_KEY:-nova_user} ${MINIO_SECRET_KEY} || true;
       fi;
 
       # Create policy (read/write on bucket)
@@ -94,15 +94,15 @@ services:
           }
         ]
       }" > /tmp/nova-policy.json;
-      mc admin policy create myminio nova-policy /tmp/nova-policy.json || true;
+      mc admin policy create silo nova-policy /tmp/nova-policy.json || true;
 
       # Attach policy to user
-      mc admin policy attach myminio nova-policy --user ${MINIO_ACCESS_KEY:-nova_user} || true;
+      mc admin policy attach silo nova-policy --user ${MINIO_ACCESS_KEY:-nova_user} || true;
 
       # Set bucket policy (e.g., private by default)
-      mc anonymous set none myminio/${MINIO_BUCKET_NAME:-nova-files} || true;
+      mc anonymous set none silo/${MINIO_BUCKET_NAME:-nova-files} || true;
 
-      echo "MinIO init for Nova completed.";
+      echo "Silo init for Nova completed.";
       exit 0;
       '
     restart: "no"  # Run once
@@ -161,8 +161,6 @@ services:
       DB_PORT: 5432
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      MINIO_HOST: minio
-      MINIO_PORT: 9000
     healthcheck:
       test:
         - CMD-SHELL

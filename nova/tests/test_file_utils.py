@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 
 from nova.tests.base import BaseTestCase
 from nova.file_utils import (
-    detect_mime, sanitize_user_path, upload_file_to_minio,
+    detect_mime, sanitize_user_path, upload_file_to_object_storage,
     auto_rename_path, build_virtual_tree,
     check_thread_access, batch_upload_files,
     MAX_FILE_SIZE, MULTIPART_THRESHOLD
@@ -111,8 +111,8 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(sanitized, '/')
 
     @patch('nova.file_utils.aioboto3.Session')
-    async def test_upload_file_to_minio_small_file(self, mock_session):
-        """Test uploading small file to MinIO."""
+    async def test_upload_file_to_object_storage_small_file(self, mock_session):
+        """Test uploading small file to object storage."""
         mock_s3_client = AsyncMock()
         mock_session.return_value.client.return_value.__aenter__.return_value = mock_s3_client
 
@@ -120,7 +120,7 @@ class FileUtilsTest(BaseTestCase):
         path = '/test.txt'
         mime = 'text/plain'
 
-        key = await upload_file_to_minio(content, path, mime, self.thread, self.user)
+        key = await upload_file_to_object_storage(content, path, mime, self.thread, self.user)
 
         expected_key = f"users/{self.user.id}/threads/{self.thread.id}/test.txt"
         self.assertEqual(key, expected_key)
@@ -130,7 +130,7 @@ class FileUtilsTest(BaseTestCase):
         )
 
     @patch('nova.file_utils.aioboto3.Session')
-    async def test_upload_file_to_minio_large_file(self, mock_session):
+    async def test_upload_file_to_object_storage_large_file(self, mock_session):
         """Test uploading large file with multipart upload."""
         mock_s3_client = AsyncMock()
         mock_session.return_value.client.return_value.__aenter__.return_value = mock_s3_client
@@ -147,7 +147,7 @@ class FileUtilsTest(BaseTestCase):
             {'ETag': '"etag2"'}
         ]
 
-        key = await upload_file_to_minio(content, path, mime, self.thread, self.user)
+        key = await upload_file_to_object_storage(content, path, mime, self.thread, self.user)
 
         expected_key = f"users/{self.user.id}/threads/{self.thread.id}/large.txt"
         self.assertEqual(key, expected_key)
@@ -155,7 +155,7 @@ class FileUtilsTest(BaseTestCase):
         mock_s3_client.complete_multipart_upload.assert_called_once()
 
     @patch('nova.file_utils.aioboto3.Session')
-    async def test_upload_file_to_minio_error(self, mock_session):
+    async def test_upload_file_to_object_storage_error(self, mock_session):
         """Test upload error handling."""
         mock_s3_client = AsyncMock()
         mock_session.return_value.client.return_value.__aenter__.return_value = mock_s3_client
@@ -167,15 +167,15 @@ class FileUtilsTest(BaseTestCase):
 
         with self.assertLogs('nova.file_utils', level='ERROR') as cm:
             with self.assertRaises(Exception):
-                await upload_file_to_minio(content, path, mime, self.thread, self.user)
-            self.assertIn("Error uploading to MinIO", cm.output[0])
+                await upload_file_to_object_storage(content, path, mime, self.thread, self.user)
+            self.assertIn("Error uploading to object storage", cm.output[0])
 
     async def test_auto_rename_path_no_conflict(self):
         """Test auto-rename when no conflict exists."""
         path = await auto_rename_path(self.thread, '/newfile.txt')
         self.assertEqual(path, '/newfile.txt')
 
-    @patch("nova.file_utils.upload_file_to_minio", new_callable=AsyncMock)
+    @patch("nova.file_utils.upload_file_to_object_storage", new_callable=AsyncMock)
     @patch("nova.file_utils.detect_mime", return_value="application/octet-stream")
     async def test_batch_upload_files_uses_explicit_mime_when_detection_is_generic_without_restrictions(
         self,
@@ -313,7 +313,7 @@ class FileUtilsTest(BaseTestCase):
         access = await check_thread_access(self.thread, other_user)
         self.assertFalse(access)
 
-    @patch('nova.file_utils.upload_file_to_minio')
+    @patch('nova.file_utils.upload_file_to_object_storage')
     @patch('nova.file_utils.auto_rename_path')
     @patch('nova.file_utils.detect_mime')
     async def test_batch_upload_files_success(self, mock_detect_mime, mock_auto_rename, mock_upload):
@@ -335,7 +335,7 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(created[0]['path'], '/test.txt')
         self.assertEqual(created[0]['request_id'], 'spec-1')
 
-    @patch('nova.file_utils.upload_file_to_minio')
+    @patch('nova.file_utils.upload_file_to_object_storage')
     @patch('nova.file_utils.auto_rename_path')
     @patch('nova.file_utils.detect_mime')
     async def test_batch_upload_files_renamed(self, mock_detect_mime, mock_auto_rename, mock_upload):
@@ -400,7 +400,7 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("File too large", errors[0])
 
-    @patch("nova.file_utils.upload_file_to_minio", new_callable=AsyncMock)
+    @patch("nova.file_utils.upload_file_to_object_storage", new_callable=AsyncMock)
     @patch('nova.file_utils.detect_mime')
     async def test_batch_upload_files_accepts_arbitrary_mime_by_default(
         self,
@@ -440,7 +440,7 @@ class FileUtilsTest(BaseTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Unsupported MIME", errors[0])
 
-    @patch('nova.file_utils.upload_file_to_minio')
+    @patch('nova.file_utils.upload_file_to_object_storage')
     @patch('nova.file_utils.auto_rename_path')
     @patch('nova.file_utils.detect_mime')
     async def test_batch_upload_files_upload_error(self, mock_detect_mime, mock_auto_rename, mock_upload):

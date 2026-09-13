@@ -163,7 +163,7 @@ class FileDeleteView(LoginRequiredMixin, View):
                                 status=403)
 
         thread_id = file.thread_id
-        file.delete()  # Uses model's delete for MinIO/DB
+        file.delete()  # Uses the model's delete for object storage and DB
         if file.scope == UserFile.Scope.THREAD_SHARED:
             async_to_sync(publish_file_update)(thread_id, "file_delete")
         return JsonResponse({'success': True})

@@ -11,7 +11,7 @@ from nova.continuous.context_builder import get_live_continuous_message_ids
 from nova.file_utils import (
     batch_upload_files,
     download_file_content,
-    upload_file_to_minio,
+    upload_file_to_object_storage,
 )
 from nova.message_attachments import (
     MESSAGE_ATTACHMENT_HISTORY_ROOT,
@@ -772,7 +772,7 @@ class VirtualFileSystem:
         source_message = await self._get_source_message()
 
         if len(content) == 0:
-            key = await upload_file_to_minio(content, storage_path, mime_type, self.thread, self.user)
+            key = await upload_file_to_object_storage(content, storage_path, mime_type, self.thread, self.user)
 
             def _create_empty_file():
                 return UserFile.objects.create(

@@ -254,7 +254,7 @@ SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0  # 1 year HSTS in prod only
 SECURE_CONTENT_TYPE_NOSNIFF = not DEBUG
 X_FRAME_OPTIONS = 'SAMEORIGIN'
 
-# MinIO (S3-compatible) settings
+# S3-compatible object-storage settings (MINIO_* kept for Silo compatibility)
 MINIO_ENDPOINT_URL = os.getenv('MINIO_ENDPOINT_URL', 'http://minio:9000')
 MINIO_ACCESS_KEY = os.getenv('MINIO_ACCESS_KEY')
 MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY')
