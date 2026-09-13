@@ -29,6 +29,7 @@ dependencies = [
     "social-auth-app-django>=6.0,<7",
     "fastmcp",
     "httpx",
+    "httpx2",
     "icalendar",
     "IMAPClient",
     "jsonschema",

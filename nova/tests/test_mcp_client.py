@@ -9,6 +9,7 @@ from django.http import Http404
 from django.test import SimpleTestCase
 
 import httpx
+import httpx2
 
 from nova.mcp.client import MCPClient
 from nova.web.network_policy import NetworkPolicyError
@@ -189,47 +190,60 @@ class MCPClientTests(SimpleTestCase):
         - 500+ -> HTTPStatusError (propagate server failures)
         - RequestError -> ConnectionError (connectivity issues).
         """
-        req = httpx.Request("GET", "http://x")
-        resp_404 = httpx.Response(404, request=req)
-        resp_500 = httpx.Response(500, request=req)
-        err_404 = httpx.HTTPStatusError("not found", request=req,
-                                        response=resp_404)
-        err_500 = httpx.HTTPStatusError("server err", request=req,
-                                        response=resp_500)
+        for client_name, http_client in (("httpx", httpx), ("httpx2", httpx2)):
+            with self.subTest(client=client_name):
+                req = http_client.Request("GET", "http://x")
+                resp_404 = http_client.Response(404, request=req)
+                resp_500 = http_client.Response(500, request=req)
+                err_404 = http_client.HTTPStatusError(
+                    "not found", request=req, response=resp_404
+                )
+                err_500 = http_client.HTTPStatusError(
+                    "server err", request=req, response=resp_500
+                )
 
-        # 404 -> Http404
-        fake_client_404 = self._FakeAsyncClient(raise_on_call=err_404)
-        with patch("nova.mcp.client.FastMCPClient",
-                   lambda transport: fake_client_404), \
-             patch.object(MCPClient, "_transport", return_value=object()):
-            c = MCPClient(endpoint="http://x")
-            with self.assertLogs("nova.mcp.client", level="ERROR") as logs_404:
-                with self.assertRaises(Http404):
-                    asyncio.run(c.acall("any", x=1))
-            self.assertTrue(any("HTTP error calling any: not found" in line for line in logs_404.output))
+                # 404 -> Http404
+                fake_client_404 = self._FakeAsyncClient(raise_on_call=err_404)
+                with patch("nova.mcp.client.FastMCPClient",
+                           lambda transport: fake_client_404), \
+                     patch.object(MCPClient, "_transport", return_value=object()):
+                    c = MCPClient(endpoint="http://x")
+                    with self.assertLogs("nova.mcp.client", level="ERROR") as logs_404:
+                        with self.assertRaises(Http404):
+                            asyncio.run(c.acall("any", x=1))
+                    self.assertTrue(any(
+                        "HTTP error calling any: not found" in line
+                        for line in logs_404.output
+                    ))
 
-        # 500 -> re-raised HTTPStatusError
-        fake_client_500 = self._FakeAsyncClient(raise_on_call=err_500)
-        with patch("nova.mcp.client.FastMCPClient",
-                   lambda transport: fake_client_500), \
-             patch.object(MCPClient, "_transport", return_value=object()):
-            c = MCPClient(endpoint="http://x")
-            with self.assertLogs("nova.mcp.client", level="ERROR") as logs_500:
-                with self.assertRaises(httpx.HTTPStatusError):
-                    asyncio.run(c.acall("any", x=1))
-            self.assertTrue(any("HTTP error calling any: server err" in line for line in logs_500.output))
+                # 500 -> re-raised HTTPStatusError
+                fake_client_500 = self._FakeAsyncClient(raise_on_call=err_500)
+                with patch("nova.mcp.client.FastMCPClient",
+                           lambda transport: fake_client_500), \
+                     patch.object(MCPClient, "_transport", return_value=object()):
+                    c = MCPClient(endpoint="http://x")
+                    with self.assertLogs("nova.mcp.client", level="ERROR") as logs_500:
+                        with self.assertRaises(http_client.HTTPStatusError):
+                            asyncio.run(c.acall("any", x=1))
+                    self.assertTrue(any(
+                        "HTTP error calling any: server err" in line
+                        for line in logs_500.output
+                    ))
 
-        # RequestError -> ConnectionError
-        err_conn = httpx.RequestError("boom", request=req)
-        fake_client_conn = self._FakeAsyncClient(raise_on_call=err_conn)
-        with patch("nova.mcp.client.FastMCPClient",
-                   lambda transport: fake_client_conn), \
-             patch.object(MCPClient, "_transport", return_value=object()):
-            c = MCPClient(endpoint="http://x")
-            with self.assertLogs("nova.mcp.client", level="ERROR") as logs_conn:
-                with self.assertRaises(ConnectionError):
-                    asyncio.run(c.acall("any", x=1))
-            self.assertTrue(any("Connection error calling any: boom" in line for line in logs_conn.output))
+                # RequestError -> ConnectionError
+                err_conn = http_client.ConnectError("boom", request=req)
+                fake_client_conn = self._FakeAsyncClient(raise_on_call=err_conn)
+                with patch("nova.mcp.client.FastMCPClient",
+                           lambda transport: fake_client_conn), \
+                     patch.object(MCPClient, "_transport", return_value=object()):
+                    c = MCPClient(endpoint="http://x")
+                    with self.assertLogs("nova.mcp.client", level="ERROR") as logs_conn:
+                        with self.assertRaises(ConnectionError):
+                            asyncio.run(c.acall("any", x=1))
+                    self.assertTrue(any(
+                        "Connection error calling any: boom" in line
+                        for line in logs_conn.output
+                    ))
 
     # ------------- _validate_inputs -----------------
 
