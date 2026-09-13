@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import httpx
+import httpx2
 import base64
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -146,12 +147,12 @@ class MCPClient:
                 except (pickle.PicklingError, TypeError):
                     logger.warning(f"Skipping cache for {tool_name} due to non-picklable result")
                 return result
-        except httpx.HTTPStatusError as e:
+        except (httpx.HTTPStatusError, httpx2.HTTPStatusError) as e:
             logger.error(f"HTTP error calling {tool_name}: {e}")
             if e.response.status_code == 404:
                 raise Http404(f"Tool '{tool_name}' not found") from e
             raise
-        except httpx.RequestError as e:
+        except (httpx.RequestError, httpx2.RequestError) as e:
             logger.error(f"Connection error calling {tool_name}: {e}")
             raise ConnectionError("MCP server unreachable") from e
         except Exception as e:
