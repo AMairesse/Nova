@@ -262,6 +262,43 @@
             }
         },
 
+        Navigation: {
+            init() {
+                if (ThreadManager.state.navigationBound) return;
+                ThreadManager.state.navigationBound = true;
+                document.addEventListener('click', (event) => {
+                    const archiveButton = event.target.closest('.archive-thread-btn, .unarchive-thread-btn');
+                    if (archiveButton) {
+                        event.preventDefault();
+                        this.toggleArchive(archiveButton);
+                    }
+                });
+                const focusId = new URLSearchParams(window.location.search).get('message_id');
+                if (focusId) {
+                    window.setTimeout(() => document.getElementById(`message-${focusId}`)?.scrollIntoView({block: 'center'}), 0);
+                }
+            },
+
+            async toggleArchive(button) {
+                const threadId = button.dataset.threadId;
+                const archived = button.classList.contains('unarchive-thread-btn');
+                const template = window.NovaApp?.urls?.[archived ? 'unarchiveThread' : 'archiveThread'];
+                if (!template || !threadId) return;
+                button.disabled = true;
+                try {
+                    const response = await window.DOMUtils.csrfFetch(
+                        template.replace('0', threadId), {method: 'POST'}
+                    );
+                    if (!response.ok) throw new Error('Archive request failed');
+                    await response.json();
+                    await window.NovaApp.messageManager?.refreshThreadListsFromServer?.();
+                } catch (error) {
+                    console.error('Error updating archived thread:', error);
+                    button.disabled = false;
+                }
+            }
+        },
+
         // ==========================================================================
         // === Initialisation & Event Handlers (depuis thread_management.js) ========== 
         // ==========================================================================
@@ -335,6 +372,7 @@
 
             // ---- Thread loading (pagination) ----------------------------------------
             ThreadManager.Loading.init();
+            ThreadManager.Navigation.init();
 
             // ---- Preview page (full-page webapp preview) ----------------------------
             ThreadManager._initPreviewPageUI({ debug });

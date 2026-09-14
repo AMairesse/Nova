@@ -87,6 +87,15 @@ class WebAppViewsTests(TestCase):
         self.assertIn(legacy.slug, html)
         self.assertIn("Ready", html)
 
+    @override_settings(WEBAPP_PUBLIC_ORIGIN="https://apps.example.com")
+    def test_webapps_list_explains_public_link_policy(self):
+        self._create_live_webapp(name="Public policy")
+
+        response = self.client.get(reverse("webapps_list", args=[self.thread.id]))
+
+        self.assertContains(response, "Public links")
+        self.assertContains(response, "reachable without signing in")
+
     def test_webapps_list_marks_broken_webapps_and_disables_preview_actions(self):
         app = self._create_live_webapp(
             name="Broken app",

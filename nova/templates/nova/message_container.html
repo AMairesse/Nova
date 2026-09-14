@@ -4,7 +4,19 @@
 
 <div class="d-flex flex-column h-100">
   <!-- Scrollable conversation area -->
-  <div id="conversation-container" class="flex-grow-1 overflow-auto p-2 p-sm-3" style="min-height: 0;">
+  <div id="conversation-container" class="flex-grow-1 overflow-auto p-2 p-sm-3"
+       data-message-offset="{{ message_offset|default:0 }}"
+       data-message-limit="{{ message_limit|default:50 }}"
+       data-messages-has-more="{% if messages_has_more %}true{% else %}false{% endif %}"
+       data-messages-next-offset="{{ messages_next_offset|default:0 }}"
+       data-focus-message-id="{{ focus_message_id|default:'' }}"
+       style="min-height: 0;">
+    {% if messages_has_more %}
+    <button type="button" id="load-older-messages" class="btn btn-sm btn-outline-secondary mb-3"
+            data-offset="{{ messages_next_offset }}">
+      {% trans "Load older messages" %}
+    </button>
+    {% endif %}
     <!-- Messages list container -->
     <div id="messages-list">
       {% if is_continuous_default_mode %}

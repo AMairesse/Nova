@@ -1,4 +1,6 @@
 from django.http import JsonResponse, Http404
+from django.db.models import DateTimeField, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_protect
 from django.views.decorators.http import require_POST
 from django.shortcuts import render, get_object_or_404
@@ -6,7 +8,7 @@ from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
-from nova.models.Message import Actor
+from nova.models.Message import Actor, Message
 from nova.models.Thread import Thread
 from nova.message_panel import (
     get_message_panel_agents,
@@ -34,6 +36,20 @@ from nova.threads import ThreadDeletionError, delete_thread_for_user
 logger = logging.getLogger(__name__)
 
 MAX_THREADS_DISPLAYED = 10
+MESSAGE_PAGE_SIZE = 50
+
+
+def _classic_threads_for_user(user, *, include_archived=False):
+    """Return classic threads in stable last-activity order."""
+    latest_message = Message.objects.filter(
+        thread=OuterRef("pk"), user=user
+    ).order_by("-created_at", "-id").values("created_at")[:1]
+    qs = Thread.objects.filter(user=user, mode=Thread.Mode.THREAD)
+    if not include_archived:
+        qs = qs.filter(archived_at__isnull=True)
+    return qs.annotate(
+        last_activity=Coalesce(Subquery(latest_message, output_field=DateTimeField()), 'created_at')
+    ).order_by("-last_activity", "-created_at", "-id")
 
 
 def group_threads_by_date(threads):
@@ -53,7 +69,7 @@ def group_threads_by_date(threads):
     }
 
     for thread in threads:
-        thread_date = thread.created_at.date()
+        thread_date = (getattr(thread, 'last_activity', None) or thread.created_at).date()
         if thread_date == today:
             grouped['today'].append(thread)
         elif thread_date == yesterday:
@@ -73,33 +89,36 @@ def group_threads_by_date(threads):
 def index(request):
     # Get initial MAX_THREADS_DISPLAYED threads
     # Hide the continuous thread from the classic Threads UI.
-    threads = (
-        Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD)
-        .order_by('-created_at')[:MAX_THREADS_DISPLAYED]
-    )
+    include_archived = request.GET.get("archived") in {"1", "true", "yes"}
+    threads = _classic_threads_for_user(
+        request.user, include_archived=include_archived
+    )[:MAX_THREADS_DISPLAYED]
     grouped_threads = group_threads_by_date(threads)
-    total_count = Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD).count()
+    total_count = _classic_threads_for_user(
+        request.user, include_archived=include_archived
+    ).count()
 
     return render(request, 'nova/index.html', {
         'grouped_threads': grouped_threads,
         'threads': threads,  # Keep for backward compatibility
         'has_more_threads': total_count > MAX_THREADS_DISPLAYED,
-        'next_offset': MAX_THREADS_DISPLAYED
+        'next_offset': MAX_THREADS_DISPLAYED,
+        'include_archived': include_archived,
     })
 
 
 @login_required(login_url='login')
 def load_more_threads(request):
     """AJAX endpoint to load more threads"""
-    offset = int(request.GET.get('offset', 0))
-    limit = int(request.GET.get('limit', MAX_THREADS_DISPLAYED))
+    offset = max(0, _parse_int(request.GET.get('offset'), 0))
+    limit = _parse_int(request.GET.get('limit'), MAX_THREADS_DISPLAYED)
 
-    threads = (
-        Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD)
-        .order_by('-created_at')[offset:offset + limit]
-    )
+    include_archived = request.GET.get("archived") in {"1", "true", "yes"}
+    limit = max(1, min(limit, 100))
+    qs = _classic_threads_for_user(request.user, include_archived=include_archived)
+    threads = qs[offset:offset + limit]
     grouped_threads = group_threads_by_date(threads)
-    total_count = Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD).count()
+    total_count = qs.count()
 
     # Render the grouped threads HTML
     html = render_to_string('nova/partials/_thread_groups.html', {
@@ -109,7 +128,8 @@ def load_more_threads(request):
     return JsonResponse({
         'html': html,
         'has_more': (offset + limit) < total_count,
-        'next_offset': offset + limit
+        'next_offset': offset + limit,
+        'include_archived': include_archived,
     })
 
 
@@ -136,9 +156,27 @@ def message_list(request):
         try:
             selected_thread = get_object_or_404(Thread, id=selected_thread_id,
                                                 user=request.user)
+            message_limit = max(1, min(_parse_int(
+                request.GET.get("limit"), MESSAGE_PAGE_SIZE
+            ), 100))
+            message_qs = selected_thread.get_messages().order_by("created_at", "id")
+            total_messages = message_qs.count()
+            message_offset = max(0, _parse_int(request.GET.get("offset"),
+                                                max(0, total_messages - message_limit)))
+            focus_message_id = request.GET.get("message_id", "")
+            if focus_message_id and "offset" not in request.GET:
+                focus_index = message_qs.filter(id=focus_message_id).values_list(
+                    "created_at", "id"
+                ).first()
+                if focus_index:
+                    message_offset = message_qs.filter(
+                        Q(created_at__lt=focus_index[0])
+                        | Q(created_at=focus_index[0], id__lt=focus_index[1])
+                    ).count()
+                    message_offset = max(0, message_offset - message_limit // 3)
             raw_messages = list(
                 with_message_display_relations(
-                    selected_thread.get_messages().order_by("created_at", "id")
+                    message_qs[message_offset:message_offset + message_limit]
                 )
             )
             agent_config = get_user_default_agent(request.user)
@@ -157,6 +195,11 @@ def message_list(request):
                 'user_agents': user_agents,
                 'default_agent': default_agent,
                 'pending_interactions': get_pending_interactions(selected_thread),
+                'message_offset': message_offset,
+                'message_limit': message_limit,
+                'messages_has_more': message_offset > 0,
+                'messages_next_offset': max(0, message_offset - message_limit),
+                'focus_message_id': focus_message_id,
             }
             context.update(get_message_attachment_template_context())
             context.update(get_message_composer_template_context())
@@ -174,7 +217,12 @@ def message_list(request):
         'messages': messages,
         'thread_id': selected_thread_id or '',
         'user_agents': user_agents,
-        'default_agent': default_agent
+        'default_agent': default_agent,
+        'message_offset': 0,
+        'message_limit': MESSAGE_PAGE_SIZE,
+        'messages_has_more': False,
+        'messages_next_offset': 0,
+        'focus_message_id': request.GET.get("message_id", ""),
     }
     context.update(get_message_attachment_template_context())
     context.update(get_message_composer_template_context())
@@ -213,6 +261,37 @@ def delete_thread(request, thread_id):
     return JsonResponse({"status": "OK"})
 
 
+def _parse_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@require_POST
+@login_required(login_url='login')
+def archive_thread(request, thread_id):
+    thread = get_object_or_404(
+        Thread, id=thread_id, user=request.user, mode=Thread.Mode.THREAD
+    )
+    if thread.archived_at is None:
+        thread.archived_at = timezone.now()
+        thread.save(update_fields=["archived_at"])
+    return JsonResponse({"status": "OK", "archived": True})
+
+
+@require_POST
+@login_required(login_url='login')
+def unarchive_thread(request, thread_id):
+    thread = get_object_or_404(
+        Thread, id=thread_id, user=request.user, mode=Thread.Mode.THREAD
+    )
+    if thread.archived_at is not None:
+        thread.archived_at = None
+        thread.save(update_fields=["archived_at"])
+    return JsonResponse({"status": "OK", "archived": False})
+
+
 @csrf_protect
 @require_POST
 @login_required(login_url='login')
@@ -234,6 +313,7 @@ def add_message(request):
     try:
         result = submit_user_message(
             user=request.user,
+            submission_key=request.POST.get("submission_key"),
             message_text=request.POST.get('new_message', ''),
             selected_agent=request.POST.get('selected_agent'),
             response_mode=request.POST.get('response_mode'),

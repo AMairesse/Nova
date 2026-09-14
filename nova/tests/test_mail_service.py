@@ -6,7 +6,7 @@ from email.message import EmailMessage
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from nova.plugins.mail import service as mail_service
 from nova.tests.factories import create_tool, create_tool_credential, create_user
@@ -48,6 +48,8 @@ class _FakeImapClient:
         self.added_flags: list[tuple[list[int], list[str]]] = []
         self.removed_flags: list[tuple[list[int], list[str]]] = []
         self.logged_out = False
+        self.appended: list[tuple[str, bytes, tuple[str, ...]]] = []
+        self.next_append_uid = 77
 
     def select_folder(self, folder):
         self.selected_folders.append(str(folder))
@@ -60,7 +62,14 @@ class _FakeImapClient:
             if int(message_id) in self.messages
         }
 
-    def search(self, _criteria):
+    def search(self, criteria):
+        if list(criteria or [])[:2] == ["HEADER", "Message-ID"]:
+            wanted = str(criteria[2])
+            return sorted(
+                message_id
+                for message_id, payload in self.messages.items()
+                if str(payload.get("Message-ID") or "") == wanted
+            )
         return sorted(self.messages.keys())
 
     def list_folders(self):
@@ -93,8 +102,13 @@ class _FakeImapClient:
     def logout(self):
         self.logged_out = True
 
+    def append(self, folder, message, flags=()):
+        self.appended.append((str(folder), bytes(message), tuple(flags)))
+        self.messages[self.next_append_uid] = {"UID": self.next_append_uid}
+        return {b"APPENDUID": (1, self.next_append_uid)}
 
-class MailServiceTests(TestCase):
+
+class MailServiceTests(TransactionTestCase):
     def setUp(self):
         self.user = create_user(username="mail-service", email="mail-service@example.com")
         self.tool = create_tool(
@@ -266,3 +280,38 @@ class MailServiceTests(TestCase):
         self.assertEqual(client.removed_flags, [([8], ["\\Flagged"])])
         self.assertIn("Marked 1 email(s) in INBOX as seen.", seen_result)
         self.assertIn("Marked 1 email(s) in INBOX as unflagged.", unflagged_result)
+
+    def test_create_draft_appends_to_special_drafts_with_stable_message_id(self):
+        client = _FakeImapClient(mailboxes=[((b"\\Drafts",), "/", "Drafts")])
+
+        with patch("nova.plugins.mail.service.build_imap_client", return_value=client):
+            first = asyncio.run(mail_service.create_draft(
+                self.user, self.tool.id, "bob@example.com", "Subject", "Body",
+                operation_key="task-1|draft-1",
+            ))
+
+        self.assertEqual(first["status"], "created")
+        self.assertEqual(first["uid"], 77)
+        self.assertEqual(len(client.appended), 1)
+        folder, raw_message, flags = client.appended[0]
+        self.assertEqual(folder, "Drafts")
+        self.assertEqual(flags, ("\\Draft",))
+        self.assertIn(first["message_id"].encode(), raw_message)
+
+    def test_create_draft_returns_existing_matching_message_id(self):
+        operation_key = "task-2|draft-1"
+        message_id = mail_service._draft_message_id(operation_key)
+        client = _FakeImapClient(
+            mailboxes=[((b"\\Drafts",), "/", "Drafts")],
+            messages={12: {"Message-ID": message_id}},
+        )
+
+        with patch("nova.plugins.mail.service.build_imap_client", return_value=client):
+            result = asyncio.run(mail_service.create_draft(
+                self.user, self.tool.id, "bob@example.com", "Subject", "Body",
+                operation_key=operation_key,
+            ))
+
+        self.assertEqual(result["status"], "existing")
+        self.assertEqual(result["uid"], 12)
+        self.assertEqual(client.appended, [])

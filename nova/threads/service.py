@@ -31,7 +31,7 @@ def delete_thread_for_user(thread: Thread, user) -> None:
     running_tasks = Task.objects.filter(
         thread=thread,
         user=user,
-        status=TaskStatus.RUNNING,
+        status__in=[TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.AWAITING_INPUT],
     )
     if running_tasks.exists():
         raise ThreadDeletionError(

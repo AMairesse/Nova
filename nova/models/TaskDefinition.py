@@ -11,6 +11,11 @@ from django_celery_beat.models import CrontabSchedule, IntervalSchedule, Periodi
 
 
 class TaskDefinition(models.Model):
+    class CatchUpPolicy(models.TextChoices):
+        SKIP = 'skip', _('New messages only')
+        CATCH_UP = 'catch_up', _('Process missed messages')
+
+    catch_up_policy = models.CharField(max_length=16, choices=CatchUpPolicy.choices, default=CatchUpPolicy.CATCH_UP)
     class TaskKind(models.TextChoices):
         AGENT = "agent", _("Agent")
         MAINTENANCE = "maintenance", _("Maintenance")

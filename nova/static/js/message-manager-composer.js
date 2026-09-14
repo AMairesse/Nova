@@ -5,6 +5,130 @@
     window.NovaApp.Modules = window.NovaApp.Modules || {};
 
     window.NovaApp.Modules.MessageComposerMethods = {
+        getComposerDraftStorageKey(threadId = this.currentThreadId) {
+            const userId = document.body?.dataset?.userId || 'anonymous';
+            return `nova:composer-draft:v1:${userId}:${threadId || 'new'}`;
+        },
+
+        saveComposerDraft(threadId = this.currentThreadId) {
+            const textarea = document.querySelector(
+                '#message-container textarea[name="new_message"]'
+            );
+            const text = `${textarea?.value || ''}`;
+            const attachmentNames = [
+                ...this.composerAttachments.map((item) => item.file?.name || ''),
+                ...this.composerThreadFiles.map((item) => item.file?.name || ''),
+            ].filter(Boolean);
+            const key = this.getComposerDraftStorageKey(threadId);
+            try {
+                const previous = JSON.parse(window.sessionStorage.getItem(key) || 'null');
+                if (!this.isComposerSubmitting && previous &&
+                    (previous.text !== text || JSON.stringify(previous.attachmentNames) !== JSON.stringify(attachmentNames))) {
+                    this.composerSubmissionKeys.delete(key);
+                }
+                const submissionKey = this.composerSubmissionKeys.get(key) || '';
+                if (!text && !attachmentNames.length) {
+                    window.sessionStorage.removeItem(key);
+                    return;
+                }
+                window.sessionStorage.setItem(
+                    key,
+                    JSON.stringify({ text, attachmentNames, submissionKey })
+                );
+            } catch (_error) {
+                // Draft persistence is best effort and must never block sending.
+            }
+        },
+
+        restoreComposerDraft(threadId = this.currentThreadId) {
+            const textarea = document.querySelector(
+                '#message-container textarea[name="new_message"]'
+            );
+            if (!textarea) return;
+            let draft = null;
+            try {
+                draft = JSON.parse(
+                    window.sessionStorage.getItem(this.getComposerDraftStorageKey(threadId)) ||
+                        'null'
+                );
+            } catch (_error) {
+                draft = null;
+            }
+            if (!draft) return;
+
+            if (draft.submissionKey) {
+                this.composerSubmissionKeys.set(
+                    this.getComposerDraftStorageKey(threadId),
+                    `${draft.submissionKey}`
+                );
+            }
+
+            textarea.value = `${draft.text || ''}`;
+            this.resizeComposerTextarea(textarea);
+            this.syncComposerTextStatus(textarea);
+            const names = Array.isArray(draft.attachmentNames)
+                ? draft.attachmentNames.filter(Boolean)
+                : [];
+            if (names.length) {
+                const status = document.getElementById('composer-status-line');
+                if (status) {
+                    status.textContent = this.interpolateMessage(
+                        gettext(
+                            'Attachments from this draft were not stored. Re-select: %(names)s.'
+                        ),
+                        { names: names.join(', ') }
+                    );
+                    status.className = 'composer-status-line small mt-2 text-warning';
+                }
+            }
+        },
+
+        clearComposerDraft(threadId = this.currentThreadId) {
+            try {
+                window.sessionStorage.removeItem(this.getComposerDraftStorageKey(threadId));
+            } catch (_error) {
+                // Ignore unavailable session storage.
+            }
+        },
+
+        clearComposerDrafts() {
+            const userId = document.body?.dataset?.userId || 'anonymous';
+            const prefix = `nova:composer-draft:v1:${userId}:`;
+            try {
+                for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+                    const key = window.sessionStorage.key(index);
+                    if (key?.startsWith(prefix)) window.sessionStorage.removeItem(key);
+                }
+            } catch (_error) {
+                // Ignore unavailable session storage.
+            }
+        },
+
+        getComposerSubmissionKey(draftKey = this.getComposerDraftStorageKey()) {
+            if (this.composerSubmissionKeys.has(draftKey)) {
+                return this.composerSubmissionKeys.get(draftKey);
+            }
+            let key = '';
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                key = window.crypto.randomUUID();
+            } else if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+                const bytes = new Uint8Array(16);
+                window.crypto.getRandomValues(bytes);
+                bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                key = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+                key = `${key.slice(0, 8)}-${key.slice(8, 12)}-${key.slice(12, 16)}-${key.slice(16, 20)}-${key.slice(20)}`;
+            } else {
+                key = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (marker) => {
+                    const random = Math.floor(Math.random() * 16);
+                    const value = marker === 'x' ? random : (random & 0x3) | 0x8;
+                    return value.toString(16);
+                });
+            }
+            this.composerSubmissionKeys.set(draftKey, key);
+            return key;
+        },
+
         async handleFormSubmit(form) {
             const textarea = form.querySelector('textarea[name="new_message"]');
             const originalMessage = textarea ? textarea.value : '';
@@ -19,6 +143,12 @@
                 this.showToast(blockingCapabilityError, 'danger');
                 return;
             }
+
+            const draftThreadId = this.currentThreadId || form.querySelector('input[name="thread_id"]')?.value || null;
+            const draftKey = this.getComposerDraftStorageKey(draftThreadId);
+            this.saveComposerDraft(draftThreadId);
+            const submissionKey = this.getComposerSubmissionKey(draftKey);
+            this.saveComposerDraft(draftThreadId);
 
             this.isComposerSubmitting = true;
 
@@ -36,6 +166,7 @@
 
             try {
                 const formData = new FormData(form);
+                formData.set('submission_key', submissionKey);
                 formData.set(
                     'new_message',
                     this.buildComposerSubmissionMessage(originalMessage)
@@ -65,11 +196,26 @@
                     throw new Error(errorMessage);
                 }
 
+                if (this.getComposerDraftStorageKey() !== draftKey) {
+                    this.clearComposerDraft(draftThreadId);
+                    this.composerSubmissionKeys.delete(draftKey);
+                    return;
+                }
                 const threadIdInput = document.querySelector('input[name="thread_id"]');
                 if (threadIdInput) threadIdInput.value = data.thread_id;
                 this.currentThreadId = data.thread_id;
+                this.clearComposerDraft(draftThreadId);
+                this.composerSubmissionKeys.delete(draftKey);
                 this.resetComposerAttachments();
                 this.resetComposerThreadFiles();
+                if (textarea?.value) this.saveComposerDraft();
+
+                if (data.dispatch_failed) {
+                    this.showToast(
+                        gettext('Your message was saved, but the task could not be queued. It will remain available in Activity.'),
+                        'warning'
+                    );
+                }
 
                 const userMessageEl = window.MessageRenderer.createMessageElement(
                     data.message,
@@ -78,21 +224,29 @@
                 this.appendMessage(userMessageEl);
                 this.scrollToMessage(data.message.id);
 
-                this.streamingManager.registerStream(data.task_id, {
-                    id: data.task_id,
-                    actor: 'agent',
-                    text: ''
-                });
+                if (data.task_id && !data.dispatch_failed &&
+                    (!data.task_status || ['PENDING', 'RUNNING'].includes(data.task_status))) {
+                    this.streamingManager.registerStream(data.task_id, {
+                        id: data.task_id,
+                        actor: 'agent',
+                        text: ''
+                    });
+                }
 
                 document.dispatchEvent(
                     new CustomEvent('nova:message-posted', { detail: data })
                 );
             } catch (error) {
                 console.error('Error sending message:', error);
-                if (textarea) {
-                    textarea.value = originalMessage;
+                if (textarea && this.getComposerDraftStorageKey() === draftKey) {
+                    if (!textarea.value) textarea.value = originalMessage;
+                    if (textarea.value !== originalMessage) {
+                        this.composerSubmissionKeys.delete(draftKey);
+                        this.getComposerSubmissionKey(draftKey);
+                    }
                     this.resizeComposerTextarea(textarea);
                     this.syncComposerTextStatus(textarea);
+                    this.saveComposerDraft(draftThreadId);
                     textarea.focus();
                 }
                 if (sendBtn) {
@@ -575,6 +729,7 @@
             if (!accepted.length) return;
             this.composerAttachments.push(...accepted);
             this.renderComposerAttachments();
+            this.saveComposerDraft();
         },
 
         insertComposerText(textarea, text) {
@@ -707,6 +862,7 @@
                 file: stableFile,
             });
             this.renderComposerThreadFiles();
+            this.saveComposerDraft();
         },
 
         async queueComposerThreadFileFromText(text) {
@@ -933,6 +1089,7 @@
             }
             this.composerAttachments = nextAttachments;
             this.renderComposerAttachments();
+            this.saveComposerDraft();
         },
 
         resetComposerAttachments() {
@@ -990,6 +1147,7 @@
                 (item) => item.id !== threadFileId
             );
             this.renderComposerThreadFiles();
+            this.saveComposerDraft();
         },
 
         resetComposerThreadFiles() {

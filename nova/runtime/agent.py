@@ -52,6 +52,7 @@ from .system_prompt import build_runtime_system_prompt
 from .terminal import TerminalCommandError, TerminalExecutor
 from .terminal_metrics import classify_terminal_failure, normalize_head_command
 from .vfs import VirtualFileSystem
+from .outcomes import RuntimeStopped, RuntimeLimitReached, RuntimeInputUnavailable, RuntimeEmptyResponse
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,7 @@ class ReactTerminalRuntime:
             tmp_storage_prefix=self.tmp_storage_prefix,
         )
         self.terminal = TerminalExecutor(vfs=self.vfs, capabilities=self.capabilities)
+        self.terminal.realtime_task_id = getattr(self.task, 'pk', None)
         if self.progress_handler:
             self.terminal.realtime_task_id = getattr(self.progress_handler, "task_id", None)
             self.terminal.realtime_channel_layer = getattr(self.progress_handler, "channel_layer", None)
@@ -278,6 +280,7 @@ class ReactTerminalRuntime:
             allow_ask_user=self.allow_ask_user,
             source_message_id=self.source_message_id,
             agent_instructions=getattr(self.agent_config, "system_prompt", ""),
+            autonomy_instructions=getattr(self.agent_config, "autonomy_instructions", ""),
         )
 
     def _build_history_summary_message(self, session_state: dict[str, Any]) -> dict[str, str] | None:
@@ -579,6 +582,9 @@ class ReactTerminalRuntime:
         return "text"
 
     async def _execute_terminal_command(self, command: str) -> ToolExecutionResult:
+        await self._check_stop_requested()
+        from nova.tasks.execution import start_action_receipt, finish_action_receipt
+        receipt = await sync_to_async(start_action_receipt, thread_sensitive=True)(self.task, command)
         before_files = await self.vfs.snapshot_visible_files()
         cwd_before = self.vfs.cwd
         failure_kind = ""
@@ -618,6 +624,7 @@ class ReactTerminalRuntime:
                 else:
                     content = f"Command error: {content or execution_result.stderr or 'Command failed.'}"
                     tool_failed = True
+        await sync_to_async(finish_action_receipt, thread_sensitive=True)(receipt, failed=bool(failure_kind or tool_failed))
         after_files = await self.vfs.snapshot_visible_files()
         output_paths = sorted(
             path
@@ -995,6 +1002,7 @@ class ReactTerminalRuntime:
         return payload
 
     async def _execute_tool_call(self, tool_call: dict) -> dict:
+        await self._check_stop_requested()
         tool_name = str(tool_call.get("name") or "").strip()
         tool_arguments = tool_call.get("arguments")
         tool_call_id = str(tool_call.get("id") or "")
@@ -1699,6 +1707,7 @@ class ReactTerminalRuntime:
                     self._provider_trace_meta(response_mode=effective_response_mode),
                 )
             if effective_response_mode in {"image", "audio"}:
+                await self._check_stop_requested()
                 await self._record_progress(
                     f"Generating native {effective_response_mode}"
                 )
@@ -1716,6 +1725,7 @@ class ReactTerminalRuntime:
             approx_tokens = None
 
             for iteration in range(max_iterations):
+                await self._check_stop_requested()
                 await self._record_progress(f"Calling model ({iteration + 1}/{max_iterations})")
                 model_node_id = None
                 if self.trace_handler:
@@ -1803,13 +1813,7 @@ class ReactTerminalRuntime:
                             )
                             continue
                         if not self.allow_ask_user:
-                            messages.append(
-                                self._build_tool_result_message(
-                                    str(tool_calls[0].get("id") or ""),
-                                    "`ask_user` is unavailable in this runtime.",
-                                )
-                            )
-                            continue
+                            raise RuntimeInputUnavailable('This unattended run requires user input and cannot continue.')
                         try:
                             interruption = self._build_ask_user_interrupt(
                                 assistant_message=assistant_message,
@@ -1838,13 +1842,14 @@ class ReactTerminalRuntime:
                     continue
 
                 final_answer = assistant_message["content"].strip()
+                if not final_answer:
+                    raise RuntimeEmptyResponse('The provider returned no final response.')
                 real_tokens = response.get("total_tokens")
                 approx_tokens = self._approximate_tokens(messages)
                 break
 
             if not final_answer:
-                final_answer = "No final response produced."
-                approx_tokens = self._approximate_tokens(messages, final_answer=final_answer)
+                raise RuntimeLimitReached('Iteration limit reached without a final response. Existing outputs were preserved.')
 
             await self._complete_stream()
             await self._record_progress("Finalizing response")
@@ -1858,3 +1863,15 @@ class ReactTerminalRuntime:
         finally:
             if self.terminal is not None:
                 await self.terminal.close()
+
+    async def _check_stop_requested(self):
+        if self.task is None:
+            return
+        from nova.models.Task import Task, TaskStatus
+        stopped = await sync_to_async(
+            lambda: not Task.objects.filter(pk=self.task.pk, user=self.user, stop_requested=False,
+                                            status__in=[TaskStatus.PENDING, TaskStatus.RUNNING]).exists(),
+            thread_sensitive=True,
+        )()
+        if stopped:
+            raise RuntimeStopped('Stopped by the user. Actions already performed were not undone.')

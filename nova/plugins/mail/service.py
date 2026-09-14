@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import imapclient
+import hashlib
 import logging
 import os
 import re
@@ -292,6 +293,86 @@ def resolve_special_mailbox(client, special_use: str) -> str | None:
             if mailbox.get("special_use") == requested and mailbox.get("special_source") == source:
                 return str(mailbox.get("name") or "")
     return None
+
+
+def _draft_message_id(operation_key: str | None) -> str:
+    if operation_key:
+        digest = hashlib.sha256(str(operation_key).encode("utf-8")).hexdigest()[:32]
+        return f"<nova-draft-{digest}@nova.local>"
+    return f"<nova-draft-{hashlib.sha256(os.urandom(16)).hexdigest()[:32]}@nova.local>"
+
+
+def _find_draft_by_message_id(client, message_id: str) -> int | None:
+    matches = client.search(["HEADER", "Message-ID", message_id])
+    return int(matches[0]) if matches else None
+
+
+def _create_draft_sync(
+    user,
+    tool_id: int,
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    in_reply_to: str | None = None,
+    operation_key: str | None = None,
+) -> dict[str, Any]:
+    client = build_imap_client(ToolCredential.objects.get(user=user, tool_id=tool_id))
+    message_id = _draft_message_id(operation_key)
+    try:
+        drafts = resolve_special_mailbox(client, "drafts")
+        if not drafts:
+            raise ValueError("No drafts mailbox could be resolved for this account.")
+        client.select_folder(drafts)
+        existing_uid = _find_draft_by_message_id(client, message_id)
+        if existing_uid is not None:
+            return {"status": "existing", "mailbox": drafts, "uid": existing_uid, "message_id": message_id}
+
+        credential = ToolCredential.objects.get(user=user, tool_id=tool_id)
+        config = credential.config or {}
+        msg = MIMEText(str(body or ""), "plain", "utf-8")
+        msg["From"] = (config.get("from_address") or config.get("email") or config.get("username")
+                       or config.get("imap_username") or credential.username or "")
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg["Message-ID"] = message_id
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        try:
+            append_result = client.append(drafts, msg.as_bytes(), flags=(r"\Draft",))
+        except Exception:
+            recovered_uid = _find_draft_by_message_id(client, message_id)
+            if recovered_uid is not None:
+                return {"status": "existing", "mailbox": drafts, "uid": recovered_uid, "message_id": message_id}
+            raise ValueError("Draft append outcome is uncertain; no matching draft was found.")
+
+        uid = None
+        if isinstance(append_result, dict):
+            value = append_result.get(b"APPENDUID") or append_result.get("APPENDUID")
+            if isinstance(value, (tuple, list)) and len(value) >= 2:
+                uid = int(value[1])
+        uid = uid or _find_draft_by_message_id(client, message_id)
+        return {"status": "created", "mailbox": drafts, "uid": uid, "message_id": message_id}
+    finally:
+        safe_imap_logout(client)
+
+
+async def create_draft(
+    user,
+    tool_id,
+    to,
+    subject,
+    body,
+    in_reply_to=None,
+    operation_key=None,
+) -> dict[str, Any]:
+    try:
+        return await sync_to_async(_create_draft_sync, thread_sensitive=False)(
+            user, tool_id, to=to, subject=subject, body=body,
+            in_reply_to=in_reply_to, operation_key=operation_key,
+        )
+    except ToolCredential.DoesNotExist as exc:
+        raise ValueError(f"No email credential found for tool {tool_id}.") from exc
 
 
 def _resolve_message_uids(

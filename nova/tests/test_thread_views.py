@@ -250,16 +250,16 @@ class MainViewsTests(TestCase):
         # Thread should still exist
         self.assertTrue(Thread.objects.filter(id=thread.id).exists())
 
-    def test_delete_thread_allows_deletion_while_awaiting_input(self):
+    def test_delete_thread_refuses_deletion_while_awaiting_input(self):
         thread = Thread.objects.create(user=self.user, subject="Awaiting input")
         Task.objects.create(user=self.user, thread=thread, status=TaskStatus.AWAITING_INPUT)
 
         self.client.login(username="alice", password="pass")
         resp = self.client.post(reverse("delete_thread", args=[thread.id]))
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json().get("status"), "OK")
-        self.assertFalse(Thread.objects.filter(id=thread.id).exists())
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json().get("status"), "ERROR")
+        self.assertTrue(Thread.objects.filter(id=thread.id).exists())
 
     @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
     def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self):
@@ -544,15 +544,16 @@ class MainViewsTests(TestCase):
         thread = Thread.objects.create(user=self.user, subject="Stale image thread")
         mocked_upload_message_attachments.return_value = ([], [])
 
-        response = self.client.post(
-            reverse("add_message"),
-            data={
-                "thread_id": str(thread.id),
-                "new_message": "Analyse cette image",
-                "selected_agent": str(agent.id),
-                "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
-            },
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("add_message"),
+                data={
+                    "thread_id": str(thread.id),
+                    "new_message": "Analyse cette image",
+                    "selected_agent": str(agent.id),
+                    "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+                },
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "OK")
@@ -775,14 +776,15 @@ class MainViewsTests(TestCase):
         thread = Thread.objects.create(user=self.user, subject="Tool-less simple")
         mocked_run_ai_task.return_value = SimpleNamespace(id="task-123")
 
-        response = self.client.post(
-            reverse("add_message"),
-            data={
-                "thread_id": str(thread.id),
-                "new_message": "Hello",
-                "selected_agent": str(agent.id),
-            },
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("add_message"),
+                data={
+                    "thread_id": str(thread.id),
+                    "new_message": "Hello",
+                    "selected_agent": str(agent.id),
+                },
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "OK")

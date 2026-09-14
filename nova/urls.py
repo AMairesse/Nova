@@ -33,8 +33,18 @@ from nova.views.security_views import csrf_token
 from nova.views.health import healthz
 from nova.views.webapp_views import serve_webapp, webapps_list, preview_webapp, delete_webapp
 from nova.views.auth_views import NovaLoginView, NovaOIDCStartView, block_local_auth_in_oidc_only
+from nova.views.search_views import search
+from nova.views.activity_views import activity, stop_task, retry_dispatch_task, retry_interaction
+from nova.views.thread_views import archive_thread, unarchive_thread
 
 urlpatterns = [
+    path('activity/', activity, name='activity'),
+    path('activity/tasks/<int:task_id>/stop/', stop_task, name='stop_task'),
+    path('activity/tasks/<int:task_id>/retry-dispatch/', retry_dispatch_task, name='retry_dispatch_task'),
+    path('activity/interactions/<int:interaction_id>/retry/', retry_interaction, name='retry_interaction'),
+    path('search/', search, name='search'),
+    path('archive-thread/<int:thread_id>/', archive_thread, name='archive_thread'),
+    path('unarchive-thread/<int:thread_id>/', unarchive_thread, name='unarchive_thread'),
     # Main views
     path("", index, name="index"),
     path("message-list/", message_list, name="message_list"),

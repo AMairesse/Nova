@@ -2501,6 +2501,32 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(result.final_answer, "The current directory is /.")
         self.assertIn("pwd", session.session_state["history"])
 
+    def test_runtime_raises_when_iteration_limit_has_no_final_answer(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user, thread=self.thread, agent_config=self.agent
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": f"call_{index}", "name": "terminal",
+                        "arguments": '{"command":"pwd"}',
+                    }],
+                }
+                for index in range(self.agent.recursion_limit)
+            ]
+        )
+        runtime._execute_tool_call = AsyncMock(
+            return_value={"tool_call_id": "call", "content": "ok"}
+        )
+
+        from nova.runtime.outcomes import RuntimeLimitReached
+        with self.assertRaises(RuntimeLimitReached):
+            async_to_sync(runtime.run)()
+
     def test_runtime_executes_python_dash_c_terminal_tool_call(self):
         code_tool = self._create_code_execution_tool()
         self.agent.tools.add(code_tool)
@@ -4446,6 +4472,40 @@ class ReactTerminalExecutorTests(TransactionTestCase):
         self.assertIn("context_consumption", event_types)
         self.assertIn("new_message", event_types)
         self.assertIn("task_complete", event_types)
+
+    def test_task_executor_persists_awaiting_input_without_completing_task(self):
+        task = Task.objects.create(
+            user=self.user, thread=self.thread, agent_config=self.agent,
+            status=TaskStatus.RUNNING,
+        )
+        channel_layer = _FakeChannelLayer()
+        executor = ReactTerminalTaskExecutor(
+            task, self.user, self.thread, self.agent, self.source_message.text,
+            source_message_id=self.source_message.id,
+            push_notifications_enabled=False,
+        )
+
+        async def fake_create_agent():
+            return None
+
+        async def fake_run_agent():
+            return {
+                "__interrupt__": [SimpleNamespace(value={
+                    "action": "ask_user", "question": "Continue?",
+                    "schema": {}, "agent_name": "Executor Agent",
+                })]
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch.object(executor, "_create_llm_agent", side_effect=fake_create_agent),
+            patch.object(executor, "_run_agent", side_effect=fake_run_agent),
+        ):
+            async_to_sync(executor.execute_or_resume)()
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, TaskStatus.AWAITING_INPUT, task.result)
+        self.assertTrue(Interaction.objects.filter(task=task, status=InteractionStatus.PENDING).exists())
 
     def test_task_executor_enqueues_thread_title_generation_for_default_subject(self):
         thread = Thread.objects.create(user=self.user, subject=build_default_thread_subject(1))

@@ -10,6 +10,7 @@ from channels.layers import get_channel_layer
 
 from django.contrib.auth.models import User
 from django.utils import timezone
+from django.db import transaction
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
@@ -152,6 +153,7 @@ def execute_agent_task_with_executor(
     *,
     source_message_id: int | None = None,
     push_notifications_enabled: bool = True,
+    allow_ask_user: bool = True,
 ) -> None:
     """Run a task execution with the Nova executor in a synchronous context."""
     executor = ReactTerminalTaskExecutor(
@@ -162,6 +164,7 @@ def execute_agent_task_with_executor(
         prompt_text,
         source_message_id=source_message_id,
         push_notifications_enabled=push_notifications_enabled,
+        allow_ask_user=allow_ask_user,
     )
     asyncio.run(executor.execute_or_resume())
 
@@ -173,12 +176,15 @@ def create_and_dispatch_agent_task(
     agent_config: AgentConfig | None,
     source_message_id: int,
     dispatcher_task,
+    submission_key=None,
 ) -> Task:
     """Create a pending task and enqueue async execution for an existing user message."""
     task = Task.objects.create(
         user=user,
         thread=thread,
         agent_config=agent_config,
+        source_message_id=source_message_id,
+        submission_key=submission_key,
         status=TaskStatus.PENDING,
         progress_logs=[
             {
@@ -189,13 +195,8 @@ def create_and_dispatch_agent_task(
         ],
     )
 
-    dispatcher_task.delay(
-        task.id,
-        user.id,
-        thread.id,
-        agent_config.id if agent_config else None,
-        source_message_id,
-    )
+    from nova.tasks.execution import dispatch_task
+    transaction.on_commit(lambda: dispatch_task(task, dispatcher_task))
     return task
 
 
@@ -271,6 +272,9 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
     Optimized Celery task with batched database queries and the Nova executor.
     """
     try:
+        from nova.tasks.execution import claim_task
+        if not claim_task(task_pk, user_id=user_pk, thread_id=thread_pk, agent_id=agent_pk, message_id=message_pk):
+            return {'status': 'skipped', 'reason': 'already_claimed_or_stopped'}
         # Optimized database queries with select_related
         task = Task.objects.select_related('user', 'thread').get(pk=task_pk)
         user = User.objects.get(pk=user_pk)
@@ -307,8 +311,10 @@ def run_ai_task_celery(self, task_pk, user_pk, thread_pk, agent_pk, message_pk):
         return {"status": "skipped", "reason": "missing_runtime_object"}
     except Exception as e:
         logger.error(f"Celery task {task_pk} failed: {e}")
-        # Let Celery handle retry logic
-        raise self.retry(countdown=60, exc=e)
+        Task.objects.filter(pk=task_pk, status=TaskStatus.RUNNING).update(
+            status=TaskStatus.FAILED, result='Execution interrupted; verify actions before retrying.',
+            failure_reason='uncertain', updated_at=timezone.now())
+        raise
 
 
 @shared_task(bind=True, name="resume_ai_task")
@@ -318,6 +324,9 @@ def resume_ai_task_celery(self, interaction_pk: int):
     Uses the same thread and streams via the same WS group (task_id).
     """
     try:
+        from nova.tasks.execution import claim_interaction
+        if not claim_interaction(interaction_pk):
+            return {'status': 'skipped', 'reason': 'already_claimed_or_stopped'}
         interaction = Interaction.objects.select_related(
             'task',
             'task__user',
@@ -350,7 +359,10 @@ def resume_ai_task_celery(self, interaction_pk: int):
         return {"status": "skipped", "reason": "missing_interaction"}
     except Exception as e:
         logger.error(f"Celery resume_ai_task for interaction {interaction_pk} failed: {e}")
-        raise self.retry(countdown=30, exc=e)
+        Task.objects.filter(interactions__pk=interaction_pk, status=TaskStatus.RUNNING).update(
+            status=TaskStatus.FAILED, result='Execution interrupted; verify actions before retrying.',
+            failure_reason='uncertain', updated_at=timezone.now())
+        raise
 
 
 @shared_task(bind=True, name="summarize_thread_task")
@@ -434,22 +446,25 @@ def run_task_definition_cron(self, task_definition_id: int):
             logger.info("Task definition %s is not cron-triggered. Skipping cron runner.", task_definition.name)
             return {"status": "skipped", "reason": "wrong_trigger"}
 
-        result = execute_agent_task_definition(task_definition)
-        _mark_task_definition_success(task_definition)
-        logger.info("Task definition %s executed successfully.", task_definition.name)
+        from nova.tasks.execution import begin_routine_run
+        run, claimed = begin_routine_run(task_definition, getattr(self.request, 'id', None))
+        if not claimed:
+            return {'status': 'skipped', 'run_id': run.pk}
+        result = execute_agent_task_definition(task_definition, run=run)
+        result_status = result['status']
+        if result_status == 'ok':
+            _mark_task_definition_success(task_definition)
+        logger.info("Task definition %s finished with status %s.", task_definition.name, result_status)
         return {"status": "ok", **result}
     except TaskDefinition.DoesNotExist:
         return _handle_missing_task_definition(task_definition_id, runner_name="cron")
     except Exception as e:
         logger.error("Error executing task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
-        if not schedule_trigger_task_retry(
-            self,
-            e,
-            task_definition_id=task_definition_id,
-            runner_name="cron",
-        ):
-            raise
+        if 'run' in locals():
+            from nova.tasks.execution import fail_routine_run
+            fail_routine_run(run, 'Execution interrupted; verify actions before another attempt.')
+        raise
 
 
 @shared_task(bind=True, name="poll_task_definition_email")
@@ -469,23 +484,32 @@ def poll_task_definition_email(self, task_definition_id: int):
             logger.info("Task definition %s is not email polling. Skipping email runner.", task_definition.name)
             return {"status": "skipped", "reason": "wrong_trigger"}
 
+        from nova.tasks.execution import begin_routine_run
+        run, claimed = begin_routine_run(task_definition, getattr(self.request, 'id', None))
+        if not claimed:
+            return {'status': 'skipped', 'run_id': run.pk}
         poll_result = poll_new_unseen_email_headers(task_definition)
         headers = poll_result["headers"]
         task_definition.runtime_state = poll_result["state"]
 
         if poll_result.get("skip_reason") == "backlog_skipped":
             task_definition.save(update_fields=["runtime_state", "updated_at"])
+            run.status = 'SKIPPED'
+            run.reason = 'Missed mail interval skipped by this routine policy.'
+            run.save(update_fields=['status', 'reason', 'updated_at'])
             return {"status": "skipped", "reason": "backlog_skipped"}
 
         if not headers:
             task_definition.save(update_fields=["runtime_state", "updated_at"])
+            run.status = 'COMPLETED'
+            run.reason = 'No new mail.'
+            run.save(update_fields=['status', 'reason', 'updated_at'])
             return {"status": "noop", "new_email_count": 0}
 
         variables = build_email_prompt_variables(headers)
-        result = execute_agent_task_definition(task_definition, variables=variables)
-        _mark_task_definition_success(task_definition)
-        task_definition.runtime_state = poll_result["state"]
-        task_definition.save(update_fields=["runtime_state", "updated_at"])
+        run.cursor_state = poll_result['state']
+        run.save(update_fields=['cursor_state', 'updated_at'])
+        result = execute_agent_task_definition(task_definition, variables=variables, run=run)
         logger.info(
             "Task definition %s executed after email poll (new_email_count=%s).",
             task_definition.name,
@@ -497,13 +521,10 @@ def poll_task_definition_email(self, task_definition_id: int):
     except Exception as e:
         logger.error("Error polling task definition %s: %s", task_definition_id, e, exc_info=True)
         _mark_task_definition_error(task_definition_id, e)
-        if not schedule_trigger_task_retry(
-            self,
-            e,
-            task_definition_id=task_definition_id,
-            runner_name="email_poll",
-        ):
-            raise
+        if 'run' in locals():
+            from nova.tasks.execution import fail_routine_run
+            fail_routine_run(run, 'Mail processing interrupted; verify actions before another attempt.')
+        raise
 
 
 @shared_task(bind=True, name="run_task_definition_maintenance")

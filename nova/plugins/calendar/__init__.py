@@ -40,6 +40,7 @@ CalDAV calendars are accessed through `calendar` commands:
 - `calendar search roadmap --days 30`
 - `calendar show <event-id>`
 - `calendar create --calendar Work --title "Planning" --start 2026-04-06T09:00:00+02:00`
+- `calendar create --calendar Work --title "Planning" --start 2026-04-06T09:00:00+02:00 --tentative`
 - `calendar update <event-id> --calendar Work --title "Updated title"`
 - `calendar delete <event-id> --confirm`
 

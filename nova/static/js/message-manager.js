@@ -8,6 +8,12 @@
     const MESSAGE_COMPOSER_METHOD_NAMES = [
         'handleFormSubmit',
         'triggerComposerSubmit',
+        'getComposerDraftStorageKey',
+        'saveComposerDraft',
+        'restoreComposerDraft',
+        'clearComposerDraft',
+        'clearComposerDrafts',
+        'getComposerSubmissionKey',
         'resizeComposerTextarea',
         'syncComposerAttachmentConfig',
         'syncComposerTextStatus',
@@ -141,6 +147,7 @@
             this.maxComposerHardTextLimit = 12_000;
             this.maxComposerDroppedTextReadBytes = 1024 * 1024;
             this.isComposerSubmitting = false;
+            this.composerSubmissionKeys = new Map();
             this.pendingComposerPasteDecision = null;
             this.composerDragDepth = 0;
             this.executionTraceTaskId = '';
@@ -393,6 +400,7 @@
                 if (e.target.matches('#message-container textarea.auto-resize-textarea[name="new_message"]')) {
                     this.resizeComposerTextarea(e.target);
                     this.syncComposerTextStatus(e.target);
+                    this.saveComposerDraft();
                 }
             });
 
@@ -402,6 +410,10 @@
                     e.preventDefault();
                     await this.triggerComposerSubmit(e.target);
                 }
+            });
+
+            document.addEventListener('submit', (e) => {
+                if (e.target.matches('form[action*="logout"]')) this.clearComposerDrafts();
             });
 
             document.addEventListener('change', (e) => {

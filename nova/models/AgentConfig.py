@@ -24,6 +24,10 @@ class AgentConfig(models.Model):
                                      related_name='AgentsConfig',
                                      verbose_name=_("Provider"))
     system_prompt = models.TextField(verbose_name=_("Prompt"))
+    autonomy_instructions = models.TextField(
+        blank=True, default="", verbose_name=_("Autonomy instructions"),
+        help_text=_("Describe what this agent may decide alone, when it should ask you, and where it may publish or write. These instructions guide the agent; they do not change connection permissions."),
+    )
     recursion_limit = models.IntegerField(default=25, verbose_name=_("Recursion limit"))
 
     # Tools
@@ -60,33 +64,10 @@ class AgentConfig(models.Model):
         help_text=_("Default output type used when the user has not explicitly selected a response mode."),
     )
 
-    # Summarization settings
-    auto_summarize = models.BooleanField(
-        default=False,
-        help_text="Enable automatic summarization when token threshold is reached"
-    )
-    token_threshold = models.IntegerField(
-        default=10000,
-        help_text="Token count threshold for triggering summarization"
-    )
+    # Compaction setting
     preserve_recent = models.IntegerField(
         default=2,
         help_text="Number of recent messages to preserve"
-    )
-    strategy = models.CharField(
-        default='conversation',
-        max_length=20,
-        help_text="Summarization strategy: conversation, topic, temporal, hybrid"
-    )
-    max_summary_length = models.IntegerField(
-        default=500,
-        help_text="Maximum length of generated summary in words"
-    )
-    summary_model = models.CharField(
-        blank=True,
-        null=True,
-        max_length=100,
-        help_text="Optional LLM model override for summarization"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

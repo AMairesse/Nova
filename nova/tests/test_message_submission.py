@@ -111,7 +111,9 @@ class MessageSubmissionTests(TestCase):
             )
 
         self.assertEqual(deleted_messages, [created_message_id])
-        self.assertFalse(
+        # The surrounding atomic submission rolls back the provisional delete;
+        # the pre-existing message remains intact for a safe retry.
+        self.assertTrue(
             self.thread.message_set.filter(id=created_message_id).exists()
         )
 
@@ -130,25 +132,26 @@ class MessageSubmissionTests(TestCase):
 
         dispatcher_task = Mock()
 
-        result = submit_user_message(
-            user=self.user,
-            message_text="Please inspect this file",
-            selected_agent=str(self.agent.id),
-            response_mode="auto",
-            thread_mode=Thread.Mode.THREAD,
-            thread_files=[
-                SimpleUploadedFile(
-                    "trace.log",
-                    b"traceback",
-                    content_type="text/plain",
-                )
-            ],
-            message_attachments=[],
-            prepare_context=prepare_context,
-            dispatcher_task=dispatcher_task,
-            thread_file_uploader=fake_thread_uploader,
-            file_update_publisher=noop_publish,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            result = submit_user_message(
+                user=self.user,
+                message_text="Please inspect this file",
+                selected_agent=str(self.agent.id),
+                response_mode="auto",
+                thread_mode=Thread.Mode.THREAD,
+                thread_files=[
+                    SimpleUploadedFile(
+                        "trace.log",
+                        b"traceback",
+                        content_type="text/plain",
+                    )
+                ],
+                message_attachments=[],
+                prepare_context=prepare_context,
+                dispatcher_task=dispatcher_task,
+                thread_file_uploader=fake_thread_uploader,
+                file_update_publisher=noop_publish,
+            )
 
         payload = result.as_payload()
 
