@@ -1,6 +1,19 @@
 {% load i18n %}
 
 <li>
+  <a class="dropdown-item" href="{% url 'search' %}">
+    <i class="bi bi-search me-2"></i>{% trans "Search" %}
+  </a>
+</li>
+{% url 'activity' as activity_url %}
+{% if activity_url %}
+<li>
+  <a class="dropdown-item" href="{{ activity_url }}">
+    <i class="bi bi-activity me-2"></i>{% trans "Activity" %}
+  </a>
+</li>
+{% endif %}
+<li>
   <a class="dropdown-item" href="{% url 'user_settings:dashboard' %}">
     <i class="bi bi-gear me-2"></i>{% trans "Settings" %}
   </a>

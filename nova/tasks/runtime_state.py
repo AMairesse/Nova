@@ -73,7 +73,12 @@ def reconcile_stale_running_tasks(*, thread=None, user=None, now=None) -> list[i
         task.status = TaskStatus.FAILED
         task.result = ORPHANED_TASK_RESULT
         task.progress_logs = progress_logs
-        task.save(update_fields=["status", "result", "progress_logs", "updated_at"])
+        changed = get_stale_running_tasks_queryset(user=user, thread=thread, now=reference_time).filter(pk=task.pk).update(
+            status=task.status, result=task.result, progress_logs=task.progress_logs, updated_at=reference_time)
+        if not changed:
+            continue
+        from nova.tasks.execution import finish_routine_task
+        finish_routine_task(task)
         reconciled_ids.append(task.id)
 
     if reconciled_ids:

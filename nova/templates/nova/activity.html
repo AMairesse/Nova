@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block content %}
+<main class="container py-4" id="activity-page">
+  <h1 class="mb-4">{% trans "Activity" %}</h1>
+  <form method="get" class="row g-2 mb-4">
+    <div class="col-auto"><label class="visually-hidden" for="activity-state">{% trans "State" %}</label><input id="activity-state" class="form-control" name="state" value="{{ state }}" placeholder="{% trans 'State' %}"></div>
+    <div class="col-auto"><label class="visually-hidden" for="activity-source">{% trans "Source" %}</label><select id="activity-source" class="form-select" name="source"><option value="">{% trans "All sources" %}</option><option value="message"{% if source == "message" %} selected{% endif %}>{% trans "Message" %}</option><option value="routine"{% if source == "routine" %} selected{% endif %}>{% trans "Routine" %}</option><option value="manual"{% if source == "manual" %} selected{% endif %}>{% trans "Manual" %}</option></select></div>
+    <div class="col-auto"><button class="btn btn-primary" type="submit">{% trans "Filter" %}</button></div>
+  </form>
+  {% for entry in page.object_list %}
+    {% with item=entry.item task=entry.task %}
+    <article class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between"><h2 class="h5">{% if entry.kind == "routine" %}{{ item.name }}{% else %}{{ item.thread.subject }}{% endif %}</h2><span class="badge text-bg-secondary">{{ item.status }}</span></div>
+        {% if entry.kind == "task" %}<p class="small text-muted">Task {{ item.pk }} · {{ entry.source }}{% if item.agent_config %} · {{ item.agent_config.name }}{% endif %}</p>{% else %}<p class="small text-muted">Routine run {{ item.pk }}{% if item.definition %} · {{ item.definition.name }}{% endif %}</p>{% endif %}
+        {% if entry.kind == "routine" %}{% if task.result and task.result != "NOVA_NO_CHANGE" %}<pre class="small text-wrap">{{ task.result }}</pre>{% endif %}{% elif item.result and item.result != "NOVA_NO_CHANGE" %}<pre class="small text-wrap">{{ item.result }}</pre>{% endif %}
+        {% if item.reason %}<p>{{ item.reason }}</p>{% endif %}
+        {% for receipt in entry.receipts %}<div class="small">{{ receipt.operation }} · {{ receipt.status }} · {{ receipt.fingerprint }}</div>{% empty %}<div class="small text-muted">{% trans "No action receipts" %}</div>{% endfor %}
+        {% if task %}
+          <a href="{{ entry.thread_url }}">{% trans "Open thread" %}</a>
+          {% for interaction in task.interactions.all %}{% if interaction.dispatch_error %}<form method="post" action="{% url 'retry_interaction' interaction.pk %}" class="d-inline" data-activity-action>{% csrf_token %}<button class="btn btn-sm btn-outline-warning" type="submit">{% trans "Retry interaction" %}</button></form>{% endif %}{% endfor %}
+          {% if task.status == "PENDING" or task.status == "DISPATCH_FAILED" %}<form method="post" action="{% url 'retry_dispatch_task' task.pk %}" class="d-inline" data-activity-action>{% csrf_token %}<button class="btn btn-sm btn-outline-primary" type="submit">{% trans "Retry dispatch" %}</button></form>{% endif %}
+          {% if task.status == "PENDING" or task.status == "DISPATCH_FAILED" or task.status == "RUNNING" or task.status == "AWAITING_INPUT" %}<form method="post" action="{% url 'stop_task' task.pk %}" class="d-inline" data-activity-action>{% csrf_token %}<button class="btn btn-sm btn-outline-danger" type="submit">{% trans "Stop" %}</button></form>{% endif %}
+        {% endif %}
+        <div class="alert alert-danger small mt-2 d-none" data-activity-error role="alert"></div>
+      </div>
+    </article>
+    {% endwith %}
+  {% empty %}<p class="text-muted">{% trans "No activity yet." %}</p>{% endfor %}
+  {% if page.has_other_pages %}<nav aria-label="{% trans 'Activity pages' %}">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}&state={{ state }}&source={{ source }}">{% trans "Previous" %}</a>{% endif %}{% if page.has_previous and page.has_next %} · {% endif %}{% if page.has_next %}<a href="?page={{ page.next_page_number }}&state={{ state }}&source={{ source }}">{% trans "Next" %}</a>{% endif %}</nav>{% endif %}
+</main>
+<script>
+(() => {
+  const page = document.getElementById('activity-page');
+  if (!page) return;
+  page.addEventListener('submit', async (event) => {
+    const form = event.target.closest('form[data-activity-action]');
+    if (!form) return;
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    const errorBox = form.closest('.card-body')?.querySelector('[data-activity-error]');
+    if (button) button.disabled = true;
+    if (errorBox) errorBox.classList.add('d-none');
+    try {
+      const response = await window.DOMUtils.csrfFetch(form.action, { method: 'POST', body: new FormData(form) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || data.message || gettext('Action failed.'));
+      window.location.reload();
+    } catch (error) {
+      if (errorBox) { errorBox.textContent = error.message || gettext('Action failed.'); errorBox.classList.remove('d-none'); }
+      if (button) button.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

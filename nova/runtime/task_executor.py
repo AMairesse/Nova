@@ -112,6 +112,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             trace_handler=self.trace_handler,
             progress_handler=self.handler,
             source_message_id=self.source_message_id,
+            allow_ask_user=self.allow_ask_user,
         ).initialize()
         self.llm = None
 
@@ -231,6 +232,18 @@ class ReactTerminalTaskExecutor(TaskExecutor):
         await self.handler.record_progress("Processing final response")
         final_answer = run_result.final_answer
         self.task.result = final_answer
+
+        from nova.models.RoutineRun import RoutineRun
+        from nova.tasks.execution import NO_CHANGE_RESULT
+        if final_answer.strip() == NO_CHANGE_RESULT and await sync_to_async(
+            RoutineRun.objects.filter(task_id=self.task.pk).exists, thread_sensitive=True,
+        )():
+            self.handler.push_notifications_enabled = False
+            self.task.current_response = None
+            self.task.streamed_markdown = ''
+            if self.trace_handler:
+                await self.trace_handler.complete_root_run('No material change.')
+            return
 
         message = await sync_to_async(
             self.thread.add_message,

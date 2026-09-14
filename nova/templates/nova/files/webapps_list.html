@@ -1,5 +1,12 @@
 {% load i18n %}
 <div class="p-2">
+  <div class="alert alert-info small mb-2" role="status">
+    {% if public_links_enabled %}
+      <strong>{% trans "Public links" %}</strong> — {% trans "The configured webapp origin makes these links reachable without signing in. The slug acts as the link capability." %}
+    {% else %}
+      <strong>{% trans "Private links" %}</strong> — {% trans "Webapp links require your Nova sign-in on the current origin." %}
+    {% endif %}
+  </div>
   {% if webapps %}
     <ul class="list-group list-group-flush">
       {% for app in webapps %}

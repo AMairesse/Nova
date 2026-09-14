@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% load i18n %}
+{% block content %}
+<main class="container py-4" id="navigation-search-page">
+  <form method="get" class="mb-4" role="search">
+    <label class="form-label" for="thread-search-query">{% trans "Search conversations" %}</label>
+    <div class="input-group">
+      <input id="thread-search-query" class="form-control" name="q" value="{{ query }}" autofocus>
+      <button class="btn btn-primary" type="submit">{% trans "Search" %}</button>
+    </div>
+    <label class="form-check mt-2"><input class="form-check-input" type="checkbox" name="archived" value="1"{% if include_archived %} checked{% endif %}> {% trans "Include archived threads" %}</label>
+  </form>
+  <div id="thread-search-results">
+    {% for result in results %}
+      <a class="list-group-item list-group-item-action" href="{{ result.url }}">
+        <div class="fw-semibold">{{ result.thread.subject }}</div>
+        <div class="small text-muted">{{ result.snippet }}</div>
+      </a>
+    {% empty %}{% if query %}<p class="text-muted">{% trans "No matching conversations." %}</p>{% endif %}{% endfor %}
+  </div>
+  {% if page.has_other_pages %}<nav aria-label="{% trans 'Search pages' %}" class="mt-3">{% if page.has_previous %}<a href="?q={{ query|urlencode }}&archived={% if include_archived %}1{% else %}0{% endif %}&page={{ page.previous_page_number }}">{% trans "Previous" %}</a>{% endif %}{% if page.has_previous and page.has_next %} · {% endif %}{% if page.has_next %}<a href="?q={{ query|urlencode }}&archived={% if include_archived %}1{% else %}0{% endif %}&page={{ page.next_page_number }}">{% trans "Next" %}</a>{% endif %}</nav>{% endif %}
+</main>
+{% endblock %}

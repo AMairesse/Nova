@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% load i18n crispy_forms_tags %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header"><h5 class="mb-0">{{ title }}</h5></div>
+                <div class="card-body">
+                    <p class="text-muted">{% trans "Choose your agent and the sources for this routine. You can edit the generated prompt and schedule before saving." %}</p>
+                    <form method="post">
+                        {% csrf_token %}
+                        {{ form.agent|as_crispy_field }}
+                        {{ form.value|as_crispy_field }}
+                        {% if form.email_tool.field.required %}{{ form.email_tool|as_crispy_field }}{% endif %}
+                        {% if form.calendar_tool.field.required %}{{ form.calendar_tool|as_crispy_field }}{% endif %}
+                        {% if form.webdav_tool.field.required %}{{ form.webdav_tool|as_crispy_field }}{% endif %}
+                        {{ form.schedule|as_crispy_field }}
+                        <div class="d-flex justify-content-between">
+                            <a href="{% url 'user_settings:task_templates' %}" class="btn btn-secondary">{% trans "Cancel" %}</a>
+                            <button type="submit" class="btn btn-primary">{% trans "Continue to prompt" %}</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

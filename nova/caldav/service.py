@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import re
 import uuid
 from datetime import date, datetime, time, timedelta
@@ -276,6 +277,7 @@ def _normalize_component(component: Any, *, calendar_name: str) -> dict[str, Any
     all_day = isinstance(dtstart, date) and not isinstance(dtstart, datetime)
     return {
         "uid": _to_text(component.get("UID")),
+        "status": _to_text(component.get("STATUS")),
         "calendar_name": _to_text(calendar_name),
         "summary": _to_text(component.get("SUMMARY")),
         "start": _serialize_temporal(dtstart),
@@ -450,6 +452,7 @@ def _create_ical_event(
     end_value: date | datetime | None = None,
     location: str | None = None,
     description: str | None = None,
+    status: str | None = None,
 ) -> str:
     event = ICalEvent()
     event.add("uid", uid)
@@ -461,6 +464,8 @@ def _create_ical_event(
         event.add("location", location)
     if description is not None:
         event.add("description", description)
+    if status:
+        event.add("status", status)
 
     calendar = ICalendar()
     calendar.add("prodid", "-//Nova//EN")
@@ -480,19 +485,43 @@ def _create_event_sync(
     all_day: bool = False,
     location: str | None = None,
     description: str | None = None,
+    tentative: bool = False,
+    operation_key: str | None = None,
 ) -> dict[str, Any]:
     client = _get_caldav_client_sync(user, tool_id)
     principal = client.principal()
     calendar = _get_calendar_by_name(list(principal.calendars()), calendar_name)[0]
     start_value = _parse_temporal_input(start, all_day=all_day)
     end_value = _parse_temporal_input(end, all_day=all_day) if end else None
+    uid = (
+        f"nova-event-{hashlib.sha256(str(operation_key).encode('utf-8')).hexdigest()[:32]}@nova.local"
+        if operation_key else str(uuid.uuid4())
+    )
+    status = "TENTATIVE" if tentative else None
+    existing = calendar.search(uid=uid, event=True, expand=False) if operation_key else []
+    if existing:
+        normalized = _normalize_resource(existing[0], calendar_name=_to_text(getattr(calendar, "name", "")))
+        if normalized:
+            expected = {
+                "summary": _to_text(summary),
+                "start": _serialize_temporal(start_value),
+                "end": _serialize_temporal(end_value),
+                "location": _to_text(location),
+                "description": _to_text(description),
+                "status": status or "",
+            }
+            if all(normalized[0].get(key, "") == value for key, value in expected.items()):
+                return normalized[0]
+            raise ValueError("An event with this operation key already exists with different content.")
+        raise ValueError("An event with this operation key exists but its content could not be verified.")
     ical = _create_ical_event(
-        uid=str(uuid.uuid4()),
+        uid=uid,
         summary=summary,
         start_value=start_value,
         end_value=end_value,
         location=location,
         description=description,
+        status=status,
     )
     resource = calendar.add_event(ical)
     normalized = _normalize_resource(resource, calendar_name=_to_text(getattr(calendar, "name", "")))
@@ -512,6 +541,8 @@ async def create_event(
     all_day: bool = False,
     location: str | None = None,
     description: str | None = None,
+    tentative: bool = False,
+    operation_key: str | None = None,
 ) -> dict[str, Any]:
     return await sync_to_async(_create_event_sync, thread_sensitive=False)(
         user,
@@ -523,6 +554,8 @@ async def create_event(
         all_day=all_day,
         location=location,
         description=description,
+        tentative=tentative,
+        operation_key=operation_key,
     )
 
 

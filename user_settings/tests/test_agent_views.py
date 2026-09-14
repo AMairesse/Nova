@@ -116,6 +116,15 @@ class AgentViewsTest(BaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         form = response.context["form"]
+        self.assertIn("preserve_recent", form.fields)
+        for field_name in (
+            "auto_summarize",
+            "token_threshold",
+            "strategy",
+            "max_summary_length",
+            "summary_model",
+        ):
+            self.assertNotIn(field_name, form.fields)
         provider_ids = {str(value) for value, _label in form.fields["llm_provider"].choices if value}
         self.assertIn(str(usable_provider.pk), provider_ids)
         self.assertNotIn(
@@ -133,7 +142,7 @@ class AgentViewsTest(BaseTestCase):
         self.assertContains(response, "Runtime instructions:")
         self.assertContains(response, "Agent identity, style, language")
         self.assertContains(response, "Technical runtime instructions are added automatically")
-        self.assertContains(response, "Advanced summarization")
+        self.assertContains(response, "Compaction")
         self.assertContains(response, "<details class=\"mb-3 border rounded p-3\">", html=False)
         self.assertContains(response, "<details class=\"mt-4 border rounded p-3\">", html=False)
         self.assertNotContains(response, "Summarization Settings")

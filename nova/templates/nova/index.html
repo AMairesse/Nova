@@ -171,6 +171,8 @@
     runningTasksBase: "/running-tasks/",
     createThread: "{% url 'create_thread' %}",
     deleteThread: "{% url 'delete_thread' 0 %}",
+    archiveThread: "{% url 'archive_thread' 0 %}",
+    unarchiveThread: "{% url 'unarchive_thread' 0 %}",
     summarizeThread: "{% url 'summarize_thread' 0 %}",
     confirmSummarizeThread: "{% url 'confirm_summarize_thread' 0 %}",
     loadMoreThreads: "{% url 'load_more_threads' %}",
@@ -194,10 +196,12 @@
 <script src="{% static 'js/message-manager.js' %}" defer></script>
 <script src="{% static 'js/preview-manager.js' %}" defer></script>
 <script src="{% static 'js/thread-manager.js' %}" defer></script>
+<script src="{% static 'js/navigation.js' %}" defer></script>
 <script src="{% static 'js/file-operations.js' %}" defer></script>
 <script src="{% static 'js/sidebar-manager.js' %}" defer></script>
 <script src="{% static 'js/websocket-manager.js' %}" defer></script>
 <script src="{% static 'js/webapp-integration.js' %}" defer></script>
 <script src="{% static 'js/files.js' %}" defer></script>
 <script src="{% static 'js/nova-thread-bootstrap.js' %}" defer></script>
+<script src="{% static 'js/navigation.js' %}" defer></script>
 {% endblock %}

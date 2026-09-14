@@ -31,19 +31,12 @@
     </details>
     {% crispy form %}
 
-    {% if form.fields.auto_summarize %}
-      <details class="mt-4 border rounded p-3">
-        <summary class="fw-semibold">{% trans "Advanced summarization" %}</summary>
-        <div class="mt-3">
-          {{ form.auto_summarize|as_crispy_field }}
-          {{ form.token_threshold|as_crispy_field }}
-          {{ form.preserve_recent|as_crispy_field }}
-          {{ form.strategy|as_crispy_field }}
-          {{ form.max_summary_length|as_crispy_field }}
-          {{ form.summary_model|as_crispy_field }}
-        </div>
-      </details>
-    {% endif %}
+    <details class="mt-4 border rounded p-3">
+      <summary class="fw-semibold">{% trans "Compaction" %}</summary>
+      <div class="mt-3">
+        {{ form.preserve_recent|as_crispy_field }}
+      </div>
+    </details>
 
     <div class="mt-4">
       <button class="btn btn-primary me-2" type="submit">

@@ -25,6 +25,7 @@ class Thread(models.Model):
         help_text=_("Conversation mode: standard thread or continuous discussion")
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     def __str__(self):
         return self.subject

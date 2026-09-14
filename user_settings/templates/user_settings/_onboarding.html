@@ -1,0 +1,26 @@
+{% load i18n %}
+<section class="card border-primary-subtle mb-4" id="nova-onboarding" data-onboarding-key="v1">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start gap-3">
+      <div>
+        <h5 class="card-title mb-1">{% trans "Get started with Nova" %}</h5>
+        <p class="card-text text-muted small mb-3">{% trans "This optional guide can be resumed at any time. It never contacts a provider by itself." %}</p>
+      </div>
+      <button type="button" class="btn btn-sm btn-link text-muted p-0" data-onboarding-toggle>{% trans "Hide" %}</button>
+    </div>
+    <ol class="mb-0 ps-3">
+      <li class="mb-2"><strong>{% trans "Choose a provider" %}</strong>
+        {% if onboarding_providers %}<span class="text-muted small d-block">— {% trans "configured providers" %}: {% for provider in onboarding_providers %}{{ provider.name }} ({{ provider.get_provider_type_display }}{% if provider.model %}, {{ provider.model }}{% endif %}){% if not forloop.last %}; {% endif %}{% endfor %}</span>{% else %}<span class="text-muted small d-block">— {% trans "none configured yet" %}</span>{% endif %}
+        <a class="btn btn-sm btn-outline-primary ms-2" href="#pane-providers" data-onboarding-step="provider">{% trans "Review providers" %}</a>
+      </li>
+      <li class="mb-2"><strong>{% trans "Create or choose an agent" %}</strong>
+        {% if onboarding_agents %}<span class="text-muted small d-block">— {% for agent in onboarding_agents %}{{ agent.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+        <span class="text-muted small d-block">{% trans "Free instructions describe the agent's behavior and complement Nova's automatic runtime instructions." %}</span>
+        <a class="btn btn-sm btn-outline-primary ms-2" href="#pane-agents" data-onboarding-step="agent">{% trans "Review agents" %}</a>
+      </li>
+      <li><strong>{% trans "Send your first request" %}</strong>
+        <a class="btn btn-sm btn-outline-primary ms-2" href="{% url 'index' %}{% if onboarding_default_agent_id %}?agent_id={{ onboarding_default_agent_id }}{% endif %}" data-onboarding-step="request">{% trans "Open Nova" %}</a>
+      </li>
+    </ol>
+  </div>
+</section>

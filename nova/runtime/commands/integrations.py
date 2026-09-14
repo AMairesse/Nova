@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import posixpath
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,12 @@ def _terminal_command_error(*args, **kwargs):
     from nova.runtime.terminal import TerminalCommandError
 
     return TerminalCommandError(*args, **kwargs)
+
+
+def _operation_key(executor, kind: str, values: list[str]) -> str:
+    context = getattr(executor, "realtime_task_id", None) or getattr(executor.vfs.thread, "id", None) or "unknown"
+    raw = "|".join([kind, str(context), *[str(value or "") for value in values]])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 async def cmd_mail_accounts(executor: TerminalExecutor) -> str:
@@ -43,7 +50,7 @@ async def cmd_mail(executor: TerminalExecutor, args: list[str]) -> str:
     if not executor.capabilities.has_email:
         raise _terminal_command_error("Mail commands are not enabled for this agent.")
     if not args:
-        raise _terminal_command_error("Usage: mail <accounts|list|read|attachments|import|folders|move|mark|send> ...")
+        raise _terminal_command_error("Usage: mail <accounts|list|read|attachments|import|folders|move|mark|send|draft> ...")
     subcommand = args[0]
     remainder = args[1:]
     mailbox, remainder = executor._parse_flag_value(remainder, "--mailbox")
@@ -243,6 +250,27 @@ async def cmd_mail(executor: TerminalExecutor, args: list[str]) -> str:
             attach_paths=attach_paths,
         )
 
+    if subcommand == "draft":
+        to, remainder = executor._parse_flag_value(remainder, "--to")
+        subject, remainder = executor._parse_flag_value(remainder, "--subject")
+        body_file, remainder = executor._parse_flag_value(remainder, "--body-file")
+        in_reply_to, remainder = executor._parse_flag_value(remainder, "--in-reply-to")
+        if remainder or not to or not subject or not body_file:
+            raise _terminal_command_error(
+                "Usage: mail draft [--mailbox <email>] --to <addr> --subject <subject> "
+                "--body-file <path> [--in-reply-to <message-id>]"
+            )
+        body = await executor.vfs.read_text(body_file)
+        try:
+            draft = await mail_service.create_draft(
+                executor.vfs.user, tool_id, to, subject, body,
+                in_reply_to=in_reply_to,
+                operation_key=_operation_key(executor, "mail-draft", [to, subject, body, in_reply_to or ""]),
+            )
+        except ValueError as exc:
+            raise _terminal_command_error(str(exc)) from exc
+        return f"Draft {draft['status']} in {draft['mailbox']} (UID {draft.get('uid') or '?'}, Message-ID {draft['message_id']})"
+
     raise _terminal_command_error(f"Unknown mail subcommand: {subcommand}")
 
 
@@ -390,10 +418,11 @@ async def cmd_calendar(executor: TerminalExecutor, args: list[str]) -> str:
         location, remainder = executor._parse_flag_value(remainder, "--location")
         description_file, remainder = executor._parse_flag_value(remainder, "--description-file")
         all_day = "--all-day" in remainder
-        remainder = [item for item in remainder if item != "--all-day"]
+        tentative = "--tentative" in remainder
+        remainder = [item for item in remainder if item not in {"--all-day", "--tentative"}]
         if remainder or not calendar_name or not title or not start_value:
             raise _terminal_command_error(
-                "Usage: calendar create --title <text> --start <iso> [--end <iso>] [--all-day] --calendar <name> [--account <selector>] [--location <text>] [--description-file /path.md]"
+                "Usage: calendar create --title <text> --start <iso> [--end <iso>] [--all-day] [--tentative] --calendar <name> [--account <selector>] [--location <text>] [--description-file /path.md]"
             )
         description = await executor.vfs.read_text(description_file) if description_file else None
         try:
@@ -407,6 +436,8 @@ async def cmd_calendar(executor: TerminalExecutor, args: list[str]) -> str:
                 all_day=all_day,
                 location=location,
                 description=description,
+                tentative=tentative,
+                operation_key=_operation_key(executor, "calendar-create", [calendar_name, title, start_value, end_value or "", location or "", description or "", str(tentative)]),
             )
         except ValueError as exc:
             raise _terminal_command_error(str(exc)) from exc

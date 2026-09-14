@@ -13,6 +13,7 @@ def build_runtime_system_prompt(
     allow_ask_user: bool = True,
     source_message_id: int | None = None,
     agent_instructions: str = "",
+    autonomy_instructions: str = "",
 ) -> str:
     prompt = build_automatic_runtime_instructions(
         capabilities=capabilities,
@@ -24,6 +25,8 @@ def build_runtime_system_prompt(
     agent_instructions = str(agent_instructions or "").strip()
     if agent_instructions:
         prompt += f"\n\nAgent instructions:\n{agent_instructions}\n"
+    if str(autonomy_instructions or "").strip():
+        prompt += f"\n\nUser-defined autonomy instructions:\n{autonomy_instructions.strip()}\n"
     return prompt
 
 

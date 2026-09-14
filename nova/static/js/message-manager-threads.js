@@ -28,6 +28,7 @@
                     '#message-container input[name="thread_id"]'
                 )?.value;
                 this.currentThreadId = renderedThreadId || threadId;
+                this.restoreComposerDraft(this.currentThreadId);
 
                 document.querySelectorAll('.thread-link').forEach((link) => {
                     link.classList.remove('active');

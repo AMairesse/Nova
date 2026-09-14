@@ -40,7 +40,7 @@
     <link rel="apple-touch-icon" href="{% static 'images/icon-192x192.png' %}">
     {% block extra_head %}{% endblock %}
   </head>
-  <body class="d-flex flex-column" data-debug="{{ debug|yesno:'true,false' }}" data-authenticated="{{ user.is_authenticated|yesno:'true,false' }}">
+  <body class="d-flex flex-column" data-debug="{{ debug|yesno:'true,false' }}" data-authenticated="{{ user.is_authenticated|yesno:'true,false' }}" data-user-id="{% if user.is_authenticated %}{{ user.id }}{% endif %}">
     <!-- Desktop Navigation (hidden on mobile) -->
     <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom d-none d-lg-flex">
       <div class="container-fluid">

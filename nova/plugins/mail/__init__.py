@@ -24,6 +24,7 @@ Mail is accessed through shell-like commands:
 - `mail move <id> --to-special junk`
 - `mail mark <id> --seen`
 - `mail send --mailbox <email> --to ... --subject ... --body-file /body.txt --attach /file.pdf`
+- `mail draft --mailbox <email> --to ... --subject ... --body-file /body.txt`
 
 Use `mail folders` to inspect special folders, and prefer explicit `--uid` in multi-step workflows.
 Prefer reading attachments metadata first, then importing only the files you need.

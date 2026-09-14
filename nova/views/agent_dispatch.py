@@ -106,6 +106,7 @@ def enqueue_message_agent_task(
     agent_config,
     source_message_id: int,
     dispatcher_task,
+    submission_key=None,
 ):
     return create_and_dispatch_agent_task(
         user=user,
@@ -113,4 +114,5 @@ def enqueue_message_agent_task(
         agent_config=agent_config,
         source_message_id=source_message_id,
         dispatcher_task=dispatcher_task,
+        submission_key=submission_key,
     )

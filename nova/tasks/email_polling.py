@@ -59,7 +59,7 @@ def poll_new_unseen_email_headers(task_definition: TaskDefinition):
     - read-only polling (never modify seen/unseen flags)
     - first run processes existing unseen emails
     - dedup by UID / UIDVALIDITY cursor
-    - ignore backlog after long downtime (> 2x polling interval)
+    - skip or catch up after downtime according to the routine policy, in batches of 50
     """
 
     if task_definition.trigger_type != TaskDefinition.TriggerType.EMAIL_POLL:
@@ -100,7 +100,8 @@ def poll_new_unseen_email_headers(task_definition: TaskDefinition):
             last_uid = 0
 
         # Ignore backlog after downtime > 2x interval.
-        if last_poll_at and (now - last_poll_at) > dt.timedelta(minutes=interval * 2):
+        if (task_definition.catch_up_policy == TaskDefinition.CatchUpPolicy.SKIP
+                and last_poll_at and (now - last_poll_at) > dt.timedelta(minutes=interval * 2)):
             next_state = {
                 **state,
                 "initialized": True,
@@ -108,11 +109,13 @@ def poll_new_unseen_email_headers(task_definition: TaskDefinition):
                 "last_uid": max(unseen_uids) if unseen_uids else last_uid,
                 "last_poll_at": now.isoformat(),
                 "backlog_skipped_at": now.isoformat(),
+                "backlog_skipped_count": sum(int(uid) > last_uid for uid in unseen_uids),
             }
             return {"headers": [], "state": next_state, "skip_reason": "backlog_skipped"}
 
         # First run: process existing unseen by design (last_uid defaults to 0).
-        new_uids = [uid for uid in unseen_uids if int(uid) > last_uid]
+        pending_uids = [uid for uid in unseen_uids if int(uid) > last_uid]
+        new_uids = pending_uids[:50]
         headers = []
         if new_uids:
             fetch_data = client.fetch(new_uids, ["ENVELOPE"])
@@ -134,6 +137,7 @@ def poll_new_unseen_email_headers(task_definition: TaskDefinition):
             "uidvalidity": uidvalidity,
             "last_uid": max(new_uids) if new_uids else last_uid,
             "last_poll_at": now.isoformat(),
+            "backlog_remaining_count": max(0, len(pending_uids) - len(new_uids)),
         }
         return {"headers": headers, "state": next_state, "skip_reason": None}
     finally:

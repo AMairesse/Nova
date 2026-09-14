@@ -329,14 +329,15 @@ class ContinuousViewsTests(TestCase):
         )
         agent = create_agent(self.user, provider, name="Vision agent")
 
-        response = self.client.post(
-            reverse("continuous_add_message"),
-            data={
-                "new_message": "Analyse cette image",
-                "selected_agent": str(agent.id),
-                "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
-            },
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("continuous_add_message"),
+                data={
+                    "new_message": "Analyse cette image",
+                    "selected_agent": str(agent.id),
+                    "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+                },
+            )
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["status"], "ERROR")
@@ -380,14 +381,15 @@ class ContinuousViewsTests(TestCase):
         agent = create_agent(self.user, provider, name="Vision agent")
         mocked_upload_message_attachments.return_value = ([], [])
 
-        response = self.client.post(
-            reverse("continuous_add_message"),
-            data={
-                "new_message": "Analyse cette image",
-                "selected_agent": str(agent.id),
-                "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
-            },
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("continuous_add_message"),
+                data={
+                    "new_message": "Analyse cette image",
+                    "selected_agent": str(agent.id),
+                    "message_attachments": [SimpleUploadedFile("camera.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+                },
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "OK")

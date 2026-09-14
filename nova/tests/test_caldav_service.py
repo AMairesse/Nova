@@ -141,6 +141,47 @@ class CaldavServiceTests(TestCase):
         self.assertEqual(event["location"], "Room A")
         self.assertIn("Roadmap review", calendar.added_ical)
 
+    def test_create_tentative_event_uses_stable_uid_and_is_idempotent(self):
+        calendar = _FakeCalendar("Work")
+        operation_key = "task-1|calendar-1"
+
+        with patch(
+            "nova.caldav.service._get_caldav_client_sync",
+            return_value=self._build_client(calendar),
+        ):
+            first = asyncio.run(caldav_service.create_event(
+                self.user, self.tool.id, calendar_name="Work", summary="Planning",
+                start="2026-04-10T09:00:00+00:00", end="2026-04-10T10:00:00+00:00",
+                tentative=True, operation_key=operation_key,
+            ))
+            calendar._search_results = [calendar.add_event(calendar.added_ical)]
+            second = asyncio.run(caldav_service.create_event(
+                self.user, self.tool.id, calendar_name="Work", summary="Planning",
+                start="2026-04-10T09:00:00+00:00", end="2026-04-10T10:00:00+00:00",
+                tentative=True, operation_key=operation_key,
+            ))
+
+        self.assertEqual(first["uid"], second["uid"])
+        self.assertEqual(first["status"], "TENTATIVE")
+
+    def test_create_event_rejects_stable_uid_collision_with_different_content(self):
+        operation_key = "task-2|calendar-1"
+        calendar = _FakeCalendar("Work")
+        with patch(
+            "nova.caldav.service._get_caldav_client_sync",
+            return_value=self._build_client(calendar),
+        ):
+            asyncio.run(caldav_service.create_event(
+                self.user, self.tool.id, calendar_name="Work", summary="Planning",
+                start="2026-04-10T09:00:00+00:00", operation_key=operation_key,
+            ))
+            calendar._search_results = [calendar.add_event(calendar.added_ical)]
+            with self.assertRaisesMessage(ValueError, "different content"):
+                asyncio.run(caldav_service.create_event(
+                    self.user, self.tool.id, calendar_name="Work", summary="Changed",
+                    start="2026-04-10T09:00:00+00:00", operation_key=operation_key,
+                ))
+
     def test_update_event_rejects_recurring_event(self):
         component = ICalEvent()
         component.add("uid", "evt-2")
