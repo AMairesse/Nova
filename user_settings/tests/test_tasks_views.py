@@ -244,7 +244,7 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Nightly summaries")
         self.assertContains(response, "continuous_nightly_daysegment_summaries_for_user")
-        self.assertContains(response, "You are generating a day summary for a continuous discussion.")
+        self.assertContains(response, "Write a concise continuity note for this day")
         self.assertContains(response, "{{day_label}}")
         self.assertContains(response, "{{transcript}}")
 
