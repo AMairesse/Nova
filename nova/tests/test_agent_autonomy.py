@@ -17,20 +17,18 @@ class AgentAutonomyTests(TransactionTestCase):
         self.user = create_user(username="autonomy")
         self.provider = create_provider(self.user, name="autonomy-provider")
         self.agent = create_agent(self.user, self.provider, name="autonomy-agent")
-        self.agent.autonomy_instructions = "You may decide routine formatting without asking."
-        self.agent.save(update_fields=["autonomy_instructions", "updated_at"])
 
-    def test_autonomy_instructions_are_a_form_field_and_runtime_prompt_section(self):
+    def test_agent_instructions_use_a_single_prompt_field(self):
         from user_settings.forms import AgentForm
 
         form = AgentForm(instance=self.agent, user=self.user)
-        self.assertIn("autonomy_instructions", form.fields)
+        self.assertNotIn("autonomy_instructions", form.fields)
         prompt = build_runtime_system_prompt(
             capabilities=Mock(),
             tools_enabled=False,
-            autonomy_instructions=self.agent.autonomy_instructions,
+            agent_instructions="You may decide routine formatting without asking.",
         )
-        self.assertIn("User-defined autonomy instructions:", prompt)
+        self.assertNotIn("User-defined autonomy instructions:", prompt)
         self.assertIn("routine formatting", prompt)
 
     def test_no_change_routine_does_not_create_message_or_push(self):

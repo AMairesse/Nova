@@ -139,6 +139,7 @@ class AgentViewsTest(BaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Automatic runtime instructions")
+        self.assertNotContains(response, 'name="autonomy_instructions"')
         self.assertContains(response, "Runtime instructions:")
         self.assertContains(response, "Agent identity, style, language")
         self.assertContains(response, "Technical runtime instructions are added automatically")

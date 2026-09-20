@@ -24,10 +24,6 @@ class AgentConfig(models.Model):
                                      related_name='AgentsConfig',
                                      verbose_name=_("Provider"))
     system_prompt = models.TextField(verbose_name=_("Prompt"))
-    autonomy_instructions = models.TextField(
-        blank=True, default="", verbose_name=_("Autonomy instructions"),
-        help_text=_("Describe what this agent may decide alone, when it should ask you, and where it may publish or write. These instructions guide the agent; they do not change connection permissions."),
-    )
     recursion_limit = models.IntegerField(default=25, verbose_name=_("Recursion limit"))
 
     # Tools

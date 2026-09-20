@@ -200,13 +200,42 @@ class BootstrapSkillsTests(TestCase):
         self.assertNotIn("{today}", nova.system_prompt)
         self.assertIn("user's language", nova.system_prompt)
         self.assertIn("Markdown", nova.system_prompt)
-        self.assertIn("available capabilities", nova.system_prompt)
         self.assertIn("do not invent files", nova.system_prompt)
         self.assertNotIn("date/time capability", nova.system_prompt)
         self.assertNotIn("Use `python` directly", nova.system_prompt)
         self.assertNotIn("pip install --user <package>", nova.system_prompt)
         self.assertNotIn("webapp publication", nova.system_prompt)
         self.assertNotIn("Python Agent", nova.system_prompt)
+
+    def test_bootstrap_specialist_prompts_keep_roles_without_runtime_mechanics(self):
+        self._apply_provider_capabilities(self.provider, tools="pass")
+
+        bootstrap_default_setup(self.user)
+
+        internet_agent = AgentConfig.objects.get(user=self.user, name="Internet Agent")
+        self.assertIn("retrieve information from the internet", internet_agent.system_prompt)
+        self.assertIn("relevant, reliable sources", internet_agent.system_prompt)
+        self.assertIn("Do not execute downloaded code", internet_agent.system_prompt)
+        self.assertIn("If a source is unavailable, try another", internet_agent.system_prompt)
+        self.assertNotIn("SearXNG", internet_agent.system_prompt)
+        self.assertNotIn("browser", internet_agent.system_prompt)
+
+        image_provider = create_provider(
+            self.user,
+            provider_type=ProviderType.OPENROUTER,
+            name="Image Provider",
+        )
+        self._apply_provider_capabilities(
+            image_provider,
+            tools="unsupported",
+            image_output="pass",
+            image_generation="pass",
+        )
+        bootstrap_default_setup(self.user)
+        image_agent = AgentConfig.objects.get(user=self.user, name="Image Agent")
+        self.assertIn("create images from text instructions", image_agent.system_prompt)
+        self.assertNotIn("/inbox", image_agent.system_prompt)
+        self.assertNotIn("/inbox", image_agent.tool_description)
 
     def test_bootstrap_attaches_webapp_tool_to_nova(self):
         self._apply_provider_capabilities(self.provider, tools="pass")
@@ -243,7 +272,8 @@ class BootstrapSkillsTests(TestCase):
         self.assertTrue(nova.agent_tools.filter(pk=image_agent.pk).exists())
         self.assertIn("Image Agent", summary.get("created_agents", []))
         self.assertEqual(image_agent.default_response_mode, AgentConfig.DefaultResponseMode.IMAGE)
-        self.assertIn("read them from `/inbox`", image_agent.tool_description)
+        self.assertEqual(image_agent.tool_description, "Use this agent to generate or transform images.")
+        self.assertNotIn("/inbox", image_agent.tool_description)
 
     def test_bootstrap_prefers_image_provider_with_editing_support(self):
         self._apply_provider_capabilities(self.provider, tools="pass")
@@ -276,7 +306,7 @@ class BootstrapSkillsTests(TestCase):
 
         image_agent = AgentConfig.objects.get(user=self.user, name="Image Agent")
         self.assertEqual(image_agent.llm_provider, editing_provider)
-        self.assertIn("creating and modifying images", image_agent.system_prompt)
+        self.assertIn("create and modify images", image_agent.system_prompt)
 
     def test_bootstrap_skips_image_agent_when_image_capabilities_are_unknown(self):
         self._apply_provider_capabilities(self.provider, tools="pass")
