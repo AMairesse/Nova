@@ -280,7 +280,6 @@ class ReactTerminalRuntime:
             allow_ask_user=self.allow_ask_user,
             source_message_id=self.source_message_id,
             agent_instructions=getattr(self.agent_config, "system_prompt", ""),
-            autonomy_instructions=getattr(self.agent_config, "autonomy_instructions", ""),
         )
 
     def _build_history_summary_message(self, session_state: dict[str, Any]) -> dict[str, str] | None:

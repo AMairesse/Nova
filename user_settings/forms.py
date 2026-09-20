@@ -167,7 +167,6 @@ class AgentForm(forms.ModelForm):
             "name",
             "llm_provider",
             "system_prompt",
-            "autonomy_instructions",
             "recursion_limit",
             "is_tool",
             "tools",
@@ -288,7 +287,6 @@ class AgentForm(forms.ModelForm):
             "name",
             "llm_provider",
             "system_prompt",
-            "autonomy_instructions",
             "recursion_limit",
             Field("is_tool", wrapper_class="mb-2"),
             Div(

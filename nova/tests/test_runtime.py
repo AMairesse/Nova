@@ -1982,7 +1982,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertNotIn("**Answer:** work", joined_contents)
         self.assertIn('{"status": "answered", "answer": "work"}', joined_contents)
 
-    def test_system_prompt_mentions_ask_user(self):
+    def test_system_prompt_leaves_tool_usage_to_tool_descriptions(self):
         runtime = async_to_sync(
             ReactTerminalRuntime(
                 user=self.user,
@@ -1993,7 +1993,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("ask_user", prompt)
+        self.assertNotIn("ask_user", prompt)
 
     def test_system_prompt_mentions_markdown_vfs_file_references(self):
         runtime = async_to_sync(
@@ -2011,7 +2011,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
         self.assertIn("/history", prompt)
-        self.assertIn("Files uploaded in the Files panel", prompt)
+        self.assertIn("persistent files for this thread", prompt)
         self.assertIn("Agent instructions:\nBe concise.", prompt)
         self.assertNotIn("You are", automatic_prompt)
         self.assertNotIn("Nova", automatic_prompt)
@@ -2977,7 +2977,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             exclude_interaction_ids=set(),
         )
 
-    def test_system_prompt_mentions_touch_tee_and_conditional_mailbox_and_date_guidance(self):
+    def test_system_prompt_keeps_core_runtime_guidance(self):
         date_tool = Tool.objects.create(
             user=self.user,
             name="Date",
@@ -3034,12 +3034,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("Runtime instructions:", prompt)
-        self.assertIn("The main action surface is the `terminal` tool.", prompt)
         self.assertIn("Use shell-like commands for terminal work.", prompt)
         self.assertIn("Inspect `/skills`", prompt)
-        self.assertIn("Use `date` for current date/time queries.", prompt)
-        self.assertIn("--mailbox <email>", prompt)
-        self.assertIn("Files uploaded in the Files panel are persistent thread files under `/`.", prompt)
+        self.assertIn("persistent files for this thread", prompt)
         self.assertIn("inspect `/` first", prompt)
         self.assertIn("- /: persistent files for this thread, including files added from the Files panel", prompt)
         self.assertNotIn("/thread", prompt)
@@ -3059,10 +3056,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("Current-message attachments are under `/inbox`", prompt)
-        self.assertIn("older live-message attachments are under `/history`", prompt)
+        self.assertIn("Use attachment mounts only when the request clearly points", prompt)
         self.assertIn("inspect `/` first", prompt)
-        self.assertIn("Only fall back to those mounts", prompt)
+        self.assertIn("Use attachment mounts only when", prompt)
 
     def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
         memory_tool = Tool.objects.create(
@@ -3085,8 +3081,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("/memory", prompt)
-        self.assertIn("grep", prompt)
-        self.assertIn("memory search", prompt)
+        self.assertNotIn("memory search", prompt)
 
     def test_system_prompt_mentions_calendar_commands(self):
         first_calendar = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
@@ -3103,9 +3098,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("calendar", prompt)
-        self.assertIn("calendar accounts", prompt)
-        self.assertIn("--account <selector>", prompt)
-        self.assertIn("Recurring events are readable", prompt)
+        self.assertNotIn("--account <selector>", prompt)
 
     def test_system_prompt_mentions_webdav_mount(self):
         webdav_tool = self._create_webdav_tool()
@@ -3121,7 +3114,6 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("/webdav", prompt)
-        self.assertIn("remote WebDAV mounts", prompt)
 
     def test_system_prompt_mentions_search_browse_and_non_persistence(self):
         browser_tool = self._create_browser_tool()
@@ -3137,11 +3129,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("search", prompt)
-        self.assertIn("browse", prompt)
-        self.assertIn("current run only", prompt)
-        self.assertIn("curl", prompt)
-        self.assertIn("wget", prompt)
+        self.assertNotIn("current run only", prompt)
 
     def test_system_prompt_mentions_live_webapp_workflow(self):
         webapp_tool = self._create_webapp_tool()
@@ -3156,11 +3144,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("webapp expose", prompt)
-        self.assertIn("live", prompt)
-        self.assertIn("source files", prompt)
-        self.assertIn("raw characters", prompt)
-        self.assertIn("tee ... --text", prompt)
+        self.assertNotIn("webapp expose", prompt)
 
     def test_system_prompt_mentions_python_direct_workflow(self):
         code_tool = self._create_code_execution_tool()
@@ -3175,9 +3159,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("Use `python` inside", prompt)
         self.assertIn("pip install --user <package>", prompt)
-        self.assertIn("--workdir", prompt)
         self.assertIn(
             "Keep thread-scoped file organization, cleanup, and webapp lifecycle work",
             prompt,
@@ -3236,10 +3218,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("mcp tools", prompt)
-        self.assertIn("mcp schema", prompt)
-        self.assertIn("api operations", prompt)
-        self.assertIn("api schema", prompt)
+        self.assertNotIn("mcp tools", prompt)
+        self.assertNotIn("api operations", prompt)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):

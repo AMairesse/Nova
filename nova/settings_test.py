@@ -3,6 +3,7 @@ Test-specific Django settings for Nova project.
 This file inherits from the main settings and overrides configurations
 to enable local testing without external Docker services.
 """
+import atexit
 import tempfile
 
 from .settings import *  # noqa: F403
@@ -24,6 +25,11 @@ CHANNEL_LAYERS = {
 
 # Override object-storage settings for tests
 MEDIA_ROOT = tempfile.mkdtemp()  # Temporary directory for test files
+
+# Keep WhiteNoise active without requiring a production collectstatic directory.
+_static_directory = tempfile.TemporaryDirectory(prefix='nova-test-static-')
+STATIC_ROOT = _static_directory.name
+atexit.register(_static_directory.cleanup)
 
 # Ensure file expiration logic is enabled for model tests by default
 # (production can disable via USERFILE_EXPIRATION_DAYS env var)
