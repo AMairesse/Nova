@@ -12,7 +12,7 @@ from unittest.mock import ANY, patch, AsyncMock, Mock
 
 from nova.file_utils import build_message_attachment_path
 from nova.models.AgentConfig import AgentConfig
-from nova.models.Message import Actor
+from nova.models.Message import Actor, Message
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
@@ -144,6 +144,110 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
+
+    def test_message_list_defaults_to_sidebar_thread_by_last_activity(self):
+        older_thread = Thread.objects.create(user=self.user, subject="Active")
+        newer_thread = Thread.objects.create(user=self.user, subject="Created later")
+        older_thread.add_message("Recent activity", actor=Actor.USER)
+        recent = timezone.now()
+        Message.objects.filter(thread=older_thread).update(created_at=recent)
+        Thread.objects.filter(id=older_thread.id).update(
+            created_at=recent - timedelta(days=1)
+        )
+        Thread.objects.filter(id=newer_thread.id).update(
+            created_at=recent - timedelta(hours=1)
+        )
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(older_thread.id))
+
+    def test_message_list_default_excludes_archived_threads(self):
+        active = Thread.objects.create(user=self.user, subject="Active")
+        archived = Thread.objects.create(
+            user=self.user, subject="Archived", archived_at=timezone.now()
+        )
+        Thread.objects.filter(id=active.id).update(
+            created_at=timezone.now() - timedelta(days=1)
+        )
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(active.id))
+        self.assertNotEqual(captured["context"]["thread_id"], str(archived.id))
+
+    def test_message_list_default_is_empty_when_user_has_no_visible_threads(self):
+        Thread.objects.create(
+            user=self.user, subject="Archived", archived_at=timezone.now()
+        )
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(captured["context"]["messages"])
+        self.assertEqual(captured["context"]["thread_id"], "")
+
+    def test_message_list_default_is_user_scoped_and_explicit_thread_is_preserved(self):
+        own = Thread.objects.create(user=self.user, subject="Own")
+        foreign = Thread.objects.create(user=self.other, subject="Foreign")
+        explicit = Thread.objects.create(user=self.user, subject="Explicit")
+        recent = timezone.now()
+        Thread.objects.filter(id=own.id).update(created_at=recent - timedelta(hours=1))
+        Thread.objects.filter(id=explicit.id).update(created_at=recent - timedelta(days=2))
+        Thread.objects.filter(id=foreign.id).update(created_at=recent)
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(own.id))
+
+        request = self.factory.get(
+            "/app/messages/", {"thread_id": str(explicit.id)}
+        )
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(explicit.id))
 
     @override_settings(
         MESSAGE_ATTACHMENT_MAX_FILES=2,

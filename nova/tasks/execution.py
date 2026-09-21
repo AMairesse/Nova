@@ -135,7 +135,11 @@ def start_action_receipt(task, command):
     read_integrations = {'accounts', 'list', 'read', 'show', 'search', 'upcoming', 'calendars', 'folders', 'schema', 'tools', 'operations'}
     # Only provably simple read commands bypass receipts. Shell composition/code is opaque.
     simple = not any(character in command for character in (';', '|', '&', '>', '<', '\n', '$', '`'))
-    if words and simple and (words[0] in read_commands or
+    search_without_output = words and words[0] == 'search' and not any(
+        token in {'--output', '-o', '-O'} or token.startswith('--output=')
+        for token in words[1:]
+    )
+    if words and simple and (words[0] in read_commands or search_without_output or
             (words[0] in {'mail', 'calendar', 'mcp', 'api'} and len(words) > 1 and words[1] in read_integrations)):
         return None
     fingerprint = hashlib.sha256(command.encode()).hexdigest()

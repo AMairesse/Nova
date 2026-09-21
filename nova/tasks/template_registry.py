@@ -497,6 +497,7 @@ def build_template_prefill_payload(
             "Stable routine identifier: {{ routine_id }}\n"
             "Use the configured agent and tools only. Do not make network calls outside the available tools. "
         )
+        prompt += "\n".join(configuration.get("connection_instructions") or []) + "\n"
         if template_id == DRAFT_REPLIES_EVENTS_TEMPLATE_ID:
             prompt += (
                 "For mail drafts use `mail draft`; for calendar events use `calendar create ... --tentative`. "
