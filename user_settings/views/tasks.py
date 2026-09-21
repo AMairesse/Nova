@@ -11,6 +11,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from urllib.parse import urlencode
+from shlex import quote
+
+from asgiref.sync import async_to_sync
 
 import croniter
 from cron_descriptor import get_description
@@ -19,6 +22,10 @@ from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Tool import Tool, ToolCredential
 from nova.continuous.utils import ensure_continuous_nightly_summary_task_definition
+from nova.runtime.capabilities import resolve_terminal_capabilities
+from nova.plugins.mail.service import _build_mailbox_registry, _resolve_mailbox
+from nova.caldav.service import build_calendar_registry, resolve_calendar_account
+from nova.webdav.service import build_webdav_mounts
 from nova.tasks.template_registry import (
     MAIL_AGENDA_BRIEF_TEMPLATE_ID,
     DIFFERENTIAL_WATCH_TEMPLATE_ID,
@@ -202,6 +209,44 @@ class TaskDefinitionForm(ModelForm):
         return cleaned_data
 
 
+def _template_connection_target(agent, selected):
+    """Resolve a selection in the same tool scope as its executing agent."""
+    candidates = [agent, *agent.agent_tools.filter(is_tool=True, user=agent.user).order_by('id')]
+    for executor in candidates:
+        # Registry helpers need the owner without lazy ORM access in async code.
+        executor.user = agent.user
+        capabilities = resolve_terminal_capabilities(executor)
+        if selected.tool_subtype == 'email':
+            tools = capabilities.email_tools
+        elif selected.tool_subtype == 'caldav':
+            tools = capabilities.caldav_tools
+        else:
+            tools = capabilities.webdav_tools
+        if not any(tool.pk == selected.pk for tool in tools):
+            continue
+        try:
+            if selected.tool_subtype == 'webdav':
+                mount = next(m for m in build_webdav_mounts(tools) if m.tool.pk == selected.pk)
+                return f'/webdav/{mount.name}', executor
+            if selected.tool_subtype == 'email':
+                _registry_user, entries, lookup, _schema, selectors = async_to_sync(_build_mailbox_registry)(tools, executor)
+                key, resolve = 'selector_email', _resolve_mailbox
+            else:
+                _registry_user, entries, lookup, selectors = async_to_sync(build_calendar_registry)(tools, executor)
+                key, resolve = 'account', resolve_calendar_account
+            entry = next((entry for entry in entries if entry['tool_id'] == selected.pk), None)
+            if entry:
+                selector = entry[key]
+                resolved, error = resolve(selector, lookup, selectors)
+                if not error and resolved['tool_id'] == selected.pk:
+                    return selector, executor
+        except ValueError:
+            continue
+    raise forms.ValidationError(_(
+        'This connection has no unambiguous runtime selector for the selected agent. Check its configuration.'
+    ))
+
+
 class TaskTemplateConfigurationForm(forms.Form):
     agent = forms.ModelChoiceField(queryset=AgentConfig.objects.none(), label=_("Agent"))
     value = forms.CharField(label=_("Configuration"), max_length=500, widget=forms.TextInput(attrs={"class": "form-control"}))
@@ -259,6 +304,28 @@ class TaskTemplateConfigurationForm(forms.Form):
             selected = data.get(field)
             if selected and selected.pk not in tool_ids:
                 self.add_error(field, _('This connection is not available to the selected agent.'))
+                continue
+            if not selected:
+                continue
+            try:
+                selector, executor = _template_connection_target(agent, selected)
+            except forms.ValidationError as error:
+                self.add_error(field, error)
+                continue
+            key, option = {
+                'email_tool': ('mailbox', '--mailbox'),
+                'calendar_tool': ('calendar_account', '--account'),
+                'webdav_tool': ('webdav_source', ''),
+            }[field]
+            data[key] = selector
+            route = (
+                f'delegate to configured agent {executor.pk}:{executor.name} and '
+                if executor.pk != agent.pk else ''
+            )
+            target = f'{option} {quote(selector)}' if option else quote(selector)
+            data.setdefault('connection_instructions', []).append(
+                f'For {key} operations, {route}use {target} explicitly.'
+            )
         return data
 
 
@@ -372,9 +439,10 @@ def task_template_apply(request, template_id: str):
                         DRAFT_REPLIES_EVENTS_TEMPLATE_ID: "mail_scope",
                         WEBDAV_DOCUMENTS_TEMPLATE_ID: "folder",
                     }[template_id]: form.cleaned_data["value"],
-                    "mailbox": str(form.cleaned_data.get("email_tool") or ""),
-                    "calendar_account": str(form.cleaned_data.get("calendar_tool") or ""),
-                    "webdav_source": str(form.cleaned_data.get("webdav_tool") or ""),
+                    "mailbox": form.cleaned_data.get("mailbox", ""),
+                    "calendar_account": form.cleaned_data.get("calendar_account", ""),
+                    "webdav_source": form.cleaned_data.get("webdav_source", ""),
+                    "connection_instructions": form.cleaned_data.get("connection_instructions", []),
                     "schedule": form.cleaned_data["schedule"].strftime("%H:%M"),
                 },
             )

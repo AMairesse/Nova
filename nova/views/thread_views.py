@@ -144,11 +144,7 @@ def message_list(request):
     selected_thread_id = request.GET.get('thread_id')
     # With browser persistence removed, default to the most recent classic thread.
     if not selected_thread_id:
-        latest = (
-            Thread.objects.filter(user=request.user, mode=Thread.Mode.THREAD)
-            .order_by('-created_at')
-            .first()
-        )
+        latest = _classic_threads_for_user(request.user).first()
         if latest:
             selected_thread_id = str(latest.id)
     messages = None
