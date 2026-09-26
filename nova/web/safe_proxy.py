@@ -19,6 +19,8 @@ class SafeHttpProxyServer:
         self.config = config
         self._server: asyncio.base_events.Server | None = None
         self._bound_port: int | None = None
+        self._client_tasks: set[asyncio.Task[None]] = set()
+        self._client_writers: set[asyncio.StreamWriter] = set()
 
     @property
     def bound_port(self) -> int:
@@ -34,7 +36,7 @@ class SafeHttpProxyServer:
         if self._server is not None:
             return
         self._server = await asyncio.start_server(
-            self._handle_client,
+            self._accept_client,
             host=self.config.host,
             port=self.config.port,
         )
@@ -45,10 +47,40 @@ class SafeHttpProxyServer:
     async def close(self) -> None:
         if self._server is None:
             return
+        writers = tuple(self._client_writers)
         self._server.close()
+        for writer in writers:
+            try:
+                writer.close()
+            except (ConnectionError, OSError, RuntimeError):
+                pass
         await self._server.wait_closed()
         self._server = None
         self._bound_port = None
+        tasks = tuple(self._client_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for writer in writers:
+            await self._wait_closed(writer)
+
+    def _accept_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        task = asyncio.create_task(self._handle_client(reader, writer))
+        self._client_tasks.add(task)
+        self._client_writers.add(writer)
+
+        def _discard_client(done: asyncio.Task[None]) -> None:
+            self._client_tasks.discard(done)
+            self._client_writers.discard(writer)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(_discard_client)
 
     async def _handle_client(
         self,
@@ -66,10 +98,7 @@ class SafeHttpProxyServer:
                 upstream_reader, upstream_writer = await self._open_connect_target(target)
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
-                await asyncio.gather(
-                    self._relay_stream(reader, upstream_writer),
-                    self._relay_stream(upstream_reader, writer),
-                )
+                await self._relay_connect(reader, writer, upstream_reader, upstream_writer)
                 return
 
             upstream_reader, upstream_writer, outbound_request = await self._build_http_request(
@@ -83,17 +112,46 @@ class SafeHttpProxyServer:
             await self._forward_http_request_body(reader, upstream_writer, header_lines)
             await self._relay_stream(upstream_reader, writer)
         except (asyncio.IncompleteReadError, ValueError):
-            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
-            await writer.drain()
+            await self._send_error(writer, b"400 Bad Request")
         except Exception:
-            writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
-            await writer.drain()
+            await self._send_error(writer, b"403 Forbidden")
         finally:
             if upstream_writer is not None:
-                upstream_writer.close()
-                await upstream_writer.wait_closed()
+                await self._wait_closed(upstream_writer)
+            await self._wait_closed(writer)
+
+    async def _relay_connect(
+        self,
+        client_reader: asyncio.StreamReader,
+        client_writer: asyncio.StreamWriter,
+        upstream_reader: asyncio.StreamReader,
+        upstream_writer: asyncio.StreamWriter,
+    ) -> None:
+        relays = {
+            asyncio.create_task(self._relay_stream(client_reader, upstream_writer)),
+            asyncio.create_task(self._relay_stream(upstream_reader, client_writer)),
+        }
+        try:
+            await asyncio.wait(relays, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for relay in relays:
+                if not relay.done():
+                    relay.cancel()
+            await asyncio.gather(*relays, return_exceptions=True)
+
+    async def _send_error(self, writer: asyncio.StreamWriter, status: bytes) -> None:
+        try:
+            writer.write(b"HTTP/1.1 " + status + b"\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+        except (ConnectionError, OSError, RuntimeError):
+            pass
+
+    async def _wait_closed(self, writer: asyncio.StreamWriter) -> None:
+        try:
             writer.close()
             await writer.wait_closed()
+        except (ConnectionError, OSError, RuntimeError):
+            pass
 
     async def _open_connect_target(
         self,

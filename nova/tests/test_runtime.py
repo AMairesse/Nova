@@ -2810,6 +2810,54 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("The current directory is /.", task.streamed_markdown)
         self.assertIsNotNone(task.current_response)
 
+    def test_realtime_delivery_failure_does_not_retry_streaming_model_call(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = Mock()
+        channel_layer.group_send = AsyncMock(side_effect=RuntimeError("connection failed"))
+        handler = TaskProgressHandler(
+            task.id,
+            channel_layer,
+            user_id=self.user.id,
+            thread_id=self.thread.id,
+            thread_mode=self.thread.mode,
+            push_notifications_enabled=False,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                task=task,
+                progress_handler=handler,
+            ).initialize
+        )()
+
+        async def fake_stream_chat_completion(*, messages, tools, on_content_delta):
+            del messages, tools
+            await on_content_delta("Completed despite realtime failure.")
+            return {
+                "content": "Completed despite realtime failure.",
+                "tool_calls": [],
+                "total_tokens": 7,
+                "streamed": True,
+            }
+
+        runtime.provider_client.stream_chat_completion = AsyncMock(side_effect=fake_stream_chat_completion)
+        runtime.provider_client.create_chat_completion = AsyncMock()
+
+        result = async_to_sync(runtime.run)()
+
+        task.refresh_from_db()
+        self.assertEqual(result.final_answer, "Completed despite realtime failure.")
+        runtime.provider_client.stream_chat_completion.assert_awaited_once()
+        runtime.provider_client.create_chat_completion.assert_not_awaited()
+        self.assertIn("Completed despite realtime failure.", task.streamed_markdown)
+        self.assertIsNotNone(task.current_response)
+
     def test_runtime_marks_model_trace_when_streaming_falls_back(self):
         task = Task.objects.create(
             user=self.user,

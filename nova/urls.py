@@ -15,7 +15,7 @@ from nova.views.continuous_views import (
     continuous_add_message,
     continuous_regenerate_summary,
 )
-from nova.views.task_views import execution_trace, running_tasks
+from nova.views.task_views import execution_trace, running_tasks, task_state
 from nova.views.files_views import (
     sidebar_panel_view, file_list,
     file_content, file_download_url, file_upload, FileDeleteView
@@ -56,6 +56,7 @@ urlpatterns = [
     path("load-more-threads/", load_more_threads, name="load_more_threads"),
     path("running-tasks/<int:thread_id>/", running_tasks, name="running_tasks"),
     path("tasks/<int:task_id>/execution-trace/", execution_trace, name="task_execution_trace"),
+    path("tasks/<int:task_id>/state/", task_state, name="task_state"),
 
     # Continuous discussion mode
     path("continuous/", continuous_home, name="continuous_home"),

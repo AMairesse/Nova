@@ -1,5 +1,5 @@
 // Service Worker for Nova PWA with smart caching
-const CACHE_NAME = 'nova-v9';  // Includes foreground push in-app handling
+const CACHE_NAME = 'nova-v10';  // Revalidate assets; keep cached copies for offline use.
 const urlsToCache = [
   '/static/css/main.css',
   '/static/js/utils.js',
@@ -13,8 +13,7 @@ const urlsToCache = [
 ];
 
 let config = {
-  debug: false,
-  cacheMaxAge: 3 * 24 * 60 * 60 * 1000  // 3 days in ms
+  debug: false
 };
 
 // Listen for config updates from main thread
@@ -56,50 +55,27 @@ self.addEventListener('fetch', (event) => {
   if (!isStatic) return; // let network handle
 
   event.respondWith(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.match(req).then(cached => {
-        const now = Date.now();
-
-        // In debug mode, always fetch fresh
-        if (config.debug) {
-          return fetchAndCache(req, cache);
-        }
-
-        // If cached, check age
-        if (cached) {
-          const cacheDate = new Date(cached.headers.get('sw-cache-date') || 0);
-          const age = now - cacheDate.getTime();
-
-          // If cache is fresh (< 3 days), use it
-          if (age < config.cacheMaxAge) {
-            return cached;
-          }
-
-          // Cache is old, try to refresh
-          return fetchAndCache(req, cache).catch(() => cached);
-        }
-
-        // Not cached, fetch and cache
-        return fetchAndCache(req, cache);
-      });
+    caches.open(CACHE_NAME).then(async cache => {
+      try {
+        // Revalidate the HTTP cache too: a hard reload alone does not bypass this worker.
+        return await fetchAndCache(req, cache);
+      } catch (error) {
+        const cached = await cache.match(req);
+        if (cached) return cached;
+        throw error;
+      }
     })
   );
 });
 
 function fetchAndCache(request, cache) {
-  return fetch(request).then(response => {
+  return fetch(request, { cache: 'no-cache' }).then(async response => {
     if (response.ok) {
-      // Clone response and add cache timestamp
-      const responseClone = response.clone();
-      const responseWithTimestamp = new Response(responseClone.body, {
-        status: responseClone.status,
-        statusText: responseClone.statusText,
-        headers: {
-          ...Object.fromEntries(responseClone.headers.entries()),
-          'sw-cache-date': new Date().toISOString()
-        }
-      });
-      cache.put(request, responseWithTimestamp);
+      try {
+        await cache.put(request, response.clone());
+      } catch (_error) {
+        // A full/unavailable offline cache must not discard a successful network response.
+      }
     }
     return response;
   });

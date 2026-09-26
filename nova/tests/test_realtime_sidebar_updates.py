@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from nova.consumers import FileProgressConsumer
 from nova.realtime.sidebar_updates import publish_file_update, publish_webapps_update
+from nova.tasks.tasks import _publish_thread_subject_update
 
 
 class SidebarRealtimePublishTests(IsolatedAsyncioTestCase):
@@ -57,6 +58,19 @@ class SidebarRealtimePublishTests(IsolatedAsyncioTestCase):
             {"type": "file_update", "reason": "upload"},
         )
 
+    @patch("nova.tasks.tasks.async_to_sync")
+    @patch("nova.tasks.tasks.get_channel_layer")
+    def test_thread_subject_update_reaches_task_and_file_groups(self, get_layer, async_to_sync_mock):
+        get_layer.return_value = AsyncMock()
+        group_send = MagicMock()
+        async_to_sync_mock.return_value = group_send
+
+        _publish_thread_subject_update(9, 42, "New title")
+
+        self.assertEqual(group_send.call_count, 2)
+        self.assertEqual(group_send.call_args_list[0].args[0], "task_9")
+        self.assertEqual(group_send.call_args_list[1].args[0], "thread_42_files")
+
 
 class FileProgressConsumerRealtimeTests(IsolatedAsyncioTestCase):
     async def test_file_update_relay(self):
@@ -81,3 +95,19 @@ class FileProgressConsumerRealtimeTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["type"], "webapps_update")
         self.assertEqual(payload["reason"], "webapp_create")
         self.assertEqual(payload["slug"], "app-1")
+
+    async def test_thread_subject_update_relay(self):
+        consumer = FileProgressConsumer()
+        consumer.send = AsyncMock()
+
+        await consumer.thread_subject_updated({
+            "thread_id": 42,
+            "thread_subject": "New title",
+        })
+
+        payload = json.loads(consumer.send.await_args.kwargs["text_data"])
+        self.assertEqual(payload, {
+            "type": "thread_subject_updated",
+            "thread_id": 42,
+            "thread_subject": "New title",
+        })

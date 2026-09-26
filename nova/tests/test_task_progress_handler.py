@@ -8,6 +8,21 @@ from nova.tasks.TaskProgressHandler import TaskProgressHandler
 
 
 class TaskProgressHandlerTests(IsolatedAsyncioTestCase):
+    async def test_publish_update_ignores_channel_layer_failure(self):
+        channel_layer = AsyncMock()
+        channel_layer.group_send.side_effect = RuntimeError("connection failed with secret content")
+        handler = TaskProgressHandler(task_id=123, channel_layer=channel_layer)
+
+        with patch("nova.tasks.TaskProgressHandler.logger.warning") as mocked_warning:
+            await handler.publish_update("response_chunk", {"chunk": "private response"})
+
+        mocked_warning.assert_called_once_with(
+            "Unable to publish realtime task update task_id=%s message_type=%s error_type=%s",
+            123,
+            "response_chunk",
+            "RuntimeError",
+        )
+
     async def test_handler_initializes_with_previous_streamed_markdown(self):
         channel_layer = AsyncMock()
         handler = TaskProgressHandler(

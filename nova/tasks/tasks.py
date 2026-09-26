@@ -131,17 +131,16 @@ def _publish_thread_subject_update(source_task_id: int | None, thread_id: int, t
     if not channel_layer:
         return
 
+    message = {
+        "type": "thread_subject_updated",
+        "thread_id": thread_id,
+        "thread_subject": thread_subject,
+    }
     async_to_sync(channel_layer.group_send)(
         f"task_{source_task_id}",
-        {
-            "type": "task_update",
-            "message": {
-                "type": "thread_subject_updated",
-                "thread_id": thread_id,
-                "thread_subject": thread_subject,
-            },
-        },
+        {"type": "task_update", "message": message},
     )
+    async_to_sync(channel_layer.group_send)(f"thread_{thread_id}_files", message)
 
 
 def execute_agent_task_with_executor(
