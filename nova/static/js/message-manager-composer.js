@@ -224,8 +224,8 @@
                 this.appendMessage(userMessageEl);
                 this.scrollToMessage(data.message.id);
 
-                if (data.task_id && !data.dispatch_failed &&
-                    (!data.task_status || ['PENDING', 'RUNNING'].includes(data.task_status))) {
+                // Even a task that finished before the POST returned needs its final message.
+                if (data.task_id && !data.dispatch_failed) {
                     this.streamingManager.registerStream(data.task_id, {
                         id: data.task_id,
                         actor: 'agent',

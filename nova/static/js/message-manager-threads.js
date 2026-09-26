@@ -648,12 +648,15 @@
 
         async checkAndReconnectRunningTasks() {
             if (!this.currentThreadId) return;
+            const threadId = String(this.currentThreadId);
 
             try {
                 const response = await fetch(
-                    `${window.NovaApp.urls.runningTasksBase}${this.currentThreadId}/`
+                    `${window.NovaApp.urls.runningTasksBase}${threadId}/`
                 );
+                if (!response.ok) throw new Error('Unable to retrieve running tasks');
                 const data = await response.json();
+                if (String(this.currentThreadId) !== threadId) return;
 
                 if (data.running_tasks && data.running_tasks.length > 0) {
                     for (const task of data.running_tasks) {

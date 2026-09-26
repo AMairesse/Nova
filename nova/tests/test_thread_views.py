@@ -897,7 +897,7 @@ class MainViewsTests(TestCase):
 
     # ------------ running_tasks -----------------------------------------
 
-    def test_running_tasks_lists_only_running_for_owner(self):
+    def test_running_tasks_lists_recoverable_tasks_for_owner(self):
         thread = Thread.objects.create(user=self.user, subject="T")
         other_thread = Thread.objects.create(user=self.user, subject="U")
         foreign_thread = Thread.objects.create(user=self.other, subject="V")
@@ -919,7 +919,8 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         tasks_data = resp.json().get("running_tasks", [])
         ids = {task['id'] for task in tasks_data}
-        self.assertEqual(ids, {t_run1.id, t_run2.id})
+        pending_task = Task.objects.get(thread=thread, status=TaskStatus.PENDING)
+        self.assertEqual(ids, {t_run1.id, t_run2.id, pending_task.id})
 
         # Non-owner should get 404 when querying someone else's thread
         resp = self.client.get(reverse("running_tasks",
@@ -927,7 +928,7 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.status_code, 404)
 
     @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
-    def test_running_tasks_excludes_awaiting_input_and_reconciles_stale_runs(self):
+    def test_running_tasks_includes_awaiting_input_and_reconciles_stale_runs(self):
         thread = Thread.objects.create(user=self.user, subject="T")
         fresh_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
         stale_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
@@ -939,11 +940,44 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(resp.status_code, 200)
         tasks_data = resp.json().get("running_tasks", [])
-        self.assertEqual([task["id"] for task in tasks_data], [fresh_task.id])
+        self.assertEqual([task["id"] for task in tasks_data], [fresh_task.id, awaiting_task.id])
         stale_task.refresh_from_db()
         awaiting_task.refresh_from_db()
         self.assertEqual(stale_task.status, TaskStatus.FAILED)
         self.assertEqual(awaiting_task.status, TaskStatus.AWAITING_INPUT)
+
+    def test_task_state_returns_owner_scoped_completed_snapshot(self):
+        thread = Thread.objects.create(user=self.user, subject="State thread")
+        source = thread.add_message("Do the work", actor=Actor.USER)
+        agent = thread.add_message("Done", actor=Actor.AGENT)
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=source,
+            status=TaskStatus.COMPLETED,
+            result="Done",
+            current_response="partial",
+            progress_logs=[{"message": "Finished"}],
+        )
+        agent.internal_data = {"trace_task_id": task.id}
+        agent.save(update_fields=["internal_data"])
+        foreign_thread = Thread.objects.create(user=self.other, subject="Foreign state")
+        foreign_task = Task.objects.create(user=self.other, thread=foreign_thread)
+
+        self.client.login(username="alice", password="pass")
+        response = self.client.get(reverse("task_state", args=[task.id]))
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["type"], "task_snapshot")
+        self.assertEqual(payload["status"], TaskStatus.COMPLETED)
+        self.assertEqual(payload["last_progress"], {"message": "Finished"})
+        self.assertEqual([message["id"] for message in payload["messages"]], [agent.id])
+        self.assertEqual(payload["messages"][0]["internal_data"]["trace_task_id"], task.id)
+        self.assertEqual(
+            self.client.get(reverse("task_state", args=[foreign_task.id])).status_code,
+            404,
+        )
 
     def test_execution_trace_endpoint_requires_task_ownership(self):
         thread = Thread.objects.create(user=self.user, subject="Trace thread")

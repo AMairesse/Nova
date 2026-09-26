@@ -302,9 +302,12 @@ async def complete_openai_compatible_chat(
         request_payload["tools"] = tools
     if extra_kwargs:
         request_payload.update(extra_kwargs)
-    response = await client.chat.completions.create(**request_payload)
-    payload = response.model_dump(mode="json", exclude_none=True)
-    return normalize_openai_completion_payload(payload)
+    try:
+        response = await client.chat.completions.create(**request_payload)
+        payload = response.model_dump(mode="json", exclude_none=True)
+        return normalize_openai_completion_payload(payload)
+    finally:
+        await client.close()
 
 
 async def stream_openai_compatible_chat(
@@ -337,11 +340,19 @@ async def stream_openai_compatible_chat(
         request_payload["tools"] = tools
     if extra_kwargs:
         request_payload.update(extra_kwargs)
-    stream = await client.chat.completions.create(**request_payload)
-    return await collect_openai_like_stream(
-        stream,
-        on_content_delta=on_content_delta,
-    )
+    stream = None
+    try:
+        stream = await client.chat.completions.create(**request_payload)
+        return await collect_openai_like_stream(
+            stream,
+            on_content_delta=on_content_delta,
+        )
+    finally:
+        try:
+            if stream is not None and hasattr(stream, "close"):
+                await stream.close()
+        finally:
+            await client.close()
 
 
 def normalize_openai_compatible_multimodal_content(content):

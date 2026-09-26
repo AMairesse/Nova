@@ -49,6 +49,13 @@
                                 source: 'files-ws',
                             });
                         }
+                    } else if (data.type === 'thread_subject_updated') {
+                        const links = document.querySelectorAll(
+                            `.thread-link[data-thread-id="${data.thread_id}"]`
+                        );
+                        links.forEach((link) => {
+                            link.textContent = data.thread_subject || link.textContent;
+                        });
                     } else if (data.type === 'progress') {
                         console.log(`Progress update: ${data.progress}%`);
                         const progressBar = document.querySelector('#upload-progress .progress-bar');

@@ -7,6 +7,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from nova.models.Task import Task
 from nova.models.Thread import Thread
+from nova.task_snapshot import build_task_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,18 @@ class TaskProgressConsumer(AsyncWebsocketConsumer):
         self._joined_group = True
 
         await self.accept()
+        try:
+            snapshot = await sync_to_async(self._build_snapshot, thread_sensitive=True)()
+        except Task.DoesNotExist:
+            await self.close(code=4404)
+            return
+        await self.send(text_data=json.dumps(snapshot))
+
+    def _build_snapshot(self):
+        task = Task.objects.select_related("thread").get(
+            id=int(self.task_id), user_id=self.scope["user"].id
+        )
+        return build_task_snapshot(task)
 
     async def disconnect(self, close_code):
         # Leave room group
@@ -131,4 +144,11 @@ class FileProgressConsumer(AsyncWebsocketConsumer):
             'type': 'webapps_update',
             'reason': event.get('reason', ''),
             'slug': event.get('slug'),
+        }))
+
+    async def thread_subject_updated(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'thread_subject_updated',
+            'thread_id': event.get('thread_id'),
+            'thread_subject': event.get('thread_subject'),
         }))

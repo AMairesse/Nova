@@ -19,7 +19,14 @@ class TaskProgressConsumerTests(IsolatedAsyncioTestCase):
         consumer.channel_layer = AsyncMock()
         consumer.channel_name = "channel-1"
         consumer.accept = AsyncMock()
+        consumer.send = AsyncMock()
         consumer._user_can_access_task = AsyncMock(return_value=True)
+        consumer._build_snapshot = lambda: {
+            "type": "task_snapshot",
+            "task_id": 123,
+            "status": "COMPLETED",
+            "messages": [{"id": 9, "rendered_html": "done"}],
+        }
 
         await consumer.connect()
         await consumer.disconnect(1000)
@@ -27,6 +34,10 @@ class TaskProgressConsumerTests(IsolatedAsyncioTestCase):
         self.assertEqual(consumer.task_group_name, "task_123")
         consumer.channel_layer.group_add.assert_awaited_once_with("task_123", "channel-1")
         consumer.accept.assert_awaited_once()
+        consumer.send.assert_awaited_once()
+        snapshot = json.loads(consumer.send.await_args.kwargs["text_data"])
+        self.assertEqual(snapshot["status"], "COMPLETED")
+        self.assertEqual(snapshot["messages"][0]["id"], 9)
         consumer.channel_layer.group_discard.assert_awaited_once_with("task_123", "channel-1")
 
     async def test_connect_rejects_anonymous_users(self):

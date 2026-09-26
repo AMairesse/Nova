@@ -6,6 +6,8 @@ from django.urls import reverse
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_GET
 from nova.message_attachments import (
     build_explicit_message_attachment_query,
     build_message_attachment_inbox_paths,
@@ -14,6 +16,7 @@ from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.tasks.runtime_state import reconcile_stale_running_tasks
+from nova.task_snapshot import build_task_snapshot
 
 TRACE_FILE_META_KEYS = {
     "output_path",
@@ -159,7 +162,7 @@ def running_tasks(request, thread_id):
     running_tasks = Task.objects.filter(
         thread=thread,
         user=request.user,
-        status=TaskStatus.RUNNING,
+        status__in=(TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.AWAITING_INPUT),
     ).values('id', 'status', 'current_response', 'progress_logs')
 
     tasks_data = []
@@ -192,3 +195,15 @@ def execution_trace(request, task_id):
             ),
         }
     )
+
+
+@require_GET
+@never_cache
+@login_required
+def task_state(request, task_id):
+    task = get_object_or_404(
+        Task.objects.select_related("thread"),
+        id=task_id,
+        user=request.user,
+    )
+    return JsonResponse(build_task_snapshot(task))

@@ -5,7 +5,7 @@ import time
 
 from asgiref.sync import sync_to_async
 
-from nova.agent_markdown import render_agent_markdown
+from nova.task_snapshot import build_task_message_payload
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor, Message
 from nova.tasks.TaskExecutor import TaskExecutor
@@ -195,24 +195,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
                     user=self.user,
                 )
             )
-            annotate_user_message(fresh_message)
-            display_text = ""
-            if isinstance(fresh_message.internal_data, dict):
-                display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
-            if not display_text:
-                display_text = fresh_message.text or ""
-            return {
-                "id": fresh_message.id,
-                "text": fresh_message.text,
-                "actor": fresh_message.actor,
-                "internal_data": fresh_message.internal_data,
-                "created_at": str(fresh_message.created_at),
-                "rendered_html": render_agent_markdown(
-                    display_text,
-                    user=fresh_message.user,
-                    thread=fresh_message.thread,
-                ),
-            }
+            return build_task_message_payload(fresh_message)
 
         return await sync_to_async(_load_message, thread_sensitive=True)()
 

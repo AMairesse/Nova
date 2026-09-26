@@ -146,3 +146,41 @@ class ExecRunnerProxyServerTests(SimpleTestCase):
             mocked_open.assert_awaited_once_with("93.184.216.34", 443)
 
         asyncio.run(scenario())
+
+    def test_close_cancels_active_clients_and_closes_their_writer(self):
+        async def scenario() -> None:
+            class _Server:
+                sockets = ()
+
+                def close(self):
+                    self.closed = True
+
+                async def wait_closed(self):
+                    self.waited = True
+
+            server = _Server()
+            proxy = ExecRunnerProxyServer(ExecRunnerProxyConfig(host="127.0.0.1", port=0))
+            cancelled = asyncio.Event()
+
+            async def blocked_handler(_reader, _writer):
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+            proxy._handle_client = blocked_handler
+            writer = _MemoryStreamWriter()
+            with patch("nova.web.safe_proxy.asyncio.start_server", AsyncMock(return_value=server)) as start:
+                await proxy.start()
+                callback = start.await_args.args[0]
+                callback(asyncio.StreamReader(), writer)
+                await asyncio.sleep(0)
+                await proxy.close()
+
+            self.assertTrue(cancelled.is_set())
+            self.assertTrue(writer.closed)
+            self.assertFalse(proxy._client_tasks)
+            self.assertFalse(proxy._client_writers)
+
+        asyncio.run(scenario())
