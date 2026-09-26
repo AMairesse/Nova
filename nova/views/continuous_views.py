@@ -349,6 +349,7 @@ def continuous_add_message(request):
 
     try:
         result = submit_user_message(
+            submission_key=request.POST.get('submission_key'),
             user=request.user,
             message_text=request.POST.get("new_message", ""),
             selected_agent=request.POST.get("selected_agent"),

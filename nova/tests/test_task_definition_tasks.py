@@ -153,6 +153,7 @@ class TaskDefinitionTaskRunnerTests(TestCase):
     def test_run_task_definition_cron_success_updates_status(self, mocked_execute):
         task_def = self._create_agent_cron_task(name="cron-success")
         mocked_execute.return_value = {
+            "status": "ok",
             "task_id": 1,
             "thread_id": 2,
             "message_id": 3,
@@ -174,10 +175,10 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         mocked_retry_policy.side_effect = RuntimeError("retry queued")
 
         with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
-            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+            with self.assertRaisesMessage(RuntimeError, "execution failed"):
                 run_task_definition_cron.run(task_def.id)
 
-        mocked_retry_policy.assert_called_once()
+        mocked_retry_policy.assert_not_called()
         task_def.refresh_from_db()
         self.assertIn("execution failed", task_def.last_error or "")
         self.assertTrue(any("Error executing task definition" in line for line in logs.output))
@@ -215,6 +216,7 @@ class TaskDefinitionTaskRunnerTests(TestCase):
             "skip_reason": None,
         }
         mocked_execute.return_value = {
+            "status": "ok",
             "task_id": 11,
             "thread_id": 12,
             "message_id": 13,
@@ -225,9 +227,9 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["new_email_count"], 1)
         mocked_execute.assert_called_once()
-        task_def.refresh_from_db()
-        self.assertEqual(task_def.runtime_state.get("last_uid"), 42)
-        self.assertIsNotNone(task_def.last_run_at)
+        from nova.models.RoutineRun import RoutineRun
+        run = RoutineRun.objects.get(definition=task_def)
+        self.assertEqual(run.cursor_state.get("last_uid"), 42)
 
     @patch("nova.tasks.tasks.schedule_trigger_task_retry")
     @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
@@ -237,10 +239,10 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         mocked_retry_policy.side_effect = RuntimeError("retry queued")
 
         with self.assertLogs("nova.tasks.tasks", level="ERROR") as logs:
-            with self.assertRaisesMessage(RuntimeError, "retry queued"):
+            with self.assertRaisesMessage(RuntimeError, "imap unavailable"):
                 poll_task_definition_email.run(task_def.id)
 
-        mocked_retry_policy.assert_called_once()
+        mocked_retry_policy.assert_not_called()
         task_def.refresh_from_db()
         self.assertIn("imap unavailable", task_def.last_error or "")
         self.assertTrue(any("Error polling task definition" in line for line in logs.output))

@@ -7,10 +7,11 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from enum import Enum
 from typing import Dict, Any
+from django.db import transaction
 
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
-from nova.models.Task import TaskStatus
+from nova.models.Task import Task, TaskStatus
 from nova.tasks.execution_trace import (
     TaskExecutionTraceHandler,
 )
@@ -54,6 +55,7 @@ class TaskExecutor:
         *,
         source_message_id: int | None = None,
         push_notifications_enabled: bool = True,
+        allow_ask_user: bool = True,
     ):
         self.task = task
         self.user = user
@@ -61,6 +63,7 @@ class TaskExecutor:
         self.agent_config = agent_config
         self.prompt = prompt
         self.source_message_id = source_message_id
+        self.allow_ask_user = allow_ask_user
         self.llm = None
         self.channel_layer = get_channel_layer()
         self.handler = TaskProgressHandler(
@@ -126,7 +129,11 @@ class TaskExecutor:
         except Exception as e:
             await self._handle_execution_error(e)
         finally:
-            await self._cleanup()
+            from nova.tasks.execution import finish_routine_task
+            try:
+                await sync_to_async(finish_routine_task, thread_sensitive=True)(self.task)
+            finally:
+                await self._cleanup()
 
     async def _resume_agent(self, interruption_response):
         raise NotImplementedError
@@ -152,7 +159,17 @@ class TaskExecutor:
             step = "Initializing AI task"
         self.task.progress_logs.append({"step": step, "timestamp": str(dt.datetime.now(dt.timezone.utc)),
                                         "severity": "info"})
-        await sync_to_async(self.task.save, thread_sensitive=False)()
+        await sync_to_async(self._save_active_transition, thread_sensitive=True)(
+            ['status', 'progress_logs', 'updated_at'])
+
+    def _save_active_transition(self, fields):
+        """Serialize worker transitions with stop requests; never revive an expired run."""
+        from nova.runtime.outcomes import RuntimeStopped
+        with transaction.atomic():
+            current = Task.objects.select_for_update().get(pk=self.task.pk)
+            if current.stop_requested or current.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                raise RuntimeStopped('This execution was stopped or is no longer active.')
+            self.task.save(update_fields=fields)
 
     async def _create_llm_agent(self):
         raise NotImplementedError
@@ -169,25 +186,20 @@ class TaskExecutor:
         resume_context: Dict[str, Any] | None = None,
     ):
         """Create the pending Interaction for this task."""
-        # Create an Interaction object
-        interaction = Interaction(task=self.task, thread=self.thread, agent_config=self.agent_config,
-                                  origin_name=agent_name, question=question, schema=schema,
-                                  status=InteractionStatus.PENDING,
-                                  resume_context=resume_context or {})
-        await sync_to_async(interaction.full_clean, thread_sensitive=False)()
-        await sync_to_async(interaction.save, thread_sensitive=False)()
-
-        # Create a message for the interaction question
-        question_text = f"**{agent_name} asks:** {question}"
-        message = await sync_to_async(self.thread.add_message, thread_sensitive=False)(question_text, Actor.SYSTEM,
-                                                                                       MessageType.INTERACTION_QUESTION,
-                                                                                       interaction)
-
-        # Store the message in the interaction for reference
-        interaction.question_message = message
-        await sync_to_async(interaction.save, thread_sensitive=False)()
-
-        return interaction
+        def persist():
+            with transaction.atomic():
+                self.task.status = TaskStatus.AWAITING_INPUT
+                self._save_active_transition(['status', 'progress_logs', 'updated_at'])
+                interaction = Interaction(task=self.task, thread=self.thread, agent_config=self.agent_config,
+                                          origin_name=agent_name, question=question, schema=schema,
+                                          status=InteractionStatus.PENDING, resume_context=resume_context or {})
+                interaction.full_clean()
+                interaction.save()
+                self.thread.add_message(
+                    f"**{agent_name} asks:** {question}", Actor.SYSTEM,
+                    MessageType.INTERACTION_QUESTION, interaction)
+                return interaction
+        return await sync_to_async(persist, thread_sensitive=True)()
 
     async def _process_interruption_payload(self, interruption):
         """
@@ -199,6 +211,12 @@ class TaskExecutor:
         schema = interruption['schema']
         agent_name = interruption['agent_name']
         resume_context = interruption.get("resume_context") or {}
+        from nova.runtime.outcomes import RuntimeInputUnavailable
+        if not self.allow_ask_user:
+            raise RuntimeInputUnavailable('This routine cannot wait for user input.')
+
+        self.task.progress_logs.append({"step": f"Waiting for user input: {question[:120]}",
+                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
 
         # Create/Update Interaction
         interaction = await self._create_interaction(
@@ -215,12 +233,6 @@ class TaskExecutor:
                 agent_name=agent_name,
             )
             await self.trace_handler.mark_root_awaiting_input()
-
-        # Mark task awaiting input
-        self.task.progress_logs.append({"step": f"Waiting for user input: {question[:120]}",
-                                        "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "info"})
-        self.task.status = TaskStatus.AWAITING_INPUT
-        await sync_to_async(self.task.save, thread_sensitive=False)()
 
         # Emit an update
         await self.handler.on_interrupt(interaction.id, question, schema, agent_name)
@@ -239,11 +251,14 @@ class TaskExecutor:
 
     async def _finalize_task(self):
         """Finalize the task as completed."""
+        if getattr(self, 'runtime', None) is not None:
+            await self.runtime._check_stop_requested()
         self.task.progress_logs.append({"step": "Task completed successfully",
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "success"})
 
         self.task.status = TaskStatus.COMPLETED
-        await sync_to_async(self.task.save, thread_sensitive=False)()
+        await sync_to_async(self._save_active_transition, thread_sensitive=True)(
+            ['status', 'result', 'current_response', 'streamed_markdown', 'progress_logs', 'updated_at'])
 
         await self.handler.on_task_complete(self.task.result, self.thread.id, self.thread.subject)
 
@@ -256,6 +271,12 @@ class TaskExecutor:
 
         # Update task state
         self.task.status = TaskStatus.FAILED
+        from nova.runtime.outcomes import RuntimeStopped, RuntimeLimitReached, RuntimeInputUnavailable, RuntimeEmptyResponse
+        if isinstance(error, RuntimeStopped):
+            self.task.status = TaskStatus.CANCELED
+        elif isinstance(error, (RuntimeLimitReached, RuntimeInputUnavailable, RuntimeEmptyResponse)):
+            self.task.status = TaskStatus.INTERRUPTED
+        self.task.failure_reason = getattr(error, 'reason', '')
         self.task.result = error_msg
 
         # Enhanced error logging
@@ -263,7 +284,21 @@ class TaskExecutor:
                      "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "error",
                      "error_details": {"type": type(error).__name__, "message": str(error)}}
         self.task.progress_logs.append(error_log)
-        await sync_to_async(self.task.save, thread_sensitive=False)()
+        def persist_error():
+            with transaction.atomic():
+                current = Task.objects.select_for_update().get(pk=self.task.pk)
+                if current.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.INTERRUPTED, TaskStatus.CANCELED):
+                    self.task.status = current.status
+                    self.task.result = current.result
+                    self.task.failure_reason = current.failure_reason
+                    return current.status != TaskStatus.COMPLETED
+                if current.stop_requested:
+                    self.task.status = TaskStatus.CANCELED
+                    self.task.failure_reason = 'stopped'
+                self.task.save(update_fields=['status', 'result', 'failure_reason', 'progress_logs', 'updated_at'])
+                return True
+        if not await sync_to_async(persist_error, thread_sensitive=True)():
+            return
 
         try:
             trace_handler = await self._ensure_trace_handler()
@@ -326,7 +361,7 @@ class TaskExecutor:
             "timestamp": str(dt.datetime.now(dt.timezone.utc)),
             "severity": "info"
         })
-        await sync_to_async(self.task.save, thread_sensitive=False)()
+        await sync_to_async(self.task.save, thread_sensitive=False)(update_fields=['progress_logs', 'updated_at'])
 
         # Save result
         self.task.result = result

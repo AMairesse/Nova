@@ -12,7 +12,7 @@ from unittest.mock import ANY, patch, AsyncMock, Mock
 
 from nova.file_utils import build_message_attachment_path
 from nova.models.AgentConfig import AgentConfig
-from nova.models.Message import Actor
+from nova.models.Message import Actor, Message
 from nova.models.Provider import ProviderType, LLMProvider
 from nova.models.Task import Task, TaskStatus
 from nova.models.Thread import Thread
@@ -145,6 +145,110 @@ class MainViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertRegex(response.content.decode(), r"Line 1<br\s*/?>Line 2")
 
+    def test_message_list_defaults_to_sidebar_thread_by_last_activity(self):
+        older_thread = Thread.objects.create(user=self.user, subject="Active")
+        newer_thread = Thread.objects.create(user=self.user, subject="Created later")
+        older_thread.add_message("Recent activity", actor=Actor.USER)
+        recent = timezone.now()
+        Message.objects.filter(thread=older_thread).update(created_at=recent)
+        Thread.objects.filter(id=older_thread.id).update(
+            created_at=recent - timedelta(days=1)
+        )
+        Thread.objects.filter(id=newer_thread.id).update(
+            created_at=recent - timedelta(hours=1)
+        )
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(older_thread.id))
+
+    def test_message_list_default_excludes_archived_threads(self):
+        active = Thread.objects.create(user=self.user, subject="Active")
+        archived = Thread.objects.create(
+            user=self.user, subject="Archived", archived_at=timezone.now()
+        )
+        Thread.objects.filter(id=active.id).update(
+            created_at=timezone.now() - timedelta(days=1)
+        )
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(active.id))
+        self.assertNotEqual(captured["context"]["thread_id"], str(archived.id))
+
+    def test_message_list_default_is_empty_when_user_has_no_visible_threads(self):
+        Thread.objects.create(
+            user=self.user, subject="Archived", archived_at=timezone.now()
+        )
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(captured["context"]["messages"])
+        self.assertEqual(captured["context"]["thread_id"], "")
+
+    def test_message_list_default_is_user_scoped_and_explicit_thread_is_preserved(self):
+        own = Thread.objects.create(user=self.user, subject="Own")
+        foreign = Thread.objects.create(user=self.other, subject="Foreign")
+        explicit = Thread.objects.create(user=self.user, subject="Explicit")
+        recent = timezone.now()
+        Thread.objects.filter(id=own.id).update(created_at=recent - timedelta(hours=1))
+        Thread.objects.filter(id=explicit.id).update(created_at=recent - timedelta(days=2))
+        Thread.objects.filter(id=foreign.id).update(created_at=recent)
+
+        captured = {}
+
+        def fake_render(request, tpl, context):
+            captured["context"] = context
+            return HttpResponse("OK")
+
+        request = self.factory.get("/app/messages/")
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(own.id))
+
+        request = self.factory.get(
+            "/app/messages/", {"thread_id": str(explicit.id)}
+        )
+        request.user = self.user
+        with patch("nova.views.thread_views.render", side_effect=fake_render):
+            response = thread_views.message_list(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["context"]["thread_id"], str(explicit.id))
+
     @override_settings(
         MESSAGE_ATTACHMENT_MAX_FILES=2,
         MESSAGE_ATTACHMENT_MAX_IMAGE_SIZE_BYTES=2 * 1024 * 1024,
@@ -250,16 +354,16 @@ class MainViewsTests(TestCase):
         # Thread should still exist
         self.assertTrue(Thread.objects.filter(id=thread.id).exists())
 
-    def test_delete_thread_allows_deletion_while_awaiting_input(self):
+    def test_delete_thread_refuses_deletion_while_awaiting_input(self):
         thread = Thread.objects.create(user=self.user, subject="Awaiting input")
         Task.objects.create(user=self.user, thread=thread, status=TaskStatus.AWAITING_INPUT)
 
         self.client.login(username="alice", password="pass")
         resp = self.client.post(reverse("delete_thread", args=[thread.id]))
 
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json().get("status"), "OK")
-        self.assertFalse(Thread.objects.filter(id=thread.id).exists())
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json().get("status"), "ERROR")
+        self.assertTrue(Thread.objects.filter(id=thread.id).exists())
 
     @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
     def test_delete_thread_allows_deletion_when_only_running_task_is_stale(self):
@@ -544,15 +648,16 @@ class MainViewsTests(TestCase):
         thread = Thread.objects.create(user=self.user, subject="Stale image thread")
         mocked_upload_message_attachments.return_value = ([], [])
 
-        response = self.client.post(
-            reverse("add_message"),
-            data={
-                "thread_id": str(thread.id),
-                "new_message": "Analyse cette image",
-                "selected_agent": str(agent.id),
-                "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
-            },
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("add_message"),
+                data={
+                    "thread_id": str(thread.id),
+                    "new_message": "Analyse cette image",
+                    "selected_agent": str(agent.id),
+                    "message_attachments": [SimpleUploadedFile("photo.jpg", b"jpeg-bytes", content_type="image/jpeg")],
+                },
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "OK")
@@ -775,14 +880,15 @@ class MainViewsTests(TestCase):
         thread = Thread.objects.create(user=self.user, subject="Tool-less simple")
         mocked_run_ai_task.return_value = SimpleNamespace(id="task-123")
 
-        response = self.client.post(
-            reverse("add_message"),
-            data={
-                "thread_id": str(thread.id),
-                "new_message": "Hello",
-                "selected_agent": str(agent.id),
-            },
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                reverse("add_message"),
+                data={
+                    "thread_id": str(thread.id),
+                    "new_message": "Hello",
+                    "selected_agent": str(agent.id),
+                },
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "OK")
@@ -791,7 +897,7 @@ class MainViewsTests(TestCase):
 
     # ------------ running_tasks -----------------------------------------
 
-    def test_running_tasks_lists_only_running_for_owner(self):
+    def test_running_tasks_lists_recoverable_tasks_for_owner(self):
         thread = Thread.objects.create(user=self.user, subject="T")
         other_thread = Thread.objects.create(user=self.user, subject="U")
         foreign_thread = Thread.objects.create(user=self.other, subject="V")
@@ -813,7 +919,8 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         tasks_data = resp.json().get("running_tasks", [])
         ids = {task['id'] for task in tasks_data}
-        self.assertEqual(ids, {t_run1.id, t_run2.id})
+        pending_task = Task.objects.get(thread=thread, status=TaskStatus.PENDING)
+        self.assertEqual(ids, {t_run1.id, t_run2.id, pending_task.id})
 
         # Non-owner should get 404 when querying someone else's thread
         resp = self.client.get(reverse("running_tasks",
@@ -821,7 +928,7 @@ class MainViewsTests(TestCase):
         self.assertEqual(resp.status_code, 404)
 
     @override_settings(NOVA_RUNNING_TASK_STALE_AFTER_SECONDS=60)
-    def test_running_tasks_excludes_awaiting_input_and_reconciles_stale_runs(self):
+    def test_running_tasks_includes_awaiting_input_and_reconciles_stale_runs(self):
         thread = Thread.objects.create(user=self.user, subject="T")
         fresh_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
         stale_task = Task.objects.create(user=self.user, thread=thread, status=TaskStatus.RUNNING)
@@ -833,11 +940,44 @@ class MainViewsTests(TestCase):
 
         self.assertEqual(resp.status_code, 200)
         tasks_data = resp.json().get("running_tasks", [])
-        self.assertEqual([task["id"] for task in tasks_data], [fresh_task.id])
+        self.assertEqual([task["id"] for task in tasks_data], [fresh_task.id, awaiting_task.id])
         stale_task.refresh_from_db()
         awaiting_task.refresh_from_db()
         self.assertEqual(stale_task.status, TaskStatus.FAILED)
         self.assertEqual(awaiting_task.status, TaskStatus.AWAITING_INPUT)
+
+    def test_task_state_returns_owner_scoped_completed_snapshot(self):
+        thread = Thread.objects.create(user=self.user, subject="State thread")
+        source = thread.add_message("Do the work", actor=Actor.USER)
+        agent = thread.add_message("Done", actor=Actor.AGENT)
+        task = Task.objects.create(
+            user=self.user,
+            thread=thread,
+            source_message=source,
+            status=TaskStatus.COMPLETED,
+            result="Done",
+            current_response="partial",
+            progress_logs=[{"message": "Finished"}],
+        )
+        agent.internal_data = {"trace_task_id": task.id}
+        agent.save(update_fields=["internal_data"])
+        foreign_thread = Thread.objects.create(user=self.other, subject="Foreign state")
+        foreign_task = Task.objects.create(user=self.other, thread=foreign_thread)
+
+        self.client.login(username="alice", password="pass")
+        response = self.client.get(reverse("task_state", args=[task.id]))
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["type"], "task_snapshot")
+        self.assertEqual(payload["status"], TaskStatus.COMPLETED)
+        self.assertEqual(payload["last_progress"], {"message": "Finished"})
+        self.assertEqual([message["id"] for message in payload["messages"]], [agent.id])
+        self.assertEqual(payload["messages"][0]["internal_data"]["trace_task_id"], task.id)
+        self.assertEqual(
+            self.client.get(reverse("task_state", args=[foreign_task.id])).status_code,
+            404,
+        )
 
     def test_execution_trace_endpoint_requires_task_ownership(self):
         thread = Thread.objects.create(user=self.user, subject="Trace thread")

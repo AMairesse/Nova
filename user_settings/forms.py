@@ -172,12 +172,7 @@ class AgentForm(forms.ModelForm):
             "tools",
             "agent_tools",
             "tool_description",
-            "auto_summarize",
-            "token_threshold",
             "preserve_recent",
-            "strategy",
-            "max_summary_length",
-            "summary_model",
         ]
 
     # ------------------------------------------------------------------ #
@@ -270,13 +265,8 @@ class AgentForm(forms.ModelForm):
             if len(self.fields["python_backend"].choices) == 2:
                 self.initial["python_backend"] = self.fields["python_backend"].choices[1][0]
 
-        # Make summarization fields not required (they have model defaults)
-        self.fields["auto_summarize"].required = False
-        self.fields["token_threshold"].required = False
+        # Compaction setting uses the model default when omitted.
         self.fields["preserve_recent"].required = False
-        self.fields["strategy"].required = False
-        self.fields["max_summary_length"].required = False
-        self.fields["summary_model"].required = False
         self.fields["system_prompt"].help_text = _(
             "Agent identity, style, language, behavioral preferences, and domain instructions. "
             "Technical runtime instructions are added automatically and shown above."

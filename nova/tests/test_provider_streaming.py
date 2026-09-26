@@ -11,6 +11,7 @@ from nova.providers.llama_cpp import LlamaCppProviderAdapter
 from nova.providers.ollama import OllamaProviderAdapter
 from nova.providers.openai_compatible import (
     OPENAI_COMPATIBLE_LOCAL_HOSTS,
+    complete_openai_compatible_chat,
     create_openai_compatible_client,
     stream_openai_compatible_chat,
 )
@@ -21,6 +22,7 @@ from nova.web.network_policy import NetworkPolicyError
 class _FakeAsyncStream:
     def __init__(self, chunks):
         self._chunks = list(chunks)
+        self.close = AsyncMock()
 
     def __aiter__(self):
         async def _iterate():
@@ -92,7 +94,8 @@ class ProviderStreamingTests(SimpleTestCase):
                 completions=SimpleNamespace(
                     create=AsyncMock(return_value=fake_stream)
                 )
-            )
+            ),
+            close=AsyncMock(),
         )
 
         async def _record_delta(delta: str) -> None:
@@ -121,6 +124,8 @@ class ProviderStreamingTests(SimpleTestCase):
             )
 
         fake_client.chat.completions.create.assert_awaited_once()
+        fake_stream.close.assert_awaited_once()
+        fake_client.close.assert_awaited_once()
         self.assertEqual(recorded_deltas, ["Hel", "lo"])
         self.assertEqual(response["content"], "Hello")
         self.assertEqual(response["tool_calls"][0]["id"], "call_1")
@@ -129,6 +134,35 @@ class ProviderStreamingTests(SimpleTestCase):
         self.assertTrue(response["streamed"])
         self.assertEqual(response["streaming_mode"], "native")
         self.assertEqual(response["total_tokens"], 14)
+
+    def test_complete_openai_compatible_chat_closes_client(self):
+        response = SimpleNamespace(
+            model_dump=lambda **_: {
+                "choices": [{"message": {"content": "Hello"}}]
+            }
+        )
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock(return_value=response))
+            ),
+            close=AsyncMock(),
+        )
+
+        with patch(
+            "nova.providers.openai_compatible.create_openai_compatible_client",
+            return_value=fake_client,
+        ):
+            result = async_to_sync(complete_openai_compatible_chat)(
+                model="gpt-4o-mini",
+                api_key="dummy-secret",
+                base_url="https://api.example.com/v1",
+                messages=[{"role": "user", "content": "Hello"}],
+                tools=None,
+                normalize_content=lambda content: content,
+            )
+
+        fake_client.close.assert_awaited_once()
+        self.assertEqual(result["content"], "Hello")
 
     def test_openai_compatible_client_blocks_private_base_url_by_default(self):
         with self.assertRaises(NetworkPolicyError):

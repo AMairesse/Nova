@@ -49,10 +49,18 @@ class TaskProgressHandler:
         self._needs_segment_break = False
 
     async def publish_update(self, message_type, data):
-        await self.channel_layer.group_send(
-            f'task_{self.task_id}',
-            {'type': 'task_update', 'message': {'type': message_type, **data}}
-        )
+        try:
+            await self.channel_layer.group_send(
+                f'task_{self.task_id}',
+                {'type': 'task_update', 'message': {'type': message_type, **data}}
+            )
+        except Exception as exc:
+            logger.warning(
+                "Unable to publish realtime task update task_id=%s message_type=%s error_type=%s",
+                self.task_id,
+                message_type,
+                type(exc).__name__,
+            )
 
     async def on_interrupt(self, interaction_id, question, schema, agent_name):
         '''

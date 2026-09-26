@@ -49,6 +49,8 @@ class Interaction(models.Model):
 
     # Runtime-specific context needed to resume the interrupted execution.
     resume_context = models.JSONField(default=dict, blank=True)
+    resume_claimed_at = models.DateTimeField(null=True, blank=True)
+    dispatch_error = models.BooleanField(default=False)
 
     status = models.CharField(
         max_length=10,

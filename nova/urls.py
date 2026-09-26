@@ -15,7 +15,7 @@ from nova.views.continuous_views import (
     continuous_add_message,
     continuous_regenerate_summary,
 )
-from nova.views.task_views import execution_trace, running_tasks
+from nova.views.task_views import execution_trace, running_tasks, task_state
 from nova.views.files_views import (
     sidebar_panel_view, file_list,
     file_content, file_download_url, file_upload, FileDeleteView
@@ -33,8 +33,18 @@ from nova.views.security_views import csrf_token
 from nova.views.health import healthz
 from nova.views.webapp_views import serve_webapp, webapps_list, preview_webapp, delete_webapp
 from nova.views.auth_views import NovaLoginView, NovaOIDCStartView, block_local_auth_in_oidc_only
+from nova.views.search_views import search
+from nova.views.activity_views import activity, stop_task, retry_dispatch_task, retry_interaction
+from nova.views.thread_views import archive_thread, unarchive_thread
 
 urlpatterns = [
+    path('activity/', activity, name='activity'),
+    path('activity/tasks/<int:task_id>/stop/', stop_task, name='stop_task'),
+    path('activity/tasks/<int:task_id>/retry-dispatch/', retry_dispatch_task, name='retry_dispatch_task'),
+    path('activity/interactions/<int:interaction_id>/retry/', retry_interaction, name='retry_interaction'),
+    path('search/', search, name='search'),
+    path('archive-thread/<int:thread_id>/', archive_thread, name='archive_thread'),
+    path('unarchive-thread/<int:thread_id>/', unarchive_thread, name='unarchive_thread'),
     # Main views
     path("", index, name="index"),
     path("message-list/", message_list, name="message_list"),
@@ -46,6 +56,7 @@ urlpatterns = [
     path("load-more-threads/", load_more_threads, name="load_more_threads"),
     path("running-tasks/<int:thread_id>/", running_tasks, name="running_tasks"),
     path("tasks/<int:task_id>/execution-trace/", execution_trace, name="task_execution_trace"),
+    path("tasks/<int:task_id>/state/", task_state, name="task_state"),
 
     # Continuous discussion mode
     path("continuous/", continuous_home, name="continuous_home"),

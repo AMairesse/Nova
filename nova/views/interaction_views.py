@@ -5,26 +5,32 @@ from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_protect
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404
+from django.db import transaction
 
 from nova.models.Interaction import Interaction, InteractionStatus
+from nova.models.Task import TaskStatus
 from nova.tasks.tasks import resume_ai_task_celery
+from nova.tasks.execution import dispatch_interaction
 
 
 @csrf_protect
 @require_POST
 @login_required(login_url='login')
+@transaction.atomic
 def answer_interaction(request, interaction_id: int):
     """
     Answer a pending Interaction and trigger task resume.
     Accepts either JSON body {"answer": ...} or form-encoded "answer".
     """
-    interaction = get_object_or_404(Interaction, id=interaction_id)
+    interaction = get_object_or_404(Interaction.objects.select_for_update().select_related('task'), id=interaction_id)
     task = interaction.task
     thread = interaction.thread
 
     # Ownership check
     if task.user_id != request.user.id or thread.user_id != request.user.id:
         return JsonResponse({'error': 'Unauthorized'}, status=403)
+    if task.stop_requested or task.status != TaskStatus.AWAITING_INPUT:
+        return JsonResponse({'error': 'This task is no longer awaiting input.'}, status=409)
 
     # Parse answer from request
     answer = None
@@ -77,7 +83,7 @@ def answer_interaction(request, interaction_id: int):
     thread.add_message(answer_message_text, Actor.USER, MessageType.INTERACTION_ANSWER, interaction)
 
     # Enqueue resume
-    resume_ai_task_celery.delay(interaction.id)
+    transaction.on_commit(lambda: dispatch_interaction(interaction.id))
 
     return JsonResponse({'status': 'queued', 'task_id': task.id})
 
@@ -85,17 +91,20 @@ def answer_interaction(request, interaction_id: int):
 @csrf_protect
 @require_POST
 @login_required(login_url='login')
+@transaction.atomic
 def cancel_interaction(request, interaction_id: int):
     """
     Cancel a pending Interaction and mark the Task accordingly.
     """
-    interaction = get_object_or_404(Interaction, id=interaction_id)
+    interaction = get_object_or_404(Interaction.objects.select_for_update().select_related('task'), id=interaction_id)
     task = interaction.task
     thread = interaction.thread
 
     # Ownership check
     if task.user_id != request.user.id or thread.user_id != request.user.id:
         return JsonResponse({'error': 'Unauthorized'}, status=403)
+    if task.stop_requested or task.status != TaskStatus.AWAITING_INPUT:
+        return JsonResponse({'error': 'This task is no longer awaiting input.'}, status=409)
 
     # If already resolved, idempotent
     if interaction.status != InteractionStatus.PENDING:
@@ -111,6 +120,6 @@ def cancel_interaction(request, interaction_id: int):
     interaction.save(update_fields=['answer', 'status', 'updated_at'])
 
     # Enqueue resume
-    resume_ai_task_celery.delay(interaction.id)
+    transaction.on_commit(lambda: dispatch_interaction(interaction.id))
 
     return JsonResponse({'status': 'queued', 'task_id': task.id})

@@ -63,11 +63,12 @@ class InteractionViewsTests(TestCase):
 
     @patch("nova.views.interaction_views.resume_ai_task_celery.delay")
     def test_answer_interaction_accepts_json_and_creates_answer_message(self, mocked_delay):
-        response = self.client.post(
-            self._answer_url(),
-            data=json.dumps({"answer": {"choice": "yes"}}),
-            content_type="application/json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._answer_url(),
+                data=json.dumps({"answer": {"choice": "yes"}}),
+                content_type="application/json",
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "queued", "task_id": self.task.id})
@@ -84,10 +85,11 @@ class InteractionViewsTests(TestCase):
 
     @patch("nova.views.interaction_views.resume_ai_task_celery.delay")
     def test_answer_interaction_accepts_form_payload(self, mocked_delay):
-        response = self.client.post(
-            self._answer_url(),
-            data={"answer": "Approved from form"},
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._answer_url(),
+                data={"answer": "Approved from form"},
+            )
 
         self.assertEqual(response.status_code, 200)
         self.interaction.refresh_from_db()
@@ -97,11 +99,12 @@ class InteractionViewsTests(TestCase):
 
     @patch("nova.views.interaction_views.resume_ai_task_celery.delay")
     def test_answer_interaction_serializes_boolean_answers_as_json_scalars(self, mocked_delay):
-        response = self.client.post(
-            self._answer_url(),
-            data=json.dumps({"answer": False}),
-            content_type="application/json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._answer_url(),
+                data=json.dumps({"answer": False}),
+                content_type="application/json",
+            )
 
         self.assertEqual(response.status_code, 200)
         self.interaction.refresh_from_db()
@@ -211,7 +214,8 @@ class InteractionViewsTests(TestCase):
 
     @patch("nova.views.interaction_views.resume_ai_task_celery.delay")
     def test_cancel_interaction_marks_interaction_and_enqueues_resume(self, mocked_delay):
-        response = self.client.post(self._cancel_url())
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._cancel_url())
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "queued", "task_id": self.task.id})

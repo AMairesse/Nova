@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from django.db import transaction
+from django.contrib.auth import get_user_model
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -146,7 +149,30 @@ def _cleanup_submission_message(context: SubmissionContext) -> None:
     context.message = None
 
 
-def submit_user_message(
+def submit_user_message(*, user, submission_key=None, **kwargs):
+    try:
+        key = uuid.UUID(str(submission_key)) if submission_key else uuid.uuid4()
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise MessageSubmissionError('Invalid submission key') from exc
+    # ponytail: serialize uploads per user; use submission rows if same-user throughput requires it.
+    with transaction.atomic():
+        get_user_model().objects.select_for_update().get(pk=user.pk)
+        task = Task.objects.select_related('thread', 'source_message').filter(user=user, submission_key=key).first()
+        if task is not None:
+            if task.source_message is None:
+                raise MessageSubmissionError('This submission was already processed and its message is no longer available.', status_code=409)
+            annotate_user_message(task.source_message)
+            result = SubmissionResult(thread=task.thread, message=task.source_message, task=task,
+                                      uploaded_file_ids=(task.source_message.internal_data or {}).get('file_ids', []))
+        else:
+            result = _submit_user_message(user=user, submission_key=key, **kwargs)
+    result.task.refresh_from_db()
+    result.response_fields.update(submission_key=str(key), task_status=result.task.status,
+                                  dispatch_failed=result.task.status == 'DISPATCH_FAILED')
+    return result
+
+
+def _submit_user_message(
     *,
     user,
     message_text: str | None,
@@ -160,6 +186,7 @@ def submit_user_message(
     thread_file_uploader=batch_upload_files,
     attachment_uploader=upload_message_attachments,
     file_update_publisher=publish_file_update,
+    submission_key=None,
 ) -> SubmissionResult:
     normalized_text = _normalize_message_text(message_text)
     normalized_response_mode = str(response_mode or "auto").strip().lower() or "auto"
@@ -237,6 +264,7 @@ def submit_user_message(
         agent_config=agent_config,
         source_message_id=message.id,
         dispatcher_task=dispatcher_task,
+        submission_key=submission_key,
     )
 
     if context.after_dispatch is not None:

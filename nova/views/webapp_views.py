@@ -116,7 +116,11 @@ def webapps_list(request, thread_id: int):
     return render(
         request,
         "nova/files/webapps_list.html",
-        {"thread": thread, "webapps": items},
+        {
+            "thread": thread,
+            "webapps": items,
+            "public_links_enabled": bool(_configured_webapp_origin()),
+        },
     )
 
 

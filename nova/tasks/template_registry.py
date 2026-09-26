@@ -15,6 +15,10 @@ from nova.models.UserObjects import UserProfile
 
 SPAM_FILTER_TEMPLATE_ID = "email_spam_filter_basic"
 THEMATIC_WATCH_TEMPLATE_ID = "thematic_watch_weekly"
+MAIL_AGENDA_BRIEF_TEMPLATE_ID = "mail_agenda_brief"
+DIFFERENTIAL_WATCH_TEMPLATE_ID = "differential_watch"
+DRAFT_REPLIES_EVENTS_TEMPLATE_ID = "draft_replies_personal_events"
+WEBDAV_DOCUMENTS_TEMPLATE_ID = "webdav_documents_changes"
 THEMATIC_WATCH_MEMORY_PATH_TOPICS = "/memory/thematic-watch-topics.md"
 THEMATIC_WATCH_MEMORY_PATH_LANGUAGE = "/memory/thematic-watch-language.md"
 
@@ -274,10 +278,73 @@ def evaluate_thematic_watch_template(user) -> TemplateAvailability:
     )
 
 
+def _evaluate_tool_template(user, required_subtypes: tuple[str, ...]) -> TemplateAvailability:
+    configured_ids = set()
+    for tool in Tool.objects.filter(Q(user=user) | Q(user__isnull=True), tool_subtype__in=required_subtypes):
+        if tool.tool_subtype not in {"email", "caldav", "webdav"}:
+            configured_ids.add(tool.id)
+            continue
+        credential = ToolCredential.objects.filter(user=user, tool=tool).first()
+        if credential and (credential.config or credential.token or credential.username or credential.password):
+            configured_ids.add(tool.id)
+    agents = list(
+        AgentConfig.objects.filter(user=user).prefetch_related("tools", "agent_tools__tools")
+    )
+    matched_agent = next(
+        (agent for agent in agents if all(
+            any(tool.tool_subtype == subtype and tool.id in configured_ids for tool in [*agent.tools.all(), *[tool for sub_agent in agent.agent_tools.all() for tool in sub_agent.tools.all()]])
+            for subtype in required_subtypes
+        )),
+        None,
+    )
+    prerequisites = [
+        TemplatePrerequisite(
+            label=str(_("At least one selectable agent exists")),
+            met=bool(agents),
+        ),
+        *[
+            TemplatePrerequisite(
+                label=str(_("A selectable agent has the %(tool)s tool") % {"tool": subtype}),
+                met=any(any(tool.tool_subtype == subtype and tool.id in configured_ids for tool in [*agent.tools.all(), *[tool for sub_agent in agent.agent_tools.all() for tool in sub_agent.tools.all()]]) for agent in agents),
+            )
+            for subtype in required_subtypes
+        ],
+    ]
+    if not agents:
+        reason = str(_("No selectable agent available."))
+    elif not matched_agent:
+        reason = str(_("No selectable agent has all required tools."))
+    else:
+        reason = ""
+    return TemplateAvailability(bool(matched_agent), reason, prerequisites, agent_id=getattr(matched_agent, "id", None))
+
+
+def evaluate_mail_agenda_brief_template(user) -> TemplateAvailability:
+    return _evaluate_tool_template(user, ("email", "caldav"))
+
+
+def evaluate_differential_watch_template(user) -> TemplateAvailability:
+    return _evaluate_tool_template(user, ("browser",))
+
+
+def evaluate_draft_replies_events_template(user) -> TemplateAvailability:
+    return _evaluate_tool_template(user, ("email", "caldav"))
+
+
+def evaluate_webdav_documents_template(user) -> TemplateAvailability:
+    return _evaluate_tool_template(user, ("webdav",))
+
+
 def get_task_templates_for_user(user) -> list[dict]:
     spam_filter = evaluate_spam_filter_template(user)
     thematic_watch = evaluate_thematic_watch_template(user)
-    return [
+    additional = [
+        (MAIL_AGENDA_BRIEF_TEMPLATE_ID, _( "Mail and agenda brief"), _( "Review new mail and upcoming agenda items in a concise daily report."), evaluate_mail_agenda_brief_template(user)),
+        (DIFFERENTIAL_WATCH_TEMPLATE_ID, _( "Differential source watch"), _( "Check explicit web sources and report only useful changes since the previous run."), evaluate_differential_watch_template(user)),
+        (DRAFT_REPLIES_EVENTS_TEMPLATE_ID, _( "Draft replies and personal events"), _( "Prepare mail drafts and personal tentative calendar events without invitations."), evaluate_draft_replies_events_template(user)),
+        (WEBDAV_DOCUMENTS_TEMPLATE_ID, _( "WebDAV document changes"), _( "Analyze new or modified documents in an explicit WebDAV folder."), evaluate_webdav_documents_template(user)),
+    ]
+    templates = [
         {
             "id": SPAM_FILTER_TEMPLATE_ID,
             "title": str(_("Spam filtering")),
@@ -317,6 +384,19 @@ def get_task_templates_for_user(user) -> list[dict]:
             ],
         },
     ]
+    templates.extend(
+        {
+            "id": template_id,
+            "title": str(title),
+            "description": str(description),
+            "available": availability.available,
+            "reason": availability.reason,
+            "prerequisites": [{"label": req.label, "met": req.met} for req in availability.prerequisites],
+            "configuration_required": True,
+        }
+        for template_id, title, description, availability in additional
+    )
+    return templates
 
 
 def build_template_prefill_payload(
@@ -325,6 +405,7 @@ def build_template_prefill_payload(
     *,
     agent_id: int | None = None,
     email_tool_id: int | None = None,
+    configuration: dict | None = None,
 ) -> dict | None:
     if template_id == THEMATIC_WATCH_TEMPLATE_ID:
         availability = evaluate_thematic_watch_template(user)
@@ -346,6 +427,94 @@ def build_template_prefill_payload(
             ),
             "run_mode": TaskDefinition.RunMode.NEW_THREAD,
             "cron_expression": "0 6 * * 1",
+            "timezone": "UTC",
+            "email_tool": "",
+            "poll_interval_minutes": 5,
+        }
+
+    additional_specs = {
+        MAIL_AGENDA_BRIEF_TEMPLATE_ID: (
+            evaluate_mail_agenda_brief_template, "Mail and agenda brief", "0 8 * * *",
+            "Read new mail and the next 24 hours of agenda. Produce a concise daily brief.",
+        ),
+        DIFFERENTIAL_WATCH_TEMPLATE_ID: (
+            evaluate_differential_watch_template, "Differential source watch", "0 7 * * *",
+            "Check the explicit sources below and report only useful changes since the previous run.",
+        ),
+        DRAFT_REPLIES_EVENTS_TEMPLATE_ID: (
+            evaluate_draft_replies_events_template, "Draft replies and personal events", "0 9 * * *",
+            "Review the selected mail context and prepare reply drafts and personal tentative events.",
+        ),
+        WEBDAV_DOCUMENTS_TEMPLATE_ID: (
+            evaluate_webdav_documents_template, "WebDAV document changes", "0 8 * * *",
+            "Inspect new or modified documents in the selected WebDAV folder and summarize useful changes.",
+        ),
+    }
+    if template_id in additional_specs:
+        availability, title, default_cron_expression, instruction = additional_specs[template_id]
+        cron_expression = default_cron_expression
+        availability = availability(user)
+        if not availability.available or not availability.agent_id or not configuration:
+            return None
+        selected_agent_id = agent_id or availability.agent_id
+        selected_agent = (
+            AgentConfig.objects.filter(user=user, id=selected_agent_id)
+            .prefetch_related("tools", "agent_tools__tools")
+            .first()
+        )
+        required_subtypes = {
+            MAIL_AGENDA_BRIEF_TEMPLATE_ID: ("email", "caldav"),
+            DIFFERENTIAL_WATCH_TEMPLATE_ID: ("browser",),
+            DRAFT_REPLIES_EVENTS_TEMPLATE_ID: ("email", "caldav"),
+            WEBDAV_DOCUMENTS_TEMPLATE_ID: ("webdav",),
+        }[template_id]
+        if not selected_agent or not all(_agent_has_tool_subtype(selected_agent, subtype) for subtype in required_subtypes):
+            return None
+        field = {
+            MAIL_AGENDA_BRIEF_TEMPLATE_ID: "theme",
+            DIFFERENTIAL_WATCH_TEMPLATE_ID: "sources",
+            DRAFT_REPLIES_EVENTS_TEMPLATE_ID: "mail_scope",
+            WEBDAV_DOCUMENTS_TEMPLATE_ID: "folder",
+        }[template_id]
+        value = str(configuration.get(field) or "").strip()
+        if not value:
+            return None
+        schedule = str(configuration.get("schedule") or "").strip()
+        try:
+            hour, minute = (int(part) for part in schedule.split(":", 1))
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError
+            cron_expression = f"{minute} {hour} * * *"
+        except (TypeError, ValueError):
+            cron_expression = default_cron_expression
+        prompt = (
+            f"{instruction}\nExplicit configured source or destination: {value}\n"
+            f"Mailbox destination: {str(configuration.get('mailbox') or 'not applicable')}\n"
+            f"Calendar account destination: {str(configuration.get('calendar_account') or 'not applicable')}\n"
+            f"WebDAV source: {str(configuration.get('webdav_source') or 'not applicable')}\n"
+            "The previous result is available as:\n{{ previous_result }}\n"
+            "The previous run time is: {{ previous_run_at }}\n"
+            "Stable routine identifier: {{ routine_id }}\n"
+            "Use the configured agent and tools only. Do not make network calls outside the available tools. "
+        )
+        prompt += "\n".join(configuration.get("connection_instructions") or []) + "\n"
+        if template_id == DRAFT_REPLIES_EVENTS_TEMPLATE_ID:
+            prompt += (
+                "For mail drafts use `mail draft`; for calendar events use `calendar create ... --tentative`. "
+                "Never send messages, add attendees or issue invitations. "
+                "Before creating anything, compare the previous result and verify an equivalent draft or event does not already exist. "
+                "If a draft or event operation is unavailable, propose the exact action in chat. "
+            )
+        else:
+            prompt += "This routine is read-only: never send mail, create events, or modify documents. "
+        prompt += "If there is no useful change, answer exactly NOVA_NO_CHANGE."
+        return {
+            "name": f"{title} - {value[:70]}",
+            "trigger_type": TaskDefinition.TriggerType.CRON,
+            "agent": selected_agent.id,
+            "prompt": prompt,
+            "run_mode": TaskDefinition.RunMode.NEW_THREAD,
+            "cron_expression": cron_expression,
             "timezone": "UTC",
             "email_tool": "",
             "poll_interval_minutes": 5,

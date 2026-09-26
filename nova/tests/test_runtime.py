@@ -1982,7 +1982,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertNotIn("**Answer:** work", joined_contents)
         self.assertIn('{"status": "answered", "answer": "work"}', joined_contents)
 
-    def test_system_prompt_mentions_ask_user(self):
+    def test_system_prompt_leaves_tool_usage_to_tool_descriptions(self):
         runtime = async_to_sync(
             ReactTerminalRuntime(
                 user=self.user,
@@ -1993,7 +1993,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("ask_user", prompt)
+        self.assertNotIn("ask_user", prompt)
 
     def test_system_prompt_mentions_markdown_vfs_file_references(self):
         runtime = async_to_sync(
@@ -2011,7 +2011,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("![alt](/path/image.png)", prompt)
         self.assertIn("/inbox", prompt)
         self.assertIn("/history", prompt)
-        self.assertIn("Files uploaded in the Files panel", prompt)
+        self.assertIn("persistent files for this thread", prompt)
         self.assertIn("Agent instructions:\nBe concise.", prompt)
         self.assertNotIn("You are", automatic_prompt)
         self.assertNotIn("Nova", automatic_prompt)
@@ -2501,6 +2501,32 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertEqual(result.final_answer, "The current directory is /.")
         self.assertIn("pwd", session.session_state["history"])
 
+    def test_runtime_raises_when_iteration_limit_has_no_final_answer(self):
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user, thread=self.thread, agent_config=self.agent
+            ).initialize
+        )()
+        runtime.provider_client.create_chat_completion = AsyncMock(
+            side_effect=[
+                {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": f"call_{index}", "name": "terminal",
+                        "arguments": '{"command":"pwd"}',
+                    }],
+                }
+                for index in range(self.agent.recursion_limit)
+            ]
+        )
+        runtime._execute_tool_call = AsyncMock(
+            return_value={"tool_call_id": "call", "content": "ok"}
+        )
+
+        from nova.runtime.outcomes import RuntimeLimitReached
+        with self.assertRaises(RuntimeLimitReached):
+            async_to_sync(runtime.run)()
+
     def test_runtime_executes_python_dash_c_terminal_tool_call(self):
         code_tool = self._create_code_execution_tool()
         self.agent.tools.add(code_tool)
@@ -2784,6 +2810,54 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         self.assertIn("The current directory is /.", task.streamed_markdown)
         self.assertIsNotNone(task.current_response)
 
+    def test_realtime_delivery_failure_does_not_retry_streaming_model_call(self):
+        task = Task.objects.create(
+            user=self.user,
+            thread=self.thread,
+            agent_config=self.agent,
+        )
+        channel_layer = Mock()
+        channel_layer.group_send = AsyncMock(side_effect=RuntimeError("connection failed"))
+        handler = TaskProgressHandler(
+            task.id,
+            channel_layer,
+            user_id=self.user.id,
+            thread_id=self.thread.id,
+            thread_mode=self.thread.mode,
+            push_notifications_enabled=False,
+        )
+        runtime = async_to_sync(
+            ReactTerminalRuntime(
+                user=self.user,
+                thread=self.thread,
+                agent_config=self.agent,
+                task=task,
+                progress_handler=handler,
+            ).initialize
+        )()
+
+        async def fake_stream_chat_completion(*, messages, tools, on_content_delta):
+            del messages, tools
+            await on_content_delta("Completed despite realtime failure.")
+            return {
+                "content": "Completed despite realtime failure.",
+                "tool_calls": [],
+                "total_tokens": 7,
+                "streamed": True,
+            }
+
+        runtime.provider_client.stream_chat_completion = AsyncMock(side_effect=fake_stream_chat_completion)
+        runtime.provider_client.create_chat_completion = AsyncMock()
+
+        result = async_to_sync(runtime.run)()
+
+        task.refresh_from_db()
+        self.assertEqual(result.final_answer, "Completed despite realtime failure.")
+        runtime.provider_client.stream_chat_completion.assert_awaited_once()
+        runtime.provider_client.create_chat_completion.assert_not_awaited()
+        self.assertIn("Completed despite realtime failure.", task.streamed_markdown)
+        self.assertIsNotNone(task.current_response)
+
     def test_runtime_marks_model_trace_when_streaming_falls_back(self):
         task = Task.objects.create(
             user=self.user,
@@ -2951,7 +3025,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
             exclude_interaction_ids=set(),
         )
 
-    def test_system_prompt_mentions_touch_tee_and_conditional_mailbox_and_date_guidance(self):
+    def test_system_prompt_keeps_core_runtime_guidance(self):
         date_tool = Tool.objects.create(
             user=self.user,
             name="Date",
@@ -3008,12 +3082,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("Runtime instructions:", prompt)
-        self.assertIn("The main action surface is the `terminal` tool.", prompt)
         self.assertIn("Use shell-like commands for terminal work.", prompt)
         self.assertIn("Inspect `/skills`", prompt)
-        self.assertIn("Use `date` for current date/time queries.", prompt)
-        self.assertIn("--mailbox <email>", prompt)
-        self.assertIn("Files uploaded in the Files panel are persistent thread files under `/`.", prompt)
+        self.assertIn("persistent files for this thread", prompt)
         self.assertIn("inspect `/` first", prompt)
         self.assertIn("- /: persistent files for this thread, including files added from the Files panel", prompt)
         self.assertNotIn("/thread", prompt)
@@ -3033,10 +3104,9 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
 
-        self.assertIn("Current-message attachments are under `/inbox`", prompt)
-        self.assertIn("older live-message attachments are under `/history`", prompt)
+        self.assertIn("Use attachment mounts only when the request clearly points", prompt)
         self.assertIn("inspect `/` first", prompt)
-        self.assertIn("Only fall back to those mounts", prompt)
+        self.assertIn("Use attachment mounts only when", prompt)
 
     def test_system_prompt_mentions_memory_mount_and_search_guidance(self):
         memory_tool = Tool.objects.create(
@@ -3059,8 +3129,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("/memory", prompt)
-        self.assertIn("grep", prompt)
-        self.assertIn("memory search", prompt)
+        self.assertNotIn("memory search", prompt)
 
     def test_system_prompt_mentions_calendar_commands(self):
         first_calendar = self._create_caldav_tool(name="Work Calendar", username="work@example.com")
@@ -3077,9 +3146,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("calendar", prompt)
-        self.assertIn("calendar accounts", prompt)
-        self.assertIn("--account <selector>", prompt)
-        self.assertIn("Recurring events are readable", prompt)
+        self.assertNotIn("--account <selector>", prompt)
 
     def test_system_prompt_mentions_webdav_mount(self):
         webdav_tool = self._create_webdav_tool()
@@ -3095,7 +3162,6 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
 
         prompt = runtime.build_system_prompt()
         self.assertIn("/webdav", prompt)
-        self.assertIn("remote WebDAV mounts", prompt)
 
     def test_system_prompt_mentions_search_browse_and_non_persistence(self):
         browser_tool = self._create_browser_tool()
@@ -3111,11 +3177,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("search", prompt)
-        self.assertIn("browse", prompt)
-        self.assertIn("current run only", prompt)
-        self.assertIn("curl", prompt)
-        self.assertIn("wget", prompt)
+        self.assertNotIn("current run only", prompt)
 
     def test_system_prompt_mentions_live_webapp_workflow(self):
         webapp_tool = self._create_webapp_tool()
@@ -3130,11 +3192,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("webapp expose", prompt)
-        self.assertIn("live", prompt)
-        self.assertIn("source files", prompt)
-        self.assertIn("raw characters", prompt)
-        self.assertIn("tee ... --text", prompt)
+        self.assertNotIn("webapp expose", prompt)
 
     def test_system_prompt_mentions_python_direct_workflow(self):
         code_tool = self._create_code_execution_tool()
@@ -3149,9 +3207,7 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("Use `python` inside", prompt)
         self.assertIn("pip install --user <package>", prompt)
-        self.assertIn("--workdir", prompt)
         self.assertIn(
             "Keep thread-scoped file organization, cleanup, and webapp lifecycle work",
             prompt,
@@ -3210,10 +3266,8 @@ class ReactTerminalRuntimeTests(TransactionTestCase):
         )()
 
         prompt = runtime.build_system_prompt()
-        self.assertIn("mcp tools", prompt)
-        self.assertIn("mcp schema", prompt)
-        self.assertIn("api operations", prompt)
-        self.assertIn("api schema", prompt)
+        self.assertNotIn("mcp tools", prompt)
+        self.assertNotIn("api operations", prompt)
 
     @patch("nova.memory.service.aget_embeddings_provider", new_callable=AsyncMock, return_value=None)
     def test_memory_is_shared_between_threads_for_same_user(self, mocked_provider):
@@ -4446,6 +4500,40 @@ class ReactTerminalExecutorTests(TransactionTestCase):
         self.assertIn("context_consumption", event_types)
         self.assertIn("new_message", event_types)
         self.assertIn("task_complete", event_types)
+
+    def test_task_executor_persists_awaiting_input_without_completing_task(self):
+        task = Task.objects.create(
+            user=self.user, thread=self.thread, agent_config=self.agent,
+            status=TaskStatus.RUNNING,
+        )
+        channel_layer = _FakeChannelLayer()
+        executor = ReactTerminalTaskExecutor(
+            task, self.user, self.thread, self.agent, self.source_message.text,
+            source_message_id=self.source_message.id,
+            push_notifications_enabled=False,
+        )
+
+        async def fake_create_agent():
+            return None
+
+        async def fake_run_agent():
+            return {
+                "__interrupt__": [SimpleNamespace(value={
+                    "action": "ask_user", "question": "Continue?",
+                    "schema": {}, "agent_name": "Executor Agent",
+                })]
+            }
+
+        with (
+            patch("nova.tasks.TaskExecutor.get_channel_layer", return_value=channel_layer),
+            patch.object(executor, "_create_llm_agent", side_effect=fake_create_agent),
+            patch.object(executor, "_run_agent", side_effect=fake_run_agent),
+        ):
+            async_to_sync(executor.execute_or_resume)()
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, TaskStatus.AWAITING_INPUT, task.result)
+        self.assertTrue(Interaction.objects.filter(task=task, status=InteractionStatus.PENDING).exists())
 
     def test_task_executor_enqueues_thread_title_generation_for_default_subject(self):
         thread = Thread.objects.create(user=self.user, subject=build_default_thread_subject(1))

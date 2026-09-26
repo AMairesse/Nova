@@ -11,15 +11,26 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from urllib.parse import urlencode
+from shlex import quote
+
+from asgiref.sync import async_to_sync
 
 import croniter
 from cron_descriptor import get_description
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.TaskDefinition import TaskDefinition
-from nova.models.Tool import Tool
+from nova.models.Tool import Tool, ToolCredential
 from nova.continuous.utils import ensure_continuous_nightly_summary_task_definition
+from nova.runtime.capabilities import resolve_terminal_capabilities
+from nova.plugins.mail.service import _build_mailbox_registry, _resolve_mailbox
+from nova.caldav.service import build_calendar_registry, resolve_calendar_account
+from nova.webdav.service import build_webdav_mounts
 from nova.tasks.template_registry import (
+    MAIL_AGENDA_BRIEF_TEMPLATE_ID,
+    DIFFERENTIAL_WATCH_TEMPLATE_ID,
+    DRAFT_REPLIES_EVENTS_TEMPLATE_ID,
+    WEBDAV_DOCUMENTS_TEMPLATE_ID,
     SPAM_FILTER_TEMPLATE_ID,
     THEMATIC_WATCH_TEMPLATE_ID,
     THEMATIC_WATCH_MEMORY_PATH_LANGUAGE,
@@ -28,7 +39,12 @@ from nova.tasks.template_registry import (
     default_agent_has_memory_tool,
     evaluate_spam_filter_template,
     evaluate_thematic_watch_template,
+    evaluate_mail_agenda_brief_template,
+    evaluate_differential_watch_template,
+    evaluate_draft_replies_events_template,
+    evaluate_webdav_documents_template,
     get_task_templates_for_user,
+    _agent_has_tool_subtype,
 )
 from nova.tasks.tasks import (
     poll_task_definition_email,
@@ -50,6 +66,7 @@ class TaskDefinitionForm(ModelForm):
             "timezone",
             "email_tool",
             "poll_interval_minutes",
+            "catch_up_policy",
         ]
         widgets = {
             "cron_expression": forms.TextInput(
@@ -67,6 +84,8 @@ class TaskDefinitionForm(ModelForm):
         locked_email_tool_id = kwargs.pop("locked_email_tool_id", None)
         self.locked_email_tool_id = str(locked_email_tool_id) if locked_email_tool_id not in (None, "") else ""
         super().__init__(*args, **kwargs)
+        self.fields['catch_up_policy'].required = False
+        self.fields['catch_up_policy'].help_text = _('After an interruption, skip missed mail or process it in bounded batches.')
 
         if self.user:
             self.fields["agent"].queryset = AgentConfig.objects.filter(user=self.user)
@@ -112,6 +131,9 @@ class TaskDefinitionForm(ModelForm):
         if not self.locked_email_tool_id:
             return ""
         return self._choice_label("email_tool", self.locked_email_tool_id)
+
+    def clean_catch_up_policy(self):
+        return self.cleaned_data.get('catch_up_policy') or self.instance.catch_up_policy
 
     def _selected_value(self, field_name: str) -> str:
         if self.is_bound:
@@ -185,6 +207,126 @@ class TaskDefinitionForm(ModelForm):
                     _("The mailbox for this predefined task cannot be changed from the creation form."),
                 )
         return cleaned_data
+
+
+def _template_connection_target(agent, selected):
+    """Resolve a selection in the same tool scope as its executing agent."""
+    candidates = [agent, *agent.agent_tools.filter(is_tool=True, user=agent.user).order_by('id')]
+    for executor in candidates:
+        # Registry helpers need the owner without lazy ORM access in async code.
+        executor.user = agent.user
+        capabilities = resolve_terminal_capabilities(executor)
+        if selected.tool_subtype == 'email':
+            tools = capabilities.email_tools
+        elif selected.tool_subtype == 'caldav':
+            tools = capabilities.caldav_tools
+        else:
+            tools = capabilities.webdav_tools
+        if not any(tool.pk == selected.pk for tool in tools):
+            continue
+        try:
+            if selected.tool_subtype == 'webdav':
+                mount = next(m for m in build_webdav_mounts(tools) if m.tool.pk == selected.pk)
+                return f'/webdav/{mount.name}', executor
+            if selected.tool_subtype == 'email':
+                _registry_user, entries, lookup, _schema, selectors = async_to_sync(_build_mailbox_registry)(tools, executor)
+                key, resolve = 'selector_email', _resolve_mailbox
+            else:
+                _registry_user, entries, lookup, selectors = async_to_sync(build_calendar_registry)(tools, executor)
+                key, resolve = 'account', resolve_calendar_account
+            entry = next((entry for entry in entries if entry['tool_id'] == selected.pk), None)
+            if entry:
+                selector = entry[key]
+                resolved, error = resolve(selector, lookup, selectors)
+                if not error and resolved['tool_id'] == selected.pk:
+                    return selector, executor
+        except ValueError:
+            continue
+    raise forms.ValidationError(_(
+        'This connection has no unambiguous runtime selector for the selected agent. Check its configuration.'
+    ))
+
+
+class TaskTemplateConfigurationForm(forms.Form):
+    agent = forms.ModelChoiceField(queryset=AgentConfig.objects.none(), label=_("Agent"))
+    value = forms.CharField(label=_("Configuration"), max_length=500, widget=forms.TextInput(attrs={"class": "form-control"}))
+    schedule = forms.TimeField(label=_("Time (UTC)"), initial="08:00", widget=forms.TimeInput(attrs={"type": "time", "class": "form-control"}))
+    email_tool = forms.ModelChoiceField(queryset=Tool.objects.none(), required=False, label=_("Mailbox"))
+    calendar_tool = forms.ModelChoiceField(queryset=Tool.objects.none(), required=False, label=_("Calendar account"))
+    webdav_tool = forms.ModelChoiceField(queryset=Tool.objects.none(), required=False, label=_("WebDAV source"))
+
+    def __init__(self, *args, user, template_id, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.template_id = template_id
+        self.fields["agent"].queryset = AgentConfig.objects.filter(user=user).prefetch_related("tools", "agent_tools__tools")
+        labels = {
+            MAIL_AGENDA_BRIEF_TEMPLATE_ID: _("Theme or mail/agenda scope"),
+            DIFFERENTIAL_WATCH_TEMPLATE_ID: _("Explicit source URLs or names"),
+            DRAFT_REPLIES_EVENTS_TEMPLATE_ID: _("Mail scope and event rules"),
+            WEBDAV_DOCUMENTS_TEMPLATE_ID: _("WebDAV folder path"),
+        }
+        self.fields["value"].label = labels[template_id]
+        configured = Tool.objects.filter(Q(user=user) | Q(user__isnull=True), tool_subtype__in=("email", "caldav", "webdav"))
+        configured = [tool for tool in configured if (credential := ToolCredential.objects.filter(user=user, tool=tool).first()) and (credential.config or credential.token or credential.username or credential.password)]
+        self.fields["email_tool"].queryset = Tool.objects.filter(id__in=[tool.id for tool in configured if tool.tool_subtype == "email"])
+        self.fields["calendar_tool"].queryset = Tool.objects.filter(id__in=[tool.id for tool in configured if tool.tool_subtype == "caldav"])
+        self.fields["webdav_tool"].queryset = Tool.objects.filter(id__in=[tool.id for tool in configured if tool.tool_subtype == "webdav"])
+        required = {
+            MAIL_AGENDA_BRIEF_TEMPLATE_ID: ("email", "caldav"),
+            DIFFERENTIAL_WATCH_TEMPLATE_ID: ("browser",),
+            DRAFT_REPLIES_EVENTS_TEMPLATE_ID: ("email", "caldav"),
+            WEBDAV_DOCUMENTS_TEMPLATE_ID: ("webdav",),
+        }[template_id]
+        self.required_subtypes = required
+        if template_id in {MAIL_AGENDA_BRIEF_TEMPLATE_ID, DRAFT_REPLIES_EVENTS_TEMPLATE_ID}:
+            self.fields["email_tool"].required = True
+            self.fields["calendar_tool"].required = True
+        elif template_id == WEBDAV_DOCUMENTS_TEMPLATE_ID:
+            self.fields["webdav_tool"].required = True
+        for name in ('email_tool', 'calendar_tool', 'webdav_tool'):
+            if not self.fields[name].required:
+                self.fields[name].widget = forms.HiddenInput()
+
+    def clean_agent(self):
+        agent = self.cleaned_data["agent"]
+        if not all(_agent_has_tool_subtype(agent, subtype) for subtype in self.required_subtypes):
+            raise forms.ValidationError(_("The selected agent does not have all required tools."))
+        return agent
+
+    def clean(self):
+        data = super().clean()
+        agent = data.get('agent')
+        if not agent:
+            return data
+        tool_ids = {tool.pk for tool in agent.tools.all()}
+        tool_ids.update(tool.pk for child in agent.agent_tools.all() for tool in child.tools.all())
+        for field in ('email_tool', 'calendar_tool', 'webdav_tool'):
+            selected = data.get(field)
+            if selected and selected.pk not in tool_ids:
+                self.add_error(field, _('This connection is not available to the selected agent.'))
+                continue
+            if not selected:
+                continue
+            try:
+                selector, executor = _template_connection_target(agent, selected)
+            except forms.ValidationError as error:
+                self.add_error(field, error)
+                continue
+            key, option = {
+                'email_tool': ('mailbox', '--mailbox'),
+                'calendar_tool': ('calendar_account', '--account'),
+                'webdav_tool': ('webdav_source', ''),
+            }[field]
+            data[key] = selector
+            route = (
+                f'delegate to configured agent {executor.pk}:{executor.name} and '
+                if executor.pk != agent.pk else ''
+            )
+            target = f'{option} {quote(selector)}' if option else quote(selector)
+            data.setdefault('connection_instructions', []).append(
+                f'For {key} operations, {route}use {target} explicitly.'
+            )
+        return data
 
 
 def _build_maintenance_doc(task: TaskDefinition) -> dict | None:
@@ -268,6 +410,50 @@ def task_template_apply(request, template_id: str):
             )
             return redirect("user_settings:task_templates")
         return redirect("user_settings:task_template_select_mailbox", template_id=template_id)
+
+    configurable = {
+        MAIL_AGENDA_BRIEF_TEMPLATE_ID: evaluate_mail_agenda_brief_template,
+        DIFFERENTIAL_WATCH_TEMPLATE_ID: evaluate_differential_watch_template,
+        DRAFT_REPLIES_EVENTS_TEMPLATE_ID: evaluate_draft_replies_events_template,
+        WEBDAV_DOCUMENTS_TEMPLATE_ID: evaluate_webdav_documents_template,
+    }
+    if template_id in configurable:
+        availability = configurable[template_id](request.user)
+        if not availability.available:
+            messages.error(request, _("This predefined task is unavailable for your current setup."))
+            return redirect("user_settings:task_templates")
+        form = TaskTemplateConfigurationForm(
+            request.POST or None,
+            user=request.user,
+            template_id=template_id,
+        )
+        if request.method == "POST" and form.is_valid():
+            initial = build_template_prefill_payload(
+                request.user,
+                template_id,
+                agent_id=form.cleaned_data["agent"].id,
+                configuration={
+                    {
+                        MAIL_AGENDA_BRIEF_TEMPLATE_ID: "theme",
+                        DIFFERENTIAL_WATCH_TEMPLATE_ID: "sources",
+                        DRAFT_REPLIES_EVENTS_TEMPLATE_ID: "mail_scope",
+                        WEBDAV_DOCUMENTS_TEMPLATE_ID: "folder",
+                    }[template_id]: form.cleaned_data["value"],
+                    "mailbox": form.cleaned_data.get("mailbox", ""),
+                    "calendar_account": form.cleaned_data.get("calendar_account", ""),
+                    "webdav_source": form.cleaned_data.get("webdav_source", ""),
+                    "connection_instructions": form.cleaned_data.get("connection_instructions", []),
+                    "schedule": form.cleaned_data["schedule"].strftime("%H:%M"),
+                },
+            )
+            if initial:
+                request.session["task_template_initial"] = initial
+                return redirect("user_settings:task_create")
+        return render(
+            request,
+            "user_settings/task_template_configure.html",
+            {"form": form, "template_id": template_id, "title": dict((item["id"], item["title"]) for item in get_task_templates_for_user(request.user)).get(template_id, template_id)},
+        )
 
     initial = build_template_prefill_payload(request.user, template_id)
     if not initial:

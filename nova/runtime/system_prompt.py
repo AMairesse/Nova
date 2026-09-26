@@ -62,16 +62,12 @@ def build_automatic_runtime_instructions(
 
     lines: list[str] = [
         "Runtime instructions:",
-        "- The main action surface is the `terminal` tool.",
         "- Use shell-like commands for terminal work. This is a documented subset, not bash: "
         "redirections (`>`, `>>`, `2>`, `2>&1`, `&>`, `<`), pipes, `;`, `&&`, and `||` are supported. "
         "Loops, functions, heredocs, and substitutions are rejected."
     ]
-    if allow_ask_user:
-        lines.append("- Use `ask_user` only for genuine blocking clarifications.")
     lines.extend(
         [
-            "- The terminal session is persistent for this agent and thread.",
             "",
             "Filesystem layout:",
             *filesystem_lines,
@@ -81,18 +77,14 @@ def build_automatic_runtime_instructions(
             "- If the current working directory matters and is unknown, run `pwd` first.",
             f"- Enabled command families: {', '.join(families)}.",
             f"- Configured sub-agents: {_format_subagents(capabilities.subagents)}.",
-            "- Use `delegate_to_agent` only for configured sub-agents. Pass the sub-agent id, exact name, or composite selector.",
             "- Keep thread-scoped file organization, cleanup, and webapp lifecycle work in the main terminal session.",
-            "- Use sub-agents only for focused specialist work; integrate returned outputs before finalizing.",
-            "- Files uploaded in the Files panel are persistent thread files under `/`.",
+            "- Integrate returned sub-agent outputs before finalizing.",
             "- If the user refers to a file without a path, inspect `/` first with `ls /` or `find / -name ...`.",
-            "- Use `/inbox` only for files attached to the current user message and `/history` only for earlier live-message attachments.",
         ]
     )
     if source_message_id is not None:
         lines.append(
-            "- Current-message attachments are under `/inbox` when present; older live-message attachments are under `/history`. "
-            "Only fall back to those mounts when the request clearly points to current or earlier chat attachments."
+            "- Use attachment mounts only when the request clearly points to current or earlier chat attachments."
         )
         lines.append(
             "- Only claim to have used a reference file when it was read directly or passed explicitly to a sub-agent."
@@ -105,61 +97,8 @@ def build_automatic_runtime_instructions(
         lines.append(
             "- Continuous threads may include prior-day summaries and a recent raw-message window; use `history search` then `history get` for older evidence."
         )
-    if capabilities.has_date_time:
-        lines.append("- Use `date` for current date/time queries.")
-    if capabilities.has_memory:
-        lines.append(
-            "- Use `/memory` for user-scoped durable memory; use `grep` for lexical matching and `memory search` for hybrid retrieval."
-        )
     if capabilities.has_python:
-        lines.append(
-            "- Use `python` inside the persistent terminal for computation, data processing, scripts, and package-backed workflows; if an import is missing, run `pip install --user <package>` and retry."
-        )
-        lines.append(
-            "- Use `python --workdir /project -c \"...\"` when inline code needs to sync a workspace folder; keep cleanup, moves, file organization, and `webapp expose` in terminal commands."
-        )
-    if capabilities.has_calendar:
-        calendar_line = "- Use `calendar` commands for CalDAV accounts and events; run `calendar accounts` first when account selection is unclear."
-        if capabilities.has_multiple_calendar_accounts:
-            calendar_line += " When several accounts exist, pass `--account <selector>` explicitly."
-        calendar_line += " Recurring events are readable, but create/update/delete only support non-recurring events."
-        lines.append(calendar_line)
-    if capabilities.has_search:
-        search_line = "- Use `search` for web discovery."
-        if capabilities.has_web:
-            search_line += " Search results are cached for the current run and can be opened with `browse open --result N` using 0-based indexes."
-        lines.append(search_line)
-    if capabilities.has_web:
-        lines.append(
-            "- Use `browse` for interactive page reading within the current run only; persist needed outputs with `--output`, or use `curl`/`wget` for direct downloads."
-        )
-    if capabilities.has_webdav:
-        lines.append(
-            "- Use `/webdav` as a remote filesystem mount; normal file commands apply, subject to configured WebDAV permissions."
-        )
-    if capabilities.has_webapp:
-        lines.append(
-            "- Build static webapps in the persistent filesystem, then publish with `webapp expose <source_dir>`; published apps update as source files change."
-        )
-        lines.append(
-            "- For HTML/CSS/JS files, use raw characters rather than escaped markup and prefer `tee ... --text` for long content."
-        )
-    if capabilities.has_mcp:
-        lines.append(
-            "- Use `mcp tools` and `mcp schema` before remote MCP calls; "
-            "pass input as a quoted JSON object, key=value pairs, --input-file, or stdin. "
-            "JSON prints on stdout by default; use --extract-to to save returned files, "
-            "or `--output` / `>` to persist JSON."
-        )
-    if capabilities.has_api:
-        lines.append(
-            "- Use `api operations` and `api schema` before custom API calls; persist structured results with `--output` or shell redirection."
-        )
-    if capabilities.has_multiple_mailboxes:
-        lines.append("- When using mail commands, always pass `--mailbox <email>` explicitly.")
-    if allow_ask_user:
-        lines.append("- Ask one combined clarification question at a time.")
-
+        lines.append("- If a Python import is missing, run `pip install --user <package>` and retry.")
     return "\n".join(lines).rstrip() + "\n"
 
 

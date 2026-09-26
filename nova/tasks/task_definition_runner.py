@@ -83,13 +83,30 @@ def _prepare_thread_and_message(task_definition: TaskDefinition, prompt: str):
     return thread, message, ephemeral
 
 
-def execute_agent_task_definition(task_definition: TaskDefinition, *, variables: dict[str, Any] | None = None):
+def execute_agent_task_definition(task_definition: TaskDefinition, *, variables: dict[str, Any] | None = None, run=None):
     if task_definition.task_kind != TaskDefinition.TaskKind.AGENT:
         raise ValueError("execute_agent_task_definition can run only AGENT task definitions")
 
-    prompt = render_prompt_template(task_definition.prompt, variables=variables)
+    from nova.models.RoutineRun import RoutineRun
+    from nova.tasks.execution import NO_CHANGE_RESULT
+    previous = RoutineRun.objects.filter(
+        definition=task_definition, user=task_definition.user, status=TaskStatus.COMPLETED,
+    ).exclude(result='').exclude(result=NO_CHANGE_RESULT).order_by('-created_at', '-pk').first()
+    prompt_variables = dict(variables or {})
+    prompt_variables.update({
+        'routine_id': task_definition.pk,
+        'previous_result': previous.result if previous else '',
+        'previous_run_at': previous.created_at.isoformat() if previous else '',
+    })
+    prompt = render_prompt_template(task_definition.prompt, variables=prompt_variables)
     if not prompt.strip():
         raise ValueError("Rendered prompt is empty.")
+
+    if run is None:
+        from nova.tasks.execution import begin_routine_run
+        run, claimed = begin_routine_run(task_definition)
+        if not claimed:
+            return {'status': 'skipped', 'run_id': run.pk}
 
     thread, message, ephemeral = _prepare_thread_and_message(task_definition, prompt)
 
@@ -98,8 +115,12 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
             user=task_definition.user,
             thread=thread,
             agent_config=task_definition.agent,
+            source_message=message,
             status=TaskStatus.RUNNING,
         )
+        run.task = task
+        run.status = TaskStatus.RUNNING
+        run.save(update_fields=['task', 'status', 'updated_at'])
 
         # Avoid import cycle with nova.tasks.tasks
         from nova.tasks.tasks import execute_agent_task_with_executor
@@ -112,18 +133,14 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
             prompt,
             source_message_id=message.id if message else None,
             push_notifications_enabled=not ephemeral,
+            allow_ask_user=not ephemeral,
         )
 
         task.refresh_from_db()
-        if task.status == TaskStatus.FAILED:
-            raise RuntimeError(task.result or "agent task execution failed")
-        if task.status != TaskStatus.COMPLETED:
-            task.status = TaskStatus.COMPLETED
-            task.save(update_fields=["status", "updated_at"])
-
-        return {"status": "ok", "task_id": task.id, "thread_id": thread.id, "message_id": message.id}
+        return {"status": 'ok' if task.status == TaskStatus.COMPLETED else task.status.lower(),
+                "task_id": task.id, "thread_id": thread.id, "message_id": message.id, 'run_id': run.pk}
     finally:
-        if ephemeral:
+        if ephemeral and not Task.objects.filter(thread=thread, status__in=[TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.AWAITING_INPUT]).exists():
             try:
                 delete_thread_for_user(thread, task_definition.user)
             except ThreadDeletionError:

@@ -5,7 +5,7 @@ import time
 
 from asgiref.sync import sync_to_async
 
-from nova.agent_markdown import render_agent_markdown
+from nova.task_snapshot import build_task_message_payload
 from nova.message_utils import annotate_user_message
 from nova.models.Message import Actor, Message
 from nova.tasks.TaskExecutor import TaskExecutor
@@ -112,6 +112,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             trace_handler=self.trace_handler,
             progress_handler=self.handler,
             source_message_id=self.source_message_id,
+            allow_ask_user=self.allow_ask_user,
         ).initialize()
         self.llm = None
 
@@ -194,24 +195,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
                     user=self.user,
                 )
             )
-            annotate_user_message(fresh_message)
-            display_text = ""
-            if isinstance(fresh_message.internal_data, dict):
-                display_text = str(fresh_message.internal_data.get("display_markdown") or "").strip()
-            if not display_text:
-                display_text = fresh_message.text or ""
-            return {
-                "id": fresh_message.id,
-                "text": fresh_message.text,
-                "actor": fresh_message.actor,
-                "internal_data": fresh_message.internal_data,
-                "created_at": str(fresh_message.created_at),
-                "rendered_html": render_agent_markdown(
-                    display_text,
-                    user=fresh_message.user,
-                    thread=fresh_message.thread,
-                ),
-            }
+            return build_task_message_payload(fresh_message)
 
         return await sync_to_async(_load_message, thread_sensitive=True)()
 
@@ -231,6 +215,18 @@ class ReactTerminalTaskExecutor(TaskExecutor):
         await self.handler.record_progress("Processing final response")
         final_answer = run_result.final_answer
         self.task.result = final_answer
+
+        from nova.models.RoutineRun import RoutineRun
+        from nova.tasks.execution import NO_CHANGE_RESULT
+        if final_answer.strip() == NO_CHANGE_RESULT and await sync_to_async(
+            RoutineRun.objects.filter(task_id=self.task.pk).exists, thread_sensitive=True,
+        )():
+            self.handler.push_notifications_enabled = False
+            self.task.current_response = None
+            self.task.streamed_markdown = ''
+            if self.trace_handler:
+                await self.trace_handler.complete_root_run('No material change.')
+            return
 
         message = await sync_to_async(
             self.thread.add_message,

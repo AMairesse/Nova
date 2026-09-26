@@ -109,6 +109,7 @@ class EmailPollingTests(TestCase):
     def test_poll_skips_backlog_after_long_downtime(self, mocked_build_imap, mocked_logout):
         now = timezone.now()
         task = self._task(
+            catch_up_policy=TaskDefinition.CatchUpPolicy.SKIP,
             runtime_state={
                 "last_poll_at": (now - dt.timedelta(minutes=30)).isoformat(),
                 "last_uid": 4,

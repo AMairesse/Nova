@@ -15,9 +15,16 @@ class TaskStatus(models.TextChoices):
     AWAITING_INPUT = "AWAITING_INPUT", _("Awaiting user input")
     COMPLETED = "COMPLETED", _("Completed")
     FAILED = "FAILED", _("Failed")
+    DISPATCH_FAILED = "DISPATCH_FAILED", _("Could not queue")
+    INTERRUPTED = "INTERRUPTED", _("Interrupted")
+    CANCELED = "CANCELED", _("Stopped")
 
 
 class Task(models.Model):
+    submission_key = models.UUIDField(null=True, blank=True)
+    source_message = models.ForeignKey('Message', null=True, blank=True, on_delete=models.SET_NULL)
+    stop_requested = models.BooleanField(default=False)
+    failure_reason = models.CharField(max_length=64, blank=True, default='')
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name='tasks',
@@ -47,6 +54,9 @@ class Task(models.Model):
     result = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['user', 'submission_key'], name='unique_user_submission')]
 
     def __str__(self):
         return f"Task {self.id} for Thread {self.thread.subject} ({self.status})"

@@ -6,11 +6,14 @@
   {{ block.super }}
   <script src="{% static 'user_settings/js/dashboard_tabs.js' %}"></script>
   <script src="{% static 'user_settings/js/general_settings.js' %}"></script>
+  <script src="{% static 'user_settings/js/onboarding.js' %}"></script>
 {% endblock %}
 
 {% block content %}
 <div class="container py-4">
   <h2 class="mb-4">{% trans "User configuration" %}</h2>
+
+  {% include "user_settings/_onboarding.html" %}
 
   <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
     <li class="nav-item" role="presentation">
