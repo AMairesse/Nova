@@ -6,6 +6,7 @@
 
     window.NovaApp.Modules.MessageThreadMethods = {
         async loadMessages(threadId) {
+            const requestId = this._messageLoadRequestId = (this._messageLoadRequestId || 0) + 1;
             try {
                 const params = threadId ? `?thread_id=${threadId}` : '';
                 const response = await fetch(
@@ -13,11 +14,14 @@
                     { headers: { 'X-AJAX': 'true' } }
                 );
 
+                if (requestId !== this._messageLoadRequestId) return;
                 if (response.status === 404 && threadId) {
                     return this.loadMessages(null);
                 }
 
+                if (!response.ok) throw new Error(gettext('Failed to load conversation.'));
                 const html = await response.text();
+                if (requestId !== this._messageLoadRequestId) return;
                 this.stopBottomFollow?.({ cancelPrimeTimers: true });
                 document.getElementById('message-container').innerHTML = html;
                 this.syncComposerAttachmentConfig();
@@ -27,7 +31,15 @@
                 const renderedThreadId = document.querySelector(
                     '#message-container input[name="thread_id"]'
                 )?.value;
-                this.currentThreadId = renderedThreadId || threadId;
+                this.currentThreadId = renderedThreadId || null;
+                const url = new URL(window.location.href);
+                if (this.currentThreadId) url.searchParams.set('thread_id', this.currentThreadId);
+                else url.searchParams.delete('thread_id');
+                if (String(new URL(window.location.href).searchParams.get('thread_id') || '') !== String(this.currentThreadId || '')) {
+                    url.searchParams.delete('message_id');
+                    url.hash = '';
+                }
+                window.history.replaceState({}, '', url);
                 this.restoreComposerDraft(this.currentThreadId);
 
                 document.querySelectorAll('.thread-link').forEach((link) => {
@@ -303,21 +315,18 @@
                     }
                 });
 
-                const firstThread = document.querySelector(
-                    '#threads-list .thread-link'
-                );
-                const firstThreadId = firstThread?.dataset.threadId
-                    || document.querySelector('#mobile-threads-list .thread-link')?.dataset.threadId;
-                await this.loadMessages(firstThreadId || null);
-                document.dispatchEvent(
-                    new CustomEvent('threadChanged', {
-                        detail: { threadId: firstThreadId || null }
-                    })
-                );
+                await this.selectAfterThreadRemoval(threadId);
             } catch (error) {
                 console.error('Error deleting thread:', error);
                 this.showToast(error.message || gettext('Failed to delete thread.'), 'warning');
             }
+        },
+
+        async selectAfterThreadRemoval(threadId) {
+            if (String(this.currentThreadId || '') !== String(threadId)) return;
+            const links = Array.from(document.querySelectorAll('#threads-list .thread-link, #mobile-threads-list .thread-link'));
+            if (links.some(link => String(link.dataset.threadId) === String(threadId))) return;
+            await this.loadMessages(links[0]?.dataset.threadId || null);
         },
 
         async summarizeCurrentThread() {

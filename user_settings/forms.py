@@ -37,6 +37,14 @@ from user_settings.mixins import SecretPreserveMixin
 # ────────────────────────────────────────────────────────────────────────────
 #  LLM providers
 # ────────────────────────────────────────────────────────────────────────────
+class ProviderCatalogConnectionForm(forms.Form):
+    provider_id = forms.IntegerField(required=False, min_value=1)
+    provider_type = LLMProvider._meta.get_field("provider_type").formfield()
+    base_url = forms.CharField(required=False, max_length=200,
+                               validators=LLMProvider._meta.get_field("base_url").validators)
+    api_key = forms.CharField(required=False, max_length=255)
+
+
 class LLMProviderForm(SecretPreserveMixin, forms.ModelForm):
     """Create and edit LLMProvider objects."""
     secret_fields = ["api_key"]

@@ -292,6 +292,7 @@
                     if (!response.ok) throw new Error('Archive request failed');
                     await response.json();
                     await window.NovaApp.messageManager?.refreshThreadListsFromServer?.();
+                    await window.NovaApp.messageManager?.selectAfterThreadRemoval?.(threadId);
                 } catch (error) {
                     console.error('Error updating archived thread:', error);
                     button.disabled = false;

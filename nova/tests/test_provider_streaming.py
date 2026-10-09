@@ -213,6 +213,7 @@ class ProviderStreamingTests(SimpleTestCase):
             messages=[{"role": "user", "content": "Hello"}],
             tools=None,
             normalize_content=adapter.normalize_multimodal_content,
+            extra_kwargs={"extra_headers": {"HTTP-Referer": "https://github.com/AMairesse/Nova", "X-OpenRouter-Title": "Nova"}},
             on_content_delta=None,
         )
 
