@@ -22,6 +22,8 @@
         maxContextNote,
         resetMaxContextButton,
         modelCatalogUrl,
+        modelCatalogPreviewUrl,
+        form,
       } = refs;
       const {
         currentModelValue,
@@ -503,32 +505,6 @@
           return;
         }
 
-        if (!providerHasBeenSaved()) {
-          modelCatalogControls.classList.add("d-none");
-          modelCatalogContainer.innerHTML = "";
-          modelCatalogEmpty.classList.remove("alert-danger");
-          modelCatalogEmpty.classList.add("alert-light");
-          modelCatalogEmpty.classList.remove("d-none");
-          modelCatalogEmpty.textContent =
-            "Save this connection first, then load the provider model catalog if available.";
-          updateSelectedModelSummary();
-          updateMaxContextUi();
-          return;
-        }
-
-        if (hasUnsavedConnectionChanges()) {
-          modelCatalogControls.classList.add("d-none");
-          modelCatalogContainer.innerHTML = "";
-          modelCatalogEmpty.classList.remove("alert-danger");
-          modelCatalogEmpty.classList.add("alert-light");
-          modelCatalogEmpty.classList.remove("d-none");
-          modelCatalogEmpty.textContent =
-            "Save connection changes before loading the model catalog for this provider.";
-          updateSelectedModelSummary();
-          updateMaxContextUi();
-          return;
-        }
-
         if (!state.catalogLoaded) {
           modelCatalogControls.classList.add("d-none");
           modelCatalogContainer.innerHTML = "";
@@ -643,35 +619,33 @@
         ) {
           return;
         }
-        if (!providerHasBeenSaved()) {
-          renderCatalog();
-          return;
-        }
-        if (hasUnsavedConnectionChanges()) {
-          renderCatalog();
-          return;
-        }
-        if (!modelCatalogUrl) {
-          setCatalogStatus(
-            "This provider does not expose a catalog endpoint.",
-            "danger"
-          );
-          return;
-        }
+        const preview = !providerHasBeenSaved() || hasUnsavedConnectionChanges();
+        const endpoint = preview ? modelCatalogPreviewUrl : modelCatalogUrl;
+        if (!endpoint) return;
+        const generation = state.catalogGeneration || 0;
 
         state.catalogLoading = true;
         updateActionButtons();
         setCatalogStatus("Loading provider model catalog…", "muted");
 
         try {
-          const response = await fetch(modelCatalogUrl, {
-            headers: {
-              Accept: "application/json",
-              "X-Requested-With": "XMLHttpRequest",
-            },
+          const options = {
+            headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
             credentials: "same-origin",
-          });
+          };
+          let response;
+          if (preview) {
+            const body = new FormData();
+            for (const name of ['provider_type', 'base_url', 'api_key', 'csrfmiddlewaretoken']) {
+              body.set(name, form.elements.namedItem(name)?.value || '');
+            }
+            body.set('provider_id', form.dataset.providerId || '');
+            response = await window.DOMUtils.csrfFetch(endpoint, { ...options, method: 'POST', body });
+          } else {
+            response = await fetch(endpoint, options);
+          }
           const payload = await response.json();
+          if (generation !== (state.catalogGeneration || 0)) return;
           if (!response.ok) {
             throw new Error(payload.error || `HTTP ${response.status}`);
           }
@@ -683,6 +657,7 @@
           renderCatalog();
           setCatalogStatus(`${state.catalogItems.length} model(s) loaded.`, "success");
         } catch (error) {
+          if (generation !== (state.catalogGeneration || 0)) return;
           state.catalogLoaded = false;
           state.catalogItems = [];
           renderFilterPills();
@@ -700,6 +675,7 @@
       }
 
       function resetCatalogState(options) {
+        state.catalogGeneration = (state.catalogGeneration || 0) + 1;
         const keepStatus = options && options.keepStatus === true;
         state.catalogLoaded = false;
         state.catalogItems = [];

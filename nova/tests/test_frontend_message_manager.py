@@ -497,6 +497,28 @@ class MessageManagerFrontendTests(PlaywrightLiveServerTestCase):
 
         self.assertFalse(Thread.objects.filter(pk=new_thread.id).exists())
 
+    def test_archiving_selected_thread_selects_remaining_then_empty(self):
+        remaining = Thread.objects.create(user=self.user, subject="Remaining")
+        selected = Thread.objects.create(user=self.user, subject="Selected")
+        self.open_path(f"/?thread_id={selected.id}")
+        self._wait_for_selected_thread(selected.id)
+        self.page.locator(f'#threads-list .archive-thread-btn[data-thread-id="{selected.id}"]').click()
+        self._wait_for_selected_thread(remaining.id)
+        self.assertIn(f"thread_id={remaining.id}", self.page.url)
+        self.page.locator(f'#threads-list .archive-thread-btn[data-thread-id="{remaining.id}"]').click()
+        self.page.wait_for_function("() => !window.NovaApp.messageManager.currentThreadId")
+        self.assertEqual(self.page.locator('#message-container input[name="thread_id"]').input_value(), "")
+        self.assertNotIn("thread_id=", self.page.url)
+
+    def test_deleting_another_thread_preserves_current_selection(self):
+        selected = Thread.objects.create(user=self.user, subject="Selected")
+        other = Thread.objects.create(user=self.user, subject="Other")
+        self.open_path(f"/?thread_id={selected.id}")
+        self._wait_for_selected_thread(selected.id)
+        self.page.evaluate("id => window.NovaApp.messageManager.deleteThread(String(id))", other.id)
+        self._wait_for_selected_thread(selected.id)
+        self.assertFalse(Thread.objects.filter(pk=other.id).exists())
+
     def test_mobile_create_thread_closes_offcanvas_and_selects_new_thread(self):
         original_thread = Thread.objects.create(user=self.user, subject="Existing mobile thread")
         original_thread.add_message("Seed message", actor=Actor.USER)

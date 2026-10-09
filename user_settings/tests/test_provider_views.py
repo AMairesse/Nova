@@ -401,3 +401,64 @@ class ProviderViewsTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+class ProviderCatalogPreviewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="catalog-preview")
+        self.client.force_login(self.user)
+        self.url = reverse("user_settings:provider-model-catalog-preview")
+        self.data = {"provider_type": ProviderType.OPENROUTER, "base_url": "", "api_key": "preview-key"}
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_preview_does_not_save_and_needs_no_name_or_model(self, catalog):
+        catalog.return_value = [{"id": "model-a"}]
+        count = LLMProvider.objects.count()
+        response = self.client.post(self.url, self.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["models"], [{"id": "model-a"}])
+        self.assertEqual(LLMProvider.objects.count(), count)
+        provider = catalog.await_args.args[0]
+        self.assertIsNone(provider.pk)
+        self.assertEqual(provider.api_key, "preview-key")
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_existing_key_is_used_without_modifying_provider(self, catalog):
+        catalog.return_value = []
+        provider = LLMProvider.objects.create(user=self.user, name="Existing", provider_type=ProviderType.OPENROUTER,
+                                              api_key="saved-key", base_url="https://openrouter.ai/api/v1")
+        response = self.client.post(self.url, {**self.data, "provider_id": provider.pk, "api_key": "",
+                                              "base_url": "https://openrouter.ai/api"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(catalog.await_args.args[0].api_key, "saved-key")
+        provider.refresh_from_db()
+        self.assertEqual(provider.base_url, "https://openrouter.ai/api/v1")
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_other_users_provider_is_rejected(self, catalog):
+        other = User.objects.create_user(username="other-catalog")
+        provider = LLMProvider.objects.create(user=other, name="Private", provider_type=ProviderType.OPENROUTER, api_key="secret")
+        response = self.client.post(self.url, {**self.data, "provider_id": provider.pk})
+        self.assertEqual(response.status_code, 404)
+        catalog.assert_not_awaited()
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_invalid_connection_and_missing_key_do_not_call_provider(self, catalog):
+        for changes in ({"provider_type": "unknown"}, {"base_url": "bad url"}, {"api_key": ""}, {"provider_id": "invalid"}):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.client.post(self.url, {**self.data, **changes}).status_code, 400)
+        catalog.assert_not_awaited()
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_provider_error_does_not_echo_secret(self, catalog):
+        catalog.side_effect = RuntimeError("request failed with preview-key")
+        response = self.client.post(self.url, self.data)
+        self.assertEqual(response.status_code, 400)
+        self.assertNotContains(response, "preview-key", status_code=400)
+
+    def test_preview_requires_post_and_csrf(self):
+        from django.test import Client
+        self.assertEqual(self.client.get(self.url).status_code, 405)
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        self.assertEqual(client.post(self.url, self.data).status_code, 403)

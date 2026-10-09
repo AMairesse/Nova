@@ -21,6 +21,11 @@ from nova.providers.openai_compatible import (
 )
 from nova.web.safe_http import safe_http_request
 
+OPENROUTER_APP_HEADERS = {
+    "HTTP-Referer": "https://github.com/AMairesse/Nova",
+    "X-OpenRouter-Title": "Nova",
+}
+
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_ALLOWED_PATHS = {"", "/", "/api", "/api/", "/api/v1", "/api/v1/"}
 OPENROUTER_TOOL_PARAMETERS = {"tools", "tool_choice", "parallel_tool_calls"}
@@ -417,6 +422,7 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             messages=messages,
             tools=tools,
             normalize_content=self.normalize_multimodal_content,
+            extra_kwargs={"extra_headers": dict(OPENROUTER_APP_HEADERS)},
         )
 
     async def stream_chat(self, provider, *, messages, tools=None, on_content_delta=None):
@@ -427,6 +433,7 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             messages=messages,
             tools=tools,
             normalize_content=self.normalize_multimodal_content,
+            extra_kwargs={"extra_headers": dict(OPENROUTER_APP_HEADERS)},
             on_content_delta=on_content_delta,
         )
 
@@ -544,6 +551,7 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
     async def invoke_native(self, provider, invocation_request: dict[str, object]) -> dict[str, object]:
         payload = await self.build_native_request(provider, invocation_request)
         headers = {
+            **OPENROUTER_APP_HEADERS,
             "Authorization": f"Bearer {provider.api_key or ''}",
             "Content-Type": "application/json",
         }

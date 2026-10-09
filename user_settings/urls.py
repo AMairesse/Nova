@@ -13,6 +13,7 @@ from user_settings.views.provider import (
     ProviderUpdateView,
     ProviderDeleteView,
     provider_model_catalog,
+    provider_model_catalog_preview,
     provider_verification_status,
 )
 from user_settings.views.agent import (
@@ -70,6 +71,7 @@ urlpatterns += [
 urlpatterns += [
     # LLM Providers
     path("providers/", ProviderListView.as_view(), name="providers"),
+    path("providers/models/preview/", provider_model_catalog_preview, name="provider-model-catalog-preview"),
     path("providers/add/", ProviderCreateView.as_view(), name="provider-add"),
     path("providers/<int:pk>/edit/", ProviderUpdateView.as_view(), name="provider-edit"),
     path(

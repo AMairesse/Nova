@@ -71,7 +71,8 @@ class ProviderPageFrontendTests(PlaywrightLiveServerTestCase):
         )
 
         empty_state_text = self.page.locator("#provider-model-catalog-empty").inner_text()
-        self.assertIn("Save this connection first", empty_state_text)
+        self.assertFalse(load_models_button.is_disabled())
+        self.assertIn("Load the provider model catalog", empty_state_text)
 
     def test_saved_provider_can_load_catalog_and_select_model(self):
         provider = create_provider(
@@ -167,7 +168,7 @@ class ProviderPageFrontendTests(PlaywrightLiveServerTestCase):
         self.assertTrue(self.page.locator("#test-provider-btn").is_disabled())
         self.assertTrue(self.page.locator("#refresh-provider-capabilities-btn").is_disabled())
 
-    def test_saved_provider_disables_catalog_when_connection_changes_are_unsaved(self):
+    def test_saved_provider_can_load_catalog_when_connection_changes_are_unsaved(self):
         provider = create_provider(
             self.user,
             provider_type=ProviderType.OPENROUTER,
@@ -180,10 +181,10 @@ class ProviderPageFrontendTests(PlaywrightLiveServerTestCase):
         self.assertFalse(load_models_button.is_disabled())
 
         self.page.locator("#id_base_url").fill("https://example.invalid/api/v1")
-        self._wait_until(load_models_button.is_disabled)
+        self.assertFalse(load_models_button.is_disabled())
 
         empty_state_text = self.page.locator("#provider-model-catalog-empty").inner_text()
-        self.assertIn("Save connection changes before loading the model catalog", empty_state_text)
+        self.assertIn("Load the provider model catalog", empty_state_text)
 
     def test_catalog_search_and_capability_filters_reduce_visible_models(self):
         provider = create_provider(
@@ -334,3 +335,25 @@ class ProviderPageFrontendTests(PlaywrightLiveServerTestCase):
             }
             """
         )
+
+    def test_new_provider_loads_models_without_saving(self):
+        from nova.models.Provider import LLMProvider
+        url = f"{self.live_server_url}{reverse('user_settings:provider-model-catalog-preview')}"
+        requests = []
+        def respond(route):
+            requests.append(route.request)
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"models": [{"id": "model-a", "name": "Model A"}]}))
+        self.page.route(url, respond)
+        count = LLMProvider.objects.filter(user=self.user).count()
+        self.open_path(reverse("user_settings:provider-add"))
+        self.page.locator("#id_provider_type").select_option(ProviderType.OPENROUTER)
+        self.page.locator("#id_api_key").fill("test-preview-key")
+        self.page.locator("#load-provider-models-btn").click()
+        self.page.wait_for_selector('[data-provider-model-select="model-a"]')
+        self.page.locator('[data-provider-model-select="model-a"]').click()
+        self.assertEqual(self.page.locator("#id_model").input_value(), "model-a")
+        self.assertEqual(LLMProvider.objects.filter(user=self.user).count(), count)
+        self.assertEqual(requests[0].method, "POST")
+        self.assertIn("test-preview-key", requests[0].post_data)
+        self.page.locator("#id_api_key").fill("changed-key")
+        self.assertEqual(self.page.locator("[data-provider-model-select]").count(), 0)

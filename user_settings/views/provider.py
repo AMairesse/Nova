@@ -13,7 +13,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 from django.views.generic import ListView
 
 from nova.models.Provider import LLMProvider, check_and_create_system_provider
@@ -24,7 +24,7 @@ from nova.providers import (
     resolve_provider_capability_snapshot,
 )
 from nova.tasks.provider_validation_tasks import validate_provider_configuration_task
-from user_settings.forms import LLMProviderForm
+from user_settings.forms import LLMProviderForm, ProviderCatalogConnectionForm
 from user_settings.mixins import (
     OwnerCreateView,
     OwnerUpdateView,
@@ -66,6 +66,7 @@ class ProviderVerificationActionMixin:
         provider = getattr(self, "object", None) or getattr(context.get("form"), "instance", None)
         context["provider_instance"] = provider
         context["provider_defaults_map"] = get_provider_defaults_map()
+        context["provider_model_catalog_preview_url"] = reverse("user_settings:provider-model-catalog-preview")
         if provider and provider.pk:
             context["provider_verification_status_url"] = reverse(
                 "user_settings:provider-validation-status",
@@ -252,3 +253,29 @@ def provider_model_catalog(request, pk: int):
             "models": models_payload,
         }
     )
+
+
+@login_required
+@require_POST
+def provider_model_catalog_preview(request):
+    form = ProviderCatalogConnectionForm(request.POST)
+    if not form.is_valid():
+        return JsonResponse({"error": _("Check the connection settings."), "errors": form.errors}, status=400)
+    connection = form.cleaned_data
+    existing = None
+    if connection["provider_id"]:
+        existing = get_object_or_404(LLMProvider, pk=connection["provider_id"], user=request.user)
+    api_key = connection["api_key"] or (existing.api_key if existing else "")
+    provider = LLMProvider(user=request.user, provider_type=connection["provider_type"],
+                           base_url=connection["base_url"], api_key=api_key)
+    defaults = get_provider_defaults(provider)
+    if not defaults.supports_model_catalog:
+        return JsonResponse({"error": _("This provider type does not expose a model catalog.")}, status=400)
+    if defaults.api_key_required and not api_key:
+        return JsonResponse({"error": _("Enter an API key before loading models.")}, status=400)
+    try:
+        models_payload = async_to_sync(list_provider_models)(provider)
+    except Exception:
+        # The connection is unsaved: never echo errors that could contain submitted secrets.
+        return JsonResponse({"error": _("Could not load models. Check the connection settings and API key.")}, status=400)
+    return JsonResponse({"provider_type": provider.provider_type, "models": models_payload})

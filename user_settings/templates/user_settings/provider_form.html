@@ -28,6 +28,7 @@
     data-is-new-provider="{% if provider.pk %}0{% else %}1{% endif %}"
     data-verification-status="{{ provider.validation_status|default:'untested' }}"
     data-verification-status-url="{{ provider_verification_status_url|default:'' }}"
+    data-model-catalog-preview-url="{{ provider_model_catalog_preview_url }}"
     data-model-catalog-url="{{ provider_model_catalog_url|default:'' }}"
     data-verification-poll-interval-ms="2000"
   >
@@ -60,7 +61,7 @@
           <div>
             <h3 class="h5 mb-1">{% trans "Model" %}</h3>
             <p class="text-muted small mb-0" id="provider-model-card-help">
-              {% trans "Choose a model after the connection is saved. For providers without discovery support, enter the model manually." %}
+              {% trans "Load available models using the connection settings above. For providers without discovery support, enter the model manually." %}
             </p>
           </div>
           <button
@@ -98,7 +99,7 @@
         </div>
 
         <div id="provider-model-catalog-empty" class="alert alert-light border small mt-3 mb-0">
-          {% trans "Save this connection first, then load the provider model catalog if available." %}
+          {% trans "Enter connection settings, then load the available models." %}
         </div>
 
         <div id="provider-model-catalog" class="row g-3 mt-1"></div>

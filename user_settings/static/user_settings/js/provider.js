@@ -206,9 +206,7 @@
       loadModelsButton.classList.toggle("d-none", !providerSupportsModelCatalog());
       loadModelsButton.disabled =
         state.catalogLoading ||
-        !providerSupportsModelCatalog() ||
-        !providerHasBeenSaved() ||
-        hasUnsavedConnectionChanges();
+        !providerSupportsModelCatalog();
     }
 
     if (loadedOnlyWrapper) {
@@ -233,6 +231,8 @@
       maxContextNote,
       resetMaxContextButton,
       modelCatalogUrl,
+      form,
+      modelCatalogPreviewUrl: form.dataset.modelCatalogPreviewUrl || "",
     },
     state,
     helpers: {
@@ -348,8 +348,8 @@
         return;
       }
       input.addEventListener("input", () => {
+        catalogController.resetCatalogState({ keepStatus: false });
         updateActionButtons();
-        catalogController.renderCatalog();
       });
     });
 

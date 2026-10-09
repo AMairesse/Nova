@@ -8,6 +8,7 @@ from django.test import SimpleTestCase
 
 from nova.models.Provider import LLMProvider, ProviderType
 from nova.providers.openrouter import (
+    OPENROUTER_APP_HEADERS,
     OpenRouterMetadataAuthError,
     OpenRouterMetadataError,
     OpenRouterMetadataTransientError,
@@ -336,6 +337,7 @@ class OpenRouterProviderTests(SimpleTestCase):
             messages=[{"role": "user", "content": "Hello"}],
             tools=None,
             normalize_content=adapter.normalize_multimodal_content,
+            extra_kwargs={"extra_headers": OPENROUTER_APP_HEADERS},
         )
 
     @patch("nova.providers.openrouter.fetch_openrouter_model_catalog", new_callable=AsyncMock)
@@ -471,6 +473,8 @@ class OpenRouterProviderTests(SimpleTestCase):
         mocked_request.return_value = ResponseStub(payload={"choices": []})
 
         payload = async_to_sync(adapter.invoke_native)(provider, {"prompt": "ignored"})
+        self.assertEqual(mocked_request.call_args.kwargs["headers"]["HTTP-Referer"], "https://github.com/AMairesse/Nova")
+        self.assertEqual(mocked_request.call_args.kwargs["headers"]["X-OpenRouter-Title"], "Nova")
 
         self.assertEqual(payload, {"choices": []})
         adapter.build_native_request.assert_awaited_once()
@@ -616,3 +620,14 @@ class OpenRouterProviderTests(SimpleTestCase):
                 }
             ],
         )
+
+
+class OpenRouterAttributionTests(SimpleTestCase):
+    @patch("nova.providers.openrouter.stream_openai_compatible_chat", new_callable=AsyncMock)
+    def test_streaming_includes_nova_attribution(self, stream):
+        adapter = OpenRouterProviderAdapter()
+        provider = LLMProvider(provider_type=ProviderType.OPENROUTER, model="test", api_key="secret")
+        async_to_sync(adapter.stream_chat)(provider, messages=[])
+        self.assertEqual(stream.await_args.kwargs["extra_kwargs"]["extra_headers"], {
+            "HTTP-Referer": "https://github.com/AMairesse/Nova", "X-OpenRouter-Title": "Nova",
+        })

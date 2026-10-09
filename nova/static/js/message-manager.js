@@ -70,6 +70,7 @@
         'createThread',
         'refreshThreadListsFromServer',
         'deleteThread',
+        'selectAfterThreadRemoval',
         'summarizeCurrentThread',
         'showSubAgentConfirmationDialog',
         'confirmSummarize',
