@@ -4,6 +4,7 @@ import logging
 import time
 
 from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 
 from nova.task_snapshot import build_task_message_payload
 from nova.message_utils import annotate_user_message
@@ -50,7 +51,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             internal_data = message.internal_data if message and isinstance(message.internal_data, dict) else {}
             return internal_data.get("response_mode")
 
-        return await sync_to_async(_load_response_mode, thread_sensitive=True)()
+        return await database_sync_to_async(_load_response_mode, thread_sensitive=True)()
 
     async def _create_prompt(self):
         if not self.source_message_id:
@@ -60,7 +61,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
 
         provider = await self._get_llm_provider()
         try:
-            source_message = await sync_to_async(
+            source_message = await database_sync_to_async(
                 Message.objects.select_related("thread", "user").get,
                 thread_sensitive=True,
             )(pk=self.source_message_id, thread=self.thread, user=self.user)
@@ -183,7 +184,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             fresh_message.internal_data = internal_data
             fresh_message.save(update_fields=["internal_data"])
 
-        await sync_to_async(_persist_message_state, thread_sensitive=True)()
+        await database_sync_to_async(_persist_message_state, thread_sensitive=True)()
 
     async def _build_realtime_message_payload(self, message_id: int) -> dict:
         def _load_message():
@@ -197,7 +198,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
             )
             return build_task_message_payload(fresh_message)
 
-        return await sync_to_async(_load_message, thread_sensitive=True)()
+        return await database_sync_to_async(_load_message, thread_sensitive=True)()
 
     async def _process_result(self, result):
         if isinstance(result, ReactTerminalRunResult):
@@ -218,7 +219,7 @@ class ReactTerminalTaskExecutor(TaskExecutor):
 
         from nova.models.RoutineRun import RoutineRun
         from nova.tasks.execution import NO_CHANGE_RESULT
-        if final_answer.strip() == NO_CHANGE_RESULT and await sync_to_async(
+        if final_answer.strip() == NO_CHANGE_RESULT and await database_sync_to_async(
             RoutineRun.objects.filter(task_id=self.task.pk).exists, thread_sensitive=True,
         )():
             self.handler.push_notifications_enabled = False
@@ -228,9 +229,9 @@ class ReactTerminalTaskExecutor(TaskExecutor):
                 await self.trace_handler.complete_root_run('No material change.')
             return
 
-        message = await sync_to_async(
+        message = await database_sync_to_async(
             self.thread.add_message,
-            thread_sensitive=False,
+            thread_sensitive=True,
         )(final_answer, actor=Actor.AGENT)
 
         await self.handler.on_context_consumption(

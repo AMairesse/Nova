@@ -3,11 +3,11 @@ import asyncio
 import datetime as dt
 import logging
 import time
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from enum import Enum
 from typing import Dict, Any
-from django.db import transaction
+from django.db import DatabaseError, transaction
 
 from nova.models.Interaction import Interaction, InteractionStatus
 from nova.models.Message import MessageType, Actor
@@ -90,7 +90,7 @@ class TaskExecutor:
         state = getattr(self.agent_config, "_state", None)
         fields_cache = getattr(state, "fields_cache", None)
         if isinstance(fields_cache, dict) and "llm_provider" not in fields_cache:
-            provider = await sync_to_async(
+            provider = await database_sync_to_async(
                 lambda: self.agent_config.llm_provider,
                 thread_sensitive=True,
             )()
@@ -131,7 +131,7 @@ class TaskExecutor:
         finally:
             from nova.tasks.execution import finish_routine_task
             try:
-                await sync_to_async(finish_routine_task, thread_sensitive=True)(self.task)
+                await database_sync_to_async(finish_routine_task, thread_sensitive=True)(self.task)
             finally:
                 await self._cleanup()
 
@@ -159,7 +159,7 @@ class TaskExecutor:
             step = "Initializing AI task"
         self.task.progress_logs.append({"step": step, "timestamp": str(dt.datetime.now(dt.timezone.utc)),
                                         "severity": "info"})
-        await sync_to_async(self._save_active_transition, thread_sensitive=True)(
+        await database_sync_to_async(self._save_active_transition, thread_sensitive=True)(
             ['status', 'progress_logs', 'updated_at'])
 
     def _save_active_transition(self, fields):
@@ -199,7 +199,7 @@ class TaskExecutor:
                     f"**{agent_name} asks:** {question}", Actor.SYSTEM,
                     MessageType.INTERACTION_QUESTION, interaction)
                 return interaction
-        return await sync_to_async(persist, thread_sensitive=True)()
+        return await database_sync_to_async(persist, thread_sensitive=True)()
 
     async def _process_interruption_payload(self, interruption):
         """
@@ -257,7 +257,7 @@ class TaskExecutor:
                                         "timestamp": str(dt.datetime.now(dt.timezone.utc)), "severity": "success"})
 
         self.task.status = TaskStatus.COMPLETED
-        await sync_to_async(self._save_active_transition, thread_sensitive=True)(
+        await database_sync_to_async(self._save_active_transition, thread_sensitive=True)(
             ['status', 'result', 'current_response', 'streamed_markdown', 'progress_logs', 'updated_at'])
 
         await self.handler.on_task_complete(self.task.result, self.thread.id, self.thread.subject)
@@ -267,7 +267,7 @@ class TaskExecutor:
         error_category = self._categorize_error(error)
 
         error_msg = f"{error_category.value}: {str(error)}"
-        logger.error(f"Task {self.task.id} failed: {error_msg}")
+        logger.error("Task %s failed: %s", self.task.id, error_msg, exc_info=True)
 
         # Update task state
         self.task.status = TaskStatus.FAILED
@@ -297,7 +297,7 @@ class TaskExecutor:
                     self.task.failure_reason = 'stopped'
                 self.task.save(update_fields=['status', 'result', 'failure_reason', 'progress_logs', 'updated_at'])
                 return True
-        if not await sync_to_async(persist_error, thread_sensitive=True)():
+        if not await database_sync_to_async(persist_error, thread_sensitive=True)():
             return
 
         try:
@@ -322,7 +322,9 @@ class TaskExecutor:
         error_str = str(error).lower()
         error_type = type(error).__name__
 
-        if "tool" in error_str or "Tool" in error_type:
+        if isinstance(error, DatabaseError):
+            return TaskErrorCategory.SYSTEM_ERROR
+        elif "tool" in error_str or "Tool" in error_type:
             return TaskErrorCategory.TOOL_FAILURE
         elif "agent" in error_str or "Agent" in error_type:
             return TaskErrorCategory.AGENT_FAILURE
@@ -361,7 +363,7 @@ class TaskExecutor:
             "timestamp": str(dt.datetime.now(dt.timezone.utc)),
             "severity": "info"
         })
-        await sync_to_async(self.task.save, thread_sensitive=False)(update_fields=['progress_logs', 'updated_at'])
+        await database_sync_to_async(self.task.save, thread_sensitive=True)(update_fields=['progress_logs', 'updated_at'])
 
         # Save result
         self.task.result = result

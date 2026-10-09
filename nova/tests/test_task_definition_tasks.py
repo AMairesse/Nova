@@ -186,6 +186,8 @@ class TaskDefinitionTaskRunnerTests(TestCase):
     @patch("nova.tasks.tasks.poll_new_unseen_email_headers")
     def test_poll_task_definition_email_noop_when_no_new_email(self, mocked_poll):
         task_def = self._create_agent_email_task(name="email-noop")
+        task_def.last_error = "Previous agent failure"
+        task_def.save(update_fields=["last_error"])
         mocked_poll.return_value = {
             "headers": [],
             "state": {"last_uid": 10},
@@ -198,6 +200,7 @@ class TaskDefinitionTaskRunnerTests(TestCase):
         self.assertEqual(result["new_email_count"], 0)
         task_def.refresh_from_db()
         self.assertEqual(task_def.runtime_state.get("last_uid"), 10)
+        self.assertEqual(task_def.last_error, "Previous agent failure")
 
     @patch("nova.tasks.tasks.execute_agent_task_definition")
     @patch("nova.tasks.tasks.poll_new_unseen_email_headers")

@@ -121,6 +121,7 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+        restart: true
     env_file:
       - .env
 
@@ -134,6 +135,7 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+        restart: true
     env_file:
       - .env
 
@@ -144,6 +146,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        restart: true
       redis:
         condition: service_healthy
       minio:
