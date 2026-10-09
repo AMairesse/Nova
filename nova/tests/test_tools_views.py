@@ -686,7 +686,7 @@ class ToolsViewsTests(TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "error")
-        self.assertIn("boom", response.json()["message"])
+        self.assertNotIn("boom", response.json()["message"])
         self.assertTrue(any("boom" in line for line in logs.output))
 
     @patch("nova.plugins.python.service.test_exec_runner_access", new_callable=AsyncMock)

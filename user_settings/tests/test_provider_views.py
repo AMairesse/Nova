@@ -350,6 +350,15 @@ class ProviderViewsTests(TestCase):
         mocked_resolve_snapshot.assert_not_awaited()
 
     @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
+    def test_saved_provider_catalog_does_not_expose_errors(self, mocked_list_models):
+        provider = LLMProvider.objects.create(user=self.user, name="Catalog", provider_type=ProviderType.OPENROUTER, api_key="secret")
+        mocked_list_models.side_effect = RuntimeError("private diagnostic with secret")
+        with self.assertLogs("user_settings.views.provider", level="ERROR"):
+            response = self.client.get(reverse("user_settings:provider-model-catalog", args=[provider.pk]))
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("private diagnostic", response.json()["error"])
+
+    @patch("user_settings.views.provider.list_provider_models", new_callable=AsyncMock)
     def test_provider_model_catalog_endpoint_returns_catalog(self, mocked_list_models):
         provider = LLMProvider.objects.create(
             user=self.user,

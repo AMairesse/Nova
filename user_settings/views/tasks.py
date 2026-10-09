@@ -12,6 +12,7 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from urllib.parse import urlencode
 from shlex import quote
+import logging
 
 from asgiref.sync import async_to_sync
 
@@ -51,6 +52,8 @@ from nova.tasks.tasks import (
     run_task_definition_cron,
     run_task_definition_maintenance,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TaskDefinitionForm(ModelForm):
@@ -716,5 +719,8 @@ def task_cron_preview(request):
 
         description = get_description(expr)
         return JsonResponse({"valid": True, "description": description})
-    except Exception as e:
-        return JsonResponse({"valid": False, "error": str(e)}, status=400)
+    except croniter.CroniterError:
+        return JsonResponse({"valid": False, "error": str(_("Invalid cron expression. Check the five schedule fields."))}, status=400)
+    except Exception:
+        logger.exception("Cron schedule description failed")
+        return JsonResponse({"valid": False, "error": str(_("Could not describe this schedule. Check the cron expression."))}, status=400)

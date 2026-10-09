@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import logging
 from urllib.parse import urlencode
 
 from asgiref.sync import async_to_sync
@@ -33,6 +34,8 @@ from user_settings.mixins import (
     SystemReadonlyMixin,
 )
 
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------#
 #  List                                                                      #
@@ -242,8 +245,9 @@ def provider_model_catalog(request, pk: int):
 
     try:
         models_payload = async_to_sync(list_provider_models)(provider)
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception:
+        logger.exception("Provider model catalog loading failed")
+        return JsonResponse({"error": _("Could not load models. Check the connection settings and API key.")}, status=400)
 
     return JsonResponse(
         {

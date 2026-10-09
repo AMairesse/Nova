@@ -131,6 +131,15 @@ class FilesViewsTests(TestCase):
         self.assertIn("File too large", payload["error"])
 
     @patch("nova.views.files_views.batch_upload_files", new_callable=AsyncMock)
+    def test_file_upload_does_not_expose_storage_errors(self, mocked_batch_upload):
+        mocked_batch_upload.side_effect = RuntimeError("private storage diagnostic")
+        uploaded = SimpleUploadedFile("a.bin", b"hello", content_type="application/x-custom")
+        with self.assertLogs("nova.views.files_views", level="ERROR"):
+            response = self.client.post(reverse("file_upload", args=[self.thread.id]), data={"files": [uploaded]})
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("private storage diagnostic", response.json()["error"])
+
+    @patch("nova.views.files_views.batch_upload_files", new_callable=AsyncMock)
     @patch("nova.views.files_views.publish_file_update", new_callable=AsyncMock)
     def test_file_upload_success(self, mocked_publish_update, mocked_batch_upload):
         mocked_batch_upload.return_value = ([{"id": 1, "path": "/a.bin"}], [])

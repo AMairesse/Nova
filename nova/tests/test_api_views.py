@@ -69,7 +69,7 @@ class QuestionAnswerViewTests(TestCase):
         mocked_initialize.assert_awaited_once()
         fake_runtime.run.assert_awaited_once_with(ephemeral_user_prompt="What is the answer?")
 
-    def test_post_surfaces_llm_failures(self):
+    def test_post_does_not_expose_llm_failures(self):
         provider = create_provider(self.user, name="Broken Provider", model="gpt-4o-mini")
         agent_config = create_agent(self.user, provider, name="Broken Agent")
         UserProfile.objects.update_or_create(
@@ -85,4 +85,5 @@ class QuestionAnswerViewTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json()["detail"], "LLM error: boom")
+        self.assertNotIn("boom", response.json()["detail"])
+        self.assertEqual(response.json()["detail"], "Could not generate an answer. Please try again later.")

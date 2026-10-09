@@ -856,9 +856,9 @@ async def tool_test_connection(request, pk: int):
                 return JsonResponse(
                     {"status": "success", "message": message, "tools": tools}
                 )
-            except Exception as e:  # noqa: BLE001 – broad catch on purpose
-                logger.error(e)
-                return JsonResponse({"status": "error", "message": str(e)})
+            except Exception:  # noqa: BLE001 – broad catch on purpose
+                logger.exception("MCP connection test failed")
+                return JsonResponse({"status": "error", "message": _("Could not connect to the tool. Check the connection settings and credentials.")})
 
         return JsonResponse(
             {
@@ -867,9 +867,9 @@ async def tool_test_connection(request, pk: int):
             }
         )
 
-    except Exception as e:  # noqa: BLE001 – broad catch on purpose
-        logger.error(e)
-        return JsonResponse({"status": "error", "message": str(e)})
+    except Exception:  # noqa: BLE001 – broad catch on purpose
+        logger.exception("Tool connection test failed")
+        return JsonResponse({"status": "error", "message": _("Could not test the tool. Check the connection settings and credentials.")})
 
 
 @login_required

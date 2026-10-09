@@ -345,6 +345,13 @@ class UserSettingsTasksViewsTests(TestCase):
         self.assertContains(response, "csrfmiddlewaretoken")
         self.assertContains(response, "return confirm(")
 
+    @patch("user_settings.views.tasks.croniter.croniter", side_effect=RuntimeError("private diagnostic"))
+    def test_task_cron_preview_does_not_expose_unexpected_errors(self, mocked_croniter):
+        with self.assertLogs("user_settings.views.tasks", level="ERROR"):
+            response = self.client.get(reverse("user_settings:task_cron_preview"), {"cron_expression": "0 8 * * *"})
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("private diagnostic", response.json()["error"])
+
     def test_task_cron_preview_handles_missing_invalid_and_valid(self):
         missing = self.client.get(reverse("user_settings:task_cron_preview"))
         self.assertEqual(missing.status_code, 400)
