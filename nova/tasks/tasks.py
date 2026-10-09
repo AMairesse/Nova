@@ -1,16 +1,15 @@
 # nova/tasks/tasks.py
-import asyncio
 import datetime as dt
 import logging
 import time
-from asgiref.sync import sync_to_async, async_to_sync
+from asgiref.sync import async_to_sync
 from celery import current_app
 from celery import shared_task
 from channels.layers import get_channel_layer
 
 from django.contrib.auth.models import User
 from django.utils import timezone
-from django.db import transaction
+from django.db import close_old_connections, transaction
 
 from nova.models.AgentConfig import AgentConfig
 from nova.models.Interaction import Interaction
@@ -165,7 +164,9 @@ def execute_agent_task_with_executor(
         push_notifications_enabled=push_notifications_enabled,
         allow_ask_user=allow_ask_user,
     )
-    asyncio.run(executor.execute_or_resume())
+    # Keep thread-sensitive ORM calls on the Celery thread, whose connections
+    # are managed by the task hooks, rather than asgiref's persistent pool.
+    async_to_sync(executor.execute_or_resume)()
 
 
 def create_and_dispatch_agent_task(
@@ -225,16 +226,14 @@ def generate_thread_title_task(
         agent_config = AgentConfig.objects.select_related("llm_provider").get(id=agent_config_id, user_id=user_id)
         provider_client = ProviderClient(agent_config.llm_provider)
 
-        response = asyncio.run(
-            provider_client.create_chat_completion(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": _build_thread_title_prompt(messages),
-                    }
-                ],
-                tools=None,
-            )
+        response = async_to_sync(provider_client.create_chat_completion)(
+            messages=[
+                {
+                    "role": "user",
+                    "content": _build_thread_title_prompt(messages),
+                }
+            ],
+            tools=None,
         )
 
         raw_title = strip_thinking_blocks(str(response.get("content") or ""))
@@ -348,7 +347,7 @@ def resume_ai_task_celery(self, interaction_pk: int):
         }
 
         executor = ReactTerminalTaskExecutor(task, user, thread, agent_config, interaction)
-        asyncio.run(executor.execute_or_resume(interruption_response))
+        async_to_sync(executor.execute_or_resume)(interruption_response)
 
     except Interaction.DoesNotExist:
         logger.warning(
@@ -383,7 +382,7 @@ def summarize_thread_task(self, thread_id, user_id, agent_config_id, task_id,
             thread,
             agent_config,
         )
-        asyncio.run(executor.execute())
+        async_to_sync(executor.execute)()
 
     except Exception as e:
         logger.error(f"Summarization task failed for thread {thread_id}: {e}")
@@ -398,6 +397,7 @@ def _mark_task_definition_success(task_definition: TaskDefinition):
 
 
 def _mark_task_definition_error(task_definition_id: int, error: Exception):
+    close_old_connections()
     try:
         task_definition = TaskDefinition.objects.get(id=task_definition_id)
         task_definition.last_error = str(error)
@@ -488,6 +488,9 @@ def poll_task_definition_email(self, task_definition_id: int):
         if not claimed:
             return {'status': 'skipped', 'run_id': run.pk}
         poll_result = poll_new_unseen_email_headers(task_definition)
+        # IMAP I/O may outlive the connection (or a PostgreSQL restart).
+        # Renew it before persisting the poll, never replay the mail operation.
+        close_old_connections()
         headers = poll_result["headers"]
         task_definition.runtime_state = poll_result["state"]
 

@@ -3,7 +3,7 @@ import logging
 from uuid import UUID
 from time import monotonic
 from typing import Any, Dict, List, Optional
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 from django.conf import settings
 from django.utils import timezone
 
@@ -127,7 +127,7 @@ class TaskProgressHandler:
                 task.progress_logs = logs
                 task.save(update_fields=["progress_logs", "updated_at"])
 
-            await sync_to_async(_append_progress, thread_sensitive=True)()
+            await database_sync_to_async(_append_progress, thread_sensitive=True)()
         except Exception as e:
             logger.error(f"Error persisting progress log: {e}")
         await self.on_progress(message)
@@ -334,9 +334,9 @@ class TaskProgressHandler:
                 elif self.final_chunks:
                     html_content = self._render_current_response()
             streamed_markdown = self.get_streamed_markdown()
-            await sync_to_async(
+            await database_sync_to_async(
                 Task.objects.filter(id=self.task_id).update,
-                thread_sensitive=False
+                thread_sensitive=True
             )(
                 current_response=html_content,
                 streamed_markdown=streamed_markdown,
@@ -357,9 +357,9 @@ class TaskProgressHandler:
         ):
             return
         try:
-            await sync_to_async(
+            await database_sync_to_async(
                 Task.objects.filter(id=self.task_id).update,
-                thread_sensitive=False,
+                thread_sensitive=True,
             )(updated_at=timezone.now())
             self._last_runtime_touch_at = now
         except Exception as e:

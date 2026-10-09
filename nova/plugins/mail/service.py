@@ -15,7 +15,7 @@ from email.mime.text import MIMEText
 from typing import Any
 from urllib.parse import urlparse
 
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 from django.utils.translation import gettext_lazy as _
 
 from nova.models.Tool import Tool, ToolCredential
@@ -121,7 +121,7 @@ def build_smtp_client(credential):
 
 async def get_imap_client(user, tool_id):
     try:
-        credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
+        credential = await database_sync_to_async(ToolCredential.objects.get, thread_sensitive=True)(user=user, tool_id=tool_id)
     except ToolCredential.DoesNotExist as exc:
         raise ValueError(_("No IMAP credential found for tool {tool_id}").format(tool_id=tool_id)) from exc
     return build_imap_client(credential)
@@ -367,7 +367,7 @@ async def create_draft(
     operation_key=None,
 ) -> dict[str, Any]:
     try:
-        return await sync_to_async(_create_draft_sync, thread_sensitive=False)(
+        return await database_sync_to_async(_create_draft_sync, thread_sensitive=True)(
             user, tool_id, to=to, subject=subject, body=body,
             in_reply_to=in_reply_to, operation_key=operation_key,
         )
@@ -731,7 +731,7 @@ async def test_email_access(user, tool_id):
         client = await get_imap_client(user, tool_id)
         try:
             client.list_folders()
-            credential = await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
+            credential = await database_sync_to_async(ToolCredential.objects.get, thread_sensitive=True)(user=user, tool_id=tool_id)
             config = credential.config or {}
             if config.get("enable_sending") and config.get("smtp_server"):
                 server = None
@@ -750,7 +750,7 @@ async def test_email_access(user, tool_id):
 
 async def _get_credential(user, tool_id: int) -> ToolCredential | None:
     try:
-        return await sync_to_async(ToolCredential.objects.get, thread_sensitive=False)(user=user, tool_id=tool_id)
+        return await database_sync_to_async(ToolCredential.objects.get, thread_sensitive=True)(user=user, tool_id=tool_id)
     except ToolCredential.DoesNotExist:
         return None
 

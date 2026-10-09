@@ -9,7 +9,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import UUID, uuid4
 
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 
 from nova.security.redaction import REDACTED_VALUE, is_sensitive_key
 
@@ -390,7 +390,7 @@ class TaskExecutionTraceHandler:
         }
 
     async def _run_serialized(self, fn, /, *args, **kwargs):
-        return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
+        return await database_sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
 
     def _persist_locked(self) -> None:
         trace = self._get_trace()

@@ -107,6 +107,46 @@ If an older deployment is already stuck on `502 Bad Gateway` after recreating `w
 `docker compose restart nginx` is a temporary workaround while updating to the
 newer dynamic upstream configuration.
 
+## PostgreSQL connection recovery
+
+`web`, `celery-worker`, and `celery-beat` inherit the PostgreSQL dependency from
+`docker-compose.base.yml`, including `condition: service_healthy` and `restart: true`.
+Compose propagates an explicit dependency restart or update to these services.
+This does not cover a database crash, Docker's automatic restart policy, or a
+direct `docker restart`. See [Compose startup order](https://docs.docker.com/compose/how-tos/startup-order/).
+
+Agent execution also cleans Django connections around database work in async
+code, and email polling renews connections after IMAP I/O. It does not retry an
+interrupted agent operation: mail may already have been moved. A successful poll
+with no new message leaves the previous agent error intact; only a successful
+agent execution confirms recovery of that stage.
+
+### Isolated local regression tests
+
+From the repository root, start a disposable PostgreSQL instance (no production
+credentials or mailbox required):
+
+```bash
+docker run -d --name nova-postgres-test -p 127.0.0.1:15432:5432 \
+  -e POSTGRES_DB=nova_connection_tests -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=test-only pgvector/pgvector:pg16-bookworm
+docker exec nova-postgres-test pg_isready -U postgres
+. .venv/bin/activate
+DEBUG=False CSRF_TRUSTED_ORIGINS='https://localhost,https://testserver' \
+  DJANGO_SETTINGS_MODULE=nova.settings_test_postgres \
+  python manage.py test nova.tests.test_worker_database_connections
+docker rm -f nova-postgres-test
+```
+
+Wait until `pg_isready` reports readiness before running tests. These tests use
+real PostgreSQL, deliberately close a psycopg connection and terminate database
+sessions during simulated IMAP/provider calls. IMAP and LLM responses are mocked;
+the Nova agent runtime, execution traces, and move command run against a simulated
+mailbox. Production acceptance must separately confirm header retrieval, agent
+completion, and the test message's actual source/destination folders. Use a
+dedicated identifiable message and inspect recorded actions before retrying any
+interrupted run.
+
 ## Available optional modules
 
 - `docker-compose.add-searxng.yml`
