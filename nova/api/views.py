@@ -1,5 +1,6 @@
 # nova/api/views.py
 from typing import Any, Dict
+import logging
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -14,6 +15,8 @@ from nova.models.Thread import Thread
 from nova.runtime.agent import ReactTerminalRuntime
 from nova.runtime.support import get_runtime_error
 from nova.threads.service import ThreadDeletionError, delete_thread_for_user
+
+logger = logging.getLogger(__name__)
 
 
 class QuestionAnswerView(APIView):
@@ -83,9 +86,10 @@ class QuestionAnswerView(APIView):
             runtime = async_to_sync(runtime.initialize)()
             result = async_to_sync(runtime.run)(ephemeral_user_prompt=question)
             answer = result.final_answer
-        except Exception as exc:
+        except Exception:
+            logger.exception("Question-answer runtime failed for user %s", request.user.id)
             return Response(
-                {"detail": f"LLM error: {exc}"},
+                {"detail": "Could not generate an answer. Please try again later."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         finally:

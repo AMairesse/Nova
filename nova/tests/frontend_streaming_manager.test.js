@@ -132,6 +132,10 @@ const flush = async () => { for (let index = 0; index < 8; index += 1) await Pro
   manager.registerStream('task', { id: 'task' });
   await flush();
   sockets.at(-1).open();
+  vm.runInContext('Object.prototype.unexpectedHandler = () => { throw new Error("inherited handler invoked"); };', context);
+  sockets.at(-1).receive({ type: 'unexpectedHandler', thread_id: '7' });
+  vm.runInContext('delete Object.prototype.unexpectedHandler;', context);
+  assert.strictEqual(warnings.length, 0, 'inherited websocket handlers must not be invoked');
   sockets.at(-1).receive({ ...response('COMPLETED', [{ id: 101, actor: 'AGT', text: 'done' }]), task_id: 'task' });
   await flush();
   assert.strictEqual(manager.activeStreams.has('task'), false, 'completed initial snapshot must clean up');

@@ -149,9 +149,9 @@ async def file_upload(request, thread_id):
             return JsonResponse({'success': False, 'errors': errors},
                                 status=400)
         return JsonResponse({'success': True, 'files': created})
-    except Exception as e:
-        logger.exception(f"Error in FileUploadView: {str(e)}")
-        return JsonResponse({'error': str(e)}, status=500)
+    except Exception:
+        logger.exception("Error in FileUploadView")
+        return JsonResponse({'error': 'Could not upload files. Please try again later.'}, status=500)
 
 
 class FileDeleteView(LoginRequiredMixin, View):

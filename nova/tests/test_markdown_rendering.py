@@ -1,9 +1,24 @@
 from django.test import SimpleTestCase
 
 from nova.utils import markdown_to_html
+from nova.agent_markdown import render_agent_markdown
 
 
 class MarkdownRenderingTests(SimpleTestCase):
+    def test_streaming_and_agent_markdown_remove_active_html(self):
+        payloads = [
+            '<script>alert(1)</script>',
+            '<img src=x onerror=alert(1)>',
+            '<a href="javascript:alert(1)" onclick="alert(2)">link</a>',
+            '[link](javascript:alert(1))',
+        ]
+        for renderer in (markdown_to_html, render_agent_markdown):
+            for payload in payloads:
+                with self.subTest(renderer=renderer.__name__, payload=payload):
+                    rendered = str(renderer(payload)).lower()
+                    for unsafe in ('<script', 'onerror=', 'onclick=', 'href="javascript:'):
+                        self.assertNotIn(unsafe, rendered)
+
     def test_nested_lists_with_two_space_indentation_are_rendered(self):
         content = (
             "- Parent\n"

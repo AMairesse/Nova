@@ -163,7 +163,8 @@
     const label = hasSelectedModel()
       ? state.labels.saveProvider
       : state.labels.saveConnection;
-    saveButton.innerHTML = `<i class="bi bi-check-lg me-1"></i>${label}`;
+    saveButton.innerHTML = '<i class="bi bi-check-lg me-1"></i>';
+    saveButton.appendChild(document.createTextNode(label));
   }
 
   function updateTestButtonLabel() {
@@ -174,7 +175,8 @@
       state.currentVerificationStatus === "testing"
         ? state.labels.verifying
         : state.labels.verify;
-    testButton.innerHTML = `<i class="bi bi-plug me-1"></i>${label}`;
+    testButton.innerHTML = '<i class="bi bi-plug me-1"></i>';
+    testButton.appendChild(document.createTextNode(label));
   }
 
   function updateLoadButtonLabel() {

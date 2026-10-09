@@ -181,7 +181,8 @@
             const contentEl = stream.element.querySelector('.streaming-content');
             if (!contentEl) return;
 
-            // The server is already sending HTML chunks, so we don't need to process them as Markdown
+            // TaskProgressHandler renders Markdown through nova.utils.markdown_to_html,
+            // which sanitizes the HTML with Bleach before publishing or persisting it.
             // Replace the entire content since server sends complete paragraph updates
             contentEl.innerHTML = chunk;
             this.messageManager?.followBottomDuringLayout?.({
@@ -392,8 +393,9 @@
                     || !this._belongsToCurrentThread(stream)) return;
                 try {
                     const data = JSON.parse(event.data);
-                    const handler = messageHandlers[data.type];
-                    if (handler) handler(data);
+                    if (Object.prototype.hasOwnProperty.call(messageHandlers, data.type)) {
+                        messageHandlers[data.type](data);
+                    }
                 } catch (error) {
                     console.warn('Invalid task websocket message:', error);
                 }
@@ -700,7 +702,7 @@
               <button
                 type="button"
                 class="btn btn-sm btn-outline-primary interaction-answer-btn"
-                data-interaction-id="${interactionId}"
+                data-interaction-id="${window.DOMUtils.escapeHTML(String(interactionId))}"
                 data-answer-json="${window.DOMUtils.escapeHTML(JSON.stringify(choice.value))}"
               >
                 ${window.DOMUtils.escapeHTML(choice.label)}
@@ -772,6 +774,7 @@
             const origin = origin_name ? `${window.DOMUtils.escapeHTML(origin_name)} ${gettext('asks')}:` : gettext('Question');
             const choiceControls = this._renderInteractionChoiceControls(interaction_id, schema);
             const schemaHint = this._buildInteractionSchemaHint(schema);
+            const escapedInteractionId = window.DOMUtils.escapeHTML(String(interaction_id));
 
             wrapper.innerHTML = `
         <div class="card border-warning">
@@ -783,14 +786,14 @@
             <div class="mb-2">${window.DOMUtils.escapeHTML(question)}</div>
             <div class="interaction-choice-controls mb-2">${choiceControls}</div>
             <div class="mb-2">
-              <textarea class="form-control" id="interaction-answer-input-${interaction_id}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
+              <textarea class="form-control" id="interaction-answer-input-${escapedInteractionId}" rows="2" placeholder="${gettext('Type your answer...')}"></textarea>
               <div class="form-text text-muted mt-1 interaction-schema-hint ${schemaHint ? '' : 'd-none'}">${window.DOMUtils.escapeHTML(schemaHint)}</div>
             </div>
             <div class="d-flex gap-2">
-              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="${interaction_id}">
+              <button type="button" class="btn btn-sm btn-primary interaction-answer-btn" data-interaction-id="${escapedInteractionId}">
                 <i class="bi bi-check2-circle me-1"></i>${gettext('Answer')}
               </button>
-              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="${interaction_id}">
+              <button type="button" class="btn btn-sm btn-outline-secondary interaction-cancel-btn" data-interaction-id="${escapedInteractionId}">
                 <i class="bi bi-x-circle me-1"></i>${gettext('Cancel')}
               </button>
               <div class="ms-auto small text-muted interaction-status"></div>
@@ -856,7 +859,7 @@
 
         onSummarizationComplete(data) {
             // Show summarization notification
-            const { summary, original_tokens, summary_tokens, strategy } = data;
+            const { original_tokens, summary_tokens, strategy } = data;
 
             // Create a toast notification or system message
             const notification = document.createElement('div');
@@ -865,9 +868,11 @@
             notification.innerHTML = `
                 <i class="bi bi-info-circle me-2"></i>
                 <strong>Conversation summarized</strong><br>
-                <small>Reduced from ${original_tokens} to ~${summary_tokens} tokens using ${strategy} strategy</small>
+                <small></small>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             `;
+            notification.querySelector('small').textContent =
+                `Reduced from ${original_tokens} to ~${summary_tokens} tokens using ${strategy} strategy`;
 
             document.body.appendChild(notification);
 

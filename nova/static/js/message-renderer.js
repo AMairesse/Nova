@@ -301,13 +301,14 @@
               ${this.renderArtifactSummary(attachments)}
               `
                     : '';
+                const fileCount = Number(messageData.file_count);
                 messageDiv.innerHTML = `
             <div class="card border-primary">
             <div class="card-body py-2">
               ${textHtml}
               ${inlineArtifactsHtml}
               ${attachmentSummaryHtml}
-              ${messageData.file_count ? `<div class="mt-2 small text-muted">${messageData.file_count} file(s) attached</div>` : ''}
+              ${Number.isSafeInteger(fileCount) && fileCount > 0 ? `<div class="mt-2 small text-muted">${fileCount} file(s) attached</div>` : ''}
             </div>
           </div>
         `;
@@ -316,6 +317,7 @@
                 const inlineArtifactsHtml = this.renderInlineArtifacts(attachments, { withTopMargin: true });
                 const attachmentSummaryHtml = this.renderArtifactSummary(attachments, { withTopMargin: true });
                 const renderedHtml = `${messageData.rendered_html || ''}`.trim();
+                // The server sanitizes rendered_html with Bleach in render_agent_markdown.
                 const contentHtml = renderedHtml || window.DOMUtils.escapeHTML(messageData.text || '');
                 // Agent message structure
                 messageDiv.innerHTML = `
