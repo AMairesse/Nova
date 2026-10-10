@@ -46,6 +46,8 @@ Use one of these values in `docker/.env`:
   - `COMPOSE_FILE=docker-compose.yml`
 - Base + SearXNG:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml`
+- Base + SearXNG with host access:
+  - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml:docker-compose.add-searxng-host.yml`
 - Base + exec-runner:
   - `COMPOSE_FILE=docker-compose.yml:docker-compose.add-exec-runner.yml`
 - Base + SearXNG + exec-runner:
@@ -153,6 +155,12 @@ interrupted run.
   - Enables the deployment-default `Search` backend in Nova.
   - Users can still add their own custom remote search backends.
   - Requires `SEARXNG_SECRET` in `.env`.
+  - Docker-network access only by default; Nova uses `http://searxng:8080`.
+- `docker-compose.add-searxng-host.yml`
+  - Optional host access; requires `docker-compose.add-searxng.yml`.
+  - Publishes `127.0.0.1:8083` to container port `8080` by default. Set `SEARXNG_HOST_IP` and `SEARXNG_HOST_PORT` to customize it; these variables only apply with this module.
+  - Loopback limits host access to local clients. Listening on another interface can expose the service to that network and requires appropriate access protection.
+  - Append this file to the existing `COMPOSE_FILE` without removing other modules, for example: `COMPOSE_FILE=docker-compose.yml:docker-compose.add-searxng.yml:docker-compose.add-exec-runner.yml:docker-compose.add-searxng-host.yml`.
 - `docker-compose.add-exec-runner.yml`
   - Enables Nova's sandbox terminal backend for Python, package install, build workflows, and code-driven webapp generation.
   - Optional for Nova overall, but recommended for code-heavy workflows.
