@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import List, Optional, Tuple
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync
+from channels.db import database_sync_to_async
 from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 from channels.layers import get_channel_layer
@@ -157,7 +157,7 @@ def _build_day_summary_prompt_with_context(
 
 async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: str | None = None) -> dict:
     # Django ORM is synchronous and must not run in an async context.
-    # Use sync_to_async for all DB access.
+    # Clean connections in the thread that performs each ORM operation.
     force_full_refresh = (mode or "").strip().lower() == "manual"
 
     async def _fetch_segment_and_messages() -> Tuple[
@@ -214,7 +214,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
             ]
             return segment, msgs, current_summary, previous_summaries, delta_mode
 
-        return await sync_to_async(_impl, thread_sensitive=True)()
+        return await database_sync_to_async(_impl, thread_sensitive=True)()
 
     async def _fetch_default_agent_config(user):
         def _impl():
@@ -223,7 +223,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
             except UserProfile.DoesNotExist:
                 return None
 
-        return await sync_to_async(_impl, thread_sensitive=True)()
+        return await database_sync_to_async(_impl, thread_sensitive=True)()
 
     async def _generate_summary_markdown(agent_config, prompt: str) -> str:
         provider = getattr(agent_config, "llm_provider", None)
@@ -329,7 +329,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
     if not summary_md.strip():
         raise RuntimeError("Summary generation returned empty content.")
 
-    # Persist summary (sync ORM in sync_to_async).
+    # Persist summary with connection cleanup around synchronous ORM work.
     def _persist():
         with transaction.atomic():
             seg = DaySegment.objects.select_for_update().get(id=segment.id)
@@ -360,7 +360,7 @@ async def _summarize_day_segment_async(day_segment_id: int, mode: str, task_id: 
                 )
             return seg.day_label.isoformat(), seg.updated_at.isoformat() if seg.updated_at else None, seg.thread_id
 
-    persisted = await sync_to_async(_persist, thread_sensitive=True)()
+    persisted = await database_sync_to_async(_persist, thread_sensitive=True)()
     if persisted is None:
         logger.info("[summarize_day_segment] superseded day_segment_id=%s", day_segment_id)
         await _publish_task_update(task_id, "task_complete", {"result": "summary_superseded"})
@@ -419,13 +419,13 @@ def summarize_day_segment_task(self, day_segment_id: int, mode: str = "heuristic
 
     task_id = str(getattr(getattr(self, "request", None), "id", "") or "")
     try:
-        return asyncio.run(_summarize_day_segment_async(day_segment_id=day_segment_id, mode=mode, task_id=task_id))
+        return async_to_sync(_summarize_day_segment_async)(day_segment_id=day_segment_id, mode=mode, task_id=task_id)
     except Exception as e:
         logger.exception("[summarize_day_segment] failed day_segment_id=%s", day_segment_id)
         if isinstance(e, SummaryReductionError):
-            asyncio.run(_publish_task_update(
+            async_to_sync(_publish_task_update)(
                 task_id, "task_error", {"message": str(e), "category": "summary"},
-            ))
+            )
             segment = DaySegment.objects.select_related("thread").filter(id=day_segment_id).first()
             _enqueue_push_notification(
                 user_id=getattr(segment, "user_id", None),
@@ -435,22 +435,18 @@ def summarize_day_segment_task(self, day_segment_id: int, mode: str = "heuristic
                 status="failed",
             )
             raise
-        asyncio.run(
-            _publish_task_update(
-                task_id,
-                "progress_update",
-                {"progress_log": "Summary generation failed, retrying..."},
-            )
+        async_to_sync(_publish_task_update)(
+            task_id,
+            "progress_update",
+            {"progress_log": "Summary generation failed, retrying..."},
         )
         try:
             raise self.retry(countdown=60, exc=e)
         except MaxRetriesExceededError:
-            asyncio.run(
-                _publish_task_update(
-                    task_id,
-                    "task_error",
-                    {"message": str(e), "category": "summary"},
-                )
+            async_to_sync(_publish_task_update)(
+                task_id,
+                "task_error",
+                {"message": str(e), "category": "summary"},
             )
             segment = DaySegment.objects.select_related("thread").filter(id=day_segment_id).first()
             _enqueue_push_notification(
@@ -563,7 +559,7 @@ def nightly_summarize_continuous_daysegments_for_user_task(self, user_id: int):
         processed += 1
         try:
             if _daysegment_needs_nightly_refresh(seg):
-                asyncio.run(_summarize_day_segment_async(day_segment_id=seg.id, mode="nightly"))
+                async_to_sync(_summarize_day_segment_async)(day_segment_id=seg.id, mode="nightly")
                 updated += 1
         except Exception:
             logger.exception("[nightly_summarize_for_user] failed day_segment_id=%s", seg.id)
