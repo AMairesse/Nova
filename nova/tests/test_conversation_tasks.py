@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest import skipUnless
 from unittest.mock import ANY, AsyncMock, PropertyMock, patch
+from asgiref.sync import sync_to_async
+from django.db import connection
 
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
@@ -19,6 +23,15 @@ from nova.tests.factories import create_agent, create_provider, create_user
 
 
 class ConversationTasksFormattingTests(SimpleTestCase):
+    def test_summary_orm_bridge_uses_the_celery_thread(self):
+        owner_thread = threading.get_ident()
+
+        async def summarize(**kwargs):
+            return await sync_to_async(threading.get_ident, thread_sensitive=True)()
+
+        with patch("nova.tasks.conversation_tasks._summarize_day_segment_async", new=summarize):
+            self.assertEqual(conversation_tasks.summarize_day_segment_task.run(1), owner_thread)
+
     def test_format_messages_for_summary_filters_without_truncating(self):
         long_text = "x" * 1700
         messages = [
@@ -385,7 +398,7 @@ class ConversationTasksDbTests(TransactionTestCase):
         initial = (seg.summary_markdown, seg.summary_until_message_id, seg.updated_at)
 
         async def complete_after_concurrent_write(**kwargs):
-            await conversation_tasks.sync_to_async(
+            await sync_to_async(
                 lambda: DaySegment.objects.filter(id=seg.id).update(
                     summary_markdown="Concurrent summary",
                     summary_until_message_id=new_message.id,
@@ -473,6 +486,12 @@ class ConversationTasksDbTests(TransactionTestCase):
     @patch("nova.tasks.conversation_tasks._summarize_day_segment_async", new_callable=AsyncMock)
     @patch("nova.tasks.conversation_tasks._daysegment_needs_nightly_refresh")
     def test_nightly_task_for_user_runs_sequential_updates(self, mocked_needs_refresh, mocked_summarize):
+        observed_threads = []
+
+        async def summarize(**kwargs):
+            observed_threads.append(await sync_to_async(threading.get_ident, thread_sensitive=True)())
+
+        mocked_summarize.side_effect = summarize
         seg1, _ = self._create_segment(day_offset=-2, summary="")
         self._create_segment(day_offset=-1, summary="")
         other_user = create_user(username="conv-other", email="conv-other@example.com")
@@ -493,3 +512,35 @@ class ConversationTasksDbTests(TransactionTestCase):
         self.assertEqual(result["processed"], 2)
         self.assertEqual(result["updated"], 1)
         mocked_summarize.assert_awaited_once_with(day_segment_id=seg1.id, mode="nightly")
+        self.assertEqual(observed_threads, [threading.get_ident()])
+
+    @skipUnless(connection.vendor == "postgresql", "Requires isolated PostgreSQL test settings")
+    @patch("nova.tasks.conversation_tasks.compute_day_segment_embedding_task.delay")
+    @patch("nova.tasks.conversation_tasks.ProviderClient.create_chat_completion", new_callable=AsyncMock)
+    def test_summary_renews_connection_closed_during_provider_call(self, mocked_completion, mocked_delay):
+        UserProfile.objects.update_or_create(user=self.user, defaults={"default_agent": self.agent})
+
+        async def complete_after_disconnect(**kwargs):
+            def close_raw_connection():
+                connection.ensure_connection()
+                connection.connection.close()
+
+            await sync_to_async(close_raw_connection, thread_sensitive=True)()
+            return {"content": "## Summary\nConnection recovered."}
+
+        mocked_completion.side_effect = complete_after_disconnect
+        for nightly in (False, True):
+            with self.subTest(nightly=nightly):
+                seg, message = self._create_segment(day_offset=-1, summary="")
+                if nightly:
+                    result = conversation_tasks.nightly_summarize_continuous_daysegments_for_user_task.run(self.user.pk)
+                    self.assertEqual(result["updated"], 1)
+                else:
+                    result = conversation_tasks.summarize_day_segment_task.run(seg.pk, mode="manual")
+                self.assertEqual(result["status"], "ok")
+                seg.refresh_from_db()
+                self.assertIn("Connection recovered.", seg.summary_markdown)
+                self.assertEqual(seg.summary_until_message_id, message.pk)
+                self.assertEqual(DaySegmentEmbedding.objects.get(day_segment=seg).state, "pending")
+                seg.delete()
+        self.assertEqual(mocked_completion.await_count, 2)
