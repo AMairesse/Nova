@@ -1,0 +1,4 @@
+services:
+  searxng:
+    ports:
+      - "${SEARXNG_HOST_IP:-127.0.0.1}:${SEARXNG_HOST_PORT:-8083}:8080"
