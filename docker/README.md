@@ -306,6 +306,61 @@ settings to make previously stored vectors eligible for semantic search again.
 Give each replacement model a distinct model identifier, even if it uses the
 same URL and vector dimensions.
 
+The embeddings server can be tuned through `docker/.env` without adding another
+Compose service. The optional `LLAMA_ARG_*` settings below are passed only to
+`llamacpp-embeddings`; the conversational llama.cpp module keeps its `LLAMA_CPP_*`
+settings. Leave unused options commented or remove them. **Do not assign an empty
+value such as `LLAMA_ARG_POOLING=`**: it is passed to llama.cpp and can prevent
+startup. Omitted options retain the server/model defaults, which depend on the
+llama.cpp image version. No Qwen-specific defaults are imposed.
+
+| Setting | Purpose | Default when omitted |
+| --- | --- | --- |
+| `LLAMA_ARG_POOLING` | Embedding pooling (`none`, `mean`, `cls`, `last`, `rank`) | Model/server default |
+| `LLAMA_ARG_CTX_SIZE` | Context window in tokens | Server/model default |
+| `LLAMA_ARG_BATCH` | Logical batch size in tokens | Server default |
+| `LLAMA_ARG_UBATCH` | Physical microbatch size in tokens | Server default |
+| `LLAMA_ARG_N_PARALLEL` | Number of server slots | Server default |
+| `LLAMA_ARG_THREADS` | CPU thread count | Server default |
+| `LLAMA_ARG_FLASH_ATTN` | Flash Attention (`on`, `off`, `auto`) | Server default |
+| `MEMORY_EMBEDDINGS_CPUS` | Docker CPU quota | `0` (no limit) |
+| `MEMORY_EMBEDDINGS_MEM_LIMIT` | Docker memory limit (e.g. `4g`) | `0` (no limit) |
+
+Example for a local Qwen3 embedding model (1024 dimensions):
+
+```dotenv
+MEMORY_EMBEDDINGS_MODEL=Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0
+LLAMA_ARG_POOLING=last
+LLAMA_ARG_CTX_SIZE=8192
+LLAMA_ARG_BATCH=4096
+LLAMA_ARG_UBATCH=512
+LLAMA_ARG_N_PARALLEL=1
+LLAMA_ARG_THREADS=4
+LLAMA_ARG_FLASH_ATTN=on
+MEMORY_EMBEDDINGS_CPUS=4
+MEMORY_EMBEDDINGS_MEM_LIMIT=4g
+MEMORY_EMBEDDINGS_TIMEOUT_SECONDS=180
+# Requires docker-compose.add-llamacpp-embeddings-host.yml in COMPOSE_FILE:
+MEMORY_EMBEDDINGS_HOST_IP=127.0.0.1
+MEMORY_EMBEDDINGS_HOST_PORT=9002
+```
+
+Keep the existing modules in `COMPOSE_FILE` and add the embeddings module plus
+its host-access complement when needed. Nova continues to use the internal URL
+`http://llamacpp-embeddings:8080/v1`, independently of the published host port.
+Recreate the embeddings service after changing server options or Docker limits;
+recreate web and celery-worker after changing their model or timeout settings.
+
+The context window does not resize or split texts submitted by applications.
+Accepted input sizes also depend on the model, batching and the application's
+own chunking. `N_PARALLEL` controls server slots, not Celery concurrency.
+Some llama.cpp versions adjust the effective batch to the microbatch size in
+embedding mode; inspect startup logs to confirm the settings actually used.
+`THREADS` controls worker threads, not the Docker CPU quota. The timeout governs
+Nova's HTTP calls only; other clients configure their own timeouts. CPU/RAM
+limits apply to the embeddings container. Rebuild stored embeddings after a
+model or pooling change before resuming semantic search with those vectors.
+
 Optional global settings:
 
 - `USERFILE_EXPIRATION_DAYS`

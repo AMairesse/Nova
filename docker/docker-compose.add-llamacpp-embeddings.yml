@@ -20,12 +20,23 @@ services:
   llamacpp-embeddings:
     image: ghcr.io/ggml-org/llama.cpp:server
     restart: unless-stopped
+    cpus: ${MEMORY_EMBEDDINGS_CPUS:-0}
+    mem_limit: ${MEMORY_EMBEDDINGS_MEM_LIMIT:-0}
     volumes:
       - hfcache:/root/.cache
     environment:
       - LLAMA_ARG_HF_REPO=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
       - LLAMA_ARG_EMBEDDINGS=1
       - LLAMA_ARG_NO_WEBUI=1
+      # No assignment: absent variables are omitted, preserving server defaults.
+      # Do not define these with empty values in .env.
+      - LLAMA_ARG_POOLING
+      - LLAMA_ARG_CTX_SIZE
+      - LLAMA_ARG_BATCH
+      - LLAMA_ARG_UBATCH
+      - LLAMA_ARG_N_PARALLEL
+      - LLAMA_ARG_THREADS
+      - LLAMA_ARG_FLASH_ATTN
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/v1/health"]
       interval: 5s
