@@ -16,17 +16,18 @@ def _skill_docs(capabilities, _thread_mode):
 Mail is accessed through shell-like commands:
 
 - `mail accounts`
-- `mail list`
-- `mail read <id> --full` or `mail read --uid <uid> --full` (omit `--full` for a 500-character preview)
-- `mail attachments <id>` or `mail attachments --uid <uid>`
-- `mail import <id> --attachment <part> --output /attachment.bin`
+- `mail list --mailbox <email> --folder INBOX`
+- `mail read --mailbox <email> --folder INBOX --uid <uid> --full` (omit `--full` for a 500-character preview)
+- `mail attachments --mailbox <email> --folder INBOX --uid <uid>`
+- `mail import --mailbox <email> --folder INBOX --uid <uid> --attachment <part> --output /attachment.bin`
 - `mail folders --mailbox <email>`
-- `mail move <id> --to-special junk`
-- `mail mark <id> --seen`
+- `mail move --mailbox <email> --folder INBOX --uid <uid> --to-special junk`
+- `mail mark --mailbox <email> --folder INBOX --uid <uid> --seen`
 - `mail send --mailbox <email> --to ... --subject ... --body-file /body.txt --attach /file.pdf`
 - `mail draft --mailbox <email> --to ... --subject ... --body-file /body.txt`
 
 Use `mail folders` to inspect special folders, and prefer explicit `--uid` in multi-step workflows.
+UIDs are scoped to a mailbox and folder. Repeat `--mailbox` and the source `--folder` on every command; selectors do not carry over between commands. Use the mailbox and folder supplied by an email routine. Otherwise, use `mail accounts` to discover mailboxes.
 Prefer reading attachments metadata first, then importing only the files you need.
 Imported attachments become normal files in the terminal filesystem.
 {mailbox_note}Reuse the same mailbox throughout a workflow unless the user explicitly asks you to switch.

@@ -76,10 +76,14 @@ class ProviderModelsTest(BaseTestCase):
         )
 
         original_fingerprint = provider.compute_validation_fingerprint()
+        self.assertEqual(original_fingerprint, provider.compute_validation_fingerprint())
         provider.model = "gpt-4.1-mini"
         changed_fingerprint = provider.compute_validation_fingerprint()
 
         self.assertNotEqual(original_fingerprint, changed_fingerprint)
+        provider.model = "gpt-4o-mini"
+        provider.api_key = "secret-b"
+        self.assertNotEqual(original_fingerprint, provider.compute_validation_fingerprint())
 
     def test_save_marks_provider_validation_stale_after_configuration_change(self):
         provider = LLMProvider.objects.create(

@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import logging
 import re
+import shlex
 from typing import Any
 
 from django.db import transaction
@@ -101,6 +102,26 @@ def execute_agent_task_definition(task_definition: TaskDefinition, *, variables:
     prompt = render_prompt_template(task_definition.prompt, variables=prompt_variables)
     if not prompt.strip():
         raise ValueError("Rendered prompt is empty.")
+
+    if task_definition.trigger_type == TaskDefinition.TriggerType.EMAIL_POLL:
+        from nova.models.Tool import ToolCredential
+        from nova.plugins.mail.service import _select_mailbox_email
+
+        credential = ToolCredential.objects.filter(
+            user=task_definition.user, tool_id=task_definition.email_tool_id,
+        ).first()
+        if credential:
+            mailbox = _select_mailbox_email(credential.config or {}, credential)
+            if mailbox:
+                # Email polling currently reads INBOX only.
+                prompt = (
+                    f"Email polling context: mailbox {mailbox}, source folder INBOX.\n"
+                    "The listed UIDs belong to this mailbox and folder. Repeat "
+                    "`--mailbox` and the source `--folder` on every mail command.\n"
+                    f"Read example: mail read --mailbox {shlex.quote(mailbox)} "
+                    "--folder INBOX --uid <uid> --full\n\n"
+                    + prompt
+                )
 
     if run is None:
         from nova.tasks.execution import begin_routine_run

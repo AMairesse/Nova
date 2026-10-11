@@ -114,6 +114,8 @@ class LLMProvider(models.Model):
         }
 
     def compute_validation_fingerprint(self) -> str:
+        # Configuration change marker, not a password hash or authentication
+        # verifier. Credentials remain encrypted in the api_key field.
         payload = json.dumps(
             self.validation_fingerprint_payload(),
             sort_keys=True,

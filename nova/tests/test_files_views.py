@@ -98,6 +98,15 @@ class FilesViewsTests(TestCase):
         self.assertEqual(response.status_code, 410)
         self.assertIn("File expired", response.json()["error"])
 
+    @patch("nova.models.UserFile.UserFile.get_download_url", side_effect=ValueError("private endpoint credentials"))
+    def test_file_endpoints_do_not_expose_value_error_details(self, _mocked_get_url):
+        user_file = self._create_user_file()
+        for endpoint in ("file_content", "file_download_url"):
+            with self.subTest(endpoint=endpoint):
+                response = self.client.get(reverse(endpoint, args=[user_file.id]))
+                self.assertEqual(response.status_code, 410)
+                self.assertEqual(response.json(), {"error": "File expired or unavailable."})
+
     @patch("nova.models.UserFile.UserFile.get_download_url", return_value=None)
     def test_file_download_url_returns_500_when_no_url(self, _mocked_get_url):
         user_file = self._create_user_file()

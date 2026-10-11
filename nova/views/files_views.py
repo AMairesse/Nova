@@ -63,8 +63,8 @@ def file_content(request, file_id):
 
     try:
         url = user_file.get_download_url(expires_in=3600)
-    except ValueError as exc:
-        return JsonResponse({'error': str(exc)}, status=410)
+    except ValueError:
+        return JsonResponse({'error': 'File expired or unavailable.'}, status=410)
     if not url:
         return JsonResponse({'error': 'Failed to generate URL'}, status=500)
     return HttpResponseRedirect(url)
@@ -78,10 +78,10 @@ def file_download_url(request, file_id):
 
     try:
         url = file.get_download_url(expires_in=3600)  # 1-hour expiry
-    except ValueError as e:
+    except ValueError:
         # Expected case when retention/expiration is enabled and the file is expired.
         # Use 410 Gone rather than 500.
-        return JsonResponse({'error': str(e)}, status=410)
+        return JsonResponse({'error': 'File expired or unavailable.'}, status=410)
 
     if not url:
         return JsonResponse({'error': 'Failed to generate URL'}, status=500)

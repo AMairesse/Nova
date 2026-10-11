@@ -6,6 +6,7 @@ from nova.models.Message import Actor
 from nova.models.Task import Task, TaskStatus
 from nova.models.TaskDefinition import TaskDefinition
 from nova.models.Thread import Thread
+from nova.models.Tool import Tool, ToolCredential
 from nova.tasks.task_definition_runner import (
     _prepare_thread_and_message,
     execute_agent_task_definition,
@@ -110,6 +111,38 @@ class TaskDefinitionRunnerExecutionTests(TestCase):
         self.assertIn("task_id", result)
         self.assertIn("thread_id", result)
         mocked_execute.assert_called_once()
+
+    @patch("nova.tasks.tasks.execute_agent_task_with_executor")
+    def test_existing_email_routine_receives_selected_mailbox_context(self, mocked_execute):
+        def complete(task, *_args, **_kwargs):
+            task.status = TaskStatus.COMPLETED
+            task.save(update_fields=["status", "updated_at"])
+        mocked_execute.side_effect = complete
+        tools = []
+        for username in ("other", "selected"):
+            tool = Tool.objects.create(
+                user=self.user, name=username, tool_subtype="email",
+                tool_type=Tool.ToolType.BUILTIN,
+            )
+            ToolCredential.objects.create(user=self.user, tool=tool, config={
+                "username": username, "imap_server": "imap.example.com",
+                "password": "private-test-password",
+            })
+            tools.append(tool)
+        task_def = self._build_task_definition(prompt="Handle uid=42.")
+        task_def.trigger_type = TaskDefinition.TriggerType.EMAIL_POLL
+        task_def.email_tool = tools[1]
+        task_def.save()
+
+        execute_agent_task_definition(task_def)
+
+        prompt = mocked_execute.call_args.args[4]
+        self.assertIn("mail read --mailbox selected@example.com --folder INBOX --uid <uid> --full", prompt)
+        self.assertIn("Handle uid=42.", prompt)
+        self.assertNotIn("other@example.com", prompt)
+        self.assertNotIn("private-test-password", prompt)
+        task_def.refresh_from_db()
+        self.assertEqual(task_def.prompt, "Handle uid=42.")
 
     @patch("nova.tasks.tasks.execute_agent_task_with_executor")
     def test_execute_agent_task_definition_ephemeral_deletes_thread(self, mocked_execute):

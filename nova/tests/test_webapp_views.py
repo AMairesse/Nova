@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
 from unittest.mock import AsyncMock, patch
 
 from django.contrib.auth import get_user_model
@@ -10,11 +11,20 @@ from nova.models.Thread import Thread
 from nova.models.UserFile import UserFile
 from nova.models.WebApp import WebApp
 from nova.utils import compute_webapp_public_url
+from nova.views.webapp_views import _build_webapp_asset_url
 
 User = get_user_model()
 
 
 class WebAppViewsTests(TestCase):
+    @override_settings(WEBAPP_PUBLIC_ORIGIN="https://apps.example.com")
+    def test_untrusted_asset_path_and_query_cannot_change_redirect_origin(self):
+        for path in ("//evil.invalid/path", "https://evil.invalid/path", "index.html?next=//evil.invalid", "index.html#//evil.invalid"):
+            with self.subTest(path=path):
+                target = urlsplit(_build_webapp_asset_url("safe-slug", path, "next=https://evil.invalid"))
+                self.assertEqual((target.scheme, target.netloc), ("https", "apps.example.com"))
+                self.assertTrue(target.path.startswith("/apps/safe-slug/"))
+
     def setUp(self):
         self.user = User.objects.create_user(username="webapp-view-user", password="pass")
         self.other = User.objects.create_user(username="webapp-view-other", password="pass")
