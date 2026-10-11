@@ -3,22 +3,38 @@ from __future__ import annotations
 import logging
 from typing import Iterable, List, Optional, Tuple
 
-from nova.llm.embeddings import aget_embeddings_provider, compute_embedding
+from django.db.models import Case, FloatField, Q, When
+
+from nova.llm.embeddings import aget_embeddings_provider, compute_embedding, embedding_provider_fingerprint
 
 logger = logging.getLogger(__name__)
 
 
-async def resolve_query_vector(*, user_id: int, query: str) -> Optional[List[float]]:
+def compatible_embedding_filter(provider):
+    return Q(embedding__state="ready", embedding__vector__isnull=False,
+             embedding__provider_fingerprint=embedding_provider_fingerprint(provider))
+
+
+def compatible_embedding_distance(vector, provider):
+    from pgvector.django import CosineDistance
+
+    # Lexical candidates may still carry vectors from a previous model.
+    return Case(When(compatible_embedding_filter(provider),
+                     then=CosineDistance("embedding__vector", vector)),
+                default=None, output_field=FloatField())
+
+
+async def resolve_query_vector(*, user_id: int, query: str, provider_override=None) -> Optional[List[float]]:
     """Return query embedding when provider is enabled, else None."""
     normalized_query = (query or "").strip()
     if not normalized_query or normalized_query == "*":
         return None
 
-    provider = await aget_embeddings_provider(user_id=user_id)
+    provider = provider_override or await aget_embeddings_provider(user_id=user_id)
     if not provider:
         return None
     try:
-        return await compute_embedding(normalized_query, user_id=user_id)
+        return await compute_embedding(normalized_query, user_id=user_id, provider_override=provider)
     except Exception as exc:
         logger.warning(
             "Query embedding unavailable for user %s. Falling back to lexical search: %s",

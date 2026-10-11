@@ -13,6 +13,7 @@ class MemoryChunkEmbedding(models.Model):
     )
     provider_type = models.CharField(max_length=40, blank=True, default="")
     model = models.CharField(max_length=120, blank=True, default="")
+    provider_fingerprint = models.CharField(max_length=64, blank=True, default="")
     dimensions = models.IntegerField(null=True, blank=True)
     state = models.CharField(
         max_length=20,

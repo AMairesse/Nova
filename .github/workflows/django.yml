@@ -13,6 +13,17 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16-bookworm
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: nova_connection_tests
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     strategy:
       max-parallel: 4
       matrix:
@@ -35,3 +46,14 @@ jobs:
     - name: Run Tests
       run: |
         python manage.py test --settings=nova.settings_test
+    - name: Run PostgreSQL embedding tests
+      env:
+        DEBUG: 'False'
+        CSRF_TRUSTED_ORIGINS: 'https://localhost,https://testserver'
+      run: |
+        python - <<'PY'
+        import psycopg
+        with psycopg.connect("host=127.0.0.1 port=15432 dbname=template1 user=postgres password=test-only", autocommit=True) as connection:
+            connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        PY
+        python manage.py test nova.tests.test_embedding_provenance nova.tests.test_memory_tasks nova.tests.test_conversation_embeddings nova.tests.test_memory_rebuild_tasks --settings=nova.settings_test_postgres

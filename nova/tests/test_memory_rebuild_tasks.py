@@ -104,7 +104,9 @@ class MemoryRebuildTasksTests(TestCase):
         rebuild_user_memory_embeddings_task.run(self.user.id, batch_size=2)
 
         self.assertEqual(mocked_compute_delay.call_count, 2)
-        mocked_rebuild_delay.assert_called_once_with(self.user.id, batch_size=2)
+        mocked_rebuild_delay.assert_called_once_with(
+            self.user.id, batch_size=2, after_chunk_id=mocked_compute_delay.call_args_list[-1].args[0],
+        )
         self.assertEqual(
             MemoryChunkEmbedding.objects.filter(
                 chunk__document__user=self.user,
@@ -143,3 +145,28 @@ class MemoryRebuildTasksTests(TestCase):
         self.assertEqual(queued_ids, {embeddings[0].chunk_id})
         mocked_rebuild_delay.assert_not_called()
         mocked_provider.assert_awaited()
+
+    def test_large_rebuild_advances_without_resetting_computed_rows(self):
+        for total in (500, 501, 1001):
+            with self.subTest(total=total):
+                chunks = [self._create_chunk(f"/memory/{total}-{i}.md", "source text") for i in range(total)]
+                pending = [{}]
+                queued = []
+                def compute(chunk_id):
+                    queued.append(chunk_id)
+                    MemoryChunkEmbedding.objects.filter(chunk_id=chunk_id).update(
+                        state=MemoryChunkEmbeddingState.READY, vector=[0.1] * 1024)
+                with patch("nova.tasks.memory_rebuild_tasks.compute_memory_chunk_embedding_task.delay", side_effect=compute), patch(
+                    "nova.tasks.memory_rebuild_tasks.rebuild_user_memory_embeddings_task.delay",
+                    side_effect=lambda _user, **kwargs: pending.append(kwargs),
+                ):
+                    batches = 0
+                    while pending:
+                        batches += 1
+                        self.assertLessEqual(batches, 3)
+                        rebuild_user_memory_embeddings_task.run(self.user.id, **pending.pop(0))
+                self.assertEqual(len(queued), total)
+                self.assertEqual(set(queued), {c.id for c in chunks})
+                self.assertEqual(MemoryChunkEmbedding.objects.filter(state="ready").count(), total)
+                self.assertEqual(MemoryChunk.objects.filter(content_text="source text").count(), total)
+                MemoryDocument.objects.filter(user=self.user).delete()

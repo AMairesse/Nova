@@ -12,11 +12,13 @@ from dataclasses import dataclass
 import hashlib
 import json
 import logging
+import math
 from typing import List, Optional
 
 import httpx
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 
 from nova.models.EmbeddingsSystemState import EmbeddingsSystemState
@@ -106,15 +108,25 @@ def _normalize_embeddings_source(value: str | None) -> str:
     return MemoryEmbeddingsSource.SYSTEM
 
 
-def _system_provider_fingerprint(provider: EmbeddingsProvider | None) -> str:
+def embedding_provider_fingerprint(provider: EmbeddingsProvider | None) -> str:
     if not provider:
         return ""
     payload = {
         "provider_type": provider.provider_type,
-        "base_url": provider.base_url.rstrip("/"),
+        "base_url": getattr(provider, "base_url", "").rstrip("/"),
         "model": (provider.model or "").strip(),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def get_embeddings_timeout_seconds() -> float:
+    try:
+        value = float(getattr(settings, "MEMORY_EMBEDDINGS_TIMEOUT_SECONDS", 30.0))
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured("MEMORY_EMBEDDINGS_TIMEOUT_SECONDS must be positive and finite") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ImproperlyConfigured("MEMORY_EMBEDDINGS_TIMEOUT_SECONDS must be positive and finite")
+    return value
 
 
 def _sync_system_embeddings_state(system_provider: EmbeddingsProvider | None) -> None:
@@ -126,7 +138,7 @@ def _sync_system_embeddings_state(system_provider: EmbeddingsProvider | None) ->
     """
 
     provider_available = system_provider is not None
-    fingerprint = _system_provider_fingerprint(system_provider)
+    fingerprint = embedding_provider_fingerprint(system_provider)
     current_state = EmbeddingsSystemState.objects.filter(singleton_key=1).only(
         "provider_available",
         "current_fingerprint",
@@ -358,7 +370,7 @@ async def compute_embedding(
         url,
         headers=headers,
         json=payload,
-        timeout=httpx.Timeout(30.0),
+        timeout=httpx.Timeout(get_embeddings_timeout_seconds()),
         allowed_private_hosts=tuple(provider.allowed_private_hosts or ()),
     )
     resp.raise_for_status()

@@ -23,11 +23,14 @@ from django.db import connection
 from django.db.models import F
 from django.utils import timezone
 
+from nova.llm.embeddings import aget_embeddings_provider
 from nova.llm.hybrid_search import (
     blend_semantic_fts,
     minmax_bounds,
     minmax_normalize,
     resolve_query_vector,
+    compatible_embedding_filter,
+    compatible_embedding_distance,
     score_fts_saturated,
     semantic_similarity_from_distance,
 )
@@ -311,7 +314,8 @@ async def conversation_search(
 
     limit, offset = _validate_limit_offset(limit, offset)
 
-    query_vec = await resolve_query_vector(user_id=agent.user.id, query=query)
+    provider = await aget_embeddings_provider(user_id=agent.user.id)
+    query_vec = await resolve_query_vector(user_id=agent.user.id, query=query, provider_override=provider) if provider else None
 
     def _impl(vec: Optional[List[float]]):
         # Resolve scope: either within a day, or last N days.
@@ -343,7 +347,6 @@ async def conversation_search(
 
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchHeadline, SearchQuery, SearchRank, SearchVector
-            from pgvector.django import CosineDistance
 
             q = SearchQuery(query)
             vector_summary = SearchVector("summary_markdown", config="english")
@@ -369,14 +372,14 @@ async def conversation_search(
             chunk_sem_ids: List[int] = []
             if vec is not None:
                 seg_sem_ids = list(
-                    seg_qs.filter(embedding__state="ready")
-                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    seg_qs.filter(compatible_embedding_filter(provider))
+                    .annotate(distance=compatible_embedding_distance(vec, provider))
                     .order_by(F("distance").asc(), F("updated_at").desc())
                     .values_list("id", flat=True)[:K]
                 )
                 chunk_sem_ids = list(
-                    chunk_qs.filter(embedding__state="ready")
-                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    chunk_qs.filter(compatible_embedding_filter(provider))
+                    .annotate(distance=compatible_embedding_distance(vec, provider))
                     .order_by(F("distance").asc(), F("created_at").desc())
                     .values_list("id", flat=True)[:K]
                 )
@@ -425,8 +428,8 @@ async def conversation_search(
             )
 
             if vec is not None:
-                seg_candidates = seg_candidates.annotate(distance=CosineDistance("embedding__vector", vec))
-                chunk_candidates = chunk_candidates.annotate(distance=CosineDistance("embedding__vector", vec))
+                seg_candidates = seg_candidates.annotate(distance=compatible_embedding_distance(vec, provider))
+                chunk_candidates = chunk_candidates.annotate(distance=compatible_embedding_distance(vec, provider))
             else:
                 seg_candidates = seg_candidates.annotate(distance=F("id") * 0.0)
                 chunk_candidates = chunk_candidates.annotate(distance=F("id") * 0.0)

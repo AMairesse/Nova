@@ -322,14 +322,14 @@ class ConversationEmbeddingTasksTests(TestCase):
             day_segment=self.seg,
             state=ConversationEmbeddingState.ERROR,
             error="stale",
-            vector=[0.1] * 4,
+            vector=[0.1] * 1024,
         )
         first_chunk_embedding = TranscriptChunkEmbedding.objects.create(
             user=self.user,
             transcript_chunk=self.chunk,
             state=ConversationEmbeddingState.ERROR,
             error="stale",
-            vector=[0.2] * 4,
+            vector=[0.2] * 1024,
         )
 
         result = rebuild_user_conversation_embeddings_task.run(self.user.id, batch_size=1)
@@ -348,7 +348,43 @@ class ConversationEmbeddingTasksTests(TestCase):
         self.assertTrue(TranscriptChunkEmbedding.objects.filter(transcript_chunk=second_chunk).exists())
         mock_day_delay.assert_called_once_with(first_day_embedding.id)
         mock_chunk_delay.assert_called_once_with(first_chunk_embedding.id)
-        mock_rebuild_delay.assert_called_once_with(self.user.id, batch_size=1)
+        mock_rebuild_delay.assert_called_once_with(
+            self.user.id, batch_size=1, after_day_id=first_day_embedding.id,
+            after_chunk_id=first_chunk_embedding.id,
+        )
+
+
+    def test_large_rebuild_uses_independent_cursors_and_terminates(self):
+        # One stream has exactly 500 rows; the other continues through 1001.
+        DaySegment.objects.bulk_create([
+            DaySegment(user=self.user, thread=self.thread, starts_at_message=self.msg1,
+                       day_label=self.seg.day_label + timedelta(days=i + 1), summary_markdown="source")
+            for i in range(499)
+        ])
+        messages = Message.objects.bulk_create([
+            Message(user=self.user, thread=self.thread, actor=Actor.USER, text="source") for _ in range(1000)
+        ])
+        TranscriptChunk.objects.bulk_create([
+            TranscriptChunk(user=self.user, thread=self.thread, start_message=m, end_message=m,
+                            content_text="source", content_hash=str(m.id), token_estimate=1)
+            for m in messages
+        ])
+        pending = [{}]
+        with patch("nova.tasks.conversation_embedding_tasks.compute_day_segment_embedding_task.delay") as day, patch(
+            "nova.tasks.conversation_embedding_tasks.compute_transcript_chunk_embedding_task.delay") as chunk, patch(
+            "nova.tasks.conversation_embedding_tasks.rebuild_user_conversation_embeddings_task.delay",
+            side_effect=lambda _user, **kwargs: pending.append(kwargs),
+        ):
+            batches = 0
+            while pending:
+                batches += 1
+                self.assertLessEqual(batches, 3)
+                rebuild_user_conversation_embeddings_task.run(self.user.id, **pending.pop(0))
+            self.assertEqual(day.call_count, 500)
+            self.assertEqual(len({c.args[0] for c in day.call_args_list}), 500)
+            self.assertEqual(chunk.call_count, 1001)
+            self.assertEqual(len({c.args[0] for c in chunk.call_args_list}), 1001)
+        self.assertEqual(TranscriptChunk.objects.filter(user=self.user).count(), 1001)
 
 
 class ConversationSearchFallbackTests(TestCase):

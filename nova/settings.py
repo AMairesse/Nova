@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 import os
 import sys
+import math
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -349,6 +351,12 @@ LLAMA_CPP_CTX_SIZE = os.getenv('LLAMA_CPP_CTX_SIZE', None)
 MEMORY_EMBEDDINGS_URL = os.getenv('MEMORY_EMBEDDINGS_URL', None)
 MEMORY_EMBEDDINGS_MODEL = os.getenv('MEMORY_EMBEDDINGS_MODEL', None)
 MEMORY_EMBEDDINGS_API_KEY = os.getenv('MEMORY_EMBEDDINGS_API_KEY', None)
+try:
+    MEMORY_EMBEDDINGS_TIMEOUT_SECONDS = float(os.getenv('MEMORY_EMBEDDINGS_TIMEOUT_SECONDS', '30'))
+except ValueError as exc:
+    raise ImproperlyConfigured('MEMORY_EMBEDDINGS_TIMEOUT_SECONDS must be positive and finite') from exc
+if not math.isfinite(MEMORY_EMBEDDINGS_TIMEOUT_SECONDS) or MEMORY_EMBEDDINGS_TIMEOUT_SECONDS <= 0:
+    raise ImproperlyConfigured('MEMORY_EMBEDDINGS_TIMEOUT_SECONDS must be positive and finite')
 
 # Get info about a Searxng server if configured
 SEARNGX_SERVER_URL = os.getenv('SEARNGX_SERVER_URL', None)

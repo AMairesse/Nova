@@ -285,6 +285,27 @@ Optional module settings:
 - llama.cpp: `LLAMA_CPP_MODEL`, `LLAMA_CPP_CHAT_TEMPLATE`, `LLAMA_CPP_CTX_SIZE`, `LLAMA_CPP_THINKING_BUDGET`
 - llama.cpp embeddings: `MEMORY_EMBEDDINGS_MODEL`
 
+Embedding requests use `MEMORY_EMBEDDINGS_TIMEOUT_SECONDS` (default: `30`).
+Set a positive, finite number of seconds in `docker/.env`, for example:
+
+```dotenv
+MEMORY_EMBEDDINGS_TIMEOUT_SECONDS=180
+```
+
+This applies to system and user-selected embeddings providers. The base stack
+passes the setting to web and celery-worker through their environment file; the
+llama.cpp embeddings module also exposes it explicitly. Recreate those services
+after changing it. No external provider or additional model is required.
+
+Rebuilding embeddings preserves memory documents, summaries and transcripts.
+Vectors are used for semantic search only when their provider URL and model
+match the query's provider. During a rebuild, lexical search remains available.
+The provenance migration requests a fresh system-provider backfill; users with
+custom providers retain their selection and can request a rebuild from Memory
+settings to make previously stored vectors eligible for semantic search again.
+Give each replacement model a distinct model identifier, even if it uses the
+same URL and vector dimensions.
+
 Optional global settings:
 
 - `USERFILE_EXPIRATION_DAYS`

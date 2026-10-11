@@ -27,5 +27,5 @@ class ResolveQueryVectorTests(IsolatedAsyncioTestCase):
             result = await hybrid_search.resolve_query_vector(user_id=7, query="deploy")
 
         self.assertIsNone(result)
-        mocked_compute.assert_awaited_once_with("deploy", user_id=7)
+        mocked_compute.assert_awaited_once_with("deploy", user_id=7, provider_override=mocked_provider.return_value)
         self.assertIn("Falling back to lexical search", "\n".join(logs.output))

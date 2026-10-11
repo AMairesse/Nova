@@ -8,6 +8,7 @@ from nova.models.MemoryChunk import MemoryChunk
 from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
 from nova.models.MemoryDocument import MemoryDocument
 from nova.models.memory_common import MemoryChunkEmbeddingState, MemoryRecordStatus
+from nova.llm.embeddings import embedding_provider_fingerprint
 from nova.tasks.memory_tasks import compute_memory_chunk_embedding_task
 
 
@@ -84,9 +85,27 @@ class MemoryTasksTests(TestCase):
             model="embed-small",
         )
 
+        embedding.provider_fingerprint = embedding_provider_fingerprint(mocked_get_provider.return_value)
+        embedding.save(update_fields=["provider_fingerprint"])
         compute_memory_chunk_embedding_task.run(embedding.chunk_id)
 
         mocked_compute_embedding.assert_not_awaited()
+
+    @patch("nova.tasks.memory_tasks.compute_embedding", new_callable=AsyncMock)
+    @patch("nova.tasks.memory_tasks.get_embeddings_provider")
+    def test_changed_provider_during_calculation_does_not_publish_old_vector(self, get_provider, compute):
+        from nova.llm.embeddings import EmbeddingsProvider
+
+        old = EmbeddingsProvider("custom_http", "http://local/v1", "old")
+        new = EmbeddingsProvider("custom_http", "http://local/v1", "new")
+        get_provider.side_effect = [old, new]
+        compute.return_value = [0.1] * 1024
+        embedding = self._create_embedding()
+        compute_memory_chunk_embedding_task.run(embedding.chunk_id)
+        embedding.refresh_from_db()
+        self.assertIsNone(embedding.vector)
+        compute.assert_awaited_once_with(embedding.chunk.content_text,
+            user_id=self.user.id, provider_override=old)
 
     @patch("nova.tasks.memory_tasks.compute_embedding", new_callable=AsyncMock)
     @patch("nova.tasks.memory_tasks.get_embeddings_provider")

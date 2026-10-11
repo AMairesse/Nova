@@ -29,7 +29,7 @@ class ComposeDependencyTests(TestCase):
             command.extend(["-f", str(self.root / "docker" / name)])
         command.extend(["config", "--no-env-resolution", "--format", "json"])
         environment = dict(os.environ, HOST_PORT="18080", MINIO_SECRET_KEY="test-only")
-        for name in ("SEARXNG_HOST_IP", "SEARXNG_HOST_PORT"):
+        for name in ("SEARXNG_HOST_IP", "SEARXNG_HOST_PORT", "MEMORY_EMBEDDINGS_TIMEOUT_SECONDS"):
             environment.pop(name, None)
         environment.update(overrides)
         result = subprocess.run(command, capture_output=True, text=True, timeout=30, env=environment)
@@ -75,3 +75,12 @@ class ComposeDependencyTests(TestCase):
                             self.assertEqual(ports, [])
                         if "docker-compose.add-exec-runner.yml" in files:
                             self.assertIn("exec-runner", services)
+
+    def test_embeddings_timeout_reaches_web_and_worker(self):
+        for base in ("docker-compose.yml", "docker-compose.dev.yml", "docker-compose.from-source.yml"):
+            for overrides in ({}, {"MEMORY_EMBEDDINGS_TIMEOUT_SECONDS": "180"}):
+                with self.subTest(base=base, overrides=overrides):
+                    services = self._compose_services((base, "docker-compose.add-llamacpp-embeddings.yml"), **overrides)
+                    for name in ("web", "celery-worker"):
+                        self.assertEqual(services[name]["environment"]["MEMORY_EMBEDDINGS_TIMEOUT_SECONDS"],
+                                         overrides.get("MEMORY_EMBEDDINGS_TIMEOUT_SECONDS", "30"))

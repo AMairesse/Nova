@@ -4,6 +4,7 @@ services:
       file: docker-compose.base.yml
       service: web
     environment:
+      - MEMORY_EMBEDDINGS_TIMEOUT_SECONDS=${MEMORY_EMBEDDINGS_TIMEOUT_SECONDS:-30}
       - MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1
       - MEMORY_EMBEDDINGS_MODEL=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
 
@@ -12,6 +13,7 @@ services:
       file: docker-compose.base.yml
       service: celery-worker
     environment:
+      - MEMORY_EMBEDDINGS_TIMEOUT_SECONDS=${MEMORY_EMBEDDINGS_TIMEOUT_SECONDS:-30}
       - MEMORY_EMBEDDINGS_URL=http://llamacpp-embeddings:8080/v1
       - MEMORY_EMBEDDINGS_MODEL=${MEMORY_EMBEDDINGS_MODEL:-nomic-ai/nomic-embed-text-v1.5-GGUF}
 

@@ -15,11 +15,14 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from nova.llm.embeddings import aget_embeddings_provider
+from nova.llm.embeddings import aget_embeddings_provider
 from nova.llm.hybrid_search import (
     blend_semantic_fts,
     minmax_bounds,
     minmax_normalize,
     resolve_query_vector,
+    compatible_embedding_filter,
+    compatible_embedding_distance,
     semantic_similarity_from_distance,
 )
 from nova.models.MemoryChunk import MemoryChunk
@@ -971,8 +974,10 @@ async def search_memory_items(
     query_text = str(query or "").strip()
     match_all = query_text in {"", "*"}
     query_vec = None
+    provider = None
     if not match_all:
-        query_vec = await resolve_query_vector(query=query_text, user_id=user.id)
+        provider = await aget_embeddings_provider(user_id=user.id)
+        query_vec = await resolve_query_vector(query=query_text, user_id=user.id, provider_override=provider) if provider else None
 
     under_spec = None
     if under:
@@ -1027,7 +1032,6 @@ async def search_memory_items(
 
         if engine == "postgresql":
             from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-            from pgvector.django import CosineDistance
 
             vector = SearchVector("content_text", config="english")
             search_query = SearchQuery(query_text)
@@ -1043,8 +1047,8 @@ async def search_memory_items(
             semantic_ids: list[int] = []
             if vec is not None:
                 semantic_qs = (
-                    qs.filter(embedding__state=MemoryChunkEmbeddingState.READY)
-                    .annotate(distance=CosineDistance("embedding__vector", vec))
+                    qs.filter(compatible_embedding_filter(provider))
+                    .annotate(distance=compatible_embedding_distance(vec, provider))
                     .order_by(F("distance").asc(), F("updated_at").desc())
                 )
                 semantic_ids = list(semantic_qs.values_list("id", flat=True)[:candidate_limit])
@@ -1058,7 +1062,7 @@ async def search_memory_items(
                 .annotate(fts_rank=SearchRank(vector, search_query))
             )
             if vec is not None:
-                candidate_qs = candidate_qs.annotate(distance=CosineDistance("embedding__vector", vec))
+                candidate_qs = candidate_qs.annotate(distance=compatible_embedding_distance(vec, provider))
             else:
                 candidate_qs = candidate_qs.annotate(distance=F("id") * 0.0)
 
@@ -1112,7 +1116,7 @@ async def search_memory_items(
                         "section_anchor": chunk.anchor,
                         "snippet": chunk.content_text[:240],
                         "score": row["score"],
-                        "signals": {"fts": True, "semantic": vec is not None},
+                        "signals": {"fts": True, "semantic": vec is not None and getattr(chunk, "distance", None) is not None},
                     }
                 )
         else:

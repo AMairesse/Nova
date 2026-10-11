@@ -3,7 +3,7 @@ import logging
 from celery import shared_task
 from django.db import transaction
 
-from nova.llm.embeddings import compute_embedding, get_embeddings_provider
+from nova.llm.embeddings import compute_embedding, get_embeddings_provider, embedding_provider_fingerprint
 from nova.models.MemoryChunkEmbedding import MemoryChunkEmbedding
 from nova.models.memory_common import MemoryChunkEmbeddingState
 
@@ -29,18 +29,24 @@ def compute_memory_chunk_embedding_task(self, chunk_id: int):
         logger.info("[compute_memory_chunk_embedding] embeddings disabled; skipping %s", chunk_id)
         return
 
-    if embedding.state == MemoryChunkEmbeddingState.READY and embedding.vector is not None:
+    if (embedding.state == MemoryChunkEmbeddingState.READY and embedding.vector is not None
+            and embedding.provider_fingerprint == embedding_provider_fingerprint(provider)):
         return
 
     try:
         vec = async_to_sync(compute_embedding)(
             embedding.chunk.content_text,
             user_id=embedding.chunk.document.user_id,
+            provider_override=provider,
         )
         if vec is None:
             return
 
+        if embedding_provider_fingerprint(get_embeddings_provider(user_id=embedding.chunk.document.user_id)) != embedding_provider_fingerprint(provider):
+            return
+
         with transaction.atomic():
+            embedding.provider_fingerprint = embedding_provider_fingerprint(provider)
             embedding.provider_type = provider.provider_type
             embedding.model = provider.model
             embedding.dimensions = len(vec)
@@ -49,6 +55,7 @@ def compute_memory_chunk_embedding_task(self, chunk_id: int):
             embedding.error = None
             embedding.save(
                 update_fields=[
+                    "provider_fingerprint",
                     "provider_type",
                     "model",
                     "dimensions",

@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.core.exceptions import ImproperlyConfigured
 
 from nova.llm.embeddings import (
     EmbeddingsProvider,
@@ -341,7 +342,26 @@ class EmbeddingRequestPolicyTests(TestCase):
         vector = async_to_sync(compute_embedding)("hello", provider_override=provider)
 
         self.assertEqual(len(vector), 1024)
+        self.assertEqual(mocked_request.await_args.kwargs["timeout"].read, 30.0)
         self.assertEqual(
             mocked_request.await_args.kwargs["allowed_private_hosts"],
             LOCAL_DEVELOPMENT_HOSTS,
         )
+
+    @override_settings(MEMORY_EMBEDDINGS_TIMEOUT_SECONDS="180")
+    @patch("nova.llm.embeddings.safe_http_request")
+    def test_configured_timeout_is_sent_to_http_client(self, request):
+        request.return_value = Mock()
+        request.return_value.json.return_value = {"data": [{"embedding": [0.1]}]}
+        provider = EmbeddingsProvider("custom_http", "http://localhost/v1", "local")
+        async_to_sync(compute_embedding)("text", provider_override=provider)
+        self.assertEqual(request.await_args.kwargs["timeout"].read, 180.0)
+
+    @patch("nova.llm.embeddings.safe_http_request")
+    def test_invalid_timeout_is_rejected_before_http_request(self, request):
+        provider = EmbeddingsProvider("custom_http", "http://localhost/v1", "local")
+        for value in (0, -1, "bad", "nan", "inf", None):
+            with self.subTest(value=value), override_settings(MEMORY_EMBEDDINGS_TIMEOUT_SECONDS=value):
+                with self.assertRaises(ImproperlyConfigured):
+                    async_to_sync(compute_embedding)("text", provider_override=provider)
+        request.assert_not_awaited()
